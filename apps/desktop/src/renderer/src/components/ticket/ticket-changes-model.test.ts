@@ -8,11 +8,8 @@ import {
   formatChangeStatus,
   presentChangeRow,
   presentChangeRowWithRecency,
-  selectChangeRow,
   sortChangeSetFiles,
   splitChangePath,
-  splitFilenameForTruncation,
-  splitParentForTruncation,
   type ChangesNavigatorState,
 } from "./ticket-changes-model";
 
@@ -133,49 +130,6 @@ describe("presentChangeRow", () => {
   });
 });
 
-describe("splitFilenameForTruncation", () => {
-  it("protects everything from the FIRST dot, so the audit pair stays distinct", () => {
-    // A cut at the last dot would leave both of these ending ".tsx".
-    expect(splitFilenameForTruncation("split-view-divider.test.tsx")).toEqual({
-      head: "split-view-divider",
-      tail: ".test.tsx",
-    });
-    expect(splitFilenameForTruncation("split-view-divider.tsx")).toEqual({
-      head: "split-view-divider",
-      tail: ".tsx",
-    });
-  });
-
-  it("leaves a dotfile whole in the head — its distinguishing characters sit early", () => {
-    expect(splitFilenameForTruncation(".gitignore")).toEqual({ head: ".gitignore", tail: "" });
-  });
-
-  it("reports nothing protected for an extensionless name", () => {
-    expect(splitFilenameForTruncation("Makefile")).toEqual({ head: "Makefile", tail: "" });
-  });
-});
-
-describe("splitParentForTruncation", () => {
-  it("protects the last segment — the one that tells two same-named files apart", () => {
-    expect(splitParentForTruncation("apps/desktop/src/renderer/src/components/split")).toEqual({
-      head: "apps/desktop/src/renderer/src/components",
-      tail: "/split",
-    });
-  });
-
-  it("keeps a single-segment parent and the repo root whole", () => {
-    expect(splitParentForTruncation("src")).toEqual({ head: "src", tail: "" });
-    expect(splitParentForTruncation("")).toEqual({ head: "", tail: "" });
-  });
-
-  it("protects a rename source's basename too, for the line it is drawn on", () => {
-    expect(splitParentForTruncation("src/old-name.ts")).toEqual({
-      head: "src",
-      tail: "/old-name.ts",
-    });
-  });
-});
-
 describe("accessibleName", () => {
   it("says binary in words and omits counts a racing snapshot never had", () => {
     expect(presentChangeRow(file({ path: "logo.png", binary: true })).accessibleName).toBe(
@@ -212,8 +166,6 @@ function navigatorState(overrides: Partial<ChangesNavigatorState> = {}): Changes
   return {
     revision: null,
     files: [],
-    activeTabId: "doc",
-    listFocusPath: null,
     hiddenCount: 0,
     ...overrides,
   };
@@ -235,13 +187,8 @@ function snapshot(over: Partial<ChangeSetSnapshot> = {}): ChangeSetSnapshot {
 }
 
 describe("applyChangeSetRefresh", () => {
-  it("updates rows from the snapshot without opening, closing, or focusing a tab", () => {
-    const before = navigatorState({
-      activeTabId: "doc",
-      listFocusPath: "src/a.ts",
-      revision: "rev-1",
-      files: [file({ path: "src/a.ts" })],
-    });
+  it("updates rows from the snapshot and holds nothing else at all", () => {
+    const before = navigatorState({ revision: "rev-1", files: [file({ path: "src/a.ts" })] });
     const after = applyChangeSetRefresh(
       before,
       snapshot({
@@ -257,16 +204,17 @@ describe("applyChangeSetRefresh", () => {
 
     expect(after.revision).toBe("rev-2");
     expect(after.files.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]);
-    // The single most important behavioral contract in #108:
-    expect(after.activeTabId).toBe(before.activeTabId);
-    expect(after.listFocusPath).toBe(before.listFocusPath);
+    // The behavioral contract of #108, now structural (VC-311): the navigator
+    // carries no tab id and no focused path, so a refresh has nothing it could
+    // open, close or focus. The panel test proves the same for the rendered
+    // list, where the tab and the keyboard actually live.
+    expect(Object.keys(after).toSorted()).toEqual(["files", "hiddenCount", "revision"]);
   });
 
   it("is a no-op when the opaque revision is unchanged", () => {
     const before = navigatorState({
       revision: "same",
       files: [file({ path: "a.ts" })],
-      activeTabId: "file:a.ts",
     });
     const after = applyChangeSetRefresh(
       before,
@@ -299,17 +247,5 @@ describe("applyChangeSetRefresh", () => {
       snapshot({ revision: "full", files: [file({ path: "a.ts" })] }),
     );
     expect(after.hiddenCount).toBe(0);
-  });
-});
-
-describe("selectChangeRow", () => {
-  it("records a deliberate open intent for the path without stealing list focus", () => {
-    const before = navigatorState({ activeTabId: "doc", listFocusPath: null });
-    const { state, openPath } = selectChangeRow(before, "src/a.ts");
-    expect(openPath).toBe("src/a.ts");
-    expect(state.listFocusPath).toBe("src/a.ts");
-    // Host opens the tab; the navigator itself does not mutate activeTabId
-    // (decision #48 — initial keyboard focus stays in the Changes list).
-    expect(state.activeTabId).toBe("doc");
   });
 });

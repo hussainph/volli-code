@@ -31,41 +31,6 @@ export function splitChangePath(path: string): { filename: string; parentPath: s
   return { filename: baseNameOf(path), parentPath: dirNameOf(path) };
 }
 
-/**
- * Where a FILENAME may be cut, so the cut never takes the tail a reader
- * compares filenames by (VC-311).
- *
- * Tail = everything from the first dot, because the audit's indistinguishable
- * pair — `split-view-divider.test.tsx` next to `split-view-divider.tsx` —
- * differs in the whole dotted run, not just the last extension: a cut at the
- * LAST dot would leave both rows ending `.tsx`. A dotfile (`.gitignore`) has
- * no dot after position 0, so it stays whole in the head — its distinguishing
- * characters sit early, which end-truncation already preserves. `tail: ""`
- * means "nothing is protected"; the caller truncates the head alone.
- */
-export function splitFilenameForTruncation(filename: string): { head: string; tail: string } {
-  const dot = filename.indexOf(".");
-  return dot <= 0
-    ? { head: filename, tail: "" }
-    : { head: filename.slice(0, dot), tail: filename.slice(dot) };
-}
-
-/**
- * Where a PARENT PATH may be cut — same rule, one segment down: the last
- * directory survives, because that is the segment that tells two same-named
- * files apart (`components/split/rail.tsx` vs `components/ui/rail.tsx`), while
- * the head's early segments are context the rail can ellipsize first. The
- * separator rides in the TAIL so a truncated head joins it cleanly
- * (`apps/desktop/…` + `/split`); a repo-root file (parent `""`) has nothing to
- * protect.
- */
-export function splitParentForTruncation(parentPath: string): { head: string; tail: string } {
-  const slash = parentPath.lastIndexOf("/");
-  return slash === -1
-    ? { head: parentPath, tail: "" }
-    : { head: parentPath.slice(0, slash), tail: parentPath.slice(slash) };
-}
-
 /** Human label for a Change Set file status (including conflicted). */
 export function formatChangeStatus(status: ChangeSetFileStatus): string {
   return STATUS_LABELS[status];
@@ -99,7 +64,7 @@ export interface ChangeRowPresentation {
    */
   updatedLabel?: "Updated";
   /** Accessible explanation accompanying {@link updatedLabel}. */
-  updatedDescription?: "Updated since you last opened this file";
+  updatedDescription?: typeof CHANGE_UPDATED_DESCRIPTION;
   /**
    * The activation target's accessible name — one string carrying everything a
    * screen reader must say about the row (VC-311): status, FULL path (the two
@@ -109,6 +74,8 @@ export interface ChangeRowPresentation {
    */
   accessibleName: string;
 }
+
+const CHANGE_UPDATED_DESCRIPTION = "Updated since you last opened this file" as const;
 
 /** Counts as words for {@link ChangeRowPresentation.accessibleName}. */
 function spokenCounts(file: ChangeSetFile): string | null {
@@ -155,8 +122,8 @@ export function presentChangeRowWithRecency(
     ...(isChangeUpdated(recency, file.path)
       ? {
           updatedLabel: "Updated" as const,
-          updatedDescription: "Updated since you last opened this file" as const,
-          accessibleName: `${row.accessibleName}, updated since you last opened this file`,
+          updatedDescription: CHANGE_UPDATED_DESCRIPTION,
+          accessibleName: `${row.accessibleName}, ${CHANGE_UPDATED_DESCRIPTION.toLowerCase()}`,
         }
       : {}),
   };
@@ -168,25 +135,29 @@ export function sortChangeSetFiles(files: readonly ChangeSetFile[]): ChangeSetFi
 }
 
 /**
- * Navigator state the panel mirrors. `activeTabId` is observed only so refresh
- * can be proven never to touch the main strip; the list keeps its own focus.
+ * Navigator state the panel mirrors: the rows, and the fingerprint that says
+ * whether they changed.
+ *
+ * WHICH ROW IS CURRENT IS NOT HERE, and that is the point (VC-311). It used to
+ * be `listFocusPath`, written by a click and never rewritten when the diff it
+ * opened was closed — so a row went on announcing itself as the current one
+ * long after its tab was gone. The one fact that cannot go stale is the tab the
+ * surface is actually showing, so the panel derives the current row from
+ * `activeTabId` instead of storing a second copy of it here.
  */
 export interface ChangesNavigatorState {
   revision: string | null;
   files: ChangeSetFile[];
-  /** Main-strip active tab id — refresh must leave this identical. */
-  activeTabId: string;
-  /** Path whose row holds keyboard focus in the Changes list (decision #48). */
-  listFocusPath: string | null;
   /** Paths the snapshot's cap left out of `files`, so the list can say so. */
   hiddenCount: number;
 }
 
 /**
  * Apply a fresh Change Set snapshot to the navigator. Updates rows and the
- * opaque revision fingerprint — and **nothing else**. Never opens, closes,
- * replaces, or focuses a main-view tab; never moves list focus. A matching
- * `revision` is a no-op (same object identity) so React can skip re-renders.
+ * opaque revision fingerprint — and **nothing else**. It holds nothing a tab or
+ * a focus ring could be read out of, so a refresh cannot open, close, replace
+ * or focus anything (decision #48). A matching `revision` is a no-op (same
+ * object identity) so React can skip re-renders.
  */
 export function applyChangeSetRefresh(
   state: ChangesNavigatorState,
@@ -199,17 +170,4 @@ export function applyChangeSetRefresh(
     files: sortChangeSetFiles(snapshot.files),
     hiddenCount: Math.max(0, snapshot.totalCount - snapshot.files.length),
   };
-}
-
-/**
- * Deliberate row selection. Returns an `openPath` the host should open as a
- * diff tab (`openTicketDiff`). List focus moves to the row; `activeTabId` is
- * intentionally unchanged so initial keyboard focus stays in the Changes list
- * (decision #48).
- */
-export function selectChangeRow(
-  state: ChangesNavigatorState,
-  path: string,
-): { state: ChangesNavigatorState; openPath: string } {
-  return { state: { ...state, listFocusPath: path }, openPath: path };
 }
