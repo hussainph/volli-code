@@ -644,6 +644,28 @@ const BUDGET = 60_000;
 
 describe("a card flipping between itself and the column holding it", () => {
   it(
+    "keeps the same full ticket preview behind the expanded automation choices",
+    async () => {
+      const grip = await pickUp();
+      const preview = document.querySelector<HTMLElement>("[data-ticket-drag-preview]");
+      expect(preview).not.toBeNull();
+      const contents = preview?.textContent;
+      await move(grip.card);
+      await press("keydown", { key: "Alt", altKey: true });
+      await move(grip.card, true);
+      expect(grown("doing")).toBe(true);
+      expect(document.querySelector("[data-ticket-drag-preview]")).toBe(preview);
+      expect(preview?.textContent).toBe(contents);
+      expect(preview?.className).toContain("opacity-30");
+      expect(preview?.parentElement?.style.zIndex).toBe("10");
+      await press("keyup", { key: "Alt", altKey: false });
+      expect(preview?.className).not.toContain("opacity-30");
+      await endDrag();
+    },
+    BUDGET,
+  );
+
+  it(
     "does not re-measure the board's scroll ancestry more as the flips pile up",
     async () => {
       // No modifier anywhere in this case: the crash was reported as an ⌥ drag

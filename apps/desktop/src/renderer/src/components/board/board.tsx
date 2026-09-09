@@ -16,7 +16,6 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
-  displayTicketId,
   EMPTY_TICKET_FILTER,
   filterTickets,
   groupTicketsByStatus,
@@ -993,6 +992,9 @@ export const Board = React.memo(function Board({
               </div>
             )}
             <DragOverlay
+              // Keep the full card behind the landing panel rather than
+              // replacing it with a tiny id label while the person is aiming.
+              zIndex={isPickerOpen(picker) ? 10 : 999}
               // The lifted card is a PICTURE, never a surface: dnd-kit's own
               // wrapper is a fixed, card-sized box at `z-index: 999` that
               // follows the pointer exactly, so without this it is the topmost
@@ -1015,15 +1017,10 @@ export const Board = React.memo(function Board({
               }
             >
               {drag ? (
-                isPickerOpen(picker) ? (
-                  // The cluster gives way over the panel rather than covering
-                  // the choices. Keep its identity and group size visible in
-                  // one compact line while the picker is the thing being read.
-                  <div className="w-fit rounded-md border border-border bg-card px-2 py-1 font-mono text-label text-muted-foreground shadow-overlay">
-                    {displayTicketId(ticketPrefix, drag.activeTicket.ticketNumber)}
-                    {drag.ticketIds.length > 1 ? ` +${drag.ticketIds.length - 1}` : ""}
-                  </div>
-                ) : (
+                <div
+                  data-ticket-drag-preview
+                  className={isPickerOpen(picker) ? "opacity-30" : undefined}
+                >
                   <DragOverlayBody
                     activeTicket={drag.activeTicket}
                     tickets={drag.selectedTickets}
@@ -1032,7 +1029,7 @@ export const Board = React.memo(function Board({
                     listView={boardView === "list"}
                     reducedMotion={reducedMotion}
                   />
-                )
+                </div>
               ) : null}
             </DragOverlay>
             {/* "⌥ to choose" — the mid-drag affordance (VC-132, VC-112). Three
@@ -1057,7 +1054,7 @@ export const Board = React.memo(function Board({
                   <kbd className="rounded-sm border border-border px-1 font-mono text-label text-foreground">
                     ⌥
                   </kbd>
-                  to choose
+                  Choose automation · 0 Move only
                 </p>
               </div>
             ) : null}
