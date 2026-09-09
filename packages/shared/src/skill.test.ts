@@ -26,7 +26,9 @@ import {
   parseSkillModes,
   resolveSkillMode,
   skillsIndexResource,
+  SKILLS_INDEX_MAX_CHARS,
   SKILLS_INDEX_RESOURCE_NAME,
+  userInvokableSkills,
   type SkillInvocationPolicy,
   type SkillReference,
 } from "./skill";
@@ -264,10 +266,85 @@ describe("skillsIndexResource", () => {
     const resource = skillsIndexResource([
       skill({ description: `multi\nline ${"x".repeat(2000)}` }),
     ]);
-    const entry = resource?.text.split("\n").at(-1) ?? "";
+    const entry = resource?.text.split("\n").find((line) => line.startsWith("- ")) ?? "";
     expect(entry).toContain("multi line x");
     expect(entry.length).toBeLessThan(1200);
     expect(entry.endsWith("...")).toBe(true);
+    expect(resource?.text).toContain("descriptions were shortened");
+  });
+
+  it("shortens descriptions deterministically before withholding entries", () => {
+    const skills = Array.from({ length: 5 }, (_, index) =>
+      skill({
+        name: `skill-${String(index).padStart(2, "0")}`,
+        description: `${String(index)} ${"x".repeat(400)}`,
+      }),
+    );
+
+    const resource = skillsIndexResource(skills);
+    const shuffled = skillsIndexResource(skills.toReversed());
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(resource).toEqual(shuffled);
+    for (const candidate of skills) expect(resource?.text).toContain(`- ${candidate.name} (`);
+    expect(resource?.text).toContain(
+      "descriptions were shortened; permitted /skill invocation is unchanged",
+    );
+    expect(resource?.text).not.toContain("entries were omitted");
+  });
+
+  it("withholds the alphabetic tail inside one deterministic aggregate ceiling", () => {
+    const skills = Array.from({ length: 40 }, (_, index) =>
+      skill({
+        name: `skill-${String(index).padStart(2, "0")}`,
+        description: `Use skill ${index}. ${"x".repeat(300)}`,
+      }),
+    );
+
+    const resource = skillsIndexResource(skills);
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(resource?.text).toContain("- skill-00 (");
+    expect(resource?.text).not.toContain("- skill-39 (");
+    expect(resource?.text).toContain("entries were omitted and descriptions shortened");
+    // Index omission changes no policy object or explicit invocation route.
+    expect(userInvokableSkills(skills)).toHaveLength(skills.length);
+  });
+
+  it("reports entry omission without claiming empty descriptions were shortened", () => {
+    const skills = Array.from({ length: 40 }, (_, index) =>
+      skill({ name: `empty-${String(index).padStart(2, "0")}`, description: "" }),
+    );
+
+    const resource = skillsIndexResource(skills);
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(resource?.text).toContain("entries were omitted; permitted /skill invocation");
+    expect(resource?.text).not.toContain("descriptions shortened");
+  });
+
+  it("keeps a disclosure inside the ceiling when even one entry path cannot fit", () => {
+    const resource = skillsIndexResource([
+      skill({ name: "giant", description: "", root: `/skills/${"x".repeat(3_000)}` }),
+    ]);
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(resource?.text).toContain("entries were omitted");
+    expect(resource?.text).not.toContain("- giant (");
+  });
+
+  it("does not disclose policy-hidden or already injected skills in an overflow notice", () => {
+    const manual = skill({ name: "manual-secret", policy: MANUAL });
+    const injected = skill({ name: "already-carried" });
+    const listed = Array.from({ length: 40 }, (_, index) =>
+      skill({ name: `listed-${String(index).padStart(2, "0")}`, description: "x".repeat(300) }),
+    );
+
+    const resource = skillsIndexResource([manual, injected, ...listed], [injected.name]);
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(resource?.text).not.toContain(manual.name);
+    expect(resource?.text).not.toContain(injected.name);
   });
 
   it("drops the trailing colon for a skill with no description at all", () => {

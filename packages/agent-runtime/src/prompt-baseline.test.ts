@@ -5,6 +5,7 @@ import {
   type RuntimeWorkspaceEnvironment,
   type SkillReference,
   SKILL_POLICY_DEFAULT,
+  SKILLS_INDEX_MAX_CHARS,
 } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -66,6 +67,7 @@ describe("promptBaseline", () => {
     const measured = promptBaseline(input());
     expect(measured.sections.map((section) => section.id)).toEqual([
       "operating",
+      "execution",
       "role",
       "authority",
       "workspace",
@@ -122,6 +124,7 @@ describe("promptBaseline", () => {
     const bare = promptBaseline(input({ promptResources: undefined }));
     expect(bare.sections.map((section) => section.id)).toEqual([
       "operating",
+      "execution",
       "role",
       "authority",
       "workspace",
@@ -133,6 +136,44 @@ describe("promptBaseline", () => {
   it("cannot drift from the composer: each section's text is the composed prompt's", () => {
     const sections = systemPromptSections(input());
     expect(composeSystemPrompt(input())).toBe(sections.map((section) => section.text).join("\n\n"));
+  });
+
+  it("keeps a current-sized fresh Board package below 1,500 estimated tokens at the index ceiling", () => {
+    const index = skillsIndexResource(
+      Array.from({ length: 100 }, (_, position) => ({
+        ...skill(`skill-${String(position).padStart(3, "0")}`),
+        description: `Use this skill for ${"x".repeat(400)}`,
+      })),
+    );
+    if (index === null) throw new Error("expected a bounded skills index");
+    expect(index.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+
+    // A 280-character Board brief renders as the checkout's measured
+    // 334-character delimited block; the Role bundle renders as its measured
+    // 685-character SESSION TOOLS block.
+    const measured = promptBaseline(
+      input({
+        // Price the exact ceiling, even if the generated fixture happened to
+        // leave a few characters unused after removing its final whole row.
+        promptResources: [{ ...index, text: "x".repeat(SKILLS_INDEX_MAX_CHARS) }],
+        brief: { text: "x".repeat(280) },
+        tools: {
+          tools: ["read", "edit", "write", "execute"],
+          verbs: [
+            "session.start",
+            "ticket.await",
+            "automation.run",
+            "session.stop",
+            "session.send",
+            "session.delegate",
+          ],
+        },
+      }),
+    );
+    expect(measured.brief.chars).toBe(334);
+    expect(measured.toolSurface.chars).toBe(685);
+    expect(measured.system).toEqual({ chars: 4_888, tokens: 1_222 });
+    expect(measured.total).toEqual({ chars: 5_907, tokens: 1_478 });
   });
 });
 
@@ -210,6 +251,8 @@ describe("promptBaseline — cache class per section (VC-164)", () => {
     ).toEqual([
       // Forks on whether any RESOURCE section exists, which is the project's index.
       ["operating", "project-static", "prefix"],
+      // Product-literal execution doctrine is shared by every Session of the Role.
+      ["execution", "role-static", "prefix"],
       ["role", "role-static", "prefix"],
       // Session authority policy is outside the prompt; Role + bundle remain.
       ["authority", "role-static", "prefix"],

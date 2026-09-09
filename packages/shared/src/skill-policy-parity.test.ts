@@ -137,6 +137,20 @@ describe("Project precedence against author defaults", () => {
   });
 });
 
+describe("aggregate index budgeting", () => {
+  it("can omit an Auto row without changing any explicit invocation route", () => {
+    const skills = Array.from({ length: 40 }, (_, index) => ({
+      ...skill(`skill-${String(index).padStart(2, "0")}`),
+      description: "x".repeat(300),
+    }));
+
+    expect(consumers(skills, {}, "skill-39")).toEqual({
+      ...MODEL_AND_USER,
+      indexed: false,
+    });
+  });
+});
+
 describe("what an unoffered reference does to the message", () => {
   it("leaves `/name` as ordinary prose and delivers nothing", () => {
     for (const authorPolicy of [
