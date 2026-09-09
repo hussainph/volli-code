@@ -314,6 +314,21 @@ export function listWorktreePaths(db: Database.Database): string[] {
 }
 
 /**
+ * Which ticket claims which worktree path (VC-340), live and archived alike. The
+ * trim's Settings table names the ticket beside each directory, and the path is
+ * the only join it has: git reports directories, not tickets.
+ */
+export function listWorktreePathOwners(
+  db: Database.Database,
+): { ticketId: string; worktreePath: string }[] {
+  const rows = prepared<[], { id: string; worktree_path: string }>(
+    db,
+    "SELECT id, worktree_path FROM tickets WHERE worktree_path IS NOT NULL",
+  ).all();
+  return rows.map((row) => ({ ticketId: row.id, worktreePath: row.worktree_path }));
+}
+
+/**
  * The same set for ONE project — live AND archived alike, since a retained
  * worktree is still a directory a session can be standing in.
  *

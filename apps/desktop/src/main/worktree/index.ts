@@ -180,6 +180,10 @@ export {
   setTrimSettings,
   TRIM_SETTINGS_KEY,
 } from "./trim-settings";
+// The manual pass over every owned worktree, with `git worktree prune` in the
+// same action — the Settings surface for what is already on disk.
+export { scanTrimTargets, trimAllWorktrees } from "./trim-sweep";
+export type { TrimSweepDeps } from "./trim-sweep";
 // Worktree OWNERSHIP (VC-113): which containers under the shared
 // `~/.volli/worktrees` root belong to THIS database, and therefore which paths
 // any destructive route may touch.

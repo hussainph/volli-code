@@ -1959,8 +1959,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 63 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(63);
+    it("covers all 67 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(67);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
@@ -1985,6 +1985,46 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
+      // Build artifacts (VC-340): one read, one destructive action, and the two
+      // settings that govern both.
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+    });
+  });
+
+  // VC-340. The trim removes files, so its guard is the only thing between a
+  // renderer typo and a deletion: a non-boolean `dryRun` must not read as a
+  // preview, and an empty settings patch must not read as an update.
+  describe("the build-artifact channels", () => {
+    it("accepts a bare trim and a boolean dryRun, and nothing looser", () => {
+      const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
+      expect(guard([])).toBe(true);
+      expect(guard([{}])).toBe(true);
+      expect(guard([{ dryRun: true }])).toBe(true);
+      expect(guard([{ dryRun: "yes" }])).toBe(false);
+      expect(guard([{ dryRun: true }, "extra"])).toBe(false);
+      expect(guard(["nope"])).toBe(false);
+      expect(invalidError).toBe("Invalid trim request");
+    });
+
+    it("takes no argument for either read", () => {
+      expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
+      expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
+      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
+      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
+    });
+
+    it("requires a settings patch to actually patch something", () => {
+      const { guard, invalidError } = DATA_IPC["volli:worktree-trim-settings-set"];
+      expect(guard([{ trimOnFinish: false }])).toBe(true);
+      expect(guard([{ keepPatterns: [".env", "*.pem"] }])).toBe(true);
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ trimOnFinish: "off" }])).toBe(false);
+      expect(guard([{ keepPatterns: ".env" }])).toBe(false);
+      expect(guard([{ keepPatterns: [1, 2] }])).toBe(false);
+      expect(invalidError).toBe("Invalid trim settings");
     });
   });
 });

@@ -199,15 +199,15 @@ function worktreeFailureExcerpt(stderr: string): string {
  * is not.
  */
 function describeBytes(bytes: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"] as const;
   let value = Math.max(0, bytes);
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
+  let unit = "B";
+  for (const larger of ["KB", "MB", "GB", "TB"] as const) {
+    if (value < 1024) break;
     value /= 1024;
-    unit += 1;
+    unit = larger;
   }
-  const rounded = unit === 0 || value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded} ${units[unit]}`;
+  const rounded = unit === "B" || value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${unit}`;
 }
 
 /**

@@ -234,6 +234,11 @@ import type {
   WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
+  WorktreeTrimInput,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsInput,
+  WorktreeTrimSettingsResult,
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreePushPrResult,
@@ -1112,6 +1117,20 @@ const api = {
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       invoke("volli:worktree-orphan-delete", { path }),
+    /**
+     * Build artifacts (VC-340). `trimScan` reads which owned worktrees carry
+     * git-ignored content and which are off limits; `trim` removes it across
+     * every non-active one and prunes stale worktree metadata in the same pass.
+     * `{ dryRun: true }` measures without removing.
+     */
+    trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
+    trim: (input?: WorktreeTrimInput): Promise<WorktreeTrimResult> =>
+      invoke("volli:worktree-trim", input ?? {}),
+    /** The preserved-configuration allowlist and the automatic-trim opt-out. */
+    trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
+      invoke("volli:worktree-trim-settings-get"),
+    setTrimSettings: (input: WorktreeTrimSettingsInput): Promise<WorktreeTrimSettingsResult> =>
+      invoke("volli:worktree-trim-settings-set", input),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */
     status: (ticketId: string): Promise<WorktreeStatusResult> =>
       invoke("volli:worktree-status", { ticketId }),

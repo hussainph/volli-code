@@ -28,6 +28,9 @@ import type {
   WorktreeRecreateResult,
   WorktreeOrphansResult,
   WorktreeRemoveResult,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsResult,
 } from "../ipc/contract";
 import {
   existsSync,
@@ -124,6 +127,13 @@ vi.mock("./worktree", async () => ({
   // on an archive. Mocked because it walks a real filesystem; the composition
   // itself is covered by `worktree/retention.test.ts`.
   trimFinishedWorktree: vi.fn(async () => ({ kind: "skipped" as const, reason: "mocked" })),
+  // The manual pass over every owned worktree (VC-340). Mocked for the same
+  // reason: it walks real trees. `worktree/trim-sweep.test.ts` drives the real
+  // thing against real `git worktree add` checkouts.
+  scanTrimTargets: vi.fn(async () => ({ worktrees: [] })),
+  trimAllWorktrees: vi.fn(),
+  getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
+  setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite.
   WorktreeChangeWatchManager: class {
@@ -148,9 +158,13 @@ import { projectContainerName } from "./worktree/containers";
 import {
   cleanupOrphans,
   ensure,
+  getTrimSettings,
   listBranches,
   remove as removeWorktree,
   scanOrphans,
+  scanTrimTargets,
+  setTrimSettings,
+  trimAllWorktrees,
   trimFinishedWorktree,
 } from "./worktree";
 import { orphanCleanupEngine } from "./worktree-runtime";
@@ -2880,6 +2894,101 @@ describe("volli:worktree-orphans", () => {
         .all(SECOND_COMMAND_ID);
       expect(receipts).toHaveLength(1);
     });
+  });
+});
+
+// VC-340. The channels themselves: what they hand back, and the one rule that
+// is theirs rather than the sweep's — a trim that removed something makes every
+// surface reading worktree state stale, and a preview makes nothing stale.
+describe("the build-artifact channels", () => {
+  const report = {
+    worktrees: [
+      {
+        worktreePath: "/wt/one",
+        removed: [{ path: "node_modules/", bytes: 4096 }],
+        kept: [{ path: ".env", reason: "it matches .env" }],
+        totalBytes: 4096,
+        dryRun: false,
+      },
+    ],
+    skipped: [{ path: "/wt/two", reason: "An agent is still running in this worktree." }],
+    pruned: ["project-1"],
+    totalBytes: 4096,
+    removedCount: 1,
+    dryRun: false,
+  };
+
+  it("hands back the scan as the table reads it", async () => {
+    const worktrees = [
+      {
+        path: "/wt/one",
+        projectId: "project-1",
+        ticketId: "t1",
+        branch: "volli/VC-1-x",
+        artifactCount: 2,
+        activeReason: null,
+      },
+    ];
+    vi.mocked(scanTrimTargets).mockResolvedValue({ worktrees });
+
+    const result = await invoke<Promise<WorktreeTrimScanResult>>("volli:worktree-trim-scan");
+
+    expect(result).toEqual({ ok: true, worktrees });
+  });
+
+  it("hands back the sweep report and re-hydrates every window", async () => {
+    vi.mocked(trimAllWorktrees).mockResolvedValue(report);
+    dataChangedSends.length = 0;
+
+    const result = await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
+
+    expect(result).toEqual({ ok: true, report });
+    expect(dataChangedSends).toContainEqual({
+      channel: "volli:data-changed",
+      payload: expect.objectContaining({ kind: "worktree" }),
+    });
+  });
+
+  it("broadcasts nothing for a preview, which changed nothing", async () => {
+    vi.mocked(trimAllWorktrees).mockResolvedValue({ ...report, dryRun: true });
+    dataChangedSends.length = 0;
+
+    const result = await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim", {
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(trimAllWorktrees).mock.calls.at(-1)?.[1]).toEqual({ dryRun: true });
+    expect(dataChangedSends).toEqual([]);
+  });
+
+  it("broadcasts nothing when a real pass removed nothing", async () => {
+    vi.mocked(trimAllWorktrees).mockResolvedValue({
+      ...report,
+      worktrees: [],
+      removedCount: 0,
+      totalBytes: 0,
+    });
+    dataChangedSends.length = 0;
+
+    await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
+
+    expect(dataChangedSends).toEqual([]);
+  });
+
+  it("reads and writes the trim settings", async () => {
+    const read = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-get");
+    expect(read).toEqual({ ok: true, settings: { keepPatterns: [".env"], trimOnFinish: true } });
+    expect(vi.mocked(getTrimSettings)).toHaveBeenCalled();
+
+    const written = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-set", {
+      trimOnFinish: false,
+    });
+    expect(written).toEqual({
+      ok: true,
+      settings: { keepPatterns: [".env"], trimOnFinish: false },
+    });
+    expect(vi.mocked(setTrimSettings).mock.calls.at(-1)?.[1]).toEqual({ trimOnFinish: false });
   });
 });
 

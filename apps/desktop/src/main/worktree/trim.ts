@@ -76,10 +76,15 @@ export const DEFAULT_TRIM_KEEP_PATTERNS: readonly string[] = [
   ".claude/settings.local.json",
 ];
 
-/** A live surface inside a worktree — the busy question every destructive path asks. */
+/**
+ * A live surface inside a worktree — the busy question every destructive path
+ * asks. `surface` is optional because the reclaim's seam has always been typed
+ * without it: the refusal reads better when it can say "agent" or "terminal",
+ * and still refuses when all it knows is that something is there.
+ */
 export interface WorktreeBusySite {
   directory: string;
-  surface: "terminal" | "agent";
+  surface?: "terminal" | "agent";
 }
 
 /** What {@link trimIgnoredArtifacts} needs to answer "is anything working in here?". */
@@ -303,11 +308,19 @@ export async function countIgnoredArtifacts(
 
 // ---- refusals --------------------------------------------------------------
 
-/** Why a destructive worktree action is refused, in the words the guards already use. */
-function busyRefusal(site: WorktreeBusySite): string {
-  return site.surface === "agent"
-    ? "An agent is still running in this worktree. Stop it first."
-    : "A terminal is still running in this worktree. Close it first.";
+/**
+ * Why a destructive worktree action is refused, in the words the other guards
+ * already use: what is in the way, and the one thing that clears it.
+ */
+export function busyRefusal(site: WorktreeBusySite): string {
+  switch (site.surface) {
+    case "agent":
+      return "An agent is still running in this worktree. Stop it first.";
+    case "terminal":
+      return "A terminal is still running in this worktree. Close it first.";
+    default:
+      return "Something is still running in this worktree.";
+  }
 }
 
 /**

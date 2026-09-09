@@ -782,6 +782,25 @@ export interface VolliDataIpcContract {
     args: [input: WorktreeOrphanDeleteInput];
     result: WorktreeOrphanDeleteResult;
   };
+  /**
+   * The build-artifact read (VC-340): every worktree this database owns, how many
+   * git-ignored paths a trim would take from it, and whether it is off limits.
+   * Removes nothing and measures no sizes — sizing the whole set is the walk that
+   * stalled for thirty seconds in the audit behind this ticket.
+   */
+  "volli:worktree-trim-scan": { args: []; result: WorktreeTrimScanResult };
+  /**
+   * The trim itself, across every non-active owned worktree, with `git worktree
+   * prune` in the same pass. `{ dryRun: true }` measures and reports without
+   * removing anything or touching git metadata.
+   */
+  "volli:worktree-trim": { args: [input?: WorktreeTrimInput]; result: WorktreeTrimResult };
+  /** The preserved-configuration allowlist and the automatic-trim opt-out. */
+  "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
+  "volli:worktree-trim-settings-set": {
+    args: [input: WorktreeTrimSettingsInput];
+    result: WorktreeTrimSettingsResult;
+  };
 
   // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
   // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;

@@ -121,6 +121,11 @@ import type {
   WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  WorktreeTrimInput,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsInput,
+  WorktreeTrimSettingsResult,
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
@@ -190,9 +195,13 @@ import {
   readVenue,
   readWorktreeDiff,
   readWorktreeStatus,
+  getTrimSettings,
   remove as removeWorktree,
   runNet,
+  scanTrimTargets,
   setRetentionTtlDays,
+  setTrimSettings,
+  trimAllWorktrees,
   trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "./worktree";
@@ -459,6 +468,16 @@ export function registerDataIpcHandlers(
    * writes `worktree_trimmed` into the ticket's History and broadcasts, so the
    * card it belongs to can account for the files that went.
    */
+  /**
+   * The sweep's deps: the worktree bundle plus the ONE busy question every
+   * destructive worktree route asks. Built per call, like `worktreeDeps(db)`
+   * everywhere else here, so nothing caches a stale db handle.
+   */
+  const trimSweepDeps = () => ({
+    worktree: worktreeDeps(db),
+    ...(options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites }),
+  });
+
   const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
     void trimFinishedWorktree(
       {
@@ -1439,6 +1458,35 @@ export function registerDataIpcHandlers(
       // target — untargeted (everyone re-hydrates).
       broadcastDataChanged({ kind: "worktree" });
       return { ok: true };
+    },
+
+    // ---- build artifacts (VC-340) ------------------------------------------
+
+    "volli:worktree-trim-scan": async (): Promise<WorktreeTrimScanResult> => {
+      const scan = await scanTrimTargets(trimSweepDeps());
+      return { ok: true, worktrees: scan.worktrees };
+    },
+
+    "volli:worktree-trim": async (input?: WorktreeTrimInput): Promise<WorktreeTrimResult> => {
+      const report = await trimAllWorktrees(
+        trimSweepDeps(),
+        input?.dryRun === undefined ? {} : { dryRun: input.dryRun },
+      );
+      // Nothing about any ticket's identity moved — the checkouts are all still
+      // there, on the same branches — but the Settings table and any surface
+      // reading worktree state should re-read what is now on disk.
+      if (!report.dryRun && report.removedCount > 0) broadcastDataChanged({ kind: "worktree" });
+      return { ok: true, report };
+    },
+
+    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: getTrimSettings(db) };
+    },
+
+    "volli:worktree-trim-settings-set": (
+      input: WorktreeTrimSettingsInput,
+    ): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
     // ---- Done flow (docs/plans/done-flow.md) --------------------------------
