@@ -34,9 +34,12 @@
 import {
   armedAutomationFor,
   offeredAutomationsForColumn,
+  TICKET_STATUS_LABELS,
+  TICKET_STATUSES,
   UNBOUND_RUN_LABEL,
   type Automation,
   type ColumnArming,
+  type ColumnAutomationOrder,
   type ModelSelection,
   type TicketStatus,
 } from "@volli/shared";
@@ -61,6 +64,15 @@ export type RailRunAction =
 export interface TicketRailAutomations {
   /** The split button's default press. */
   primary: RailRunAction;
+  /**
+   * Every column's Offered list, grouped and labelled (VC-329 item 5): the
+   * whole answer to "what may this Ticket run", not just this column's slice
+   * of it. Running a Doing Automation on a Todo Ticket is a hand-run — the
+   * same act the caret already performed, minus the fumble — so no group row
+   * moves the Ticket or arms anything: it reaches the same
+   * `runAutomationOnTicket` the current column's rows always have.
+   */
+  groups: readonly AutomationGroup[];
   /** This column's Offered list in its authored rank — the caret menu's rows. */
   offered: readonly Automation[];
   /**
@@ -80,34 +92,100 @@ export interface TicketRailAutomations {
   ready: boolean;
 }
 
-/** What this Ticket's rail offers, given its project's records and its own column. */
 export function ticketRailAutomations(input: {
   automations: readonly Automation[];
   armings: readonly ColumnArming[];
   status: TicketStatus;
   /**
+   * Every column's authored rank, so each GROUP of the cross-column answer is
+   * ordered the way its own lane arranges — one rank per column, not one for
+   * the whole menu.
+   */
+  orders: readonly ColumnAutomationOrder[];
+  /**
    * This column's authored rank (VC-132) — the order its lane arranges, so the
    * menu and the lane are one list read twice. Deliberately NOT the drag's
    * pinned shape: the pin exists to protect what digit `1` means, and this menu
-   * has no digits.
+   * has no digits. Optional; a caller that reads only the cross-column groups
+   * may omit it.
    */
-  rankedAutomationIds: readonly string[];
+  rankedAutomationIds?: readonly string[];
   /** Whether the reads behind `automations`/`armings` have landed for this rail. */
   ready: boolean;
 }): TicketRailAutomations {
   if (!input.ready)
-    return { primary: { kind: "unread" }, offered: [], listsAny: false, ready: false };
+    return {
+      primary: { kind: "unread" },
+      groups: [],
+      offered: [],
+      listsAny: false,
+      ready: false,
+    };
   const armed = armedAutomationFor(input.automations, input.armings, input.status);
   return {
     primary: armed === null ? { kind: "run-once" } : { kind: "automation", automation: armed },
+    groups: automationGroupsFor({
+      automations: input.automations,
+      orders: input.orders,
+      status: input.status,
+    }),
     offered: offeredAutomationsForColumn(
       input.automations,
       input.status,
-      input.rankedAutomationIds,
+      input.rankedAutomationIds ?? [],
     ),
     listsAny: input.automations.length > 0,
     ready: true,
   };
+}
+
+/** One column's slice of the cross-column answer: its label, and what it offers. */
+export interface AutomationGroup {
+  status: TicketStatus | "any";
+  /** The column's own display label — the board's words, not a machine id. */
+  label: string;
+  /** Whether this group is the Ticket's own column — drawn first when it is. */
+  current: boolean;
+  automations: readonly Automation[];
+}
+
+/**
+ * Every column's Offered list, grouped and labelled, for a menu that answers
+ * "what may this Ticket run" across ALL columns (VC-329 item 5).
+ *
+ * Membership stays the record's Trigger — a schedule names the PROJECT, so it
+ * appears in no group and keeps its own doors. Triggerless records can be run
+ * on any ticket and have their own final group. Order is the Ticket's own column first (the nearest answer
+ * stays nearest), then board order, each group in its column's authored rank —
+ * the same {@link offeredAutomationsForColumn} the lane arranges, read once per
+ * column. A column offering nothing contributes no group, so an unarranged
+ * project reads as a short menu rather than a wall of empty headings.
+ */
+export function automationGroupsFor(input: {
+  automations: readonly Automation[];
+  orders: readonly ColumnAutomationOrder[];
+  status: TicketStatus;
+}): readonly AutomationGroup[] {
+  const groups: AutomationGroup[] = [];
+  for (const status of TICKET_STATUSES) {
+    const automations = offeredAutomationsForColumn(
+      input.automations,
+      status,
+      input.orders.find((order) => order.status === status)?.rankedAutomationIds ?? [],
+    );
+    if (automations.length === 0) continue;
+    groups.push({
+      status,
+      label: TICKET_STATUS_LABELS[status],
+      current: status === input.status,
+      automations,
+    });
+  }
+  const manual = input.automations.filter((automation) => automation.trigger.kind === "none");
+  if (manual.length > 0) {
+    groups.push({ status: "any", label: "Any column", current: false, automations: manual });
+  }
+  return [...groups.filter((group) => group.current), ...groups.filter((group) => !group.current)];
 }
 
 /** What the control's default half is labelled — the Automation's name, "Run once", or the wait. */

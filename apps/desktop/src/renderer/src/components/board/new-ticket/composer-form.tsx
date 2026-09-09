@@ -14,10 +14,13 @@ import { useComposerRun } from "@renderer/components/board/new-ticket/composer-r
 import { clearDraft, loadDraft, saveDraft } from "@renderer/components/board/new-ticket/draft";
 import {
   type ComposerFields,
+  runCreateWithAutomation,
   runKickoff,
   runPlainCreate,
   type SubmitDeps,
 } from "@renderer/components/board/new-ticket/submit";
+import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
+import { useAutomationRunOffer } from "@renderer/components/automations/automation-run-menu";
 import {
   type DocumentFileRefs,
   MonacoDocumentEditor,
@@ -27,6 +30,7 @@ import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -155,6 +159,11 @@ export function ComposerForm({
   // that module's header.
   const run = useComposerRun(target.sessionModel ?? null);
 
+  // Read on arrival and project changes: a composer can open without ever
+  // visiting the board, or retarget to a project whose cache is still cold.
+  const automationOffer = useAutomationRunOffer(target.id, status);
+  const enabledIds = useAutomationsStore((state) => state.enabledIds);
+
   const currentFields = React.useCallback(
     (): ComposerFields => ({
       projectId: target.id,
@@ -246,6 +255,17 @@ export function ComposerForm({
         });
         if (!result.ok) toast.error(result.error);
       },
+      // The one Run call every other hand-run door uses, so this composer's
+      // third commit lands, toasts and refuses exactly like a rail press.
+      runAutomation: async (input) => {
+        await runAutomationOnTicket({
+          target: { kind: "automation", automationId: input.automationId },
+          automationName: input.automationName,
+          ticketId: input.ticketId,
+          ticketDisplayId: input.ticketDisplayId,
+          modelOverride: null,
+        });
+      },
     }),
     [],
   );
@@ -287,6 +307,27 @@ export function ComposerForm({
     if (createMore) resetForm();
     else onClose();
   }, [title, submitting, currentFields, deps, createMore, run.selection, resetForm, onClose]);
+
+  // The third commit (VC-329 item 4): create in the chip's status — never
+  // moved to make a column match — then run the chosen saved Automation on it.
+  const handleCreateWithAutomation = React.useCallback(
+    async (automation: { id: string; name: string }) => {
+      if (title.trim() === "" || submitting) return;
+      setSubmitting(true);
+      try {
+        const result = await runCreateWithAutomation(currentFields(), deps, { automation });
+        if (!result.created) return;
+        clearDraft();
+        if (createMore) resetForm();
+        else onClose();
+      } catch (error) {
+        toast.error(`Couldn't create ticket: ${errorMessage(error)}`);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [title, submitting, currentFields, deps, createMore, resetForm, onClose],
+  );
 
   // ⌘+Enter → Create, ⌘+Shift+Enter → Create & start. Captured on the composer
   // root so the shortcut fires before Monaco or the title input can act on the
@@ -413,6 +454,12 @@ export function ComposerForm({
           onCreateMoreChange={setCreateMore}
           onCreate={() => void handleCreate()}
           onKickoff={() => void handleKickoff()}
+          automationRun={{
+            groups: automationOffer.groups,
+            ready: automationOffer.ready,
+            enabledIds,
+            onRun: (automation) => void handleCreateWithAutomation(automation),
+          }}
           disabled={!canSubmit}
         />
       </div>

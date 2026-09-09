@@ -1,7 +1,13 @@
 import type { ModelSelection, Ticket } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { type ComposerFields, runKickoff, runPlainCreate, type SubmitDeps } from "./submit";
+import {
+  type ComposerFields,
+  runCreateWithAutomation,
+  runKickoff,
+  runPlainCreate,
+  type SubmitDeps,
+} from "./submit";
 
 function fields(overrides: Partial<ComposerFields> = {}): ComposerFields {
   return {
@@ -53,6 +59,7 @@ function fakeDeps(overrides: Partial<SubmitDeps> = {}): SubmitDeps {
     startChat: vi.fn<SubmitDeps["startChat"]>(async () => "s1"),
     openTicketWorkspace: vi.fn<SubmitDeps["openTicketWorkspace"]>(),
     toastSuccess: vi.fn<SubmitDeps["toastSuccess"]>(),
+    runAutomation: vi.fn<SubmitDeps["runAutomation"]>(async () => {}),
     ...overrides,
   };
 }
@@ -215,6 +222,61 @@ describe("runKickoff", () => {
     expect(result).toEqual({ created: false });
     expect(deps.startChat).not.toHaveBeenCalled();
     expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
+    expect(deps.toastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe("runCreateWithAutomation (VC-329 item 4)", () => {
+  it("creates in the CHIP's status and runs the saved Automation on it", async () => {
+    const deps = fakeDeps({
+      addTicket: vi.fn<SubmitDeps["addTicket"]>(async () =>
+        madeTicket({ id: "tk", ticketNumber: 12, status: "backlog" }),
+      ),
+    });
+
+    const result = await runCreateWithAutomation(fields({ status: "backlog" }), deps, {
+      automation: { id: "a1", name: "Implement" },
+    });
+
+    expect(result).toEqual({ created: true });
+    // NOT moved to Doing to make a column match: a manual launch is a hand-run,
+    // and hand-runs do not reposition work or arm anything.
+    expect(deps.addTicket).toHaveBeenCalledWith("p1", "backlog", "A ticket", expect.anything());
+    expect(deps.runAutomation).toHaveBeenCalledWith({
+      automationId: "a1",
+      automationName: "Implement",
+      ticketId: "tk",
+      ticketDisplayId: "VC-12",
+    });
+    expect(deps.startChat).not.toHaveBeenCalled();
+    expect(deps.openTicketWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("links the composer's attachments before the Automation runs", async () => {
+    const order: string[] = [];
+    const deps = fakeDeps({
+      linkAttachments: vi.fn(async () => {
+        order.push("link");
+      }),
+      runAutomation: vi.fn(async () => {
+        order.push("run");
+      }),
+    });
+
+    await runCreateWithAutomation(fields(), deps, { automation: { id: "a1", name: "Implement" } });
+
+    expect(order).toEqual(["link", "run"]);
+  });
+
+  it("runs nothing when the ticket create fails", async () => {
+    const deps = fakeDeps({ addTicket: vi.fn<SubmitDeps["addTicket"]>(async () => null) });
+
+    const result = await runCreateWithAutomation(fields(), deps, {
+      automation: { id: "a1", name: "Implement" },
+    });
+
+    expect(result).toEqual({ created: false });
+    expect(deps.runAutomation).not.toHaveBeenCalled();
     expect(deps.toastSuccess).not.toHaveBeenCalled();
   });
 });
