@@ -55,6 +55,14 @@ export interface NotificationRuntime {
   forgetWindow(windowId: number): void;
   /** This window's renderer has subscribed to notification clicks. */
   markRendererReady(windowId: number): void;
+  /**
+   * This window's page is being replaced or has died (a reload, a navigation,
+   * a renderer crash). Its click subscription and its reported target both
+   * belonged to the page that is gone: the next page subscribes and reports
+   * afresh, and until it does the window is showing nothing and hearing
+   * nothing.
+   */
+  forgetRenderer(windowId: number): void;
   /** The target of a click that arrived with no window open, taken once. */
   takePendingActivation(): NotificationTarget | null;
   /**
@@ -165,6 +173,10 @@ export function createNotificationRuntime(options: {
       activation.forgetWindow(windowId);
     },
     markRendererReady: (windowId) => activation.markRendererReady(windowId),
+    forgetRenderer: (windowId) => {
+      registry.forget(windowId);
+      activation.forgetRenderer(windowId);
+    },
     takePendingActivation: () => activation.takePending(),
     bindWindowOpener: (open) => {
       openWindow = open;

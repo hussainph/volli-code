@@ -33,6 +33,24 @@
  * still brought forward either way: the click asked for Volli, and that part
  * needs no renderer.
  *
+ * ── THE WINDOW THAT RECEIVES IS THE WINDOW BROUGHT FORWARD ────────────────
+ * Round 5's correction. Round 2 chose the two independently — the focused
+ * window came forward, and a (possibly different) listening window was sent
+ * the target — so with one window focused and still booting and another
+ * minimized but subscribed, the click restored nothing and routed into the
+ * minimized one: the person saw Volli come forward and land nowhere, while a
+ * hidden window navigated on its own. A route nobody can see is a dropped
+ * click with extra steps. So ONE window is chosen: the listening one (focused
+ * first), which is restored, shown, focused AND sent to; only when none is
+ * listening does the focused-or-first window come forward on its own and the
+ * target park for whichever renderer subscribes next.
+ *
+ * A subscription is also not forever. A reload or a renderer crash discards
+ * the page that subscribed while the window id lives on, so the host drops the
+ * mark on those ({@link NotificationActivation.forgetRenderer}) and the next
+ * click parks again until the fresh page asks. Without that, every click after
+ * a reload would be pushed into a page that is no longer listening.
+ *
  * Every failure is swallowed. This runs from a native event handler with no
  * caller to return an error to, and a throw here would be an unhandled
  * rejection in main rather than anything a person could act on.
@@ -74,8 +92,19 @@ export interface NotificationActivation {
    * existence says nothing about whether anything inside it has subscribed.
    */
   markRendererReady(windowId: number): void;
+  /**
+   * This window's renderer is gone or being replaced — a reload, a crash, a
+   * navigation — so the page that subscribed is not the page that will be
+   * there. The window itself stays a candidate for coming forward.
+   */
+  forgetRenderer(windowId: number): void;
   /** Drops a closed window's subscription. */
   forgetWindow(windowId: number): void;
+}
+
+/** The focused window among these, or the first — the same tie-break for both choices. */
+function focusedFirst(candidates: readonly ActivationWindow[]): ActivationWindow | undefined {
+  return candidates.find((candidate) => candidate.isFocused()) ?? candidates[0];
 }
 
 export function createNotificationActivation(
@@ -91,13 +120,12 @@ export function createNotificationActivation(
     activate(target) {
       try {
         const live = ports.windows().filter((window) => !window.isDestroyed());
-        // Forward first, receive second: the window that comes forward is the
-        // focused one (or any live one), while the window that may be SENT to
-        // is one with a renderer behind it. They are usually the same window
-        // and, during boot, deliberately are not.
-        const front = live.find((candidate) => candidate.isFocused()) ?? live[0];
+        // A target needs a listener, so with one the window that can route is
+        // the window that comes forward — never two different windows. A
+        // target-less click needs no listener and takes any live window.
         const ready = live.filter((candidate) => listening.has(candidate.id));
-        const receiver = ready.find((candidate) => candidate.isFocused()) ?? ready[0];
+        const receiver = target === null ? undefined : focusedFirst(ready);
+        const front = receiver ?? focusedFirst(live);
         ports.focusApp();
         if (front === undefined) {
           pending = target;
@@ -126,6 +154,9 @@ export function createNotificationActivation(
     },
     markRendererReady(windowId) {
       listening.add(windowId);
+    },
+    forgetRenderer(windowId) {
+      listening.delete(windowId);
     },
     forgetWindow(windowId) {
       listening.delete(windowId);

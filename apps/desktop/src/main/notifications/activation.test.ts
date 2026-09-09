@@ -262,6 +262,66 @@ describe("a window whose renderer has not subscribed yet (round 2)", () => {
     expect(booting.sent).toEqual([]);
   });
 
+  it("brings forward the window it routes to, not a different one (round 5)", () => {
+    // The focused window is still booting; the subscribed one is minimized.
+    // Restoring the first and routing into the second would leave the person
+    // looking at a blank window while a hidden one navigated.
+    const booting = fakeWindow({ focused: true });
+    const ready = fakeWindow({ minimized: true });
+    const activation = createNotificationActivation({
+      windows: () => [booting.window, ready.window],
+      focusApp: () => {},
+      openWindow: () => {},
+    });
+
+    activation.markRendererReady(ready.id);
+    activation.activate(TARGET);
+
+    expect(ready.sent).toEqual([TARGET]);
+    expect(ready.acts).toEqual(["restore", "show", "focus"]);
+    expect(booting.acts).toEqual([]);
+  });
+
+  it("still takes the focused window for a target-less click, listener or not", () => {
+    // Nothing to route, so nothing to wait for: the click asked for Volli.
+    const booting = fakeWindow({ focused: true });
+    const ready = fakeWindow();
+    const activation = createNotificationActivation({
+      windows: () => [booting.window, ready.window],
+      focusApp: () => {},
+      openWindow: () => {},
+    });
+
+    activation.markRendererReady(ready.id);
+    activation.activate(null);
+
+    expect(booting.acts).toContain("focus");
+    expect(ready.acts).toEqual([]);
+    expect(ready.sent).toEqual([]);
+  });
+
+  it("parks again after the renderer reloads, until the fresh page subscribes", () => {
+    // The window id survives a reload; the page that subscribed does not.
+    const window = fakeWindow({ focused: true });
+    const activation = createNotificationActivation({
+      windows: () => [window.window],
+      focusApp: () => {},
+      openWindow: () => {},
+    });
+
+    activation.markRendererReady(window.id);
+    activation.forgetRenderer(window.id);
+    activation.activate(TARGET);
+
+    expect(window.sent).toEqual([]);
+    expect(window.acts).toContain("focus");
+    expect(activation.takePending()).toEqual(TARGET);
+
+    activation.markRendererReady(window.id);
+    activation.activate({ kind: "update" });
+    expect(window.sent).toEqual([{ kind: "update" }]);
+  });
+
   it("forgets a window's subscription when it closes", () => {
     // Window ids are reused by nothing here, but a stale "ready" would make the
     // next click push into a window that no longer has a renderer.

@@ -2762,6 +2762,15 @@ app.whenReady().then(async () => {
     // linger and suppress an alert nobody can see (VC-295).
     const windowId = window.id;
     window.once("closed", () => notifications.forgetWindow(windowId));
+    // A page that reloads, navigates, or crashes takes its click subscription
+    // and its reported target with it, while the window id lives on. Drop
+    // both, so the next click parks for the fresh page instead of being pushed
+    // into one that no longer listens. Same-document navigations (a hash
+    // change) keep the page and are skipped.
+    window.webContents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
+    });
+    window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps
