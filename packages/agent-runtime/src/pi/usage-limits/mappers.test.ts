@@ -2,6 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { anthropicHeadersToUpdate, anthropicUsageFromEndpoint } from "./anthropic";
 import { codexHeadersToUpdate, codexUsageFromEndpoint } from "./codex";
+import { kimiUsageFromEndpoint } from "./kimi";
+import { githubCopilotUsageFromEndpoint } from "./github-copilot";
+import { xaiUsageFromEndpoint } from "./xai";
 import { opencodeGoUsageFromEndpoint } from "./opencode-go";
 import { headerUsageUpdate } from "./passive";
 import {
@@ -446,6 +449,436 @@ describe("opencodeGoUsageFromEndpoint", () => {
     expect(
       opencodeGoUsageFromEndpoint(
         { rollingUsage: { status: "ok", usagePercent: 4, resetInSec: 3_600 } },
+        NOW,
+      ),
+    ).toEqual(failed);
+  });
+});
+
+// --- Kimi Code ---------------------------------------------------------------
+
+/**
+ * `/coding/v1/usages` as the endpoint serves it: protobuf-flavoured JSON, so
+ * every count arrives as a STRING and the time unit wears its enum prefix.
+ */
+const KIMI_BODY = {
+  usage: { limit: "1000", remaining: "380", resetTime: "2026-03-05T09:30:00.416717Z" },
+  limits: [
+    {
+      window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+      detail: { limit: "1200", remaining: "756", resetTime: "2026-03-01T14:00:00.416717Z" },
+    },
+  ],
+};
+
+describe("kimiUsageFromEndpoint", () => {
+  it("reads the plan window and the rate-limit window whose length the body states", () => {
+    expect(kimiUsageFromEndpoint(KIMI_BODY, NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [
+        {
+          id: "session",
+          kind: "session",
+          label: "Session",
+          // 1200 − 756 of 1200.
+          usedPercent: 37,
+          // Kimi states resets to the MICROSECOND; the vocabulary carries
+          // milliseconds, so the tail is dropped rather than rounded.
+          resetsAt: "2026-03-01T14:00:00.416Z",
+          windowDurationMins: 300,
+        },
+        {
+          id: "weekly",
+          kind: "weekly",
+          label: "Weekly",
+          // 1000 − 380 of 1000.
+          usedPercent: 62,
+          resetsAt: "2026-03-05T09:30:00.416Z",
+          windowDurationMins: 10_080,
+        },
+      ],
+    });
+  });
+
+  it("reads a spend the body states as `used` rather than as what is left", () => {
+    const limits = kimiUsageFromEndpoint(
+      { usage: { limit: "200", used: "50", resetTime: iso(RESET_7D) } },
+      NOW,
+    );
+    expect(limits.windows).toEqual([
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 25,
+        resetsAt: iso(RESET_7D),
+        windowDurationMins: 10_080,
+      },
+    ]);
+  });
+
+  it("names a rate-limit window by the length it states, in whatever unit it states it", () => {
+    const inDays = kimiUsageFromEndpoint(
+      {
+        limits: [
+          {
+            window: { duration: 7, timeUnit: "TIME_UNIT_DAY" },
+            detail: { limit: 100, remaining: 90 },
+          },
+          {
+            window: { duration: 12, timeUnit: "TIME_UNIT_HOUR" },
+            detail: { limit: 100, remaining: 40 },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(inDays.windows).toEqual([
+      { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 10, windowDurationMins: 10_080 },
+      {
+        id: "window_720m",
+        kind: "other",
+        label: "12h",
+        usedPercent: 60,
+        windowDurationMins: 720,
+      },
+    ]);
+  });
+
+  it("keeps the binding one when two entries meter the same length", () => {
+    // Standard and HighSpeed are two tiers of one membership, so one span can
+    // arrive twice. Two rows with one id is not a row a person can read, and
+    // the one that stops a turn first is the one worth drawing.
+    const limits = kimiUsageFromEndpoint(
+      {
+        limits: [
+          {
+            window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+            detail: { limit: 100, remaining: 80, resetTime: iso(RESET_5H) },
+          },
+          {
+            window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+            detail: { limit: 100, remaining: 5 },
+          },
+          // A third, laxer reading of the same span must not win it back.
+          {
+            window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+            detail: { limit: 100, remaining: 99 },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(limits.windows).toEqual([
+      {
+        id: "session",
+        kind: "session",
+        label: "Session",
+        usedPercent: 95,
+        windowDurationMins: 300,
+      },
+    ]);
+  });
+
+  it("skips an entry whose length or counts it cannot read, and the monthly freeze flag", () => {
+    const limits = kimiUsageFromEndpoint(
+      {
+        usage: { limit: "1000", remaining: "380", resetTime: iso(RESET_7D) },
+        limits: [
+          null,
+          { window: null, detail: {} },
+          { window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: null },
+          // A unit this build does not know, and a duration that is not one.
+          { window: { duration: 3, timeUnit: "TIME_UNIT_FORTNIGHT" }, detail: { limit: 1 } },
+          { window: { duration: 0, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: 1 } },
+          { window: { duration: 300 }, detail: { limit: 1 } },
+          // A window nothing can be spent from is not a window.
+          {
+            window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+            detail: { limit: 0, remaining: 0 },
+          },
+          // Neither `remaining` nor `used`: a limit with no reading.
+          { window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" }, detail: { limit: 100 } },
+        ],
+        // The monthly membership cap: `remaining` is sticky, so the only fact
+        // in it is a boolean, and this vocabulary carries shares.
+        totalQuota: { limit: "100", used: "1", remaining: "99" },
+      },
+      NOW,
+    );
+    expect(limits.windows.map((window) => window.id)).toEqual(["weekly"]);
+  });
+
+  it("holds an overspent window at a full bar", () => {
+    const limits = kimiUsageFromEndpoint({ usage: { limit: 100, remaining: -20 } }, NOW);
+    expect(limits.windows[0]?.usedPercent).toBe(100);
+    expect(limits.windows[0]).not.toHaveProperty("resetsAt");
+  });
+
+  it("reports a failed probe when the body names no usable window", () => {
+    const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
+    expect(kimiUsageFromEndpoint(undefined, NOW)).toEqual(failed);
+    expect(kimiUsageFromEndpoint([], NOW)).toEqual(failed);
+    expect(kimiUsageFromEndpoint({}, NOW)).toEqual(failed);
+    expect(kimiUsageFromEndpoint({ usage: null, limits: null }, NOW)).toEqual(failed);
+    expect(kimiUsageFromEndpoint({ usage: { limit: "0" } }, NOW)).toEqual(failed);
+    expect(kimiUsageFromEndpoint({ totalQuota: { used: "1" } }, NOW)).toEqual(failed);
+  });
+});
+
+// --- GitHub Copilot ----------------------------------------------------------
+
+/** `/copilot_internal/user` for a paid seat: three classes, two of them unlimited. */
+const COPILOT_BODY = {
+  copilot_plan: "individual_pro",
+  access_type_sku: "plus_monthly_subscriber_quota",
+  quota_reset_date: "2026-04-01",
+  quota_snapshots: {
+    chat: {
+      entitlement: 0,
+      percent_remaining: 100,
+      quota_id: "chat",
+      remaining: 0,
+      unlimited: true,
+    },
+    completions: {
+      entitlement: 0,
+      percent_remaining: 100,
+      quota_id: "completions",
+      remaining: 0,
+      unlimited: true,
+    },
+    premium_interactions: {
+      entitlement: 300,
+      overage_count: 0,
+      overage_permitted: false,
+      percent_remaining: 31.17,
+      quota_id: "premium_interactions",
+      quota_remaining: 93.5,
+      remaining: 93,
+      unlimited: false,
+    },
+  },
+};
+
+describe("githubCopilotUsageFromEndpoint", () => {
+  it("draws the metered class and skips the ones the plan does not meter", () => {
+    expect(githubCopilotUsageFromEndpoint(COPILOT_BODY, NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [
+        {
+          id: "premium_interactions",
+          kind: "monthly",
+          label: "Premium requests",
+          // The endpoint states what is LEFT; the vocabulary carries what is spent.
+          usedPercent: 68.83,
+          resetsAt: "2026-04-01T00:00:00.000Z",
+          // 1 Mar → 1 Apr: the calendar month that ends at the reset.
+          windowDurationMins: 31 * 1_440,
+        },
+      ],
+    });
+  });
+
+  it("draws every class a seat really meters, in the order they matter", () => {
+    const limits = githubCopilotUsageFromEndpoint(
+      {
+        quota_reset_date: "2026-03-01",
+        quota_snapshots: {
+          completions: { percent_remaining: 12, unlimited: false },
+          chat: { percent_remaining: 40, unlimited: false },
+          premium_interactions: { percent_remaining: 0, unlimited: false },
+        },
+      },
+      NOW,
+    );
+    expect(limits.windows.map((window) => [window.id, window.label, window.usedPercent])).toEqual([
+      ["premium_interactions", "Premium requests", 100],
+      ["chat", "Chat", 60],
+      ["completions", "Completions", 88],
+    ]);
+    // 1 Feb → 1 Mar 2026: a 28-day month, not a fixed 30.
+    expect(limits.windows[0]?.windowDurationMins).toBe(28 * 1_440);
+  });
+
+  it("keeps a window whose reset the body does not state, without a length", () => {
+    const limits = githubCopilotUsageFromEndpoint(
+      { quota_snapshots: { premium_interactions: { percent_remaining: 50 } } },
+      NOW,
+    );
+    expect(limits.windows).toEqual([
+      {
+        id: "premium_interactions",
+        kind: "monthly",
+        label: "Premium requests",
+        usedPercent: 50,
+      },
+    ]);
+  });
+
+  it("reports a failed probe when no class is both present and metered", () => {
+    const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
+    expect(githubCopilotUsageFromEndpoint(undefined, NOW)).toEqual(failed);
+    expect(githubCopilotUsageFromEndpoint([], NOW)).toEqual(failed);
+    expect(githubCopilotUsageFromEndpoint({ copilot_plan: "individual" }, NOW)).toEqual(failed);
+    expect(githubCopilotUsageFromEndpoint({ quota_snapshots: null }, NOW)).toEqual(failed);
+    expect(githubCopilotUsageFromEndpoint({ quota_snapshots: {} }, NOW)).toEqual(failed);
+    expect(
+      githubCopilotUsageFromEndpoint({ quota_snapshots: { premium_interactions: null } }, NOW),
+    ).toEqual(failed);
+    // Every class unlimited: a seat with nothing to meter, not a failed read
+    // of one — but there is no window to draw either way.
+    expect(
+      githubCopilotUsageFromEndpoint(
+        {
+          quota_snapshots: {
+            chat: { percent_remaining: 100, unlimited: true },
+            completions: { percent_remaining: 100, unlimited: true },
+          },
+        },
+        NOW,
+      ),
+    ).toEqual(failed);
+    // A class with no percentage at all.
+    expect(
+      githubCopilotUsageFromEndpoint(
+        { quota_snapshots: { premium_interactions: { entitlement: 300 } } },
+        NOW,
+      ),
+    ).toEqual(failed);
+    // The free-seat shape, which states counts and no percentages.
+    expect(
+      githubCopilotUsageFromEndpoint(
+        {
+          copilot_plan: "individual",
+          access_type_sku: "free_limited_copilot",
+          limited_user_quotas: { chat: 410, completions: 4_000 },
+          limited_user_reset_date: "2026-03-11",
+        },
+        NOW,
+      ),
+    ).toEqual(failed);
+  });
+});
+
+// --- xAI ---------------------------------------------------------------------
+
+/** `/v1/billing?format=credits`: the shared pool grok.com's own meter shows. */
+const XAI_BODY = {
+  config: {
+    currentPeriod: {
+      type: "USAGE_PERIOD_TYPE_WEEKLY",
+      start: "2026-02-26T09:30:00.885620+00:00",
+      end: "2026-03-05T09:30:00.885620+00:00",
+    },
+    creditUsagePercent: 75,
+    productUsage: [
+      { product: "GrokBuild", usagePercent: 54 },
+      { product: "Api", usagePercent: 21 },
+    ],
+    isUnifiedBillingUser: true,
+    prepaidBalance: { val: 0 },
+  },
+};
+
+describe("xaiUsageFromEndpoint", () => {
+  it("reads the combined pool as one window, named by the length its period states", () => {
+    expect(xaiUsageFromEndpoint(XAI_BODY, NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [
+        {
+          id: "weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 75,
+          resetsAt: "2026-03-05T09:30:00.885Z",
+          windowDurationMins: 10_080,
+        },
+      ],
+    });
+  });
+
+  it("reads a period with the share omitted as nothing spent", () => {
+    // Protobuf drops a field at its default, so an untouched account sends no
+    // `creditUsagePercent` at all rather than a zero.
+    const limits = xaiUsageFromEndpoint(
+      {
+        config: {
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            start: "2026-02-26T09:30:00Z",
+            end: "2026-03-05T09:30:00Z",
+          },
+        },
+      },
+      NOW,
+    );
+    expect(limits.windows).toEqual([
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 0,
+        resetsAt: iso(RESET_7D),
+        windowDurationMins: 10_080,
+      },
+    ]);
+  });
+
+  it("names the window by the length of the period, not by the enum beside it", () => {
+    const limits = xaiUsageFromEndpoint(
+      {
+        config: {
+          // A month of days under a name that says otherwise: the length is
+          // the fact the ids are keyed on.
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            start: "2026-02-01T00:00:00Z",
+            end: "2026-03-03T00:00:00Z",
+          },
+          creditUsagePercent: 12.5,
+        },
+      },
+      NOW,
+    );
+    expect(limits.windows).toEqual([
+      {
+        id: "monthly",
+        kind: "monthly",
+        label: "Monthly",
+        usedPercent: 12.5,
+        resetsAt: "2026-03-03T00:00:00.000Z",
+        windowDurationMins: 43_200,
+      },
+    ]);
+  });
+
+  it("reports a failed probe when no period is stated", () => {
+    const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
+    expect(xaiUsageFromEndpoint(undefined, NOW)).toEqual(failed);
+    expect(xaiUsageFromEndpoint([], NOW)).toEqual(failed);
+    expect(xaiUsageFromEndpoint({ config: null }, NOW)).toEqual(failed);
+    expect(xaiUsageFromEndpoint({ config: {} }, NOW)).toEqual(failed);
+    expect(xaiUsageFromEndpoint({ config: { currentPeriod: null } }, NOW)).toEqual(failed);
+    // The dollar-allowance shape the same route serves without `?format=credits`:
+    // a credit balance, which this vocabulary does not carry.
+    expect(
+      xaiUsageFromEndpoint(
+        { config: { monthlyLimit: { val: 15_000 }, used: { val: 2_931 } } },
+        NOW,
+      ),
+    ).toEqual(failed);
+    expect(
+      xaiUsageFromEndpoint({ config: { currentPeriod: { start: "2026-02-26T09:30:00Z" } } }, NOW),
+    ).toEqual(failed);
+    // A period that ends before it starts places nothing.
+    expect(
+      xaiUsageFromEndpoint(
+        {
+          config: {
+            currentPeriod: { start: "2026-03-05T09:30:00Z", end: "2026-02-26T09:30:00Z" },
+          },
+        },
         NOW,
       ),
     ).toEqual(failed);

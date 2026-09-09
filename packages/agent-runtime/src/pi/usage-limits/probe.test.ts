@@ -1,4 +1,4 @@
-import type { AuthCheck, AuthResult } from "@earendil-works/pi-ai";
+import type { AuthCheck, AuthResult, Credential } from "@earendil-works/pi-ai";
 import type { UsageLimits } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -9,6 +9,7 @@ import {
   USAGE_PROBE_COOLDOWN_MS,
   USAGE_PROBE_FRESH_MS,
   UsageProbeSchedule,
+  type UsageProbeCredentials,
   type UsageProbeFetch,
   type UsageProbeInput,
   type UsageProbeModels,
@@ -81,6 +82,33 @@ const OPENCODE_GO_BODY = {
   },
 };
 const goKey: AuthCheck = { type: "api_key", source: "OPENCODE_API_KEY" };
+const COPILOT_BODY = {
+  copilot_plan: "individual_pro",
+  quota_reset_date: "2026-04-01",
+  quota_snapshots: {
+    chat: { percent_remaining: 100, unlimited: true },
+    premium_interactions: { entitlement: 300, percent_remaining: 31.17, unlimited: false },
+  },
+};
+const XAI_BODY = {
+  config: {
+    currentPeriod: {
+      type: "USAGE_PERIOD_TYPE_WEEKLY",
+      start: "2026-02-26T09:30:00Z",
+      end: "2026-03-05T09:30:00Z",
+    },
+    creditUsagePercent: 75,
+  },
+};
+const KIMI_BODY = {
+  usage: { limit: "1000", remaining: "380", resetTime: "2026-03-05T09:30:00Z" },
+  limits: [
+    {
+      window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+      detail: { limit: "1200", remaining: "756", resetTime: "2026-03-01T14:00:00Z" },
+    },
+  ],
+};
 const CODEX_BODY = {
   plan_type: "plus",
   rate_limit: {
@@ -89,9 +117,15 @@ const CODEX_BODY = {
   },
 };
 
+/** A credential store holding one provider's entry, as `read` hands it back. */
+function store(credential: Credential): UsageProbeCredentials {
+  return { read: async () => credential };
+}
+
 function input(overrides: Partial<UsageProbeInput> = {}): UsageProbeInput {
   return {
     providerId: "anthropic",
+    credentials: null,
     models: models(oauth, { auth: { apiKey: "sk-ant-oat-token" }, source: "OAuth" }),
     fetch: scripted(() => json(ANTHROPIC_BODY)).fetch,
     signal: new AbortController().signal,
@@ -185,6 +219,143 @@ describe("probeUsageLimits", () => {
     ]);
     const limits = (outcome as { limits: UsageLimits }).limits;
     expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly", "monthly"]);
+  });
+
+  it("reads Kimi's usage endpoint with the bearer its credential carries in a header", async () => {
+    // Kimi's `toAuth` puts the subscription token in `headers.Authorization`
+    // rather than in `apiKey`, which is a perfectly ordinary thing for a
+    // provider to do and the reason the probe reads the credential rather
+    // than one field of it.
+    const { fetch, calls } = scripted(() => json(KIMI_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "kimi-coding",
+        models: models(oauth, {
+          auth: { headers: { Authorization: "Bearer kimi-oat-token" } },
+          source: "OAuth",
+        }),
+        fetch,
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        url: "https://api.kimi.com/coding/v1/usages",
+        headers: { authorization: "Bearer kimi-oat-token", accept: "application/json" },
+      },
+    ]);
+    const limits = (outcome as { limits: UsageLimits }).limits;
+    expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly"]);
+  });
+
+  it("reads Copilot's account endpoint with the GitHub token, not the proxy token turns use", async () => {
+    // Pi holds TWO secrets for this account: the short-lived Copilot proxy
+    // token (`access`, what `getAuth` resolves and what every turn presents to
+    // api.individual.githubcopilot.com) and the GitHub OAuth token it was
+    // minted from (`refresh`). Only the second one means anything to
+    // api.github.com, so this is the reader that names its own credential.
+    const { fetch, calls } = scripted(() => json(COPILOT_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "github-copilot",
+        models: models(oauth, { auth: { apiKey: "tid=proxy;exp=1" }, source: "OAuth" }),
+        credentials: store({
+          type: "oauth",
+          access: "tid=proxy;exp=1",
+          refresh: "gho_github_token",
+          expires: NOW + 60_000,
+        }),
+        fetch,
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        url: "https://api.github.com/copilot_internal/user",
+        headers: {
+          // GitHub's own editors present this endpoint a `token` credential,
+          // not a `Bearer` one.
+          authorization: "token gho_github_token",
+          accept: "application/json",
+          "x-github-api-version": "2025-04-01",
+        },
+      },
+    ]);
+    const limits = (outcome as { limits: UsageLimits }).limits;
+    expect(limits.windows.map((window) => window.id)).toEqual(["premium_interactions"]);
+  });
+
+  it("reports a failed probe when the stored Copilot credential carries no GitHub token", async () => {
+    const { fetch, calls } = scripted(() => json(COPILOT_BODY));
+    const failed = {
+      kind: "verdict",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+    };
+    const copilot = {
+      providerId: "github-copilot",
+      models: models(oauth, { auth: { apiKey: "tid=proxy;exp=1" }, source: "OAuth" }),
+      fetch,
+    };
+    // A store this process does not have is "cannot tell", which keeps
+    // whatever was published rather than replacing it with a shrug.
+    expect(await probeUsageLimits(input({ ...copilot, credentials: null }))).toEqual(failed);
+    expect(
+      await probeUsageLimits(
+        input({ ...copilot, credentials: store({ type: "api_key", key: "ghp_classic" }) }),
+      ),
+    ).toEqual(failed);
+    expect(
+      await probeUsageLimits(
+        input({
+          ...copilot,
+          credentials: {
+            read: () => {
+              throw new Error("auth.json is locked");
+            },
+          },
+        }),
+      ),
+    ).toEqual(failed);
+    expect(calls).toEqual([]);
+  });
+
+  it("reads xAI's credits meter, and never the dollar allowance beside it", async () => {
+    const { fetch, calls } = scripted(() => json(XAI_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "xai",
+        models: models(oauth, { auth: { apiKey: "xai-oat-token" }, source: "OAuth" }),
+        fetch,
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        // `?format=credits` is the whole difference between a window and a
+        // dollar balance, so it is pinned here rather than left to the mapper.
+        url: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+        headers: {
+          authorization: "Bearer xai-oat-token",
+          accept: "application/json",
+          "x-grok-client-surface": "grok-build",
+        },
+      },
+    ]);
+    const limits = (outcome as { limits: UsageLimits }).limits;
+    expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([["weekly", 75]]);
+  });
+
+  it("reports an xAI API key unsupported: it is invoiced, not metered in a window", async () => {
+    const { fetch, calls } = scripted(() => json(XAI_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "xai",
+        models: models({ type: "api_key", source: "XAI_API_KEY" }, { auth: { apiKey: "xai-key" } }),
+        fetch,
+      }),
+    );
+    expect(outcome).toEqual({
+      kind: "verdict",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "unsupported" } },
+    });
+    expect(calls).toEqual([]);
   });
 
   it("reads Go's 403 as unsupported — a Zen key with no Go subscription — and marks nothing fresh", async () => {
@@ -293,6 +464,21 @@ describe("probeUsageLimits", () => {
       kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
     });
+  });
+
+  it("reports a failed probe when the credential is gone by the time it is resolved", async () => {
+    // A sign-out that lands between the check and the resolve: the account was
+    // there a moment ago, so this is one attempt that failed rather than a
+    // provider with nothing to show, and the last good read stands.
+    const { fetch, calls } = scripted(() => json(ANTHROPIC_BODY));
+    const outcome = await probeUsageLimits(
+      input({ models: models(oauth, undefined), fetch }),
+    );
+    expect(outcome).toEqual({
+      kind: "verdict",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+    });
+    expect(calls).toEqual([]);
   });
 
   it("collapses a refused or malformed response to a failed probe, carrying no body text", async () => {
