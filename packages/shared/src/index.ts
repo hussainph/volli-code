@@ -44,6 +44,7 @@ export * from "./change-set";
 export * from "./worktree-collisions";
 export * from "./worktree-preservation";
 export * from "./worktree-orphans";
+export * from "./process-orphans";
 export * from "./ticket-filter";
 export * from "./ticket-sort";
 export * from "./project-identity";

@@ -28,6 +28,7 @@ import {
   type ShellOutputUpdate,
   type ShellOutputView,
 } from "@earendil-works/pi-agent-core/node";
+import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
 import { scopedEnvironment } from "./execution-env";
 
@@ -62,7 +63,26 @@ interface FileOperations {
   rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>;
 }
 
+/** Who a spawned command belongs to, as the spawn ledger records it (VC-341). */
+export interface ExecutionEnvOwner {
+  sessionId: string;
+  ticketId: string | null;
+  projectId: string | null;
+}
+
 export interface ScopedExecutionEnvOptions {
+  /**
+   * Where each spawned command is recorded, and who it is recorded as.
+   *
+   * The row is written with the pid this environment spawned and the group it
+   * leads (`detached`, so the pid IS the group), and is marked exited when the
+   * command settles. A command that outlives this app — a daemon that
+   * double-forked, a build killed mid-turn — leaves the row open, which is what
+   * lets the orphan sweep attribute the process to a Session instead of reading
+   * its command line. Absent means nothing is recorded, which is what every
+   * caller that has never heard of the ledger gets.
+   */
+  ledger?: { port: SpawnLedgerPort; owner: ExecutionEnvOwner };
   /** Internal test seam for SRT's process-global manager. */
   sandbox?: SandboxRuntime;
   /** Internal test seam for the host process boundary. */
@@ -456,11 +476,13 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   readonly #homeDir: string;
   readonly #processKill: ProcessKill;
   readonly #fileOperations: FileOperations;
+  readonly #ledger: { port: SpawnLedgerPort; owner: ExecutionEnvOwner } | undefined;
   readonly #activeChildren = new Set<ChildProcess>();
   readonly #tempDirectories = new Set<string>();
 
   private constructor(root: string, options: ScopedExecutionEnvOptions) {
     this.cwd = root;
+    this.#ledger = options.ledger;
     this.#delegate = new NodeExecutionEnv({ cwd: root });
     this.#sandbox = options.sandbox ?? SandboxManager;
     this.#spawn = options.spawn ?? spawn;
@@ -922,6 +944,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         });
         this.#activeChildren.add(child);
       } catch (error) {
+        // Nothing spawned, so nothing to record.
         finish(
           executionError(
             "spawn_error",
@@ -933,6 +956,33 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       }
 
       const launchedChild = child;
+      // The spawn ledger row (VC-341), written the moment a pid exists and
+      // closed by the same `cleanup` every exit path runs through. `detached`
+      // above makes the child its own group leader, so its pid is also the
+      // group a later reap would signal. A pid-less spawn (Windows, a host
+      // double that never forked) records nothing rather than a row naming no
+      // process.
+      const ledgerId =
+        this.#ledger === undefined || launchedChild.pid === undefined
+          ? null
+          : this.#ledger.port.recordSpawn({
+              sessionId: this.#ledger.owner.sessionId,
+              ticketId: this.#ledger.owner.ticketId,
+              projectId: this.#ledger.owner.projectId,
+              kind: "execute",
+              pid: launchedChild.pid,
+              pgid: launchedChild.pid,
+              startedAt: Date.now(),
+              cwd: commandCwd.value,
+              command,
+            });
+      if (ledgerId !== null) {
+        const ledger = this.#ledger;
+        // `close` rather than `exit`: the same event the result waits on, so a
+        // row is never marked exited while this command's own pipes are still
+        // delivering.
+        launchedChild.once("close", () => ledger?.port.markExited(ledgerId));
+      }
       // One decoder per stream, one buffer for both. The merge is 0.85's, and
       // it is done on decoded text rather than on bytes: stdout and stderr are
       // separate UTF-8 streams, so a multibyte character split across chunks of

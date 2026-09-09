@@ -1980,6 +1980,45 @@ BEGIN
 END;
 `;
 
+/**
+ * Migration 045: the SPAWN LEDGER — every child Volli starts on a Session's
+ * behalf, written at spawn (VC-341).
+ *
+ * The leak this answers is not a missing kill; it is missing knowledge. Once a
+ * Session's executor releases, nothing on the machine knew that the `next dev`
+ * still holding 2.9 GB was ever that Session's, so no sweep could reason about
+ * it. Command lines cannot supply the answer — grepping argv for `node` finds
+ * JavaScript and misses a Gradle daemon or a `uvicorn --reload` — and a
+ * working directory only says where a process is standing. A row written at
+ * spawn says whose it is.
+ *
+ * `started_at` is beside `pid` for one reason: pids recycle. The pair is the
+ * identity every reap re-checks against the live process table before it
+ * signals anything (`ledgerEntryMatches`), so a row whose number has since been
+ * handed to the user's editor names a process this app will not touch.
+ *
+ * No foreign key to `sessions`. A row is a fact about a process that existed,
+ * and it has to outlive both the Session record and the launch that wrote it —
+ * a crash mid-turn is precisely the case the ledger is read after.
+ */
+const MIGRATION_045_SPAWN_LEDGER = `
+CREATE TABLE IF NOT EXISTS spawned_processes (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ticket_id  TEXT,
+  project_id TEXT,
+  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal', 'browser')),
+  pid        INTEGER NOT NULL,
+  pgid       INTEGER,
+  started_at INTEGER NOT NULL,
+  cwd        TEXT NOT NULL,
+  command    TEXT NOT NULL,
+  exited_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS spawned_processes_open ON spawned_processes(exited_at, started_at);
+CREATE INDEX IF NOT EXISTS spawned_processes_session ON spawned_processes(session_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2207,6 +2246,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session_event_sequence — durable opaque cursors for lossless waits on a Session",
     sql: MIGRATION_044_SESSION_EVENT_SEQUENCE,
     apply: applyMigration044SessionEventSequence,
+  },
+  {
+    version: 45,
+    name: "spawned_processes — the spawn ledger behind the orphan process sweep",
+    sql: MIGRATION_045_SPAWN_LEDGER,
   },
 ];
 

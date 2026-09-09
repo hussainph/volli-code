@@ -29,12 +29,14 @@ import type {
   TerminalExitEvent,
   TerminalIoResult,
   TerminalParkStateEvent,
+  SpawnLedgerPort,
 } from "@volli/shared";
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
 import type { ParkConfig, ProcessInspector } from "../park";
+import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
@@ -241,6 +243,10 @@ export class PtyManager {
    *                   (never used in production; `registerTerminalIpcHandlers`
    *                   always resolves the real path) so existing tests/callers
    *                   that never seed attachments need not pass it.
+   * @param spawnLedger where each spawned shell is recorded so a sweep after a
+   *                   crash can still say whose process it is (VC-341).
+   *                   Defaults to the ledger that remembers nothing, which is
+   *                   what every test that is not about the ledger wants.
    */
   constructor(
     private readonly db: Database.Database | null,
@@ -250,6 +256,7 @@ export class PtyManager {
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
+    private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
     // The controller shares this manager's live session map and mutates each
@@ -631,10 +638,28 @@ export class PtyManager {
           ...sessionEnv,
         },
       });
+      // The spawn ledger row (VC-341). A terminal's shell is the process most
+      // likely to still be holding a worktree hours after everyone forgot about
+      // it, and node-pty gives us the pid: the shell leads its own session, so
+      // its pid is also the group a reap would signal. Written before the
+      // window race below, because a row for a shell that is about to be killed
+      // is harmless (the kill marks it exited) while a missing row is not.
+      const ledgerId = this.spawnLedger.recordSpawn({
+        sessionId,
+        ticketId: scope.ticketId,
+        projectId: scope.projectId,
+        kind: "terminal",
+        pid: pty.pid,
+        pgid: pty.pid,
+        startedAt: now,
+        cwd,
+        command: file,
+      });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
       if (webContents.isDestroyed()) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         await recordAttachmentFailure(
           new Error("Window was closed before the terminal could start"),
           cwd,
@@ -664,6 +689,7 @@ export class PtyManager {
         });
       } catch (error) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         await recordAttachmentFailure(error, cwd);
         return { ok: false, error: errorMessage(error) };
       }
@@ -791,6 +817,10 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         session.output.flush();
+        // The one exit the ledger can observe. A shell this app never sees die
+        // — because the app itself was killed — leaves the row open, which is
+        // exactly the state the orphan sweep reads.
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         // A shell dying with the setup run still armed means the sentinel never
         // printed — the subshell wrapper contains a setup's own `exit`, but a
         // crash or an `exec` can still take the shell down. Without this the
@@ -821,6 +851,7 @@ export class PtyManager {
       const record = projection === null ? null : terminalSessionRecord(projection);
       if (record === null) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         return { ok: false, error: "Session was not found after terminal attachment opened" };
       }
       return { ok: true, sessionId, session: record };

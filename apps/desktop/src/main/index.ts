@@ -304,6 +304,7 @@ import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
+import { SpawnLedger } from "./process/spawn-ledger";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -1074,6 +1075,14 @@ app.whenReady().then(async () => {
     : null;
   agentObservability?.start();
   /**
+   * The spawn ledger (VC-341): every child Volli starts on a Session's behalf,
+   * recorded at spawn so that a sweep after a crash — or after a Session ended
+   * without its processes noticing — can say whose a running process is
+   * without guessing from its command line. One instance, shared by every
+   * spawn door, and a no-op when the database never opened.
+   */
+  const spawnLedger = new SpawnLedger(dbHandle.ok ? dbHandle.db : null);
+  /**
    * The Agent Tool Surface's door into main (VC-162) — the same application
    * handler the socket's `session.start` reaches, entered with a caller main
    * bound rather than one a request claimed.
@@ -1127,6 +1136,10 @@ app.whenReady().then(async () => {
   const backgroundShells = new BackgroundShellHost({
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
+    // One row per started shell (VC-341). A background shell is the door a
+    // model most often uses to start a dev server, and the one whose child can
+    // outlive both the Session and this launch.
+    ledger: spawnLedger,
   });
 
   let agentToolDoor: AgentToolDoor | null = null;
