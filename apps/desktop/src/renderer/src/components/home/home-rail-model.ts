@@ -16,6 +16,7 @@
 import { isListableSession, type ChatSessionRecord, type SessionRecord } from "@volli/shared";
 
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
+import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
 
 /** Home's rail pages. */
 export type HomeRailMode = "now" | "sessions" | "files" | "search";
@@ -124,11 +125,16 @@ export function homeSessionRows(
   return rows.toSorted((left, right) => right.at - left.at);
 }
 
-/** A chat row's dot: waiting outranks working; between turns is simply idle. */
+/**
+ * A chat row's dot: waiting outranks working, a turn that died says so
+ * (VC-324), and between turns is simply idle. The words are the record's own
+ * — `activity` already ranked them; this only spends the dot's vocabulary.
+ */
 function chatState(row: ChatSessionRecord): StatusDotState {
-  if (row.activity === "waiting") return "waiting";
-  if (row.activity === "working") return "working";
-  return "idle";
+  // The shared mapping (VC-324): this used to be a private copy whose `idle`
+  // default swallowed `interrupted`, so a chat whose last turn died read as
+  // merely quiet on Home and as dead in the sidebar.
+  return sessionActivityDotState(row.activity);
 }
 
 /**

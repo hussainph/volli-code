@@ -109,8 +109,8 @@ export interface CursorOverlayHost {
   /**
    * Whether one tab's page is on screen. A question rather than "which tab is
    * attached", because the host attaches a view per tab (VC-238): a shown
-   * agent tab and the person's own pane can both be up. A headless tab is
-   * attached to nothing, so the cursor can never draw over one.
+   * agent tab and the person's own pane can both be up. A Headless tab is on no
+   * visible surface, so the cursor can never draw over one.
    */
   isOnScreen(tabId: string): boolean;
   /** Every tab on screen right now, for choosing the one cursor to draw. */

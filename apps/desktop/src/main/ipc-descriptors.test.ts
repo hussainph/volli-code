@@ -1506,9 +1506,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{}])).toBe(true);
     });
 
-    it("accepts an explicit boolean rescan", () => {
-      expect(guard([{ rescan: true }])).toBe(true);
-      expect(guard([{ rescan: false }])).toBe(true);
+    it("accepts an explicit boolean refresh", () => {
+      expect(guard([{ refresh: true }])).toBe(true);
+      expect(guard([{ refresh: false }])).toBe(true);
     });
 
     it("rejects a non-object first argument", () => {
@@ -1516,8 +1516,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([null])).toBe(false);
     });
 
-    it("rejects a present-but-non-boolean rescan", () => {
-      expect(guard([{ rescan: "yes" }])).toBe(false);
+    it("rejects a present-but-non-boolean refresh", () => {
+      expect(guard([{ refresh: "yes" }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1526,6 +1526,72 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:worktree-orphan-cleanup", () => {
+    const { guard, invalidError } = DATA_IPC["volli:worktree-orphan-cleanup"];
+
+    // A caller-minted UUID, like every other command channel in this catalog.
+    const commandId = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
+
+    it("accepts a command id, a scan revision, and the item ids confirmed from it", () => {
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }])).toBe(
+        true,
+      );
+      expect(
+        guard([
+          {
+            commandId,
+            scanRevision: "rev-1",
+            itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+          },
+        ]),
+      ).toBe(true);
+    });
+
+    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // `"cmd-1"` is an id a second writer could mint too, and cross-writer
+    // string equality has to mean "the same logical fact"
+    // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
+    it("rejects a command id that is not a UUID", () => {
+      for (const bad of ["cmd-1", "1", "", "6f1a2b3c4d5e4f608a912b3c4d5e6f70", 7, null]) {
+        expect(
+          guard([{ commandId: bad, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
+        ).toBe(false);
+      }
+    });
+
+    // A cleanup with nothing to do would still open a durable record; refusing
+    // the shape keeps the history a log of acts rather than of clicks.
+    it("rejects a request that would change nothing", () => {
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [] }])).toBe(false);
+    });
+
+    // The channel takes ids, never paths: main resolves them against the plan
+    // it minted, so a client cannot name a directory no scan proposed (C1).
+    it("rejects the old path-carrying shape outright", () => {
+      expect(guard([{ paths: ["/wt/a"], projectIds: ["p1"] }])).toBe(false);
+    });
+
+    it("rejects anything that isn't a command id, a revision, and non-empty string ids", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([{ scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "", scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: "a" }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [1] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [""] }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ commandId: "c", scanRevision: "r", itemIds: ["i"] }, {}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid cleanup request");
     });
   });
 
@@ -1850,8 +1916,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 62 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(62);
+    it("covers all 63 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(63);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no

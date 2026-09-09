@@ -42,9 +42,26 @@ export interface SplitViewDividerProps {
   /** The first pane's current share, for the keyboard's relative steps. */
   ratio: number;
   onChange(ratio: number): void;
+  /**
+   * Draw the grip, but keep it out of the accessibility tree and the tab order.
+   *
+   * SINCE VC-333 a row split has TWO grips on one seam — the main tab bar's and
+   * the plane's — and they drive the same ratio through the same split id. To a
+   * pointer that is a convenience: the seam is draggable along its whole
+   * height. To AT and to the keyboard it would be a lie, announcing two
+   * dividers and costing two identical tab stops where the user sees one
+   * boundary. So the bar's copy is presentational and the plane's is the one
+   * that speaks — the plane being the thing the ratio is actually about.
+   */
+  presentational?: boolean;
 }
 
-export function SplitViewDivider({ direction, ratio, onChange }: SplitViewDividerProps) {
+export function SplitViewDivider({
+  direction,
+  ratio,
+  onChange,
+  presentational = false,
+}: SplitViewDividerProps) {
   const vertical = direction === "row";
   const dragRef = React.useRef<{
     pointerId: number;
@@ -86,16 +103,23 @@ export function SplitViewDivider({ direction, ratio, onChange }: SplitViewDivide
 
   return (
     <div
-      role="separator"
-      aria-orientation={vertical ? "vertical" : "horizontal"}
-      aria-label={vertical ? "Resize left and right panes" : "Resize top and bottom panes"}
+      role={presentational ? "presentation" : "separator"}
+      aria-hidden={presentational || undefined}
+      aria-orientation={presentational ? undefined : vertical ? "vertical" : "horizontal"}
+      aria-label={
+        presentational
+          ? undefined
+          : vertical
+            ? "Resize left and right panes"
+            : "Resize top and bottom panes"
+      }
       // Where it stands, as a percentage of the model's own clamp — the px
       // floor is a live-layout fact AT cannot usefully be told, but 15–85 and
       // the current share are stable answers to "how far can this go".
-      aria-valuemin={Math.round(SPLIT_VIEW_MIN_RATIO * 100)}
-      aria-valuemax={Math.round(SPLIT_VIEW_MAX_RATIO * 100)}
-      aria-valuenow={Math.round(ratio * 100)}
-      tabIndex={0}
+      aria-valuemin={presentational ? undefined : Math.round(SPLIT_VIEW_MIN_RATIO * 100)}
+      aria-valuemax={presentational ? undefined : Math.round(SPLIT_VIEW_MAX_RATIO * 100)}
+      aria-valuenow={presentational ? undefined : Math.round(ratio * 100)}
+      tabIndex={presentational ? -1 : 0}
       data-slot="split-view-divider"
       className={cn(
         "group relative z-10 shrink-0 bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-primary",
