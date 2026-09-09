@@ -1188,6 +1188,7 @@ export const VERB_REGISTRY = [
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
+        "When the person names a saved Automation, preserve that workflow rather than copying or rewriting its Instructions into a kickoff. If this Session holds `automation_run`, use that tool instead so the saved definition and Run history stay connected. If it does not, explain the missing tool and ask for a Board Session or a manual Run; do not bypass the missing tool with an improvised kickoff.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
@@ -1725,11 +1726,27 @@ export const VERB_REGISTRY = [
     // Appended, never inserted. Declaration order is the canonical tool order,
     // and a Session whose surface was frozen before this verb existed must find
     // every tool it already held exactly where it already was.
+    //
+    // `listed: true` (VC-329) follows the `session.start` and `session.stop`
+    // precedent for a tool-only verb: the reference is where an agent learns
+    // the verb's real door. Previously only the frozen tool array exposed it;
+    // listing it also makes CLI-based discovery possible. This addresses one
+    // plausible cause of agents substituting custom kickoffs for saved work.
+    // Listing costs nothing unsafe: the reference line and the `volli help
+    // automation run` detail page teach the Agent Tool Surface door, and the
+    // parser still refuses any shell invocation with the name of the door that
+    // does hold it.
     key: "automation.run",
     accessModes: ["tool"],
     actor: "role",
     handler: { site: "main", id: "automation.run" },
-    listed: false,
+    listed: true,
+    referenceOrder: 35,
+    example: 'volli automation run "Nightly sweep" VC-12',
+    notes: [
+      "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
+      "Runs a saved Automation a person already wrote; it cannot create or edit one.",
+    ],
     group: "Session",
     summary: "Run a saved Automation on one Ticket, opening one fresh Session.",
     effects: {
@@ -1761,6 +1778,7 @@ export const VERB_REGISTRY = [
         "Start a saved Automation on one Ticket in this project: it opens one fresh Session carrying that Automation's Instructions, and returns as soon as the Run is recorded.",
         "This includes an Automation whose Trigger is a schedule: although the schedule itself and person-facing Run doors target the Project, this agent-only invocation is a ruled exception that aims its one Run at the named Ticket without changing the Trigger.",
         "Use it to fan a saved piece of work out across Tickets, one Run per Ticket; the Run runs on its own and does not report back into this Session.",
+        "Prefer this over composing an equivalent `session_start` kickoff by hand: the Automation is the person's authored, rerunnable version of that work.",
         "It runs an Automation a person already wrote and cannot create or edit one, so name an existing Automation \u2014 an unknown name is answered with the ones this project has.",
         "It does not move the Ticket, and it does not wait for the work to finish.",
         "Volli binds the calling Session and project itself: name the Automation and the Ticket, and nothing about yourself.",
