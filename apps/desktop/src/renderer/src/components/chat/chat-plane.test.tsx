@@ -92,7 +92,9 @@ describe("SessionBlocker hit testing", () => {
       </div>,
     );
 
-    expect(html).toMatch(/^<div class="pointer-events-none"><div class="[^"]*pointer-events-auto/);
+    expect(html).toMatch(
+      /^<div class="pointer-events-none"><div data-slot="session-blocker" class="[^"]*pointer-events-auto/,
+    );
     expect(html).toContain('aria-label="Dismiss"');
   });
 });

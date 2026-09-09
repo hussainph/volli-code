@@ -5902,6 +5902,8 @@ describe("prompt.baseline", () => {
     }[];
     expect(sections.map((section) => section.id)).toEqual([
       "operating",
+      // The compact coding workflow every Role shares (VC-332).
+      "execution",
       "role",
       "authority",
       "workspace",
@@ -5953,6 +5955,7 @@ describe("prompt.baseline", () => {
     const sections = (response.data as Record<string, unknown>)["sections"] as { id: string }[];
     expect(sections.map((section) => section.id)).toEqual([
       "operating",
+      "execution",
       "role",
       "authority",
       "workspace",
