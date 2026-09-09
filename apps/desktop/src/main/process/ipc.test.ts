@@ -118,6 +118,25 @@ describe("orphan process IPC", () => {
         minimumAgeHours: 24,
       }),
     ).toEqual({ ok: false, error: "Invalid automatic reaping setting" });
+    // Neither guard may reach `args[0]["..."]` on something that is not a
+    // record, and neither may accept a call with the wrong arity.
+    expect(
+      await invoke<Promise<OrphanProcessReapResult>>("volli:orphan-processes-reap", "rev-7"),
+    ).toEqual({ ok: false, error: "Invalid reap request" });
+    expect(await invoke<Promise<OrphanProcessReapResult>>("volli:orphan-processes-reap")).toEqual({
+      ok: false,
+      error: "Invalid reap request",
+    });
+    expect(
+      await invoke<Promise<OrphanProcessPolicyResult>>("volli:orphan-processes-policy", null),
+    ).toEqual({ ok: false, error: "Invalid automatic reaping setting" });
+    expect(
+      await invoke<Promise<OrphanProcessPolicyResult>>(
+        "volli:orphan-processes-policy",
+        { enabled: true, minimumAgeHours: 1 },
+        { enabled: false, minimumAgeHours: 1 },
+      ),
+    ).toEqual({ ok: false, error: "Invalid automatic reaping setting" });
   });
 
   it("stores what the person chose, clamped by main", async () => {
