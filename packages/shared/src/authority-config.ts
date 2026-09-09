@@ -245,6 +245,13 @@ const DEFAULT_SESSION_COORDINATION_VERBS = [
   // withhold nothing — it would only push the same merge back into hand-rolled
   // shell, which is the uneven staleness handling this verb replaces.
   "worktree.sync",
+  // Label merge (VC-310). A default on `worktree.sync`'s reasoning: a Session
+  // already holds `ticket.update`, whose `--add-label`/`--remove-label` reach
+  // every association this verb touches, so withholding it would not withhold
+  // the outcome — it would push the same rewrite into a hand-rolled loop that
+  // previews nothing and reports no blast radius. The verb's own preview-first
+  // shape is the guard here, not the policy list.
+  "label.merge",
   "notify",
   "session.harness",
   "hook",

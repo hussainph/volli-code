@@ -30,6 +30,13 @@ export function listAllLabels(db: Database.Database): Label[] {
   return rows.map(mapLabel);
 }
 
+/**
+ * The project's label named `name`, matched case-insensitively: `ui` finds
+ * `UI` (VC-310). `COLLATE NOCASE` rather than a folded comparison in JS so
+ * this reads the very index that enforces the rule (migration 043's
+ * `labels_project_name_nocase`), which is also why `labelNameKey` in
+ * `@volli/shared` folds ASCII and only ASCII — the two must not disagree.
+ */
 export function findLabelByName(
   db: Database.Database,
   projectId: string,
@@ -37,7 +44,7 @@ export function findLabelByName(
 ): Label | undefined {
   const row = prepared<[string, string], LabelRow>(
     db,
-    "SELECT * FROM labels WHERE project_id = ? AND name = ?",
+    "SELECT * FROM labels WHERE project_id = ? AND name = ? COLLATE NOCASE",
   ).get(projectId, name);
   return row ? mapLabel(row) : undefined;
 }
@@ -47,7 +54,13 @@ export function getLabel(db: Database.Database, labelId: string): Label | undefi
   return row ? mapLabel(row) : undefined;
 }
 
-/** Returns the project's existing label named `name`, or creates one with `color: null` ("derive by hash"). */
+/**
+ * Returns the project's existing label named `name` — under ANY case spelling
+ * of it — or creates one with `color: null` ("derive by hash"). Resolving
+ * rather than minting is what keeps a second `ui` from appearing beside `UI`
+ * when a door other than the picker asks for one (VC-310); the caller gets the
+ * spelling the project already settled on.
+ */
 export function getOrCreateLabel(
   db: Database.Database,
   projectId: string,
@@ -93,4 +106,37 @@ export function removeTicketLabel(db: Database.Database, ticketId: string, label
     ticketId,
     labelId,
   );
+}
+
+/** Every ticket wearing `labelId`, oldest ticket first — a merge's blast radius. */
+export function listTicketIdsWithLabel(db: Database.Database, labelId: string): string[] {
+  const rows = prepared<[string], { ticket_id: string }>(
+    db,
+    `SELECT tl.ticket_id
+       FROM ticket_labels tl
+       JOIN tickets t ON t.id = tl.ticket_id
+      WHERE tl.label_id = ?
+      ORDER BY t.ticket_number`,
+  ).all(labelId);
+  return rows.map((row) => row.ticket_id);
+}
+
+/**
+ * Moves every association from one label to another and deletes the emptied
+ * one (VC-310's merge). `INSERT OR IGNORE` for the ticket that wore BOTH: its
+ * target row already exists, and the junction's primary key would otherwise
+ * reject the copy rather than collapsing it. Deleting the source last lets
+ * `ticket_labels.label_id`'s ON DELETE CASCADE clear the rows just copied.
+ */
+export function mergeLabelInto(
+  db: Database.Database,
+  fromLabelId: string,
+  intoLabelId: string,
+): void {
+  prepared(
+    db,
+    `INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id)
+     SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?`,
+  ).run(intoLabelId, fromLabelId);
+  prepared(db, "DELETE FROM labels WHERE id = ?").run(fromLabelId);
 }

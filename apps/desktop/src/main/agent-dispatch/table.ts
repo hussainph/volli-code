@@ -32,6 +32,7 @@ import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app
 import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
+import { labelMergeVerb } from "./label-verbs";
 import {
   boardVerb,
   identifyVerb,
@@ -134,6 +135,10 @@ export const AGENT_VERB_TABLE: {
   conflicts: { handle: conflictsVerb, projections: "skip", envSession: "resolve" },
   "project.list": { handle: projectListVerb, projections: "load", envSession: "resolve" },
   "label.list": { handle: labelListVerb, projections: "load", envSession: "resolve" },
+  // Reads Tickets and labels and writes both; no Session is in the answer, so
+  // the fold would be pure cost. `envSession` still resolves, because the
+  // merge is attributed history.
+  "label.merge": { handle: labelMergeVerb, projections: "skip", envSession: "resolve" },
   // Reads the Model Access snapshot and nothing else — no Session anywhere in
   // the answer, so folding every project's is pure cost.
   "model.list": { handle: modelListVerb, projections: "skip", envSession: "resolve" },

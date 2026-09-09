@@ -6975,3 +6975,142 @@ describe("the ticket wake bus", () => {
     });
   });
 });
+
+/**
+ * `volli label merge` — the cleanup tool for a vocabulary that drifted
+ * (VC-310).
+ *
+ * Migration 043 means two spellings of ONE name can no longer coexist, so what
+ * is left for a person to fix by hand is the other kind of duplicate: two
+ * genuinely different names that mean the same thing. Merging those is
+ * destructive and unattributed history cannot be undone, which is why the
+ * preview is the DEFAULT here rather than a `--dry-run` a caller must remember.
+ */
+describe("label merge", () => {
+  async function projectWithDriftedLabels() {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let ticketNumber = 0;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      newId: () => `ticket-${++ticketNumber}`,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+
+    await execute("ticket.create", { title: "One", labels: ["frontend"] });
+    await execute("ticket.create", { title: "Two", labels: ["front-end"] });
+    // Wears BOTH spellings: the merge must leave it wearing one label, not
+    // fail on the junction's primary key.
+    await execute("ticket.create", { title: "Three", labels: ["frontend", "front-end"] });
+    await execute("ticket.create", { title: "Four", labels: ["infra"] });
+    return execute;
+  }
+
+  function labelNames(): string[] {
+    return (
+      ctx.db.prepare("SELECT name FROM labels ORDER BY name").all() as { name: string }[]
+    ).map((row) => row.name);
+  }
+
+  it("previews the affected tickets and writes nothing", async () => {
+    const execute = await projectWithDriftedLabels();
+
+    const preview = await execute("label.merge", { from: "front-end", into: "frontend" });
+
+    expect(preview).toMatchObject({
+      ok: true,
+      data: {
+        applied: false,
+        from: "front-end",
+        into: "frontend",
+        tickets: [
+          { id: "VC-2", title: "Two" },
+          { id: "VC-3", title: "Three" },
+        ],
+      },
+    });
+    expect(labelNames()).toEqual(["front-end", "frontend", "infra"]);
+  });
+
+  it("performs the merge under --apply, preserving every association", async () => {
+    const execute = await projectWithDriftedLabels();
+
+    const applied = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      apply: true,
+    });
+
+    expect(applied).toMatchObject({
+      ok: true,
+      data: { applied: true, tickets: [{ id: "VC-2" }, { id: "VC-3" }] },
+    });
+    expect(labelNames()).toEqual(["frontend", "infra"]);
+    // VC-2 gained the surviving label; VC-3 kept its single copy of it.
+    const wearers = await execute("ticket.list", { label: "frontend" });
+    expect(wearers).toMatchObject({
+      ok: true,
+      data: { tickets: [{ id: "VC-1" }, { id: "VC-2" }, { id: "VC-3" }] },
+    });
+  });
+
+  it("refuses a name the project does not have, naming what it does have", async () => {
+    const execute = await projectWithDriftedLabels();
+
+    const refusal = await execute("label.merge", { from: "backend", into: "frontend" });
+
+    expect(refusal).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(labelNames()).toEqual(["front-end", "frontend", "infra"]);
+  });
+});
+
+/**
+ * VC-310's acceptance, at the door an agent and the `volli` CLI both come
+ * through: asking for `ui` where `UI` exists gets the label the project already
+ * has, not a second spelling of it.
+ *
+ * The picker's own guard was always case-insensitive; this is the half that was
+ * not, and it is asserted HERE rather than at the repo because the claim is
+ * about the door, not about the SQL.
+ */
+describe("label case identity through the agent door", () => {
+  it("resolves a differently-cased name to the label the project already has", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let ticketNumber = 0;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      newId: () => `ticket-${++ticketNumber}`,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+
+    await execute("ticket.create", { title: "First", labels: ["UI"] });
+    // Two more doors onto the same vocabulary: a fresh ticket, and an update.
+    const second = await execute("ticket.create", { title: "Second", labels: ["ui"] });
+    const third = await execute("ticket.create", { title: "Third" });
+    const updated = await execute("ticket.update", { id: "VC-3", addLabels: ["Ui"] });
+
+    // Each door hands back the settled spelling, so nothing downstream has to
+    // normalise it a second time.
+    expect(second).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    expect(third).toMatchObject({ ok: true });
+    expect(updated).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    // And the project still has exactly one label, worn by all three tickets.
+    expect(await execute("label.list", {})).toMatchObject({
+      ok: true,
+      data: { labels: [{ name: "UI", tickets: 3 }] },
+    });
+  });
+});

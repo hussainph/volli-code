@@ -107,7 +107,14 @@ export type VerbTier = "read" | "coordination" | "control";
 /** One durable write a voluntary verb intends. */
 export interface VerbDurableWrite {
   readonly resource: string;
-  readonly operation: "create" | "update" | "append";
+  /**
+   * `delete` was added by VC-310's label merge, the first verb on this surface
+   * that durably removes a row rather than superseding or archiving one. It is
+   * spelled out rather than folded into `update` because this list is what a
+   * caller reads to decide whether to run a verb, and "a row goes away" is
+   * exactly the kind of thing that must not be phrased softly.
+   */
+  readonly operation: "create" | "update" | "append" | "delete";
   readonly summary: string;
 }
 
@@ -244,6 +251,22 @@ export interface VerbEntry {
   readonly notes?: readonly string[];
   /** Structured writes and person-visible effects; the canonical side-effect contract. */
   readonly effects?: VerbEffects;
+  /**
+   * The verb previews unless told to write, inverting the CLI's ordinary rule
+   * that a coordination verb writes and `--dry-run` previews (VC-310).
+   *
+   * Declared rather than inferred, because the registry is where a caller
+   * learns what a verb DOES before running it, and "the plain form is safe"
+   * is exactly that kind of fact. It is also what lets the invariant "every
+   * voluntary coordination write offers a preview" stay a real check: such a
+   * verb satisfies it by construction rather than by an exemption.
+   *
+   * Reserve it for a write that is destructive and not usefully reversible. A
+   * comment can be answered and a move can be moved back, so those keep the
+   * ordinary shape; folding one label into another deletes a row and rewrites
+   * the organisation of tickets nobody is looking at.
+   */
+  readonly previewsByDefault?: boolean;
   /** How this verb appears on the Agent Tool Surface; required by a `tool` access mode. */
   readonly tool?: VerbToolProjection;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
@@ -955,6 +978,63 @@ export const VERB_REGISTRY = [
     options: [{ name: "--project", kind: "value", placeholder: "<p>", help: "Target project." }],
   },
   {
+    // The one verb whose PREVIEW is the default and whose write needs a flag
+    // (VC-310). It declares no `--dry-run`, because omitting `--apply` already
+    // is one; see `label-verbs.ts` for why this verb inverts the rule.
+    key: "label.merge",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: { site: "main", id: "label.merge" },
+    listed: true,
+    referenceOrder: 20,
+    group: "Write",
+    previewsByDefault: true,
+    summary: "Fold one label into another, previewing the affected tickets.",
+    example: "volli label merge --from front-end --into frontend",
+    notes: [
+      "Previews by default: without --apply nothing is written.",
+      "Case variants are already one label, so this is for names that merely mean the same thing.",
+      "Every ticket wearing the merged-away name comes out wearing the surviving one.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-label",
+          operation: "update",
+          summary:
+            "Move every association from the merged-away label onto the surviving one, and record a labels_changed event per affected Ticket.",
+        },
+        {
+          resource: "label",
+          operation: "delete",
+          summary: "Delete the merged-away label row once nothing wears it.",
+        },
+      ],
+      humanVisible: [
+        "Affected Ticket cards show the surviving label, and the merged-away one leaves the board's Label filter.",
+      ],
+      nonEffects: ["No Ticket moves, and no Ticket loses a label it was wearing."],
+    },
+    options: [
+      {
+        name: "--from",
+        kind: "value",
+        placeholder: "<name>",
+        required: true,
+        help: "Label to merge away.",
+      },
+      {
+        name: "--into",
+        kind: "value",
+        placeholder: "<name>",
+        required: true,
+        help: "Label that survives.",
+      },
+      { name: "--apply", kind: "flag", help: "Perform the merge instead of previewing it." },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
+    ],
+  },
+  {
     // Model discovery (VC-78): the same Model Access snapshot the app reads,
     // narrowed to models the runtime can use — never a parallel provider probe
     // or a signed-out catalog in an agent's context.
@@ -1047,7 +1127,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
@@ -1069,7 +1149,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 26,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -1102,7 +1182,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.answer" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 27,
     group: "Session",
     summary: "Read a chat session's final message in full: a subagent's answer.",
     example: "volli session answer a1b2c3",
@@ -1145,7 +1225,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 21,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -1296,7 +1376,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 28,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -1345,7 +1425,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 28,
+    referenceOrder: 29,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -1391,7 +1471,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 29,
+    referenceOrder: 30,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1451,7 +1531,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 30,
+    referenceOrder: 31,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1510,7 +1590,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 33,
+    referenceOrder: 34,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1555,7 +1635,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 32,
+    referenceOrder: 33,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1592,7 +1672,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 31,
+    referenceOrder: 32,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1617,7 +1697,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 34,
+    referenceOrder: 35,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -1802,7 +1882,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.stop" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 22,
     group: "Session",
     summary: "Stop another agent session's work, recording who stopped it.",
     example: "volli session stop a1b2c3d4",
@@ -1868,7 +1948,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.send" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 23,
     group: "Session",
     summary: "Steer a message into another running agent session.",
     example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
@@ -1950,7 +2030,7 @@ export const VERB_REGISTRY = [
     // teach its real door rather than answer UNSUPPORTED_COMMAND. It prints
     // beside `session send`, the verb it is most often mistaken for.
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "Session",
     summary: "Delegate one task to a subagent Session that answers back here.",
     example: 'volli session delegate "Find where the auth token is refreshed"',

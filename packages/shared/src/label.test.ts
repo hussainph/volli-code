@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { labelColor } from "./label";
+import { labelColor, labelNameKey } from "./label";
 import type { Label } from "./label";
 import { TAG_COLORS, tagColor } from "./tag-color";
 
@@ -23,5 +23,11 @@ describe("labelColor", () => {
     // `??` only falls through on null/undefined, so an explicit (if odd)
     // empty-string color is honored rather than silently reinterpreted.
     expect(labelColor({ name: "bug", color: "" })).toBe("");
+  });
+});
+
+describe("labelNameKey", () => {
+  it("gives two ASCII case variants of one name the same key", () => {
+    expect(labelNameKey("UI")).toBe(labelNameKey("ui"));
   });
 });

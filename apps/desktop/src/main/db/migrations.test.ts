@@ -3134,3 +3134,83 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
     db.close();
   });
 });
+
+/**
+ * A v42 database carrying the exact shape the audit found: a project whose
+ * label vocabulary contains both `UI` and `ui`, each worn by real tickets.
+ * Built by walking the real runner to 42 rather than exec'ing SQL by hand,
+ * so the fixture is the database a real install actually upgrades from.
+ */
+function buildV42DbWithLabelCaseVariants(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath, { toVersion: 42 });
+
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 0, 0)`,
+  ).run();
+  const insertTicket = db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, status, priority, position, created_at, updated_at)
+       VALUES (@id, 'p1', @n, @title, 'todo', 'medium', 0, 0, 0)`,
+  );
+  insertTicket.run({ id: "t1", n: 1, title: "One" });
+  insertTicket.run({ id: "t2", n: 2, title: "Two" });
+  insertTicket.run({ id: "t3", n: 3, title: "Three" });
+
+  const insertLabel = db.prepare(
+    `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
+       VALUES (@id, 'p1', @name, @color, @createdAt, @createdAt)`,
+  );
+  // `UI` is the established spelling — two tickets wear it, and it carries
+  // the color someone chose. `ui` is the stray one door minted.
+  insertLabel.run({ id: "l-upper", name: "UI", color: "#123456", createdAt: 10 });
+  insertLabel.run({ id: "l-lower", name: "ui", color: null, createdAt: 20 });
+
+  const wear = db.prepare("INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)");
+  wear.run("t1", "l-upper");
+  wear.run("t2", "l-upper");
+  wear.run("t3", "l-lower");
+  return db;
+}
+
+describe("migrate — 043, one label identity per case-folded name (VC-310)", () => {
+  it("folds the stray spelling into the established one, keeping every association", () => {
+    const dbPath = tempDbPath();
+    const db = buildV42DbWithLabelCaseVariants(dbPath);
+
+    migrate(db, dbPath);
+
+    // The name the project had settled on survives, with its chosen color.
+    expect(db.prepare("SELECT id, name, color FROM labels WHERE project_id = 'p1'").all()).toEqual([
+      { id: "l-upper", name: "UI", color: "#123456" },
+    ]);
+    // t3 wore only the stray spelling: it must still wear the label, not lose it.
+    expect(
+      db.prepare("SELECT ticket_id, label_id FROM ticket_labels ORDER BY ticket_id").all(),
+    ).toEqual([
+      { ticket_id: "t1", label_id: "l-upper" },
+      { ticket_id: "t2", label_id: "l-upper" },
+      { ticket_id: "t3", label_id: "l-upper" },
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("refuses a second case spelling once the index is in place", () => {
+    const dbPath = tempDbPath();
+    const db = buildV42DbWithLabelCaseVariants(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
+             VALUES ('l-new', 'p1', 'Ui', NULL, 0, 0)`,
+        )
+        .run(),
+    ).toThrow();
+    db.close();
+  });
+});

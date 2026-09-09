@@ -1795,6 +1795,30 @@ UPDATE sessions
 const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
 
 /**
+ * Migration 043: one label identity per case-folded name (VC-310).
+ *
+ * Migration 001 made labels unique on `(project_id, name)` EXACTLY, so `UI`
+ * and `ui` were two labels and every door but the picker could mint the second
+ * one. This index closes that; it subsumes 001's constraint (names identical
+ * are also identical under NOCASE), so the old one is left in place rather
+ * than rebuilding the table to drop a redundant guard.
+ *
+ * NOCASE folds `A`-`Z` and nothing else, which is exactly what `labelNameKey`
+ * in `@volli/shared` folds and exactly what `findLabelByName` matches with.
+ * That agreement is the point: a JS-side fold that reached further than the
+ * index would report a name taken that the index would then happily store
+ * twice.
+ *
+ * It cannot be created before the duplicates are gone — see
+ * {@link applyMigration043LabelCaseIdentity}, which merges them first, in the
+ * same transaction.
+ */
+const MIGRATION_043_LABEL_CASE_IDENTITY = `
+CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
+  ON labels(project_id, name COLLATE NOCASE);
+`;
+
+/**
  * Migration 042: compact replay-stable native observation ids and intern event
  * provenance (VC-326).
  *
@@ -2078,6 +2102,12 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_042_SESSION_EVENT_STORAGE,
     apply: applyMigration042SessionEventStorage,
   },
+  {
+    version: 43,
+    name: "labels — one identity per case-folded name, existing variants merged",
+    sql: MIGRATION_043_LABEL_CASE_IDENTITY,
+    apply: applyMigration043LabelCaseIdentity,
+  },
 ];
 
 function countRows(db: Database.Database, sql: string): number {
@@ -2274,6 +2304,65 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
   const after = computeSessionStorageContentDigest(db);
   assertSessionStorageContentUnchanged(before, after);
   db.exec("DROP TABLE session_event_id_map_v42");
+}
+
+/**
+ * Migration 043's merge step: fold every case variant of a label name onto one
+ * row, so the NOCASE unique index can be created (VC-310).
+ *
+ * WHICH SPELLING SURVIVES. The one the project actually uses: most tickets
+ * wins, then the oldest row, then the lowest id so the outcome never depends
+ * on scan order. On the board this audit came from that folds `ui` (1 ticket)
+ * into `UI` (77) — the answer a person would have given. The survivor keeps
+ * its OWN color: adopting a loser's would repaint 77 tickets' chips because
+ * one stray ticket carried a color, which is the "silently rewrite existing
+ * organisation" this ticket rules out.
+ *
+ * Associations are preserved, never dropped: a ticket wearing only the losing
+ * spelling comes out wearing the survivor. `INSERT OR IGNORE` covers the
+ * ticket that wore BOTH spellings, whose two rows collapse into the one it
+ * already has rather than colliding on the junction's primary key.
+ */
+function applyMigration043LabelCaseIdentity(db: Database.Database): void {
+  // `lower()` is SQLite's own ASCII fold, so the grouping here is precisely
+  // the equivalence the index below will enforce — no group is merged that the
+  // index would have allowed to coexist, and none is left that it would reject.
+  const duplicateGroups = db
+    .prepare(
+      `SELECT project_id, lower(name) AS folded
+         FROM labels
+        GROUP BY project_id, lower(name)
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as { project_id: string; folded: string }[];
+
+  const variantsOf = db.prepare(
+    `SELECT l.id,
+            (SELECT COUNT(*) FROM ticket_labels tl WHERE tl.label_id = l.id) AS tickets
+       FROM labels l
+      WHERE l.project_id = ? AND lower(l.name) = ?
+      ORDER BY tickets DESC, l.created_at ASC, l.id ASC`,
+  );
+  // OR IGNORE, for the ticket that wore both spellings: it already has the
+  // survivor's junction row, and the loser's would collide on (ticket, label).
+  const repointAssociations = db.prepare(
+    "INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?",
+  );
+  // The losing label row goes, and `ticket_labels.label_id`'s ON DELETE
+  // CASCADE takes its now-redundant junction rows with it.
+  const dropVariant = db.prepare("DELETE FROM labels WHERE id = ?");
+
+  for (const group of duplicateGroups) {
+    const variants = variantsOf.all(group.project_id, group.folded) as { id: string }[];
+    const [survivor, ...losers] = variants;
+    if (survivor === undefined) continue;
+    for (const loser of losers) {
+      repointAssociations.run(survivor.id, loser.id);
+      dropVariant.run(loser.id);
+    }
+  }
+
+  db.exec(MIGRATION_043_LABEL_CASE_IDENTITY);
 }
 
 /** Migration 041's reconciler, probe-gated like 040's. */

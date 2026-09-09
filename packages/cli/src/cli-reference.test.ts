@@ -75,6 +75,7 @@ const REFERENCE_COMMANDS = [
   "ticket signal",
   "ticket archive",
   "worktree sync",
+  "label merge",
   "session start",
   "session stop",
   "session send",

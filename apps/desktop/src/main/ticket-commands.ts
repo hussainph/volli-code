@@ -22,7 +22,10 @@ import { createSignal } from "./db/signals-repo";
 import {
   addTicketLabel,
   findLabelByName,
+  getLabel,
   getOrCreateLabel,
+  listTicketIdsWithLabel,
+  mergeLabelInto,
   removeTicketLabel,
 } from "./db/labels-repo";
 import {
@@ -410,6 +413,46 @@ export function setTicketLabelsCommand(
     const ticket = getTicket(db, input.ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
+  })();
+}
+
+/**
+ * Folds one label into another across a whole project (VC-310).
+ *
+ * Every ticket that wore the source comes out wearing the target, and the
+ * source row is gone. The associations are the point: this is a rename of an
+ * organisation people built, not a delete, so nothing may end up wearing
+ * fewer labels than it did — only the same meaning under one name.
+ */
+export function mergeLabelsCommand(
+  db: Database.Database,
+  input: { fromLabelId: string; intoLabelId: string },
+  context: TicketCommandContext,
+): void {
+  db.transaction(() => {
+    const from = getLabel(db, input.fromLabelId);
+    const into = getLabel(db, input.intoLabelId);
+    if (!from || !into) throw new Error("Unknown label");
+    const affected = listTicketIdsWithLabel(db, input.fromLabelId);
+    const alreadyWearingTarget = new Set(listTicketIdsWithLabel(db, input.intoLabelId));
+    mergeLabelInto(db, input.fromLabelId, input.intoLabelId);
+    for (const ticketId of affected) {
+      bumpTicketVersion(db, ticketId, context.now);
+      recordTicketEvent(
+        db,
+        ticketId,
+        {
+          kind: "labels_changed",
+          // A ticket that already wore the target only LOSES a name; one that
+          // did not also gains it. Recording a phantom "added" for the former
+          // would put a fact in the ledger that never happened.
+          added: alreadyWearingTarget.has(ticketId) ? [] : [into.name],
+          removed: [from.name],
+        },
+        context.now,
+        context.actor,
+      );
+    }
   })();
 }
 

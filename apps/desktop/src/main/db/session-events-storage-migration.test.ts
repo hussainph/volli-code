@@ -10,8 +10,18 @@ import {
   type FixtureProfile,
 } from "../backup/test-fixture";
 import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { migrate } from "./migrations";
+import { MIGRATIONS, migrate } from "./migrations";
 import { computeSessionStorageContentDigest } from "./session-storage-digest";
+
+/**
+ * Derived, not typed out, for the reason `migrations.test.ts` gives at its own
+ * copy: every assertion below that named `42` meant "and it is up to date",
+ * and adding migration 043 turned all four into failures about a number rather
+ * than about migration 42. The one deliberate `41` in this file is a different
+ * claim — a rolled-back attempt that must NOT have advanced — and stays a
+ * literal.
+ */
+const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
 
 const RECEIPT_EVENT_ID = FIXTURE_NATIVE_RECEIPT_EVENT_ID;
 const USAGE_EVENT_ID = FIXTURE_NATIVE_USAGE_EVENT_ID;
@@ -109,7 +119,7 @@ describe("migration 42 — compact native event ids and interned provenance", ()
 
     const receiptEventId = compactNativeObservationEventId(RECEIPT_EVENT_ID);
     const usageEventId = compactNativeObservationEventId(USAGE_EVENT_ID);
-    expect(profile.db.pragma("user_version", { simple: true })).toBe(42);
+    expect(profile.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(computeSessionStorageContentDigest(profile.db)).toEqual(beforeDigest);
     expect(
       (profile.db.pragma("table_info(session_events)") as Array<{ name: string }>).map(
@@ -240,7 +250,7 @@ describe("migration 42 — compact native event ids and interned provenance", ()
 
     expect(() => migrate(profile.db, profile.dbPath)).not.toThrow();
 
-    expect(profile.db.pragma("user_version", { simple: true })).toBe(42);
+    expect(profile.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(
       profile.db
         .prepare(
@@ -286,7 +296,7 @@ describe("migration 42 — compact native event ids and interned provenance", ()
 
     migrate(empty.db, empty.dbPath);
 
-    expect(empty.db.pragma("user_version", { simple: true })).toBe(42);
+    expect(empty.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(empty.db.prepare("SELECT COUNT(*) AS n FROM session_events").get()).toEqual({ n: 0 });
     expect(empty.db.prepare("SELECT COUNT(*) AS n FROM session_provenances").get()).toEqual({
       n: 0,
@@ -298,7 +308,7 @@ describe("migration 42 — compact native event ids and interned provenance", ()
       .prepare("SELECT id FROM session_events ORDER BY session_id, sequence")
       .all();
     migrate(fixture.db, fixture.dbPath);
-    expect(fixture.db.pragma("user_version", { simple: true })).toBe(42);
+    expect(fixture.db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(
       fixture.db.prepare("SELECT id FROM session_events ORDER BY session_id, sequence").all(),
     ).toEqual(idsBefore);

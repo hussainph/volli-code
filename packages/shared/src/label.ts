@@ -24,3 +24,25 @@ export interface Label {
 export function labelColor(label: Pick<Label, "name" | "color">): string {
   return label.color ?? tagColor(label.name);
 }
+
+/**
+ * The identity a label name is matched under: `UI` and `ui` are ONE label, so
+ * `getOrCreateLabel` resolves an existing spelling instead of minting a second
+ * one (VC-310).
+ *
+ * The fold is ASCII-only, deliberately, because it has to agree EXACTLY with
+ * the `COLLATE NOCASE` unique index that backs it (migration 043): SQLite's
+ * NOCASE and its `lower()` both fold `A`-`Z` and nothing else. A JS
+ * `toLowerCase()` here would fold more than the index does, and the two would
+ * disagree on non-ASCII — the repo would report `ü` taken by `Ü` while the
+ * index happily stored both. One rule, enforced in two places, has to BE one
+ * rule. The cost is that names differing only in a non-ASCII letter's case
+ * stay distinct labels, which is precisely what the database enforces.
+ *
+ * It does not trim, for the same reason: the index sees the stored name, so
+ * `" ui"` and `"ui"` are genuinely different names. Trimming input is a
+ * separate concern from deciding identity.
+ */
+export function labelNameKey(name: string): string {
+  return name.replaceAll(/[A-Z]/g, (letter) => letter.toLowerCase());
+}

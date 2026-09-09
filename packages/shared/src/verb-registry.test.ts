@@ -41,6 +41,7 @@ const SOCKET_SURFACE = [
   "conflicts",
   "project.list",
   "label.list",
+  "label.merge",
   "model.list",
   "cost",
   "session.list",
@@ -77,6 +78,7 @@ const REFERENCE_SURFACE = [
   "ticket.comment",
   "ticket.signal",
   "worktree.sync",
+  "label.merge",
   "session.list",
   "session.peek",
   "session.answer",
@@ -127,6 +129,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   conflicts: "read",
   "project.list": "read",
   "label.list": "read",
+  // A coordination write despite sitting beside a read: it deletes a label row
+  // and rewrites associations, so it is attributable or it does not happen.
+  "label.merge": "coordination",
   "model.list": "read",
   // VC-92 staged it read tier explicitly: an orchestrator sampling spend must
   // not pay context rent to ask. Setting a budget is not here — that is
@@ -356,7 +361,8 @@ describe("verbTier", () => {
     expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);
+    // VC-310 adds label.merge, the label cleanup write.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 
@@ -526,15 +532,38 @@ describe("the registry table", () => {
     // newly declared coordination verb instead of preserving a stale list of
     // the ones that happened to exist when the test was written. Unlisted
     // harness plumbing is involuntary and intentionally has no preview.
-    const voluntaryCoordinationWrites = VERB_REGISTRY.filter(
+    // Read as `VerbEntry`, not as the const-asserted tuple's literal member
+    // types: an optional field is absent from the literal type of every entry
+    // that omits it, so the union has no `previewsByDefault` to ask about.
+    const voluntaryCoordinationWrites = (VERB_REGISTRY as readonly VerbEntry[]).filter(
       (entry) => entry.listed && verbTier(entry) === "coordination",
     );
     expect(voluntaryCoordinationWrites).not.toHaveLength(0);
     for (const entry of voluntaryCoordinationWrites) {
+      // TWO ways to satisfy the rule, because the rule is "a caller can see
+      // this write before it happens", not "this flag exists". A verb that
+      // previews unless told to apply already keeps that promise, and more
+      // strongly than one whose safe mode has to be remembered — see
+      // `previewsByDefault`. What is refused is a coordination write offering
+      // neither.
+      expect(
+        entry.previewsByDefault === true ||
+          entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+    }
+  });
+
+  it("never lets a verb claim both preview shapes, which would contradict each other", () => {
+    // `--dry-run` means "this run writes unless you ask otherwise";
+    // `previewsByDefault` means the opposite. A verb declaring both leaves a
+    // caller no way to know what the plain form does.
+    for (const entry of VERB_REGISTRY as readonly VerbEntry[]) {
+      if (entry.previewsByDefault !== true) continue;
       expect(
         entry.options.some((option) => option.name === "--dry-run"),
         entry.key,
-      ).toBe(true);
+      ).toBe(false);
     }
   });
 
