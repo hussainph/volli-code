@@ -8,7 +8,10 @@ import { DATA_EXPORT_LIMITS } from "../../../../../data-export-copy";
 import type {
   PiSessionOrphanInventory,
   PiSessionOrphanScanResult,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
 } from "../../../../../ipc/contract";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
 
 const INVENTORY: PiSessionOrphanInventory = {
@@ -25,6 +28,48 @@ const INVENTORY: PiSessionOrphanInventory = {
   candidateCount: 1,
   candidateBytes: 1_024,
   skipped: [],
+};
+
+/** One worktree carrying artifacts and one that is off limits — the two rows the table has. */
+const TRIM_SCAN: WorktreeTrimScanEntry[] = [
+  {
+    path: "/wt/volli-code/VC-1-alpha",
+    projectId: "project-1",
+    ticketId: "t1",
+    branch: "volli/VC-1-alpha",
+    artifactCount: 3,
+    activeReason: null,
+  },
+  {
+    path: "/wt/volli-code/VC-2-beta",
+    projectId: "project-1",
+    ticketId: "t2",
+    branch: "volli/VC-2-beta",
+    artifactCount: 2,
+    activeReason: "An agent is still running in this worktree. Stop it first.",
+  },
+];
+
+const TRIM_REPORT: WorktreeTrimSweepReport = {
+  worktrees: [
+    {
+      worktreePath: "/wt/volli-code/VC-1-alpha",
+      removed: [{ path: "node_modules/", bytes: 2_048 }],
+      kept: [{ path: ".env", reason: "it matches .env" }],
+      totalBytes: 2_048,
+      dryRun: false,
+    },
+  ],
+  skipped: [
+    {
+      path: "/wt/volli-code/VC-2-beta",
+      reason: "An agent is still running in this worktree. Stop it first.",
+    },
+  ],
+  pruned: ["project-1"],
+  totalBytes: 2_048,
+  removedCount: 1,
+  dryRun: false,
 };
 
 let root: Root | null = null;
@@ -53,6 +98,12 @@ function bridge(
     if (current.scan instanceof Error) throw current.scan;
     return current.scan;
   });
+  const trimScan = vi.fn(async () => ({ ok: true as const, worktrees: TRIM_SCAN }));
+  const trim = vi.fn(async () => ({ ok: true as const, report: TRIM_REPORT }));
+  const setTrimSettings = vi.fn(async (input: { trimOnFinish?: boolean }) => ({
+    ok: true as const,
+    settings: { keepPatterns: [".env"], trimOnFinish: input.trimOnFinish ?? true },
+  }));
   const reclaimOrphans = vi.fn(async () => ({
     ok: true as const,
     report: {
@@ -84,11 +135,21 @@ function bridge(
         runs: [],
       })),
       deleteOrphan: vi.fn(async () => ({ ok: true as const })),
+      trimScan,
+      trim,
+      trimSettings: vi.fn(async () => ({
+        ok: true as const,
+        settings: { keepPatterns: [".env"], trimOnFinish: true },
+      })),
+      setTrimSettings,
     },
   });
   return {
     scanOrphans,
     reclaimOrphans,
+    trimScan,
+    trim,
+    setTrimSettings,
     answerScan: (answer: PiSessionOrphanScanResult | Error) => {
       current.scan = answer;
     },
@@ -96,7 +157,15 @@ function bridge(
 }
 
 async function open(): Promise<void> {
-  await act(async () => root?.render(<StoragePane />));
+  // The provider the app shell supplies: a list row's action is a tooltip
+  // trigger, and this pane's rows only mount one once a scan returns something.
+  await act(async () =>
+    root?.render(
+      <TooltipProvider>
+        <StoragePane />
+      </TooltipProvider>,
+    ),
+  );
 }
 
 function buttonNamed(name: string): HTMLButtonElement {
@@ -147,6 +216,64 @@ describe("Settings → Storage Pi session logs", () => {
     const html = renderToStaticMarkup(<StoragePane />);
 
     expect(html).toContain('aria-label="About Orphaned logs"');
+  });
+});
+
+// VC-340. The action removes files, so what the surface says before and after it
+// runs is the feature: which worktrees are in scope, which are refused and why,
+// and what a finished pass actually took.
+describe("Settings → Storage build artifacts", () => {
+  it("keeps the trim disabled until a scan, then names only the worktrees in scope", async () => {
+    const main = bridge();
+    await open();
+
+    expect(buttonNamed("Trim…").disabled).toBe(true);
+    await act(async () => buttonNamed("Rescan build artifacts").click());
+    expect(main.trimScan).toHaveBeenCalledTimes(1);
+
+    // Both rows are listed; the busy one says why rather than disappearing.
+    expect(document.body.textContent).toContain("VC-1-alpha");
+    expect(document.body.textContent).toContain("3 ignored path(s).");
+    expect(document.body.textContent).toContain("An agent is still running in this worktree");
+
+    await act(async () => buttonNamed("Trim…").click());
+    expect(document.body.textContent).toContain("Trim build artifacts?");
+    // The confirm lists the trimmable worktree only — never the refused one.
+    const dialog = document.querySelector("[role='alertdialog']")?.textContent ?? "";
+    expect(dialog).toContain("/wt/volli-code/VC-1-alpha");
+    expect(dialog).not.toContain("/wt/volli-code/VC-2-beta");
+    expect(dialog).toContain("1 worktree(s)");
+  });
+
+  it("reports what a finished trim took, kept, and refused", async () => {
+    const main = bridge();
+    await open();
+    await act(async () => buttonNamed("Rescan build artifacts").click());
+    await act(async () => buttonNamed("Trim…").click());
+
+    await act(async () => buttonNamed("Trim").click());
+
+    expect(main.trim).toHaveBeenCalledTimes(1);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Freed");
+    expect(text).toContain("2.0 KB");
+    expect(text).toContain("kept 1");
+    expect(text).toContain("metadata pruned");
+    expect(text).toContain("node_modules/");
+    expect(text).toContain("Skipped — An agent is still running in this worktree. Stop it first.");
+    // The table it was based on is re-read, since every trimmed row changed.
+    expect(main.trimScan).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists the automatic-trim opt-out", async () => {
+    const main = bridge();
+    await open();
+
+    const toggle = document.querySelector("#trim-on-finish");
+    if (!(toggle instanceof HTMLElement)) throw new Error("no trim-on-finish switch");
+    await act(async () => toggle.click());
+
+    expect(main.setTrimSettings).toHaveBeenCalledWith({ trimOnFinish: false });
   });
 });
 

@@ -2024,6 +2024,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ trimOnFinish: "off" }])).toBe(false);
       expect(guard([{ keepPatterns: ".env" }])).toBe(false);
       expect(guard([{ keepPatterns: [1, 2] }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ trimOnFinish: true }, "extra"])).toBe(false);
+      expect(guard(["nope"])).toBe(false);
       expect(invalidError).toBe("Invalid trim settings");
     });
   });
