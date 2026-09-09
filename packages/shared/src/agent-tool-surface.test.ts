@@ -34,6 +34,7 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
       "ticket.await",
       "automation.run",
       "session.delegate",
+      "session.await",
     ]);
     // The default-bundle property is asserted as absence rather than prose. An
     // injected instruction telling a Ticket Session to start ten Sessions has
@@ -42,7 +43,7 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
     // `session.delegate` is part of the agent-control family — waiting
     // controls nobody (VC-85/VC-92), and a subagent answers back here and can
     // act on nothing else (VC-9).
-    expect(roleVerbBundle("ticket")).toEqual(["ticket.await", "session.delegate"]);
+    expect(roleVerbBundle("ticket")).toEqual(["ticket.await", "session.delegate", "session.await"]);
     // A helper's bundle is the whole of its authority: nothing (VC-9).
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
@@ -88,6 +89,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.stop",
       "session.send",
       "session.delegate",
+      "session.await",
     ]);
   });
 
@@ -102,7 +104,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // The await tool is deliberately in this room too (VC-92's ruling on
     // VC-85): blocking is a runtime property, not a privilege, and what may
     // be awaited is policy data judged at call time.
-    expect(verbToolsOf(surface)).toEqual(["ticket.await", "session.delegate"]);
+    expect(verbToolsOf(surface)).toEqual(["ticket.await", "session.delegate", "session.await"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -127,6 +129,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "shell_kill",
       "ticket.await",
       "session.delegate",
+      "session.await",
     ]);
   });
 
@@ -214,6 +217,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.stop",
       "session.send",
       "session.delegate",
+      "session.await",
     ]);
   });
 
@@ -240,6 +244,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.stop",
       "session.send",
       "session.delegate",
+      "session.await",
     ]);
   });
 });
@@ -268,9 +273,35 @@ describe("session.delegate is the working Roles' verb, and never the helper's (V
   });
 
   it("is appended after session.send, so no frozen surface shifted under it", () => {
-    expect(VERB_TOOL_KEYS.at(-1)).toBe("session.delegate");
     expect(VERB_TOOL_KEYS.indexOf("session.delegate")).toBe(
       VERB_TOOL_KEYS.indexOf("session.send") + 1,
+    );
+  });
+});
+
+describe("session.await is the working Roles' wait over Sessions (VC-324 item 3)", () => {
+  it("is a control-tier tool named for the model, off the socket", () => {
+    const entry = verbEntry("session.await");
+    expect(entry?.accessModes).toEqual(["tool"]);
+    expect(entry?.actor).toBe("role");
+    expect(entry?.tool?.name).toBe("session_await");
+  });
+
+  it("is in both working bundles and absent from the subagent's", () => {
+    // The same two rooms as `ticket.await`, for the same reason (VC-92):
+    // waiting controls nobody. A helper whose answer is its last message
+    // must not park (VC-9), so its room stays empty.
+    expect(roleVerbBundle("project")).toContain("session.await");
+    expect(roleVerbBundle("ticket")).toContain("session.await");
+    expect(roleVerbBundle("subagent")).not.toContain("session.await");
+  });
+
+  it("is the LAST tool key, so no frozen surface shifted under it", () => {
+    // Registry declaration order is the frozen tool order: a tool appended
+    // last changes no already-born Session's array (Cache Prefix).
+    expect(VERB_TOOL_KEYS.at(-1)).toBe("session.await");
+    expect(VERB_TOOL_KEYS.indexOf("session.await")).toBe(
+      VERB_TOOL_KEYS.indexOf("session.delegate") + 1,
     );
   });
 });

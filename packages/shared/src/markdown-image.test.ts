@@ -83,6 +83,10 @@ describe("resolveMarkdownImageSrc", () => {
     "ftp://example.com/a.png",
     "ftps://example.com/a.png",
     "wss://example.com/a.png",
+    "ws://example.com/a.png",
+    // Protocol-relative: a URL with no scheme of its own is still somewhere
+    // else, and every renderer must say so with the same word.
+    "//example.com/a.png",
   ])("declines to fetch a remote source: %s", (src: string) => {
     expect(resolveMarkdownImageSrc(src)).toEqual({ kind: "remote" });
   });

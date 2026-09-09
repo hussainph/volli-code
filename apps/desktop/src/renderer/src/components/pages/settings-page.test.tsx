@@ -64,8 +64,11 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain('id="done-ttl-days"');
     // VC-113: the number governs an automatic deletion, so the row states what
     // the deletion takes and what survives it. This is the sanctioned
-    // exception to the copy rule and must not become a hint.
-    expect(html).toContain("keeps the branch, its commits, and the ticket");
+    // exception to the copy rule and must not become a hint. VC-284 added the
+    // pull-request link and the Keep exemption for the same reason: a policy
+    // whose opt-out is invisible here reads as unconditional.
+    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
+    expect(html).toContain("Keep on a ticket holds its folder");
   });
 
   it("opens Telemetry in its loading state, drawing no switch it has not read", () => {

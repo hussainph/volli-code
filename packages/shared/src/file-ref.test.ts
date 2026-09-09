@@ -328,6 +328,18 @@ describe("scoreFileMatch", () => {
     expect(scoreFileMatch("MAIN", "src/main.ts")).not.toBeNull();
     expect(scoreFileMatch("main", "src/MAIN.TS")).not.toBeNull();
   });
+
+  it("still lets the +1000 artifact bonus outrank an exact basename — the @ picker's rule", () => {
+    // The audit's worked example (VC-299 / A13), pinned to the number. This
+    // ordering is a BUG in quick-open and deliberate here: an `@` ref is being
+    // written into a message, where artifacts are force-included context and
+    // sort first (decision #3). VC-299 moved ⌘P onto `rankQuickOpenFiles`
+    // rather than changing this, so the numbers below must not drift.
+    expect(scoreFileMatch("README", "README.md")).toBe(46);
+    expect(scoreFileMatch("README", ".volli/artifacts/design-audit/audit-motion-perf.md")).toBe(
+      1030,
+    );
+  });
 });
 
 // ---- name safety (create flow) ----------------------------------------------

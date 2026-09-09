@@ -293,6 +293,12 @@ export default defineConfig(({ mode }) => ({
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
+        // What Storage says about an orphaned worktree, before and after a
+        // destructive act (VC-284). Enrolled for the same reason as the row
+        // above: these are sentences about deletions, and the bug they answer
+        // was a label — every removed row read "Removed at launch", including
+        // the ones a person had just asked for by hand.
+        "src/components/settings/panes/storage-orphans-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -412,6 +418,18 @@ export default defineConfig(({ mode }) => ({
         // branch missed here shows frontmatter as a heading, and the person
         // editing it would have no way to know.
         "src/editor/document-view-policy.ts",
+        // And what the read-only fallback that refusal offers is allowed to
+        // DRAW (VC-307). These three are in the gate for a stricter reason
+        // than the policy above: the files this surface exists for are the
+        // ones nobody vetted — a README off a pull request, a plan an agent
+        // wrote into the worktree — so a missed branch here is markup reaching
+        // a renderer, a path resolving outside the checkout, or a request
+        // leaving the machine. None of it is visible in a screenshot.
+        "src/editor/markdown-html-blocks.ts",
+        "src/editor/markdown-preview-html.ts",
+        "src/editor/markdown-preview-source.ts",
+        "src/editor/markdown-preview-image.ts",
+        "src/editor/markdown-preview-rehype.ts",
         "src/editor/emphasis-wrap.ts",
         "src/editor/file-refs.ts",
         // Which editor an outside-Monaco Go to Line lands in (VC-187), and

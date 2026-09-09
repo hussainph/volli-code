@@ -230,6 +230,8 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
   WorktreeOrphansResult,
@@ -479,7 +481,7 @@ const api = {
     /** Replaces this project's per-skill rules wholesale — the Configure Skills table (VC-111). */
     setSkillModes: (input: ProjectSkillModesInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-skill-modes", input),
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
     /**
@@ -1092,12 +1094,21 @@ const api = {
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**
-     * The launch's cached orphan report — the destructive sweep runs once per
-     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
-     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     * The launch's cached orphan SCAN — read-only in every shape (VC-284), so
+     * calling it costs a walk and never a deletion. Pass `{ refresh: true }`
+     * for the Storage pane's Scan, which asks git again.
      */
     orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
       invoke("volli:worktree-orphans", opts ?? {}),
+    /**
+     * The confirmed cleanup, as a command: the caller's UUID, the revision of
+     * the scan whose proposal was confirmed, and the ids of the items selected
+     * out of it. Main owns the paths — a client cannot name a directory no scan
+     * offered — re-checks every target immediately before it acts, and answers
+     * with the acceptance receipt plus the durable run.
+     */
+    cleanupOrphans: (input: WorktreeOrphanCleanupInput): Promise<WorktreeOrphanCleanupResult> =>
+      invoke("volli:worktree-orphan-cleanup", input),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       invoke("volli:worktree-orphan-delete", { path }),
@@ -1124,6 +1135,10 @@ const api = {
     /** Debounced recursive watch on the ticket worktree; pair with `unwatchChangeSet` on leave. */
     watchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-watch", { ticketId }),
+    pauseChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-pause", { ticketId }),
+    resumeChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-resume", { ticketId }),
     unwatchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-unwatch", { ticketId }),
     /** Subscribes to debounced worktree filesystem changes for Change Set refresh. */

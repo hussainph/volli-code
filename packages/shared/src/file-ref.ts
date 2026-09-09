@@ -250,8 +250,14 @@ export function isExpressibleRefPath(relPath: string): boolean {
  * or `null` when `query`'s characters don't appear in order. Rewards contiguous
  * runs and matches at a word boundary (start, or right after `/._-`) so a
  * basename hit outranks scattered mid-path hits.
+ *
+ * Exported as the one small matching helper the two file-ranking surfaces
+ * share: the `@` picker's {@link scoreFileMatch} sums it with a shape bonus,
+ * and quick-open's `rankQuickOpenFiles` uses it to order files WITHIN one of
+ * its rank tiers (VC-299). What must not be shared is everything above it —
+ * see that module for why one number could not serve both.
  */
-function subsequenceScore(query: string, text: string): number | null {
+export function subsequenceScore(query: string, text: string): number | null {
   let qi = 0;
   let score = 0;
   let prevMatch = -2;

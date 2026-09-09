@@ -105,17 +105,44 @@ const SECOND_ROW = `[data-testid="ticket-files-row"][data-path="${SECOND_FILE}"]
 /** Every pane cell the grid drew, in reading order. */
 function readPanes(page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll('[data-slot="split-view-pane"]')).map((cell) => ({
-      paneId: cell.getAttribute("data-pane-id"),
-      focused: cell.getAttribute("data-focused") === "true",
-      label: cell.getAttribute("aria-label"),
-      empty: cell.querySelector('[data-slot="pane-empty-state"]') !== null,
-      tabs: Array.from(cell.querySelectorAll('[role="tab"]')).map((tab) =>
-        (tab.getAttribute("aria-label") ?? "").trim(),
-      ),
-    })),
+    Array.from(document.querySelectorAll('[data-slot="split-view-pane"]')).map((cell) => {
+      const paneId = cell.getAttribute("data-pane-id");
+      // SINCE VC-333 a pane is ONE REGION DRAWN IN TWO BOXES: its cell in the
+      // plane, and — for a pane along the top edge — its segment of the main
+      // tab bar, which is where its tabs are. Only a pane below a down split
+      // still draws a strip inside its own cell. Both boxes carry the pane's
+      // id, so its tabs are whichever of the two is holding them.
+      const segment = document.querySelector(
+        `[data-slot="split-view-tab-pane"][data-pane-id="${paneId}"]`,
+      );
+      const tabs = [
+        ...cell.querySelectorAll('[role="tab"]'),
+        ...(segment === null ? [] : segment.querySelectorAll('[role="tab"]')),
+      ];
+      return {
+        paneId,
+        focused: cell.getAttribute("data-focused") === "true",
+        label: cell.getAttribute("aria-label"),
+        empty: cell.querySelector('[data-slot="pane-empty-state"]') !== null,
+        tabs: tabs.map((tab) => (tab.getAttribute("aria-label") ?? "").trim()),
+        // The permanent tab (Body / Board) draws no close control and never
+        // leaves the primary pane, so this is "the tabs a person could close".
+        closable: tabs
+          .filter((tab) => tab.querySelector('[data-testid="tab-close"]') !== null)
+          .map((tab) => (tab.getAttribute("aria-label") ?? "").trim()),
+      };
+    }),
   );
 }
+
+/**
+ * `descendant`, inside either box the pane is drawn in — see {@link readPanes}.
+ * Written out per box because a CSS comma binds at the top level: one trailing
+ * descendant would attach to the second alternative alone.
+ */
+const inPane = (paneId, descendant) =>
+  `[data-slot="split-view-pane"][data-pane-id="${paneId}"] ${descendant}, ` +
+  `[data-slot="split-view-tab-pane"][data-pane-id="${paneId}"] ${descendant}`;
 
 const paneCount = async (page) => (await readPanes(page)).length;
 
@@ -188,8 +215,8 @@ async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
 }
 
 /**
- * The SURFACE's own strip — the primary pane's, drawn above the grid rather
- * than inside a cell, which is why `readPanes` cannot see it.
+ * The primary pane's strip, by its own name — the first segment of the main
+ * tab bar since VC-333, and the whole bar while the surface is unsplit.
  */
 function readSurfaceStrip(page) {
   return page.evaluate(() =>
@@ -312,9 +339,16 @@ async function main() {
         { timeout: 20_000 },
       );
       return {
-        // The primary pane still draws no strip of its own (the surface's is
-        // its), so its cell holds no tabs — the session is the second pane's.
-        ok: panes.length === 2 && panes[0].tabs.length === 0 && panes[1].tabs.length === 1,
+        // SINCE VC-333 the primary pane's tabs are the main bar's first
+        // segment rather than a strip this could not see, so "pane 1 holds
+        // nothing" is no longer the shape of the claim. What the check is
+        // about is unchanged: the session landed in the pane the menu was in,
+        // and not in the one that was already there.
+        ok:
+          panes.length === 2 &&
+          panes[1].tabs.length === 1 &&
+          panes[0].tabs.length >= 1 &&
+          !panes[0].tabs.includes(panes[1].tabs[0]),
         detail: JSON.stringify(panes.map((pane) => pane.tabs)),
       };
     });
@@ -420,12 +454,16 @@ async function main() {
       // Close every session tab a pane holds; the last one leaves no split.
       for (let guard = 0; guard < 4; guard += 1) {
         const panes = await readPanes(page);
-        const owner = panes.find((pane) => pane.tabs.length > 0);
+        // The SPLIT's tabs, which is what emptying a pane collapses: since
+        // VC-333 `readPanes` can also see the primary pane's own strip, and
+        // neither its permanent Body tab nor anything else parked there is
+        // what this check is closing.
+        const owner = panes.slice(1).find((pane) => pane.closable.length > 0);
         if (owner === undefined) break;
-        const label = owner.tabs[0];
+        const label = owner.closable[0];
         await page
           .locator(
-            `[data-slot="split-view-pane"][data-pane-id="${owner.paneId}"] [role="tab"][aria-label="${label}"] [data-testid="tab-close"]`,
+            inPane(owner.paneId, `[role="tab"][aria-label="${label}"] [data-testid="tab-close"]`),
           )
           .first()
           .click();

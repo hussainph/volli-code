@@ -75,9 +75,11 @@ import type { VerbToolKey } from "./verb-registry";
  *   not spawn" structural rather than kickoff prose. It also makes delegation
  *   depth a bundle fact: with no `session.delegate` in the room there is no
  *   grandchild to count, so no depth counter exists anywhere.
- * - No `ticket.await`. A subagent is a bounded helper whose answer is its
- *   last message; a helper parked on a Ticket gate is a helper that never
- *   answers.
+ * - No `ticket.await`, and no `session.await` (VC-324). A subagent is a
+ *   bounded helper whose answer is its last message; a helper parked on a
+ *   Ticket gate — or on another Session's turn — is a helper that never
+ *   answers. It also has nothing legitimate to await: it holds no verb that
+ *   could have started the work.
  *
  * What it does hold is decided by {@link ROLE_CAPABILITY_POLICY}, which is the
  * capability half of the same decision.
@@ -94,6 +96,14 @@ import type { VerbToolKey } from "./verb-registry";
  * given Session may await is per-actor policy data
  * (`AuthorityActorPolicy.awaitable`), judged at call time — bundle membership
  * is deliberately not the control.
+ *
+ * `session.await` (VC-324) sits in the same two bundles on the same ruling,
+ * with its own policy list (`awaitableSessions`) and its own per-call bound:
+ * a Board Session may await any Session in its project, while a Ticket Session
+ * may await only itself and the subagents it delegated. That bound is the
+ * HANDLER's, not this map's, because it is a fact about the target rather than
+ * about the Role — the same reason `session.delegate` needs no second entry
+ * here to keep a child from spawning.
  *
  * `automation.run` sits in the `project` bundle ALONE (VC-134, filed by
  * VC-112). Starting an Automation Run is agent control — it spends model budget
@@ -125,6 +135,7 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "ticket.await",
     "automation.run",
     "session.delegate",
+    "session.await",
   ]) as readonly VerbToolKey[],
   // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
   // needs "go look at this and tell me" as much as an orchestrator does, and
@@ -132,7 +143,11 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
   // not the agent-control family — a subagent answers back here and cannot
   // act on anything else — so VC-92's pairing rule does not pull the rest of
   // that family in with it.
-  ticket: Object.freeze(["ticket.await", "session.delegate"]) as readonly VerbToolKey[],
+  ticket: Object.freeze([
+    "ticket.await",
+    "session.delegate",
+    "session.await",
+  ]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });
 
