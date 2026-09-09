@@ -54,6 +54,10 @@ import type {
   ModelAccessSignInType,
   DeliberateMoveChoice,
   ModelSelection,
+  NotificationEvent,
+  NotificationPreferences,
+  NotificationProducer,
+  NotificationTarget,
   OrphanAgeBasis,
   OrphanCleanupItem,
   OrphanCleanupItemKind,
@@ -1500,6 +1504,62 @@ export interface VolliAgentObservabilityIpcContract {
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
 
+// ---- notifications (VC-295) ------------------------------------------------
+
+/**
+ * What Settings → Notifications draws.
+ *
+ * Two delivery facts and no third: `supported` is `Notification.isSupported()`,
+ * and `deliveryFailure` is the most recent delivery Electron itself reported as
+ * failed this launch. There is deliberately no `permission` field — Electron
+ * gives this app no trustworthy read of the OS authorization state, and a
+ * Settings page that guessed one would be wrong in exactly the case that
+ * matters (a denied notification's `show()` succeeds silently).
+ */
+export interface NotificationSettingsView {
+  preferences: NotificationPreferences;
+  supported: boolean;
+  deliveryFailure: { producer: NotificationProducer; message: string; at: number } | null;
+}
+
+export type NotificationSettingsResult = Result<{ settings: NotificationSettingsView }>;
+
+export type NotificationPendingActivationResult = Result<{ target: NotificationTarget | null }>;
+
+/**
+ * The notification preference surface (VC-295), on its own door rather than the
+ * generic `app_state` write.
+ *
+ * docs/BOUNDARIES.md rule 5: a domain surface takes a validated command with
+ * IPC as dumb transport. The generic string→string write cannot refuse a
+ * category this build does not have; this can, and its refusal is the sentence
+ * the pane shows.
+ */
+export interface VolliNotificationIpcContract {
+  /** The preferences plus what is known about delivery on this machine. */
+  "volli:notifications-get": { args: []; result: NotificationSettingsResult };
+  /**
+   * One switch move. `event: null` is the master switch. Answers with the whole
+   * view read back from the stored row — never an echo of the request — so the
+   * pane can only ever show a value the write actually produced.
+   */
+  "volli:notifications-set": {
+    args: [update: { event: NotificationEvent | null; enabled: boolean }];
+    result: NotificationSettingsResult;
+  };
+  /**
+   * The target of a notification clicked while no window existed, taken once.
+   * A window that opens because of a click asks for it as it subscribes; a
+   * push into a page that has not subscribed yet would simply be lost.
+   */
+  "volli:notifications-pending-activation": {
+    args: [];
+    result: NotificationPendingActivationResult;
+  };
+}
+
+export type NotificationIpcChannel = keyof VolliNotificationIpcContract;
+
 // ---- Browser Tabs (VC-110) -------------------------------------------------
 
 /**
@@ -2284,6 +2344,12 @@ export interface VolliSendContract {
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   "volli:terminal-ack": { args: [sessionId: string, chars: number] };
+  // Send-based (ipcRenderer.send, not invoke): what this window is showing
+  // right now (VC-295), so main can suppress a native alert for a target the
+  // person is already looking at. It flips on every nav, needs no reply, and
+  // main's copy is advisory — a report that never arrives costs a duplicate
+  // alert, which is the harmless direction.
+  "volli:notification-active-target": { args: [target: NotificationTarget | null] };
   // Send-based (ipcRenderer.send, not invoke): visibility flips on every board
   // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
   // add latency to navigation for nothing.
@@ -2326,6 +2392,7 @@ export interface VolliInvokeContract
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
+    VolliNotificationIpcContract,
     VolliUpdateIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
@@ -2370,6 +2437,21 @@ export type VolliIpcEvent =
   // until an unrelated refresh. The durable write is still the truth — this
   // only tells the windows to catch up.
   | "volli:session-retitled"
+  // A native alert was clicked (VC-295). Main has already brought the window
+  // forward; the payload is the alert's target, and routing to it — selecting
+  // the Session, then revealing the question or failure it named, or saying so
+  // when that item has since resolved — is the renderer's own knowledge. Sent
+  // to ONE window (the focused one, or the first live one), not fanned out:
+  // this is a navigation, and two windows obeying it would be two places the
+  // person did not ask to go.
+  | "volli:notification-activated"
+  // Settings → Notifications moved (VC-295): a switch was written, or a delivery
+  // Electron reported as failed landed or was retired by a later one that
+  // showed. The payload is the WHOLE `NotificationSettingsView`, never a delta,
+  // so a page that missed an earlier push is whole again on the next one. Every
+  // window, because a failure is a machine fact and a page open in two windows
+  // must not disagree about it.
+  | "volli:notification-settings"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.

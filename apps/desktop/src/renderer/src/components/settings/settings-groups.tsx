@@ -143,7 +143,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "alert",
             "banner",
             "an agent needs my input",
-            "a session finishes",
+            "a pull request merges",
             "volli reclaims a worktree",
             "an update is ready",
           ],
