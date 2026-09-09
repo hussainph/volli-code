@@ -288,8 +288,9 @@ function TerminalFocusExit() {
  * Absolutely centered so the pair anchors to the WINDOW's midline regardless of
  * the traffic-light spacer / fullscreen collapse. Overlap math at minWidth
  * 940px (main/index.ts): left chrome occupies ≈110px (78px spacer + trigger);
- * the cluster is 380 + 4 + 28 = 412px wide, so its left edge sits at
- * (940 − 412) / 2 = 264px — still comfortably clear of it.
+ * the cluster is 380 + 4 + 24 = 408px wide (pill, gap-1, an `icon-sm` at
+ * size-6), so its left edge sits at (940 − 408) / 2 = 266px — still
+ * comfortably clear of it.
  *
  * The two are one absolutely-positioned GROUP rather than two independently
  * placed controls. The pill is elastic (`max-w-[40vw]`), so anything pinned to

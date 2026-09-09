@@ -25,6 +25,13 @@ function provider(id: string, label: string, usageLimits?: UsageLimits): ModelAc
 
 const limits = (...windows: UsageWindow[]): UsageLimits => ({ checkedAt: NOW, windows });
 
+/** An account the runtime knows how to ask about and could not read this time. */
+const failed = (id: string, label: string): ModelAccessProvider =>
+  provider(id, label, { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } });
+
+const order = (providers: readonly ModelAccessProvider[]): string[] =>
+  usageLimitAccounts(providers).map((account) => account.label);
+
 describe("usageLimitAccounts", () => {
   it("keeps only the accounts that have windows to show", () => {
     const accounts = usageLimitAccounts([
@@ -88,5 +95,24 @@ describe("usageLimitAccounts", () => {
     ]);
     expect(accounts.map((account) => account.providerId)).toEqual(["anthropic", "github-copilot"]);
     expect(accounts[1]?.binding).toBeNull();
+  });
+
+  it("holds two failed reads in a settled order, whichever way round they arrive", () => {
+    // Neither has a reading to be nearer the wall with, so the only ordering
+    // left is the name — and it has to be the same order on every inspection,
+    // or two accounts nobody can measure would swap places on a Refresh.
+    expect(order([failed("xai", "xAI"), failed("anthropic", "Anthropic")])).toEqual([
+      "Anthropic",
+      "xAI",
+    ]);
+    // And an account that failed never outranks one that measured, no matter
+    // which side of the comparison it lands on.
+    expect(
+      order([
+        failed("github-copilot", "GitHub Copilot"),
+        provider("anthropic", "Anthropic", limits(window("five_hour", 3))),
+        failed("xai", "xAI"),
+      ]),
+    ).toEqual(["Anthropic", "GitHub Copilot", "xAI"]);
   });
 });

@@ -1,22 +1,28 @@
 /**
  * The on-demand read: one GET per subscribed provider, no model call.
  *
- * Three providers have an endpoint that answers "how much of my subscription
- * is left" without spending any of it — Anthropic's `/api/oauth/usage`,
- * Codex's `/backend-api/wham/usage`, and OpenCode Go's `/zen/go/v1/usage`.
- * Each takes the same credential the turns use, so the probe asks Pi for it
- * through `Models.getAuth`, which runs Pi's own refresh under Pi's own lock;
- * nothing here reads `auth.json` or mints a token.
+ * Six providers have an endpoint that answers "how much of my subscription is
+ * left" without spending any of it — Anthropic's `/api/oauth/usage`, Codex's
+ * `/backend-api/wham/usage`, OpenCode Go's `/zen/go/v1/usage`, Kimi Code's
+ * `/coding/v1/usages`, xAI's `/v1/billing?format=credits`, and Copilot's
+ * `/copilot_internal/user`. Five take the same credential the turns use, so
+ * the probe asks Pi for it through `Models.getAuth`, which runs Pi's own
+ * refresh under Pi's own lock; nothing here mints a token.
  *
- * Three things the probe is careful about, in the order they bite:
+ * Four things the probe is careful about, in the order they bite:
  *
- * - **Which credential a subscription wears is the reader's to say.** On
- *   Anthropic and Codex an `api_key` is metered by invoice, and the endpoint
- *   would refuse it anyway: the probe reports `unsupported` without a request,
- *   and the fold treats that as final. OpenCode Go is a subscription driven by
- *   an API key, so its reader accepts one — and reads the console's 403
- *   ("OpenCode Go subscription required": a Zen-only key) as the same final
- *   `unsupported`, because no later read of that key will grow windows.
+ * - **Which credential a subscription wears is the reader's to say**, in both
+ *   senses. WHICH KIND: on Anthropic, Codex and xAI an `api_key` is metered by
+ *   invoice, and the endpoint would refuse it anyway, so the probe reports
+ *   `unsupported` without a request and the fold treats that as final; Go and
+ *   Kimi are subscriptions driven by a key, so their readers accept one — and
+ *   Go reads the console's 403 ("OpenCode Go subscription required": a
+ *   Zen-only key) as the same final `unsupported`, because no later read of
+ *   that key will grow windows. WHICH SECRET: Copilot's endpoint is not on the
+ *   host its turns talk to, and knows only the GitHub OAuth token the request
+ *   token was minted from, so that reader names the stored credential instead
+ *   (`credential: "oauth-refresh"`) — the one case where this file reads the
+ *   credential store, and it reads it, never writes it.
  * - **The usage endpoint has its own rate limit**, independent of chat. A 429
  *   is honoured for `Retry-After` when stated and five minutes otherwise, and
  *   the attempt reports `probeFailed` — which the fold reads as "keep the last
