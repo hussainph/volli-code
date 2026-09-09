@@ -157,7 +157,21 @@ beforeEach(() => {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
-      worktree: { orphans, cleanupOrphans, deleteOrphan: vi.fn() },
+      worktree: {
+        orphans,
+        cleanupOrphans,
+        deleteOrphan: vi.fn(),
+        // The build-artifact section reads its setting on mount and scans only
+        // when asked (VC-340); this suite is about the orphan cleanup, so the
+        // trim door answers empty.
+        trimSettings: async () => ({
+          ok: true,
+          settings: { keepPatterns: [".env"], trimOnFinish: true },
+        }),
+        trimScan: async () => ({ ok: true, worktrees: [] }),
+        trim: vi.fn(),
+        setTrimSettings: vi.fn(),
+      },
       retention: {
         getTtlDays: async () => ({ ok: true, days: 14 }),
         setTtlDays: async (days: number) => ({ ok: true, days }),

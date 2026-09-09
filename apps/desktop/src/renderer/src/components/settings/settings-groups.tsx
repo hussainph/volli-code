@@ -235,6 +235,20 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "orphaned pi logs",
             "scan",
             "clean up",
+            // The build-artifact trim (VC-340). Both the words on screen and the
+            // words a person would actually type for it: nobody searches
+            // Settings for "git-ignored content", they search for node_modules.
+            "build artifacts",
+            "trim",
+            "trim when a ticket is done",
+            "carrying artifacts",
+            "artifacts",
+            "ignored",
+            "node_modules",
+            "target",
+            "venv",
+            "cache",
+            "disk space",
             "database",
             "size",
             "database export",

@@ -329,7 +329,10 @@ function BuildArtifactsSection() {
         }
         action={
           <SectionIconAction
-            label="Rescan build artifacts"
+            // "Scan", never "Rescan": VC-284 found that word on a button that
+            // pruned metadata and deleted directories, and the label a person
+            // reads before pressing is part of that fix. This one only reads.
+            label="Scan for build artifacts"
             icon={ArrowsClockwiseIcon}
             busy={scanning}
             onAct={() => void scan()}

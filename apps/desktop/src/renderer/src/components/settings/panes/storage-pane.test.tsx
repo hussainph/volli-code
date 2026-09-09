@@ -227,7 +227,7 @@ describe("Settings → Storage build artifacts", () => {
     await open();
 
     expect(buttonNamed("Trim…").disabled).toBe(true);
-    await act(async () => buttonNamed("Rescan build artifacts").click());
+    await act(async () => buttonNamed("Scan for build artifacts").click());
     expect(main.trimScan).toHaveBeenCalledTimes(1);
 
     // Both rows are listed; the busy one says why rather than disappearing.
@@ -247,7 +247,7 @@ describe("Settings → Storage build artifacts", () => {
   it("reports what a finished trim took, kept, and refused", async () => {
     const main = bridge();
     await open();
-    await act(async () => buttonNamed("Rescan build artifacts").click());
+    await act(async () => buttonNamed("Scan for build artifacts").click());
     await act(async () => buttonNamed("Trim…").click());
 
     await act(async () => buttonNamed("Trim").click());
