@@ -1,39 +1,25 @@
 /**
- * Configure → Sessions: what a new Session in this project starts as.
+ * Configure → Sessions: the Chat defaults and instructions a project owns.
  *
- * The two rows here are the redesign's worked example of `OverrideControl`.
- * Neither carries a scope switch: the surface already says "this project", so
- * the only thing left to say is whether a row has diverged from the app-wide
- * value — which the revert button says, on exactly the rows where it is true.
+ * The Model row is an `OverrideControl`: this page already establishes project
+ * scope, and the reset affordance is the visible signal that the row differs
+ * from the app-wide value. `null` means inherit; there is no second mode.
  *
- * `null` means inherit, and the override IS the presence of a value. There is
- * no separate mode flag, which is what let an earlier pass's two pills per row
- * disappear entirely.
- *
- * Harness inventory lives in Settings → About, not here: a project cannot
- * register or revoke a harness, so the LIST is app-wide and only the CHOICE is
- * scoped. Inlining the picker's second view here is what retires
- * `harness-settings.tsx`.
+ * Terminals are manual companions that start as bare shells. They therefore do
+ * not offer a Project harness setting: a setting that names a harness but does
+ * not launch one would be inert.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
-import {
-  DEFAULT_HARNESS_ID,
-  harnessLabel,
-  type ModelAccessModel,
-  type ModelAccessProvider,
-  type ModelSelection,
-  type Project,
-} from "@volli/shared";
+import type { ModelAccessModel, ModelAccessProvider, ModelSelection, Project } from "@volli/shared";
 
 import {
   offerableModels,
   preferredReasoning,
   providerLabelFor,
 } from "@renderer/components/pages/model-access-settings";
-import { useHarnessListings } from "@renderer/components/pages/harness-picker";
 import {
   CONTROL_W,
   ItemRow,
@@ -61,7 +47,6 @@ const NO_PROVIDERS: readonly ModelAccessProvider[] = [];
 type ModelCatalogStatus = "loading" | "ready" | "error" | "unavailable";
 
 export function SessionsPane({ project }: { project: Project }) {
-  const listings = useHarnessListings();
   const modelAccess = useModelAccessClient();
   const inspect = modelAccess?.inspect;
   const adoptProject = useProjectsStore((store) => store.adoptProject);
@@ -73,9 +58,7 @@ export function SessionsPane({ project }: { project: Project }) {
   const [modelCatalogStatus, setModelCatalogStatus] = React.useState<ModelCatalogStatus>("loading");
   const [catalogAttempt, setCatalogAttempt] = React.useState(0);
 
-  const harness = project.sessionHarness ?? null;
   const model = project.sessionModel ?? null;
-  const inheritedHarness = harnessLabel(DEFAULT_HARNESS_ID);
 
   React.useEffect(() => {
     let current = true;
@@ -132,14 +115,11 @@ export function SessionsPane({ project }: { project: Project }) {
       />
     ) : undefined;
 
-  async function save(next: {
-    harness: string | null;
-    model: ModelSelection | null;
-  }): Promise<void> {
+  async function save(selection: ModelSelection | null): Promise<void> {
     if (saving) return;
     setSaving(true);
-    const saved = await writeThrough("save this project's session defaults", () =>
-      window.api.projects.setSessionDefaults({ id: project.id, ...next }),
+    const saved = await writeThrough("save this project's Chat default", () =>
+      window.api.projects.setSessionDefaults({ id: project.id, model: selection }),
     );
     setSaving(false);
     if (saved !== null) adoptProject(saved.project);
@@ -148,39 +128,15 @@ export function SessionsPane({ project }: { project: Project }) {
   return (
     <>
       <PrefSection
-        title="New sessions"
+        title="Chat"
         icon={CpuIcon}
         // The precedence table, as one hint rather than a paragraph under the
         // header — available to whoever wants it, invisible to everyone else.
-        hint={<>Volli uses the composer&rsquo;s choice first, then this project, then Settings.</>}
+        hint={
+          <>New chats use the composer&rsquo;s choice first, then this project, then Settings.</>
+        }
         action={modelCatalogAction}
       >
-        <PrefRow label="Harness" htmlFor="project-harness" testId="project-session-harness">
-          <OverrideControl
-            label="Harness"
-            inheritedValue={inheritedHarness}
-            overridden={harness !== null}
-            onRevert={() => void save({ harness: null, model })}
-          >
-            <Select
-              value={harness ?? DEFAULT_HARNESS_ID}
-              disabled={saving}
-              onValueChange={(next) => void save({ harness: next, model })}
-            >
-              <SelectTrigger id="project-harness" className={CONTROL_W.md}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {listings.map((listing) => (
-                  <SelectItem key={listing.id} value={listing.id}>
-                    {listing.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </OverrideControl>
-        </PrefRow>
-
         {/*
          * An override no longer named by the offerable catalogue is shown as
          * inherited. The reset button remains the one, honest signal that the
@@ -196,7 +152,7 @@ export function SessionsPane({ project }: { project: Project }) {
             label="Model"
             inheritedValue="the app-wide default"
             overridden={model !== null}
-            onRevert={() => void save({ harness, model: null })}
+            onRevert={() => void save(null)}
           >
             {/*
              * At the app's narrow window floor, the two rails leave no room
@@ -213,12 +169,9 @@ export function SessionsPane({ project }: { project: Project }) {
                   );
                   if (nextModel === undefined) return;
                   void save({
-                    harness,
-                    model: {
-                      providerId: nextModel.providerId,
-                      modelId: nextModel.modelId,
-                      reasoningLevel: preferredReasoning(nextModel, model?.reasoningLevel),
-                    },
+                    providerId: nextModel.providerId,
+                    modelId: nextModel.modelId,
+                    reasoningLevel: preferredReasoning(nextModel, model?.reasoningLevel),
                   });
                 }}
               >
@@ -245,7 +198,7 @@ export function SessionsPane({ project }: { project: Project }) {
                     (level) => level === next,
                   );
                   if (reasoningLevel === undefined) return;
-                  void save({ harness, model: { ...model, reasoningLevel } });
+                  void save({ ...model, reasoningLevel });
                 }}
               >
                 <SelectTrigger className={CONTROL_W.sm} aria-label="Reasoning level">

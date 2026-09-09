@@ -35,3 +35,11 @@ describe("the Models category's search index", () => {
     }
   });
 });
+
+describe("the Storage category's search index", () => {
+  it("finds the orphaned Pi log row by the label on screen", () => {
+    const terms = keywordsFor("storage").map((term) => term.toLowerCase());
+
+    expect(terms).toContain("orphaned logs");
+  });
+});

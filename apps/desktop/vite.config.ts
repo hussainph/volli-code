@@ -293,6 +293,12 @@ export default defineConfig(({ mode }) => ({
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
+        // What Storage says about an orphaned worktree, before and after a
+        // destructive act (VC-284). Enrolled for the same reason as the row
+        // above: these are sentences about deletions, and the bug they answer
+        // was a label — every removed row read "Removed at launch", including
+        // the ones a person had just asked for by hand.
+        "src/components/settings/panes/storage-orphans-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -365,6 +371,25 @@ export default defineConfig(({ mode }) => ({
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.
         "src/lib/chat-open-target.ts",
+        // Where a notification click lands, and what this window reports as
+        // "already on screen" (VC-295). Enrolled because both answers are
+        // invisible until they are wrong: a target read too widely silences an
+        // alert nobody saw, and a route that disagrees with it opens somewhere
+        // the suppression rule was never talking about. The store work that
+        // carries the decision out (`notification-activation.ts`) stays outside,
+        // like every other glue module — and so does `notification-surface.ts`,
+        // which is the store calls that carry that decision out.
+        "src/lib/notification-target.ts",
+        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // project, open the Session, then reveal the item. Ported precisely so
+        // the sequence is assertable, because the failure it prevents — a card
+        // revealed in a Session nobody opened, or a harness alert opening a chat
+        // tab that does not exist — is invisible in a screenshot.
+        "src/lib/notification-activation.ts",
+        // And the slot that carries a reveal across the mount race, on the same
+        // argument `editor/reveal-line.ts` is enrolled under: single module
+        // state, claimed once, whose bug is a card that jumps for no reason.
+        "src/chat/session-item-reveal.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         // The split chords (VC-202 §5), in the gate for the same reason the
@@ -450,6 +475,17 @@ export default defineConfig(({ mode }) => ({
         // reason the IPC handlers are: a missed branch is a privacy or a
         // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
         // `index.ts`: it is transport bootstrap around an SDK.
+        // The notification delivery boundary (VC-295). Enrolled for the same
+        // reason the IPC handlers are: a missed branch here is an alert that
+        // escapes a preference, a click that opens nothing, or a suppression
+        // that silences work a person is waiting on. `runtime.ts` stays
+        // outside, like `otlp.ts` and `index.ts`: it is Electron wiring around
+        // these parts, with no decision of its own.
+        "**/src/main/notifications/active-targets.ts",
+        "**/src/main/notifications/activation.ts",
+        "**/src/main/notifications/dispatch.ts",
+        "**/src/main/notifications/ipc.ts",
+        "**/src/main/notifications/settings.ts",
         "**/src/main/observability/genai.ts",
         "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",

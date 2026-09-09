@@ -243,6 +243,7 @@ const ACTS: SessionBlockerActs = {
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
   return {
     sessionError: null,
+    revealedAttentionId: null,
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
@@ -297,6 +298,71 @@ function recorder(resolved: boolean) {
     },
   };
 }
+
+describe("a notification click that named an Attention (VC-295 round 3)", () => {
+  /**
+   * The row draws `attention.primary` — the newest active one — so a click on
+   * an alert about an OLDER live failure used to open the Session and select
+   * nothing: the person was interrupted, sent somewhere, and shown a different
+   * problem with no word about the one they were told.
+   */
+  const older = attention("adapter_disconnected");
+  const newer = attention("configuration_invalid");
+  const twoLive = (revealedAttentionId: string | null): SessionBlockerInput =>
+    blockerInput({
+      revealedAttentionId,
+      attention: { active: [older, newer], primary: newer },
+    });
+
+  it("shows the newest attention when no click named one", () => {
+    expect(sessionBlocker(twoLive(null), ACTS, false)?.message).toBe(
+      sessionBlocker(raised(newer), ACTS, false)?.message,
+    );
+  });
+
+  it("shows the attention the click named, even though it is not the primary", () => {
+    const revealed = sessionBlocker(twoLive(older.id), ACTS, false);
+
+    expect(revealed?.message).toBe(sessionBlocker(raised(older), ACTS, false)?.message);
+    expect(revealed?.message).not.toBe(sessionBlocker(raised(newer), ACTS, false)?.message);
+  });
+
+  it("falls back to the primary when the named attention is no longer live", () => {
+    // Nothing is invented and nothing is replayed: the row shows what IS
+    // wrong, and the click's own toast is what explains the absence.
+    expect(sessionBlocker(twoLive("attention-gone"), ACTS, false)?.message).toBe(
+      sessionBlocker(raised(newer), ACTS, false)?.message,
+    );
+  });
+
+  it("still lets a card hide the row a card answers", () => {
+    // A revealed `permission_required` with a card open is the card's own
+    // question: selecting the row over it would draw the same ask twice.
+    const asked = blockerInput({
+      revealedAttentionId: "attention-permission_required",
+      attention: {
+        active: [attention("permission_required")],
+        primary: attention("permission_required"),
+      },
+    });
+
+    expect(sessionBlocker(asked, ACTS, true)).toBeNull();
+  });
+
+  it("never lets a revealed attention speak over a dead stream", () => {
+    // `sessionError` outranks every attention: the failure that has the report
+    // in it must not be replaced by the one a notification happened to name.
+    const stream = blockerInput({
+      sessionError: "Lost the Session stream: socket hang up",
+      revealedAttentionId: older.id,
+      attention: { active: [older, newer], primary: newer },
+    });
+
+    expect(sessionBlocker(stream, ACTS, false)?.message).toBe(
+      "Lost the Session stream: socket hang up",
+    );
+  });
+});
 
 describe("sessionBlocker", () => {
   it("reports a failed delivery even while a card is still on screen", () => {

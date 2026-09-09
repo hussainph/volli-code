@@ -1,12 +1,12 @@
 import {
   app,
+  BaseWindow,
   BrowserWindow,
   WebContentsView,
   dialog,
   ipcMain,
   nativeTheme,
   net,
-  Notification,
   protocol,
   session,
   shell,
@@ -122,7 +122,8 @@ import {
   type PendingArmedRunCoordinator,
 } from "./automations/pending-armed-runs";
 import { createRunAttentionWatch } from "./automations/run-attention";
-import { readNotificationPreferences } from "./notification-preferences";
+import { registerNotificationIpcHandlers } from "./notifications/ipc";
+import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
@@ -224,16 +225,18 @@ import { createAgentToolDoor } from "./agent-tool-door";
 import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
-import { startOrphanSweep } from "./orphan-sweep";
+import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
+  reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
 } from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -300,7 +303,7 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -817,6 +820,17 @@ app.whenReady().then(async () => {
   // that a later branch may reassign: a narrowing on it does not survive into
   // the callback below, and this is the one place that callback needs it.
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  // The ONE notification door (VC-295). Every native alert this process posts —
+  // this file's five, the retention watch's three — goes through `deliver`,
+  // which is what makes "no alert escapes the preferences" structural rather
+  // than a convention. Built here, right after the database handle is known,
+  // because the run-attention watch below is the first thing that needs it; the
+  // window opener is bound later, when the window factory exists.
+  //
+  // Deliberately built even for a degraded database: with no stored
+  // preferences the all-on default applies, so a broken db costs the app its
+  // settings, never its voice.
+  const notifications = createNotificationRuntime({ db: watchedDb });
   // The Notification rule (VC-112, VC-133): an unattended Run that enters
   // `waiting` or `error` says so, and nothing else does. It hangs off the
   // activity watch below because that is the one place every durable Session
@@ -825,11 +839,9 @@ app.whenReady().then(async () => {
     watchedDb !== null
       ? createRunAttentionWatch({
           attendanceOf: (sessionId) => readAutomationRunAttendance(watchedDb, sessionId),
-          // Re-read per notification rather than captured at boot, so switching
-          // notifications off takes effect on the next one instead of the next
-          // launch. It is one indexed `app_state` read.
-          preferences: () => readNotificationPreferences(watchedDb),
-          notify: ({ title, body }) => new Notification({ title, body }).show(),
+          // The preference is read per alert inside the delivery path, so this
+          // observer names the producer and the target and nothing else.
+          notify: (request) => notifications.deliver(request),
         })
       : null;
   // The runtime is composed from the watched Engine below, so this reader is
@@ -837,9 +849,19 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
-  const sessionActivityWatch =
+  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
+  // watch: a write returns from the engine, the bus fans the committed event
+  // out to whichever `session_await` is parked on it, and only then does the
+  // watch mark the row dirty. Same construction-site rule as the watch — this
+  // is the only place the engine is made, so no caller can hold an unwatched
+  // one. See `session-wake.ts`.
+  const sessionWakeBus =
     watchedDb !== null
-      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
+      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+      : null;
+  const sessionActivityWatch =
+    watchedDb !== null && sessionWakeBus !== null
+      ? watchSessionActivity(sessionWakeBus.engine, {
           publish: broadcastSessionActivity,
           // Read on the push path as well as the fetch path, so a Run's bolt
           // survives its Session's first turn (VC-131): the renderer upserts
@@ -1842,6 +1864,11 @@ app.whenReady().then(async () => {
           // post-commit wake bus until a planner fact matches.
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
           subscribeTicketWake,
+          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
+          // read through a closure because the bus and the door are composed
+          // under different null-guards in this same function.
+          subscribeSessionWake: (listener) =>
+            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>
@@ -1904,6 +1931,36 @@ app.whenReady().then(async () => {
       ? undefined
       : `Agent telemetry settings are unavailable — the local database failed to open: ${dbHandle.error}`,
   );
+  // Settings → Notifications (VC-295), and the second half of a notification
+  // click. Its own door rather than the generic `app_state` write, so the
+  // category vocabulary is validated in one place (docs/BOUNDARIES.md rule 5).
+  registerNotificationIpcHandlers({
+    settings: notifications.settings,
+    takePendingActivation: () => notifications.takePendingActivation(),
+    // A renderer asking for the parked click is a renderer that has just
+    // subscribed to them (VC-295 round 2): until then main parks rather than
+    // pushes, because a window exists long before anything inside it listens.
+    markRendererReady: (sender) => {
+      const window = BrowserWindow.fromWebContents(sender);
+      if (window !== null) notifications.markRendererReady(window.id);
+    },
+    ...(dbHandle.ok
+      ? {}
+      : {
+          unavailableReason: `Notification settings are unavailable — the local database failed to open: ${dbHandle.error}`,
+        }),
+  });
+  // What each window is showing, for the focused-target rule. A `send`: it
+  // flips on every navigation, needs no reply, and main's copy is advisory —
+  // a report that never arrives costs one duplicate alert.
+  ipcMain.on(
+    "volli:notification-active-target" satisfies VolliIpcChannel,
+    (event, ...args: unknown[]): void => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window === null) return;
+      notifications.reportActiveTarget(window.id, args[0]);
+    },
+  );
   // The session watchdog (VC-86): every executor this process holds open is
   // scanned on a coarse clock, and an open turn silent past the app-wide
   // threshold self-reports — one durable blocked signal naming the watchdog
@@ -1918,7 +1975,7 @@ app.whenReady().then(async () => {
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),
-          notify: ({ title, body }) => new Notification({ title, body }).show(),
+          notify: (request) => notifications.deliver(request),
         })
       : null;
   sessionWatchdog?.start();
@@ -1948,12 +2005,17 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
-  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
-  // durable Session itself intentionally remains open; only the binding ends.
+  // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
+  // structured attachment stays reattachable, but a turn left active by the
+  // prior process is reconciled now so `session list` cannot call it idle.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
       await closeStaleAttachments({
         engine: sessionEngine,
+        reconcile: (input) =>
+          sessionRuntime === null
+            ? Promise.reject(new Error("The Session runtime is unavailable during boot recovery."))
+            : sessionRuntime.reconcile(input),
         projectIds: listProjects(dbHandle.db).map((project) => project.id),
         newId: randomUUID,
         now: Date.now,
@@ -2598,6 +2660,24 @@ app.whenReady().then(async () => {
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // The off-screen stage every tab waits in until a person shows it (VC-278).
+    // A tab nobody has revealed still needs a window to hold its compositor
+    // surface, or its clicks land nowhere and its screenshots never answer.
+    //
+    // A BaseWindow, deliberately: it holds views but has no webContents, so it
+    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
+    // picks the app window out of, and that `activate` counts before
+    // re-creating one. `show: false` is load-bearing and must stay: showing
+    // this would put an agent's page on screen with nothing in the UI claiming
+    // to have shown it.
+    createStageWindow: () =>
+      new BaseWindow({
+        show: false,
+        width: BROWSER_DEFAULT_BOUNDS.width,
+        height: BROWSER_DEFAULT_BOUNDS.height,
+        skipTaskbar: true,
+        focusable: false,
+      }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
     // The pictures a transcript card shows (VC-238): live captures bounded in
@@ -2719,8 +2799,27 @@ app.whenReady().then(async () => {
     // app window that can place them closes, keeping invisible remote pages
     // running would leave network/timers with no reachable owner.
     window.once("closed", () => browserTabs.closeAll());
+    // And a closed window is showing nothing: its last reported target must not
+    // linger and suppress an alert nobody can see (VC-295).
+    const windowId = window.id;
+    window.once("closed", () => notifications.forgetWindow(windowId));
+    // A page that reloads, navigates, or crashes takes its click subscription
+    // and its reported target with it, while the window id lives on. Drop
+    // both, so the next click parks for the fresh page instead of being pushed
+    // into one that no longer listens. Same-document navigations (a hash
+    // change) keep the page and are skipped.
+    window.webContents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
+    });
+    window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
     return window;
   };
+  // A notification clicked with every window closed asks for one (macOS keeps
+  // the app alive), and the renderer collects the parked target as it
+  // subscribes. Bound here because this is where the factory exists.
+  notifications.bindWindowOpener(() => {
+    if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
+  });
   const mainWindow = createOwnedWindow();
   const transcriptRepackAbort = new AbortController();
   app.on("before-quit", () => transcriptRepackAbort.abort());
@@ -2775,25 +2874,48 @@ app.whenReady().then(async () => {
     });
   });
 
-  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs that THIS database owns and that
-  // nothing has touched for the retention window (branches retained — VC-113
-  // scoped both the ownership and the timing); dirty orphans are
-  // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
-  // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
-  // volli:worktree-orphans handler. Deferred to did-finish-load so it never
-  // competes with first paint; a sweep failure is logged, not thrown.
+  // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching
+  // the app pruned git metadata and deleted every clean orphan past the
+  // retention window, with no confirmation and nothing on screen that had asked.
+  // Starting an app is not consent to delete, so a launch now only LOOKS — the
+  // report it produces is what Settings → Storage lists, and removing anything
+  // takes an explicit, confirmed cleanup through volli:worktree-orphan-cleanup.
+  // Deferred to did-finish-load so it never competes with first paint; a scan
+  // failure is logged, not thrown.
+  //
+  // The reconcile beside it closes the other half: a cleanup the app did not
+  // live long enough to finish is stamped interrupted here, so Storage can show
+  // what completed and what was never attempted instead of re-offering both.
   if (dbHandle.ok) {
     const db = dbHandle.db;
     mainWindow.webContents.once("did-finish-load", () => {
-      startOrphanSweep(worktreeDeps(db))
+      // Each announced-but-unsettled item is asked of git and disk before the
+      // run is stamped, so an already-removed folder is recorded as removed
+      // rather than described as work nobody attempted (review C3). Read-only,
+      // and never fatal to a launch.
+      void reconcileInterruptedCleanups({
+        worktree: worktreeDeps(db),
+        engine: orphanCleanupEngine(db),
+      })
+        .then((runs) => {
+          for (const run of runs) {
+            const done = run.items.filter((item) => item.state === "completed").length;
+            console.log(
+              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+        });
+      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
-            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
+            `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
           );
         })
         .catch((error) => {
-          console.error("[worktree] sweep failed:", errorMessage(error));
+          console.error("[worktree] scan failed:", errorMessage(error));
         });
     });
 
@@ -2822,7 +2944,7 @@ app.whenReady().then(async () => {
     updater: autoUpdater,
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
     currentVersion: app.getVersion(),
-    notify: (title, body) => new Notification({ title, body }).show(),
+    notify: (request) => notifications.deliver(request),
     log: (line) => console.info(line),
     onStateChange: broadcastUpdateState,
     // The double-notify guard: with a window open the sidebar badge/dialog
@@ -3206,7 +3328,7 @@ app.whenReady().then(async () => {
           // The chat half of the same verb (VC-79): a peek at a structured
           // Session renders its transcript tail from these artifacts.
           readTranscriptArtifact: (reference) => transcriptArtifacts.read(reference),
-          notify: (title, message) => new Notification({ title, body: message }).show(),
+          notify: (request) => notifications.deliver(request),
           // The product Session start route (VC-13): the same facade the
           // renderer's `sessions.create` RPC rides — no parallel creation
           // path. Absent when the Session runtime never came up this launch,
@@ -3394,10 +3516,15 @@ app.whenReady().then(async () => {
     // used for lifecycle notices) surfaces it instead of only a console line
     // no one but a developer will ever see.
     console.error("[volli] failed to start agent socket:", errorMessage(error));
-    new Notification({
+    // Operational (VC-295): a fault about Volli itself, whose only alternative
+    // is a console line, so no preference is consulted and there is nothing to
+    // open — the CLI is what is broken, not a screen.
+    notifications.deliver({
+      producer: "cli-socket-failed",
       title: "Volli CLI unavailable",
       body: "The agent socket failed to start. CLI commands won't work this launch.",
-    }).show();
+      target: null,
+    });
   }
 
   // Background user-space CLI + skills install (VC-52): no dialog, no admin
