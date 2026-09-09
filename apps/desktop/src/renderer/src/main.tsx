@@ -177,9 +177,12 @@ async function main() {
       if (pending.ok && pending.target !== null)
         void activateNotificationTarget(pending.target, desktopNotificationSurface);
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       // A click whose target could not be collected leaves the window open on
       // whatever it was showing — which is where the click brought it anyway.
+      // There is no route the person can retry, but retain the diagnostic rather
+      // than silently losing the failure.
+      console.warn("[volli] couldn't collect notification activation:", error);
     });
 
   // Self-update state (VC-59): subscribe FIRST, then prime with a one-time
