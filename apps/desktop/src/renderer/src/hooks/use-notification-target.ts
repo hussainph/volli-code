@@ -19,13 +19,14 @@
  *    a person reading one question swallow the alert about the failure beside
  *    it. `sessionNotificationItem` is the same derivation the producer used.
  *
- * ── AND WHICH ITEM, WHEN A CLICK HAS OVERRIDDEN THE ROW ──────────────────
- * A click can ask the blocker to draw an OLDER live Attention than the primary.
- * Round 3 reported the primary-derived item anyway, so the row showed one
- * problem while this told main another was visible — and the alert for the
- * problem that was NOT on screen got suppressed. There is now one record of
- * what a plane was asked to show (`chat/session-item-reveal.ts`) and one rule
- * over it (`shownSessionNotificationItem`), read here and by the blocker alike.
+ * ── AND WHICH ITEM, WHEN A CLICK HAS OVERRIDDEN THE PLANE ────────────────
+ * A click can ask the blocker to draw an OLDER live Attention than the primary,
+ * or the card slot to draw a question other than the first. Round 3 reported
+ * the primary-derived item anyway, so the row showed one problem while this
+ * told main another was visible — and the alert for the problem that was NOT
+ * on screen got suppressed. There is now one record of what a plane was asked
+ * to show (`chat/session-item-reveal.ts`) and one rule over it
+ * (`shownSessionNotificationItem`), read here and by the plane alike.
  *
  * The report is advisory and one-way. If it never arrives — a dropped send, a
  * window still booting — the cost is one duplicate notification, which is the
@@ -102,7 +103,7 @@ export function useNotificationTargetReport(): void {
     () =>
       projection === null
         ? NO_SESSION_NOTIFICATION_ITEM
-        : shownSessionNotificationItem(projection, claimed?.attentionId ?? null),
+        : shownSessionNotificationItem(projection, claimed),
     [claimed, projection],
   );
 

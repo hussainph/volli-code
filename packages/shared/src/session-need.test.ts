@@ -248,6 +248,10 @@ describe("revealedSessionAttention", () => {
   });
 });
 
+/** The item a click asked the plane to show: a failure, or a question. */
+const reveal = (attentionId: string) => ({ interactionId: null, attentionId });
+const revealQuestion = (interactionId: string) => ({ interactionId, attentionId: null });
+
 describe("shownSessionNotificationItem", () => {
   const older = "attention-adapter_disconnected";
   const newer = "attention-configuration_invalid";
@@ -264,14 +268,14 @@ describe("shownSessionNotificationItem", () => {
     // The round-3 gap: the row showed `older` while the window reported
     // `newer`, so the alert for `newer` — the problem NOT on screen — was
     // suppressed.
-    expect(shownSessionNotificationItem(twoLive, older)).toEqual({
+    expect(shownSessionNotificationItem(twoLive, reveal(older))).toEqual({
       interactionId: null,
       attentionId: older,
     });
   });
 
   it("falls back to what the row falls back to when the revealed one has cleared", () => {
-    expect(shownSessionNotificationItem(twoLive, "attention-gone")).toEqual({
+    expect(shownSessionNotificationItem(twoLive, reveal("attention-gone"))).toEqual({
       interactionId: null,
       attentionId: newer,
     });
@@ -283,13 +287,46 @@ describe("shownSessionNotificationItem", () => {
     expect(
       shownSessionNotificationItem(
         askingAndAttending("permission_required"),
-        "attention-permission_required",
+        reveal("attention-permission_required"),
       ),
     ).toEqual({ interactionId: "ask-1", attentionId: null });
   });
 
+  it("names the revealed question when it is one of several open (round 5)", () => {
+    // The plane puts the revealed question in the foot slot (or scrolls to its
+    // row), so that — not the first — is what the person is looking at.
+    const twoQuestions = projection({
+      interactions: {
+        active: [{ id: "ask-1" }, { id: "ask-2" }],
+        all: [],
+      } as unknown as SessionProjection["interactions"],
+    });
+    expect(shownSessionNotificationItem(twoQuestions, revealQuestion("ask-2"))).toEqual({
+      interactionId: "ask-2",
+      attentionId: null,
+    });
+    expect(shownSessionNotificationItem(twoQuestions, revealQuestion("ask-gone"))).toEqual({
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("never lets a revealed question displace a failure row", () => {
+    // The failure is drawn above the card whichever question is in the slot.
+    expect(
+      shownSessionNotificationItem(
+        askingAndAttending("adapter_disconnected"),
+        revealQuestion("ask-1"),
+      ),
+    ).toEqual({ interactionId: null, attentionId: older });
+  });
+
   it("says nothing about a Session that shows nothing", () => {
-    expect(shownSessionNotificationItem(projection(), older)).toEqual({
+    expect(shownSessionNotificationItem(projection(), reveal(older))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+    expect(shownSessionNotificationItem(projection(), revealQuestion("ask-1"))).toEqual({
       interactionId: null,
       attentionId: null,
     });

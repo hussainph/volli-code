@@ -169,6 +169,33 @@ describe("useNotificationTargetReport", () => {
     expect(lastReport()).toMatchObject({ attentionId: NEWER });
   });
 
+  it("follows a revealed question too, when several are open (round 5)", async () => {
+    // The plane draws the revealed question in the card slot (or scrolls to
+    // its row), so the report names it — not the first open one — and an alert
+    // about the first is still delivered.
+    useChatSessionsStore.setState({
+      sessions: {
+        [SESSION]: {
+          projection: {
+            interactions: { active: [{ id: "ask-1" }, { id: "ask-2" }], resolved: [] },
+            attention: { active: [], primary: null },
+          },
+        },
+      },
+    } as never);
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    expect(lastReport()).toMatchObject({ interactionId: "ask-1", attentionId: null });
+
+    await act(async () => {
+      requestSessionItemReveal(SESSION, { interactionId: "ask-2", attentionId: null });
+      takeSessionItemReveal(SESSION);
+    });
+
+    expect(lastReport()).toMatchObject({ interactionId: "ask-2", attentionId: null });
+  });
+
   it("keeps another Session's reveal out of this window's report", async () => {
     await act(async () => {
       root.render(<Probe />);

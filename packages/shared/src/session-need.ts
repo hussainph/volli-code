@@ -204,16 +204,21 @@ export function revealedSessionAttention<T extends { id: string }>(
 }
 
 /**
- * What a Session is showing right now, given a click that revealed an Attention.
+ * What a Session is showing right now, given the item a click asked it to show.
  *
  * {@link sessionNotificationItem} answers for the resting case — the row draws
- * `primary`. This wraps it with the one override the plane has: a click can ask
- * for an older live Attention, and while that stands, that is the row.
+ * `primary`, the foot draws the first open question. This wraps it with the
+ * one override the plane has: a click can ask for an older live Attention, or
+ * for a question other than the first, and while that stands, that is what is
+ * on screen.
  *
- * The override applies only where the ROW is the item. With a card open the
- * blocker stands down for the kind the card answers, so the question stays what
- * is on screen and a reveal changes nothing — which is why this defers to the
- * base answer whenever that answer is an interaction.
+ * The override never changes WHICH KIND of item is showing, only which one of
+ * that kind. With a card open the blocker stands down for the kind the card
+ * answers, so a revealed Attention changes nothing there; and a revealed
+ * question does not displace a failure row, because the row is drawn above the
+ * card either way. Each override applies only while its item is still live —
+ * one that has cleared falls back to what the plane would draw anyway (round 5
+ * extended this from Attentions to questions).
  */
 export function shownSessionNotificationItem(
   projection: {
@@ -224,12 +229,19 @@ export function shownSessionNotificationItem(
     };
     stopped?: SessionProjection["stopped"];
   },
-  revealedAttentionId: string | null,
+  revealed: SessionNotificationItem | null,
 ): SessionNotificationItem {
   const base = sessionNotificationItem(projection);
-  if (base.attentionId === null) return base;
-  const revealed = revealedSessionAttention(projection.attention.active, revealedAttentionId);
-  return revealed === null ? base : { interactionId: null, attentionId: revealed.id };
+  if (revealed === null) return base;
+  if (base.attentionId !== null) {
+    const attention = revealedSessionAttention(projection.attention.active, revealed.attentionId);
+    return attention === null ? base : { interactionId: null, attentionId: attention.id };
+  }
+  if (base.interactionId !== null && revealed.interactionId !== null) {
+    const question = projection.interactions.active.find(({ id }) => id === revealed.interactionId);
+    return question === undefined ? base : { interactionId: question.id, attentionId: null };
+  }
+  return base;
 }
 
 export function sessionNotificationItem(projection: {

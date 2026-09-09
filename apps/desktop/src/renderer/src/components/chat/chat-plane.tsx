@@ -16,6 +16,7 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
+import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 
 import { toastError } from "@renderer/lib/toast";
@@ -289,6 +290,7 @@ export function ChatPlane({
   // off the plane's subtree rather than the document so a split with two
   // chats never hands focus to the other one's island.
   const planeRef = React.useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion() ?? false;
   const peekReturnFocus = React.useCallback(
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
@@ -458,7 +460,15 @@ export function ChatPlane({
   React.useEffect(() => {
     const claim = () => {
       const item = takeSessionItemReveal(sessionId);
-      if (item !== null) setRevealed(item);
+      if (item === null) return;
+      // A fresh object per claim, on purpose: a second click on the same alert
+      // is a second ask, and the scroll below keys on the claim, not its ids.
+      setRevealed({ ...item });
+      // A click naming a failure is a person asking to see it, and a dismissal
+      // is a view choice that has now been reversed by a louder one: the row
+      // comes back for the exact problem the alert was about (round 5). A
+      // question needs no such reset — cards are never dismissed.
+      if (item.attentionId !== null) setDismissedBlockerKey(null);
     };
     claim();
     const off = onSessionItemReveal(sessionId, claim);
@@ -1062,6 +1072,27 @@ export function ChatPlane({
   // saying so.
   const liveTurn = working ? (turns.at(-1) ?? null) : null;
 
+  /**
+   * The other place a question draws (round 5). A gated tool call's question
+   * sits on its own row in the transcript, not at the foot — `footInteraction`
+   * skips it by design — so reordering the foot did nothing for it, and a click
+   * on its alert opened the Session with the card somewhere above the fold. So
+   * a revealed question that is drawn inline is scrolled to, once per reveal
+   * and as soon as its row exists: `rows` is a dependency because the row may
+   * mount a frame after the plane does.
+   */
+  const scrolledReveal = React.useRef<SessionNotificationItem | null>(null);
+  React.useEffect(() => {
+    if (revealed === null || revealed.interactionId === null) return;
+    if (scrolledReveal.current === revealed) return;
+    const row = planeRef.current?.querySelector<HTMLElement>(
+      `[data-interaction-id="${CSS.escape(revealed.interactionId)}"]`,
+    );
+    if (row === null || row === undefined) return;
+    scrolledReveal.current = revealed;
+    row.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+  }, [reducedMotion, revealed, rows]);
+
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
     setDismissedBlockerKey(dismissKey);
@@ -1454,6 +1485,7 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
     // The composer overlay ignores hits so its empty padding does not cover the
     // transcript. This row carries recovery controls, so it must opt back in.
     <div
+      data-slot="session-blocker"
       className={cn(
         "pointer-events-auto mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
         blocker.tone === "error" ? "border-destructive/30" : "border-border",
@@ -1786,7 +1818,9 @@ function renderSegment(
 function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
-    <div className="space-y-1">
+    // The id is on the row so a notification click can scroll to THIS question
+    // (VC-295): it is the one card the foot slot never draws.
+    <div className="space-y-1" data-interaction-id={interaction?.id}>
       <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
       {interaction ? (
         <InteractionCard
