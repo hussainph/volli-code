@@ -92,7 +92,12 @@ describe("SessionBlocker hit testing", () => {
       </div>,
     );
 
-    expect(html).toMatch(/^<div class="pointer-events-none"><div class="[^"]*pointer-events-auto/);
+    // The inner row opts back in; WHICH attribute comes first is React's
+    // business, not this assertion's — pinning `class` to first position broke
+    // the moment the row gained its `data-slot` handle.
+    expect(html).toMatch(
+      /^<div class="pointer-events-none"><div [^>]*class="[^"]*pointer-events-auto/,
+    );
     expect(html).toContain('aria-label="Dismiss"');
   });
 });
