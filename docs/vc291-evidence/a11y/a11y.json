@@ -1,0 +1,222 @@
+{
+  "meta": {
+    "startedAt": "2026-09-09T19:59:19.949Z",
+    "referenceFile": "/tmp/volli-reflow-1788983974.txt",
+    "consoleErrors": []
+  },
+  "checks": [
+    {
+      "id": "A1-dom-terminal",
+      "at": 1788983975429,
+      "host": {
+        "tag": "div",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "tabIndex": null,
+        "title": null,
+        "textContentLength": 8
+      },
+      "hostChildren": [
+        "restty-search-ui-root restty-pane-root"
+      ],
+      "canvas": {
+        "tag": "canvas",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "tabIndex": "0",
+        "title": null,
+        "textContentLength": 0
+      },
+      "innerTextOfHost": 0
+    },
+    {
+      "id": "A2-focus-after-click",
+      "at": 1788983975689,
+      "activeElement": "TEXTAREA",
+      "activeClass": "pane-ime-input restty-pane-ime-input",
+      "activeRole": "",
+      "activeAria": ""
+    },
+    {
+      "id": "A3-tab-walk",
+      "at": 1788983976607,
+      "walk": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "aria": ""
+        }
+      ]
+    },
+    {
+      "id": "A4-chromium-ax",
+      "at": 1788983976607,
+      "available": false
+    },
+    {
+      "id": "A5-system-events-window",
+      "at": 1788983977797,
+      "result": "standard window | missing value || group:"
+    },
+    {
+      "id": "A6-system-events-entire-contents",
+      "at": 1788983978211,
+      "bytes": 19,
+      "containsREFLOW": false,
+      "refused": false
+    },
+    {
+      "id": "A7-voiceover-cursor",
+      "at": 1788983982930,
+      "voText": "refused: Command failed: osascript -e tell application \"VoiceOver\" to get the description of the cursor"
+    },
+    {
+      "id": "A7-voiceover-toggle",
+      "at": 1788983984847,
+      "result": "toggled; VoiceOver pid=19031"
+    },
+    {
+      "id": "B0-grid",
+      "at": 1788983986990,
+      "grid": "51 86",
+      "rowsUsed": 51
+    },
+    {
+      "id": "B-selection-geometry-unsplit",
+      "at": 1788983988161,
+      "rows": 51,
+      "rowH": 14,
+      "startRow": 5,
+      "ocrLines": 59
+    },
+    {
+      "id": "B-copy-unsplit",
+      "at": 1788983989798,
+      "clipboardBytes": 355,
+      "changedFromBefore": true,
+      "containsShort01": true,
+      "containsLongStart": true,
+      "containsLongEnd": false,
+      "xRunLength": 240,
+      "first160": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "id": "B-keyboard-select-unsplit",
+      "at": 1788983991327,
+      "clipboardChanged": false,
+      "clipboardPreview": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "id": "B-cycle-navigation",
+      "at": 1788983996390,
+      "ok": true
+    },
+    {
+      "id": "B0-grid",
+      "at": 1788984005490,
+      "grid": "25 86",
+      "rowsUsed": 25
+    },
+    {
+      "id": "B-selection-geometry-after-cycle",
+      "at": 1788984006176,
+      "rows": 25,
+      "rowH": 14,
+      "startRow": 5,
+      "ocrLines": 29
+    },
+    {
+      "id": "B-copy-after-cycle",
+      "at": 1788984007661,
+      "clipboardBytes": 355,
+      "changedFromBefore": false,
+      "containsShort01": true,
+      "containsLongStart": true,
+      "containsLongEnd": false,
+      "xRunLength": 240,
+      "first160": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "id": "B-keyboard-select-after-cycle",
+      "at": 1788984009221,
+      "clipboardChanged": false,
+      "clipboardPreview": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "id": "C1-cmd-f-terminal-focused",
+      "at": 1788984010427,
+      "dialogs": 0,
+      "findbars": [
+        "Find in scrollback"
+      ]
+    },
+    {
+      "id": "C1b-find-REFLOW-SHORT-01",
+      "at": 1788984012956,
+      "typed": true,
+      "barReports": [],
+      "paneShowsQuery": true,
+      "scrollTop": 70,
+      "scrollMax": 2534,
+      "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-REFLOWSHORT01.png"
+    },
+    {
+      "id": "C1b-find-REFLOW-PWD-",
+      "at": 1788984017330,
+      "typed": true,
+      "barReports": [],
+      "paneShowsQuery": true,
+      "scrollTop": 2534,
+      "scrollMax": 2534,
+      "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-REFLOWPWD.png"
+    },
+    {
+      "id": "C2-quickopen",
+      "at": 1788984021624,
+      "mentionsREFLOW": false,
+      "optionCount": 0
+    },
+    {
+      "id": "C3-dom-search-uis",
+      "at": 1788984021996,
+      "count": 18
+    }
+  ]
+}

@@ -477,6 +477,18 @@ async function setScrollTop(paneIndex, top) {
   await sleep(260);
 }
 
+/** Scroll state + WHICH pane it came from: every claim about retained
+ * scrollback has to name the pane it measured, or a newly-created terminal
+ * that stole the active tab reads as "the seeded pane lost everything". */
+const scrollOf = (host) =>
+  host && {
+    paneId: host.paneId,
+    top: host.scrollTop,
+    max: host.scrollHeight - host.clientHeight,
+    height: host.scrollHeight,
+    client: host.clientHeight,
+  };
+
 let probeLines = 0;
 
 /** The ticket PTY spawns only after the worktree ensure() lands, and writes
@@ -615,6 +627,11 @@ async function sweep(run, label, paneIndex = 0) {
 
 // ---- seeding -------------------------------------------------------------------
 
+/** Index of the tab holding the pane this run seeded, so a row that opens more
+ * terminals can come back to it. Creating a terminal can move the active tab,
+ * and measuring the wrong pane reads as "the seeded pane lost everything". */
+let seedTabIndex = -1;
+
 /** Create a fresh terminal on the active surface, select its tab (the
  * ticket detail does not always auto-switch to the new session tab, which
  * leaves the pane hidden and its canvas at 0×0), and seed the REFLOW block. */
@@ -627,6 +644,7 @@ async function seedRun(caseName, runNo) {
     });
     await strip.last().click();
     await sleep(400);
+    seedTabIndex = (await strip.count()) - 1;
   }
   await waitUntil(
     "seed terminal canvas",
@@ -676,15 +694,11 @@ async function seedRun(caseName, runNo) {
   console.log(`  [backend after seed] ${JSON.stringify(backendNow)}`);
 
   const host = await readScrollHost(0);
+  run.seededPaneId = host?.paneId ?? null;
   ev(run, {
     t: "seed-post",
     grid: await sttyCheck(run, `${caseName}-${runNo}-seedpost`),
-    scroll: host && {
-      top: host.scrollTop,
-      max: host.scrollHeight - host.clientHeight,
-      height: host.scrollHeight,
-      client: host.clientHeight,
-    },
+    scroll: scrollOf(host),
     dpr: host?.dpr,
     shots: await fullSweep(run, "seedpost"),
   });
@@ -699,7 +713,7 @@ async function caseControl(run) {
   ev(run, {
     t: "post-10s",
     grid: await sttyCheck(run, `${run.case}-${run.run}-post10s`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "post10s"),
   });
 }
@@ -725,7 +739,7 @@ async function caseResize(run) {
       t: `resize-${label}`,
       size,
       grid: await sttyCheck(run, `${run.case}-${run.run}-${label}`),
-      scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+      scroll: scrollOf(host),
     };
     if (!swept.has(label)) {
       swept.add(label);
@@ -734,6 +748,15 @@ async function caseResize(run) {
     legs.push(rec);
     ev(run, rec);
   }
+  // Verdict checkpoint for this row: the whole scrollback, after the restore.
+  await focusCanvasAt(0);
+  const finalHost = await readScrollHost(0);
+  ev(run, {
+    t: "resize-final",
+    grid: await sttyCheck(run, `${run.case}-${run.run}-final`),
+    scroll: scrollOf(finalHost),
+    shots: await fullSweep(run, "resizefinal"),
+  });
 }
 
 async function caseFocus(run) {
@@ -741,6 +764,11 @@ async function caseFocus(run) {
     await page.keyboard.press("Alt+Meta+Enter"); // enter terminal focus
     await sleep(420);
     const exitCount = await page.getByRole("button", { name: "Exit terminal focus" }).count();
+    // The grid WHILE focused: zen hides the chrome, so the pane is larger here
+    // than on return. Recording both ends is what distinguishes "the grid moved
+    // and came back" from "the grid never moved".
+    const focusedHost = await readScrollHost(0);
+    const focusedGrid = await sttyCheck(run, `${run.case}-${run.run}-c${i}-in`);
     await page.keyboard.press("Alt+Meta+Enter"); // leave terminal focus
     await sleep(420);
     const enterCount = await page.getByRole("button", { name: "Enter terminal focus" }).count();
@@ -749,8 +777,10 @@ async function caseFocus(run) {
       t: `focus-cycle-${i}`,
       entered: exitCount === 1,
       exited: enterCount === 1,
+      gridWhileFocused: focusedGrid,
+      scrollWhileFocused: scrollOf(focusedHost),
       grid: await sttyCheck(run, `${run.case}-${run.run}-c${i}`),
-      scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+      scroll: scrollOf(host),
     });
   }
   await focusCanvasAt(0);
@@ -758,7 +788,7 @@ async function caseFocus(run) {
   ev(run, {
     t: "focus-post",
     grid: await sttyCheck(run, `${run.case}-${run.run}-post`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "focuspost"),
   });
 }
@@ -828,7 +858,7 @@ async function caseSplit(run, direction) {
       await focusCanvasAt(0);
       ev(run, {
         t: `drag-c${cycle}-${Math.round(f * 100)}`,
-        scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+        scroll: scrollOf(host),
         grid: await sttyCheck(run, `${run.case}-${run.run}-c${cycle}-${Math.round(f * 100)}`),
       });
     }
@@ -841,7 +871,7 @@ async function caseSplit(run, direction) {
   ev(run, {
     t: "split-final",
     grid: await sttyCheck(run, `${run.case}-${run.run}-final1`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "splitfinal"),
   });
 }
@@ -863,7 +893,7 @@ async function caseHideshow(run) {
   ev(run, {
     t: "hideshow-board10",
     grid: await sttyCheck(run, `${run.case}-${run.run}-board10`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "board10"),
   });
 
@@ -886,7 +916,7 @@ async function caseHideshow(run) {
   ev(run, {
     t: "hideshow-tabs10",
     grid: await sttyCheck(run, `${run.case}-${run.run}-tabs10`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "tabs10"),
   });
 }
@@ -894,35 +924,38 @@ async function caseHideshow(run) {
 async function caseTicketHideshow(run) {
   // The audit's surface: ticket detail ↔ board ×10, then session tab ↔ session
   // tab ×10 inside the ticket.
+  const strip = () => page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
   for (let i = 1; i <= 10; i += 1) {
-    await page.keyboard.press("Escape");
+    // Home nav button, not Escape: it is present on every screen, while the
+    // board card behind Escape can be off-screen on a crowded board.
+    await page.getByRole("button", { name: "Home", exact: true }).click();
     await sleep(420);
-    const card = page.locator("article").filter({ hasText: "VC-1" }).first();
-    await card.dblclick();
+    await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 20000 });
     await sleep(520);
+    if (seedTabIndex >= 0) {
+      await strip().nth(seedTabIndex).click();
+      await sleep(300);
+    }
   }
   let host = await readScrollHost(0);
   await focusCanvasAt(0);
   ev(run, {
     t: "ticket-hideshow-board10",
     grid: await sttyCheck(run, `${run.case}-${run.run}-board10`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "board10"),
   });
   await startTerminalSession(page.locator("aside"));
-  {
-    const strip = page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
-    await waitUntil("second session tab", async () => (await strip.count()) >= 2, { timeout: 45000 });
-    await strip.last().click();
-  }
+  await waitUntil("second session tab", async () => (await strip().count()) >= 3, { timeout: 45000 });
+  const otherTabIndex = (await strip().count()) - 1;
+  await strip().nth(otherTabIndex).click();
   await sleep(2600);
-  const strip = () => page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
+  // Terminal tab ↔ terminal tab: the OTHER terminal and the seeded one, never
+  // the doc tab (which shows no terminal at all).
   for (let i = 1; i <= 10; i += 1) {
-    const tabs = strip();
-    const n = await tabs.count();
-    await tabs.nth(n - 1).click();
+    await strip().nth(otherTabIndex).click();
     await sleep(320);
-    await tabs.nth(0).click();
+    await strip().nth(seedTabIndex >= 0 ? seedTabIndex : 1).click();
     await sleep(420);
   }
   host = await readScrollHost(0);
@@ -930,7 +963,7 @@ async function caseTicketHideshow(run) {
   ev(run, {
     t: "ticket-hideshow-tabs10",
     grid: await sttyCheck(run, `${run.case}-${run.run}-tabs10`),
-    scroll: host && { top: host.scrollTop, max: host.scrollHeight - host.clientHeight },
+    scroll: scrollOf(host),
     shots: await fullSweep(run, "tabs10"),
   });
 }
@@ -1008,7 +1041,20 @@ try {
           await sleep(1100);
         }
         const live = await page.evaluate(() => document.querySelectorAll("[data-terminal-renderer]").length);
-        ev(run, { t: "pressure-panes-created", liveTerminalHosts: live });
+        // Come back to the seeded pane: creating terminals moves the active
+        // tab, and every later reading has to be about the pane that was seeded.
+        if (SURFACE === "ticket" && seedTabIndex >= 0) {
+          const strip = page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
+          await strip.nth(seedTabIndex).click();
+          await sleep(1200);
+        }
+        const back = await readScrollHost(0);
+        ev(run, {
+          t: "pressure-panes-created",
+          liveTerminalHosts: live,
+          scroll: scrollOf(back),
+          backOnSeededPane: back?.paneId === run.seededPaneId,
+        });
         await sleep(2500);
       }
         await CASE_FN[caseName](run);

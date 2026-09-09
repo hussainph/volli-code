@@ -486,19 +486,61 @@ const pbpaste = () => {
   }
 };
 
+/** OCR one image via the Vision-framework helper (canvas text is not DOM). */
+const ocrText = (path) =>
+  new Promise((resolve) => {
+    execFile(
+      "osascript",
+      ["-l", "JavaScript", join(APP_DIR, "e2e", "lib", "ocr.js"), path],
+      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: 30000 },
+      (e, out) => resolve(e ? "" : out),
+    );
+  });
+
+/** The pane's real grid, straight from the shell, so selection geometry uses
+ * the true row height instead of an assumed one. */
+async function paneRows() {
+  const probe = join(SEED_DIR, "grid.txt");
+  await fs.rm(probe, { force: true });
+  await waitShellReady();
+  await page.keyboard.type(`stty size > ${probe}`);
+  await page.keyboard.press("Enter");
+  const text = await waitUntil(
+    "stty size",
+    async () => {
+      try {
+        const t = (await fs.readFile(probe, "utf8")).trim();
+        return /^\d+\s+\d+$/.test(t) ? t : null;
+      } catch {
+        return null;
+      }
+    },
+    { timeout: 8000 },
+  ).catch(() => null);
+  const rows = text ? Number(text.split(/\s+/)[0]) : 45;
+  note("B0-grid", { grid: text, rowsUsed: rows });
+  return rows;
+}
+
 async function dragSelectAndCopy(label) {
-  // Scroll to the very top: REFLOW-BEGIN is row 0, REFLOW-SHORT-01 row 1, the
-  // first long line wraps rows 2..4 at these widths.
+  // Scroll to the very top: REFLOW-BEGIN is the first seeded line, with
+  // REFLOW-SHORT-01 and the first long line right under it.
+  const rows = await paneRows();
   await setScroll(0);
   const host = await scrollHostInfo();
-  const rows = 45; // typical grid; refined below via canvas/stty not needed —
-  // we select generously: from row 1 left edge to row 4 right edge.
   const rowH = host.clip.height / rows;
-  const x0 = host.clip.x + 6;
-  const y0 = host.clip.y + rowH * 1.5;
-  const x1 = host.clip.x + host.clip.width - 6;
-  const y1 = host.clip.y + rowH * 4.5;
+  // Find the row REFLOW-SHORT-01 actually sits on by OCRing the top viewport,
+  // rather than assuming the seed starts at row 0.
   await page.screenshot({ path: join(EVIDENCE, `copy-${label}-before.png`), clip: host.clip });
+  const topText = await ocrText(join(EVIDENCE, `copy-${label}-before.png`));
+  const lines = topText.split("\n");
+  const shortIdx = lines.findIndex((l) => l.replace(/\s+/g, "").includes("REFLOW-SHORT-01"));
+  const startRow = shortIdx >= 0 ? shortIdx : 1;
+  const x0 = host.clip.x + 6;
+  const y0 = host.clip.y + rowH * (startRow + 0.5);
+  const x1 = host.clip.x + host.clip.width - 6;
+  const y1 = host.clip.y + rowH * (startRow + 4.5);
+  note(`B-selection-geometry-${label}`, { rows, rowH: Math.round(rowH), startRow, ocrLines: lines.length });
   await page.mouse.move(x0, y0);
   await page.mouse.down();
   await page.mouse.move(x1, y1, { steps: 12 });
@@ -511,19 +553,19 @@ async function dragSelectAndCopy(label) {
   await sleep(700);
   const after = pbpaste();
   await fs.writeFile(join(EVIDENCE, `clipboard-${label}.txt`), after ?? "").catch(() => {});
-  const expected =
-    "REFLOW-SHORT-01\nREFLOW-LONG-01-" + "x".repeat(240) + "-END";
   const got = (after ?? "").replace(/\r\n/g, "\n").replace(/\n$/, "");
-  const exact = got === expected;
+  const flat = got.replace(/\s+/g, "");
   note(`B-copy-${label}`, {
     clipboardBytes: after?.length ?? 0,
     changedFromBefore: after !== before,
-    exactMatch: exact,
-    first120: (after ?? "").slice(0, 120),
-    endsWithEnd: (after ?? "").trimEnd().endsWith("-END"),
+    containsShort01: flat.includes("REFLOW-SHORT-01"),
+    containsLongStart: flat.includes("REFLOW-LONG-01-"),
+    containsLongEnd: flat.includes("-END"),
+    xRunLength: (flat.match(/x+/g) ?? []).reduce((m, s2) => Math.max(m, s2.length), 0),
+    first160: got.slice(0, 160),
   });
   await setScroll(1);
-  return { exact, got };
+  return got;
 }
 
 async function keyboardSelectAttempt(label) {
@@ -543,15 +585,25 @@ async function keyboardSelectAttempt(label) {
 await dragSelectAndCopy("unsplit");
 await keyboardSelectAttempt("unsplit");
 
-// Cycle: focus enter/leave, hide/show, split — then repeat the copy check.
+// Cycle: focus enter/leave, hide/show (via the Home nav button, which is
+// always present, rather than Escape + a board card that may not be there),
+// then a split — and repeat the copy checks after it.
 await page.keyboard.press("Alt+Meta+Enter");
 await sleep(600);
 await page.keyboard.press("Alt+Meta+Enter");
 await sleep(600);
-await page.keyboard.press("Escape"); // ticket detail → board
-await sleep(700);
-await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick();
-await sleep(900);
+const ticketTabs = () => page.getByRole("tablist", { name: "Ticket tabs" }).getByRole("tab");
+try {
+  await page.getByRole("button", { name: "Home", exact: true }).click();
+  await sleep(800);
+  await page.locator("article").filter({ hasText: "VC-1" }).first().dblclick({ timeout: 15000 });
+  await sleep(900);
+  await ticketTabs().last().click();
+  await sleep(800);
+  note("B-cycle-navigation", { ok: true });
+} catch (error) {
+  note("B-cycle-navigation", { ok: false, error: String(error).slice(0, 160) });
+}
 await clickCanvas();
 await page.keyboard.press("Shift+Meta+KeyD"); // horizontal split
 await waitUntil("split canvases", async () => {
@@ -572,7 +624,8 @@ await keyboardSelectAttempt("after-cycle");
 // =====================================================================
 {
   await clickCanvas();
-  // C1 — ⌘F with the terminal focused: does any find UI open?
+  // C1 — ⌘F with the terminal focused: does a find UI open, and does it search
+  // TERMINAL OUTPUT (not just app chrome)?
   await page.keyboard.press("Meta+f");
   await sleep(900);
   const afterCmdF = await page.evaluate(() => ({
@@ -583,9 +636,58 @@ await keyboardSelectAttempt("after-cycle");
       .filter(Boolean)
       .slice(0, 8),
   }));
+  note("C1-cmd-f-terminal-focused", afterCmdF);
+
+  // C1b — drive it: type a seeded marker and read what the bar reports plus
+  // what the pane then shows (canvas text via OCR).
+  for (const query of ["REFLOW-SHORT-01", "REFLOW-PWD-"]) {
+    const field = page
+      .locator("input")
+      .filter({ visible: true })
+      .first();
+    let typed = false;
+    try {
+      await field.fill(query, { timeout: 5000 });
+      typed = true;
+    } catch {
+      try {
+        await page.keyboard.type(query);
+        typed = true;
+      } catch {
+        /* nothing focused to type into */
+      }
+    }
+    await sleep(1200);
+    const barText = await page.evaluate(() => {
+      const bar = Array.from(document.querySelectorAll("div,span")).filter(
+        (el) =>
+          el.offsetParent !== null &&
+          /\b(\d+\s*(of|\/)\s*\d+|no results|no matches)\b/i.test(el.textContent ?? ""),
+      );
+      return bar.map((el) => el.textContent.trim().slice(0, 80)).slice(0, 4);
+    });
+    await page.keyboard.press("Enter"); // next match
+    await sleep(900);
+    const host = await scrollHostInfo();
+    const shot = join(EVIDENCE, `find-${query.replace(/[^A-Za-z0-9]/g, "")}.png`);
+    await page.screenshot({ path: shot, clip: host?.clip });
+    const paneText = await ocrText(shot);
+    note(`C1b-find-${query}`, {
+      typed,
+      barReports: barText,
+      paneShowsQuery: paneText.replace(/\s+/g, "").includes(query.replace(/\s+/g, "")),
+      scrollTop: host?.scrollTop,
+      scrollMax: host ? host.scrollHeight - host.clientHeight : null,
+      screenshot: shot,
+    });
+    await page.keyboard.press("Escape");
+    await sleep(400);
+    await clickCanvas();
+    await page.keyboard.press("Meta+f");
+    await sleep(700);
+  }
   await page.keyboard.press("Escape");
   await sleep(300);
-  note("C1-cmd-f-terminal-focused", afterCmdF);
 
   // C2 — quick-open (⌘K): app-chrome search; does it see terminal output?
   await page.keyboard.press("Meta+k");

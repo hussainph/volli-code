@@ -1,0 +1,659 @@
+{
+  "meta": {
+    "ticket": "VC-291 reflow matrix",
+    "startedAt": "2026-09-09T19:11:14.644Z",
+    "commit": "645beb5c4871a7d78c896bca1a5d688d3d337ec0",
+    "appVersion": "0.2.0-canary.4",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "displays": "Graphics/Displays:\n\n    Apple M1:\n\n      Chipset Model: Apple M1\n      Type: GPU\n      Bus: Built-In\n      Total Number of Cores: 8\n      Vendor: Apple (0x106b)\n      Metal Support: Metal 4\n      Displays:\n        Color LCD:\n          Display Type: Built-In Retina LCD\n          Resolution: 2560 x 1600 Retina\n          Main Display: Yes\n          Mirror: Off\n          Online: Yes\n          Automatically Adjust Brightness: Yes\n          Connection Type: Internal\n        DELL E2422HS:\n          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)\n          UI Looks like: 1920 x 1080 @ 60.00Hz\n          Mirror: Off\n          Online: Yes\n          Rotation: Supported\n        Sidecar Display:\n          Resolution: 2732 x 2048\n          UI Looks like: 1366 x 1024 @ 60.00Hz\n          Framebuffer Depth: 24-Bit Color (ARGB8888)\n          Mirror: Off\n          Connection Type: AirPlay\n          Virtual Device: Yes",
+    "externalMonitorAttached": true,
+    "shell": "unknown",
+    "forcedBackend": "auto (production default)",
+    "cases": [
+      "hideshow"
+    ],
+    "runsPerCase": 3,
+    "surface": "home",
+    "node": "v24.18.0",
+    "fontWorkaround": "queryLocalFonts stubbed to serve real SFNSMono.ttf bytes (Local Font Access hangs under automation on this macOS/Electron combo; see harness header)",
+    "window": {
+      "x": 20,
+      "y": 31,
+      "width": 1280,
+      "height": 810,
+      "scale": 2
+    },
+    "backend": {
+      "webgpu": true,
+      "webgl2": false,
+      "navigatorGpu": true
+    },
+    "consoleErrors": [],
+    "consoleAll": [
+      {
+        "t": 1788981104352,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981104352,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788981124981,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981124982,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788981140494,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981140494,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788981161119,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981161119,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788981176379,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981176379,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788981196505,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788981196506,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "case": "hideshow",
+      "run": 1,
+      "surface": "home",
+      "startedAt": "2026-09-09T19:11:46.770Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "top": 1932,
+            "max": 1932,
+            "height": 2647,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-seedpost-s04.png",
+                "requestedTop": 2002,
+                "actualTop": 2002
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2002,
+              "pwd": 2002,
+              "end": 2002
+            },
+            "steps": 5,
+            "scrollMax": 2002
+          },
+          "at": 1788981111779
+        },
+        {
+          "t": "hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2002,
+            "max": 2002
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-board10-s04.png",
+                "requestedTop": 2072,
+                "actualTop": 2072
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2072,
+              "pwd": 2072,
+              "end": 2072
+            },
+            "steps": 5,
+            "scrollMax": 2072
+          },
+          "at": 1788981124607
+        },
+        {
+          "t": "hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2072,
+            "max": 2072
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-tabs10-s04.png",
+                "requestedTop": 2142,
+                "actualTop": 2142
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2142,
+              "pwd": 2142,
+              "end": 2142
+            },
+            "steps": 5,
+            "scrollMax": 2142
+          },
+          "at": 1788981140117
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788981107.txt",
+      "finishedAt": "2026-09-09T19:12:20.118Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 2,
+      "surface": "home",
+      "startedAt": "2026-09-09T19:12:22.911Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "top": 1932,
+            "max": 1932,
+            "height": 2647,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-seedpost-s04.png",
+                "requestedTop": 2002,
+                "actualTop": 2002
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2002,
+              "pwd": 2002,
+              "end": 2002
+            },
+            "steps": 5,
+            "scrollMax": 2002
+          },
+          "at": 1788981147960
+        },
+        {
+          "t": "hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2142,
+            "max": 2142
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-board10-s04.png",
+                "requestedTop": 2212,
+                "actualTop": 2212
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2212,
+              "pwd": 2212,
+              "end": 2212
+            },
+            "steps": 5,
+            "scrollMax": 2212
+          },
+          "at": 1788981160781
+        },
+        {
+          "t": "hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2212,
+            "max": 2212
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-tabs10-s04.png",
+                "requestedTop": 2282,
+                "actualTop": 2282
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2282,
+              "pwd": 2282,
+              "end": 2282
+            },
+            "steps": 5,
+            "scrollMax": 2282
+          },
+          "at": 1788981175995
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788981107.txt",
+      "finishedAt": "2026-09-09T19:12:55.996Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 3,
+      "surface": "home",
+      "startedAt": "2026-09-09T19:12:58.808Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "top": 1932,
+            "max": 1932,
+            "height": 2647,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r3-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-seedpost-s04.png",
+                "requestedTop": 1960,
+                "actualTop": 1960
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 1960,
+              "pwd": 1960,
+              "end": 1960
+            },
+            "steps": 5,
+            "scrollMax": 1960
+          },
+          "at": 1788981183525
+        },
+        {
+          "t": "hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2282,
+            "max": 2282
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r3-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-board10-s04.png",
+                "requestedTop": 2352,
+                "actualTop": 2352
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2352,
+              "pwd": 2352,
+              "end": 2352
+            },
+            "steps": 5,
+            "scrollMax": 2352
+          },
+          "at": 1788981196123
+        },
+        {
+          "t": "hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "top": 2352,
+            "max": 2352
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r3-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-tabs10-s04.png",
+                "requestedTop": 2422,
+                "actualTop": 2422
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2422,
+              "pwd": 2422,
+              "end": 2422
+            },
+            "steps": 5,
+            "scrollMax": 2422
+          },
+          "at": 1788981211540
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788981143.txt",
+      "finishedAt": "2026-09-09T19:13:31.540Z"
+    }
+  ]
+}

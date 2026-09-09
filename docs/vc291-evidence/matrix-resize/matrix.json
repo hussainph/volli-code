@@ -1,0 +1,1100 @@
+{
+  "meta": {
+    "ticket": "VC-291 reflow matrix",
+    "startedAt": "2026-09-09T19:26:58.838Z",
+    "commit": "645beb5c4871a7d78c896bca1a5d688d3d337ec0",
+    "appVersion": "0.2.0-canary.4",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "displays": "Graphics/Displays:\n\n    Apple M1:\n\n      Chipset Model: Apple M1\n      Type: GPU\n      Bus: Built-In\n      Total Number of Cores: 8\n      Vendor: Apple (0x106b)\n      Metal Support: Metal 4\n      Displays:\n        Color LCD:\n          Display Type: Built-In Retina LCD\n          Resolution: 2560 x 1600 Retina\n          Main Display: Yes\n          Mirror: Off\n          Online: Yes\n          Automatically Adjust Brightness: Yes\n          Connection Type: Internal\n        DELL E2422HS:\n          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)\n          UI Looks like: 1920 x 1080 @ 60.00Hz\n          Mirror: Off\n          Online: Yes\n          Rotation: Supported\n        Sidecar Display:\n          Resolution: 2732 x 2048\n          UI Looks like: 1366 x 1024 @ 60.00Hz\n          Framebuffer Depth: 24-Bit Color (ARGB8888)\n          Mirror: Off\n          Connection Type: AirPlay\n          Virtual Device: Yes",
+    "externalMonitorAttached": true,
+    "shell": "unknown",
+    "forcedBackend": "auto (production default)",
+    "cases": [
+      "resize"
+    ],
+    "runsPerCase": 3,
+    "surface": "ticket",
+    "node": "v24.18.0",
+    "fontWorkaround": "queryLocalFonts stubbed to serve real SFNSMono.ttf bytes (Local Font Access hangs under automation on this macOS/Electron combo; see harness header)",
+    "window": {
+      "x": 20,
+      "y": 31,
+      "width": 1280,
+      "height": 810,
+      "scale": 2
+    },
+    "backend": {
+      "webgpu": true,
+      "webgl2": false,
+      "navigatorGpu": true
+    },
+    "consoleErrors": [],
+    "consoleAll": [
+      {
+        "t": 1788982051796,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788982051800,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788982085978,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788982085978,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788982119774,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788982119775,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "case": "resize",
+      "run": 1,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:27:34.748Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r1-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r1-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r1-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r1-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788982060968
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 1540,
+            "max": 1540,
+            "height": 2255,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r1-resize-wide-top.png",
+                "scrollTop": 0,
+                "topInk": 0.07798
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r1-resize-wide-mid.png",
+                "scrollTop": 798,
+                "topInk": 0.08609
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r1-resize-wide-bottom.png",
+                "scrollTop": 1596,
+                "topInk": 0.08593
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982065756
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 4816,
+            "max": 4816,
+            "height": 5531,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r1-resize-narrow-top.png",
+                "scrollTop": 0,
+                "topInk": 0.13473
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r1-resize-narrow-mid.png",
+                "scrollTop": 2478,
+                "topInk": 0.13801
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r1-resize-narrow-bottom.png",
+                "scrollTop": 4942,
+                "topInk": 0.12965
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982069499
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 1652,
+            "max": 1652,
+            "height": 2367,
+            "client": 715
+          },
+          "at": 1788982071200
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 5068,
+            "max": 5068,
+            "height": 5783,
+            "client": 715
+          },
+          "at": 1788982072691
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 1750,
+            "max": 1750,
+            "height": 2465,
+            "client": 715
+          },
+          "at": 1788982074645
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 5320,
+            "max": 5320,
+            "height": 6035,
+            "client": 715
+          },
+          "at": 1788982076277
+        },
+        {
+          "t": "resize-restore",
+          "size": {
+            "w": 1280,
+            "h": 810
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 2450,
+            "max": 2450,
+            "height": 3165,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r1-resize-restore-top.png",
+                "scrollTop": 0,
+                "topInk": 0.1144
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r1-resize-restore-mid.png",
+                "scrollTop": 1260,
+                "topInk": 0.13176
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r1-resize-restore-bottom.png",
+                "scrollTop": 2506,
+                "topInk": 0.12161
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982080289
+        },
+        {
+          "t": "resize-final",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+            "top": 2506,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r1-resizefinal-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r1-resizefinal-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r1-resizefinal-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r1-resizefinal-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r1-resizefinal-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "resize-r1-resizefinal-s05.png",
+                "requestedTop": 2576,
+                "actualTop": 2576
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2422,
+              "pwd": 2422,
+              "end": 2422
+            },
+            "steps": 6,
+            "scrollMax": 2576
+          },
+          "at": 1788982085474
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788982055.txt",
+      "seededPaneId": "a5a48fd8-623e-49d4-974e-bd2a991f084d",
+      "finishedAt": "2026-09-09T19:28:05.474Z"
+    },
+    {
+      "case": "resize",
+      "run": 2,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:28:08.974Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r2-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r2-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r2-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r2-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r2-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788982094741
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 1540,
+            "max": 1540,
+            "height": 2255,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r2-resize-wide-top.png",
+                "scrollTop": 0,
+                "topInk": 0.078
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r2-resize-wide-mid.png",
+                "scrollTop": 798,
+                "topInk": 0.08609
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r2-resize-wide-bottom.png",
+                "scrollTop": 1596,
+                "topInk": 0.08593
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982099732
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 4816,
+            "max": 4816,
+            "height": 5531,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r2-resize-narrow-top.png",
+                "scrollTop": 0,
+                "topInk": 0.13481
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r2-resize-narrow-mid.png",
+                "scrollTop": 2478,
+                "topInk": 0.13801
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r2-resize-narrow-bottom.png",
+                "scrollTop": 4942,
+                "topInk": 0.12965
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982103528
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 1652,
+            "max": 1652,
+            "height": 2367,
+            "client": 715
+          },
+          "at": 1788982105225
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 5068,
+            "max": 5068,
+            "height": 5783,
+            "client": 715
+          },
+          "at": 1788982106725
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 1750,
+            "max": 1750,
+            "height": 2465,
+            "client": 715
+          },
+          "at": 1788982108275
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 5320,
+            "max": 5320,
+            "height": 6035,
+            "client": 715
+          },
+          "at": 1788982109802
+        },
+        {
+          "t": "resize-restore",
+          "size": {
+            "w": 1280,
+            "h": 810
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 2450,
+            "max": 2450,
+            "height": 3165,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r2-resize-restore-top.png",
+                "scrollTop": 0,
+                "topInk": 0.11443
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r2-resize-restore-mid.png",
+                "scrollTop": 1260,
+                "topInk": 0.13176
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r2-resize-restore-bottom.png",
+                "scrollTop": 2506,
+                "topInk": 0.12171
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982113856
+        },
+        {
+          "t": "resize-final",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "67d012f8-b059-4151-871d-994f842a6e14",
+            "top": 2506,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r2-resizefinal-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r2-resizefinal-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r2-resizefinal-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r2-resizefinal-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r2-resizefinal-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "resize-r2-resizefinal-s05.png",
+                "requestedTop": 2576,
+                "actualTop": 2576
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2422,
+              "pwd": 2422,
+              "end": 2422
+            },
+            "steps": 6,
+            "scrollMax": 2576
+          },
+          "at": 1788982119206
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788982055.txt",
+      "seededPaneId": "67d012f8-b059-4151-871d-994f842a6e14",
+      "finishedAt": "2026-09-09T19:28:39.206Z"
+    },
+    {
+      "case": "resize",
+      "run": 3,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:28:42.695Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r3-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r3-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r3-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r3-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r3-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788982128579
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 1540,
+            "max": 1540,
+            "height": 2255,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r3-resize-wide-top.png",
+                "scrollTop": 0,
+                "topInk": 0.07802
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r3-resize-wide-mid.png",
+                "scrollTop": 798,
+                "topInk": 0.08609
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r3-resize-wide-bottom.png",
+                "scrollTop": 1596,
+                "topInk": 0.08593
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982133017
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 4816,
+            "max": 4816,
+            "height": 5531,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r3-resize-narrow-top.png",
+                "scrollTop": 0,
+                "topInk": 0.13488
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r3-resize-narrow-mid.png",
+                "scrollTop": 2478,
+                "topInk": 0.13801
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r3-resize-narrow-bottom.png",
+                "scrollTop": 4942,
+                "topInk": 0.12965
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982136889
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 1652,
+            "max": 1652,
+            "height": 2367,
+            "client": 715
+          },
+          "at": 1788982138629
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 5068,
+            "max": 5068,
+            "height": 5783,
+            "client": 715
+          },
+          "at": 1788982140173
+        },
+        {
+          "t": "resize-wide",
+          "size": {
+            "w": 1840,
+            "h": 810
+          },
+          "grid": "51 160",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 1750,
+            "max": 1750,
+            "height": 2465,
+            "client": 715
+          },
+          "at": 1788982141890
+        },
+        {
+          "t": "resize-narrow",
+          "size": {
+            "w": 820,
+            "h": 810
+          },
+          "grid": "51 40",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 5320,
+            "max": 5320,
+            "height": 6035,
+            "client": 715
+          },
+          "at": 1788982143452
+        },
+        {
+          "t": "resize-restore",
+          "size": {
+            "w": 1280,
+            "h": 810
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 2450,
+            "max": 2450,
+            "height": 3165,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "pos": "top",
+                "name": "resize-r3-resize-restore-top.png",
+                "scrollTop": 0,
+                "topInk": 0.11448
+              },
+              {
+                "pos": "mid",
+                "name": "resize-r3-resize-restore-mid.png",
+                "scrollTop": 1260,
+                "topInk": 0.13176
+              },
+              {
+                "pos": "bottom",
+                "name": "resize-r3-resize-restore-bottom.png",
+                "scrollTop": 2506,
+                "topInk": 0.12158
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": false,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            }
+          },
+          "at": 1788982147435
+        },
+        {
+          "t": "resize-final",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+            "top": 2506,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "resize-r3-resizefinal-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "resize-r3-resizefinal-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "resize-r3-resizefinal-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "resize-r3-resizefinal-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "resize-r3-resizefinal-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "resize-r3-resizefinal-s05.png",
+                "requestedTop": 2576,
+                "actualTop": 2576
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2422,
+              "pwd": 2422,
+              "end": 2422
+            },
+            "steps": 6,
+            "scrollMax": 2576
+          },
+          "at": 1788982152435
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788982089.txt",
+      "seededPaneId": "5df62a85-97ea-4b1a-b884-fda8aff7ad61",
+      "finishedAt": "2026-09-09T19:29:12.436Z"
+    }
+  ]
+}

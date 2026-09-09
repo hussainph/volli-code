@@ -1,0 +1,3215 @@
+{
+  "meta": {
+    "ticket": "VC-291 reflow matrix",
+    "startedAt": "2026-09-09T19:51:48.701Z",
+    "commit": "645beb5c4871a7d78c896bca1a5d688d3d337ec0",
+    "appVersion": "0.2.0-canary.4",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "displays": "Graphics/Displays:\n\n    Apple M1:\n\n      Chipset Model: Apple M1\n      Type: GPU\n      Bus: Built-In\n      Total Number of Cores: 8\n      Vendor: Apple (0x106b)\n      Metal Support: Metal 4\n      Displays:\n        Color LCD:\n          Display Type: Built-In Retina LCD\n          Resolution: 2560 x 1600 Retina\n          Main Display: Yes\n          Mirror: Off\n          Online: Yes\n          Automatically Adjust Brightness: Yes\n          Connection Type: Internal\n        DELL E2422HS:\n          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)\n          UI Looks like: 1920 x 1080 @ 60.00Hz\n          Mirror: Off\n          Online: Yes\n          Rotation: Supported\n        Sidecar Display:\n          Resolution: 2732 x 2048\n          UI Looks like: 1366 x 1024 @ 60.00Hz\n          Framebuffer Depth: 24-Bit Color (ARGB8888)\n          Mirror: Off\n          Connection Type: AirPlay\n          Virtual Device: Yes",
+    "externalMonitorAttached": true,
+    "shell": "unknown",
+    "forcedBackend": "webgl2 (navigator.gpu stubbed via init script)",
+    "cases": [
+      "focus",
+      "hideshow"
+    ],
+    "runsPerCase": 3,
+    "surface": "ticket",
+    "node": "v24.18.0",
+    "fontWorkaround": "queryLocalFonts stubbed to serve real SFNSMono.ttf bytes (Local Font Access hangs under automation on this macOS/Electron combo; see harness header)",
+    "window": {
+      "x": 20,
+      "y": 31,
+      "width": 1280,
+      "height": 810,
+      "scale": 2
+    },
+    "backend": {
+      "webgpu": false,
+      "webgl2": true,
+      "navigatorGpu": false
+    },
+    "consoleErrors": [],
+    "consoleAll": [
+      {
+        "t": 1788983540379,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983540380,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983549025,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983549025,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983550441,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983550441,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983551853,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983551854,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983553291,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983553292,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983554910,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983554910,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983556334,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983556334,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983557812,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983557812,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983559270,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983559270,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983560677,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983560677,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983562096,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983562096,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983563526,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983563526,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983564955,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983564958,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983566503,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983566504,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983567828,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983567828,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983569293,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983569293,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983570719,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983570719,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983570735,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983604720,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983604720,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983604725,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983613007,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983613007,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983613010,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983614343,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983614343,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983614356,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983615779,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983615779,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983615792,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983617297,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983617297,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983617311,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983618798,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983618798,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983618801,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983620216,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983620216,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983620230,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983621658,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983621658,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983621672,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983623125,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983623125,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983623138,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983624591,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983624591,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983624594,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983626029,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983626029,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983626044,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983627501,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983627501,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983627515,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983628970,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983628970,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983628986,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983630427,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983630428,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983630430,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983631875,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983631875,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983631894,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983633340,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983633341,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983633357,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983634788,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983634788,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983634809,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983664720,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983664720,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983664726,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983673195,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983673195,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983673198,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983674643,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983674643,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983674661,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983676181,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983676181,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983676203,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983677632,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983677632,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983677648,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983679177,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983679177,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983679189,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983680598,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983680598,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983680616,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983682065,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983682065,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983682083,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983683542,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983683542,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983683560,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983685015,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983685016,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983685022,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983686470,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983686470,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983686487,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983687935,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983687935,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983687953,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983689421,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983689421,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983689440,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983690908,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983690908,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983690911,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983692377,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983692377,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983692395,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983693772,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983693772,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983693792,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983695300,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983695302,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983695320,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983727018,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983727019,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983727021,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983735597,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983735597,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983735604,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983736989,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983736989,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983737014,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983738578,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983738578,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983738611,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983740116,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983740116,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983740144,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983741529,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983741529,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983741533,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983743055,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983743062,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983743062,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983744484,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983744485,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983744512,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983746371,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983746372,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983746401,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983748204,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983748207,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983748207,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983751170,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983751171,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983751202,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983752816,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983752816,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983752840,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983753947,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983753948,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983753959,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983758587,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983758589,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983758596,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983759442,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983759444,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983759446,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983761299,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983761299,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983761332,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983763053,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983763054,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983763060,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983791628,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983791628,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983791634,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983807741,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983807741,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983807745,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983816629,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983816629,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983816633,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983818120,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983818120,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983818144,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983819655,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983819655,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983819678,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983821159,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983821159,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983821183,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983822554,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983822554,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983822558,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983824088,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983824088,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983824122,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983825666,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983825666,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983825696,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983827059,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983827059,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983827083,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983828633,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983828633,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983828637,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983830115,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983830115,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983830142,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983831612,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983831612,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983831638,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983833113,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983833113,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983833143,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983834656,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983834656,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983834660,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983836039,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983836039,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983836072,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983837581,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983837581,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983837609,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983838993,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983838993,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983839021,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983866505,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983866505,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983866510,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983882782,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983882782,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983882788,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983891883,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983891884,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983891887,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983893403,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983893403,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983893430,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983894832,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983894832,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983894862,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983896205,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983896205,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983896237,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983897790,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983897790,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983897795,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983899121,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983899121,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983899150,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983900663,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983900663,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983900706,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983902195,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983902195,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983902223,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983903716,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983903716,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983903721,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983905099,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983905101,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983905130,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983906503,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983906503,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983906532,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983907912,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983907912,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983907945,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983909503,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983909503,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983909506,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983910880,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983910880,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983910910,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983912346,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983912346,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983912378,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983913783,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983913783,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983913813,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1788983942111,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1788983942111,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1788983942115,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      }
+    ]
+  },
+  "runs": [
+    {
+      "case": "focus",
+      "run": 1,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:52:23.340Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r1-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r1-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r1-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r1-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788983548574
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 17,
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 2016,
+            "max": 2016,
+            "height": 2731,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983573110
+        },
+        {
+          "t": "focus-cycle-1",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1078,
+            "max": 1078,
+            "height": 1844,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1610,
+            "max": 2086,
+            "height": 2801,
+            "client": 715
+          },
+          "at": 1788983577585
+        },
+        {
+          "t": "focus-cycle-2",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1106,
+            "max": 1190,
+            "height": 1956,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1582,
+            "max": 2226,
+            "height": 2941,
+            "client": 715
+          },
+          "at": 1788983579475
+        },
+        {
+          "t": "focus-cycle-3",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1078,
+            "max": 1302,
+            "height": 2068,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1554,
+            "max": 2366,
+            "height": 3081,
+            "client": 715
+          },
+          "at": 1788983581665
+        },
+        {
+          "t": "focus-cycle-4",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1064,
+            "max": 1414,
+            "height": 2180,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1526,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "at": 1788983583638
+        },
+        {
+          "t": "focus-cycle-5",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1050,
+            "max": 1526,
+            "height": 2292,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1498,
+            "max": 2646,
+            "height": 3361,
+            "client": 715
+          },
+          "at": 1788983585769
+        },
+        {
+          "t": "focus-cycle-6",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1022,
+            "max": 1638,
+            "height": 2404,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1470,
+            "max": 2786,
+            "height": 3501,
+            "client": 715
+          },
+          "at": 1788983589443
+        },
+        {
+          "t": "focus-cycle-7",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1008,
+            "max": 1750,
+            "height": 2516,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1442,
+            "max": 2926,
+            "height": 3641,
+            "client": 715
+          },
+          "at": 1788983593236
+        },
+        {
+          "t": "focus-cycle-8",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 994,
+            "max": 1862,
+            "height": 2628,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1414,
+            "max": 3066,
+            "height": 3781,
+            "client": 715
+          },
+          "at": 1788983595456
+        },
+        {
+          "t": "focus-cycle-9",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 966,
+            "max": 1974,
+            "height": 2740,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1386,
+            "max": 3206,
+            "height": 3921,
+            "client": 715
+          },
+          "at": 1788983597815
+        },
+        {
+          "t": "focus-cycle-10",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 952,
+            "max": 2086,
+            "height": 2852,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1358,
+            "max": 3346,
+            "height": 4061,
+            "client": 715
+          },
+          "at": 1788983599715
+        },
+        {
+          "t": "focus-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+            "top": 1358,
+            "max": 3416,
+            "height": 4131,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r1-focuspost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r1-focuspost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r1-focuspost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r1-focuspost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r1-focuspost-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "focus-r1-focuspost-s05.png",
+                "requestedTop": 3035,
+                "actualTop": 3038
+              },
+              {
+                "name": "focus-r1-focuspost-s06.png",
+                "requestedTop": 3486,
+                "actualTop": 3486
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 7,
+            "scrollMax": 3486
+          },
+          "at": 1788983604276
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983543.txt",
+      "seededPaneId": "0edf8895-69eb-48b8-aba8-190a6b84e07f",
+      "finishedAt": "2026-09-09T19:53:24.277Z"
+    },
+    {
+      "case": "focus",
+      "run": 2,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:53:27.640Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r2-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r2-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r2-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r2-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r2-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788983612576
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 34,
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 2016,
+            "max": 2016,
+            "height": 2731,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983637075
+        },
+        {
+          "t": "focus-cycle-1",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1078,
+            "max": 1078,
+            "height": 1844,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1610,
+            "max": 2086,
+            "height": 2801,
+            "client": 715
+          },
+          "at": 1788983641494
+        },
+        {
+          "t": "focus-cycle-2",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1106,
+            "max": 1190,
+            "height": 1956,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1582,
+            "max": 2226,
+            "height": 2941,
+            "client": 715
+          },
+          "at": 1788983643480
+        },
+        {
+          "t": "focus-cycle-3",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1078,
+            "max": 1302,
+            "height": 2068,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1554,
+            "max": 2366,
+            "height": 3081,
+            "client": 715
+          },
+          "at": 1788983645464
+        },
+        {
+          "t": "focus-cycle-4",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1064,
+            "max": 1414,
+            "height": 2180,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1526,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "at": 1788983647406
+        },
+        {
+          "t": "focus-cycle-5",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1050,
+            "max": 1526,
+            "height": 2292,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1498,
+            "max": 2646,
+            "height": 3361,
+            "client": 715
+          },
+          "at": 1788983649382
+        },
+        {
+          "t": "focus-cycle-6",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1022,
+            "max": 1638,
+            "height": 2404,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1470,
+            "max": 2786,
+            "height": 3501,
+            "client": 715
+          },
+          "at": 1788983651469
+        },
+        {
+          "t": "focus-cycle-7",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1008,
+            "max": 1750,
+            "height": 2516,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1442,
+            "max": 2926,
+            "height": 3641,
+            "client": 715
+          },
+          "at": 1788983653586
+        },
+        {
+          "t": "focus-cycle-8",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 994,
+            "max": 1862,
+            "height": 2628,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1414,
+            "max": 3066,
+            "height": 3781,
+            "client": 715
+          },
+          "at": 1788983655729
+        },
+        {
+          "t": "focus-cycle-9",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 966,
+            "max": 1974,
+            "height": 2740,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1386,
+            "max": 3206,
+            "height": 3921,
+            "client": 715
+          },
+          "at": 1788983657779
+        },
+        {
+          "t": "focus-cycle-10",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 952,
+            "max": 2086,
+            "height": 2852,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1358,
+            "max": 3346,
+            "height": 4061,
+            "client": 715
+          },
+          "at": 1788983659754
+        },
+        {
+          "t": "focus-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+            "top": 1358,
+            "max": 3416,
+            "height": 4131,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r2-focuspost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r2-focuspost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r2-focuspost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r2-focuspost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r2-focuspost-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "focus-r2-focuspost-s05.png",
+                "requestedTop": 3035,
+                "actualTop": 3038
+              },
+              {
+                "name": "focus-r2-focuspost-s06.png",
+                "requestedTop": 3486,
+                "actualTop": 3486
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 7,
+            "scrollMax": 3486
+          },
+          "at": 1788983664273
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983543.txt",
+      "seededPaneId": "2fe76032-e792-406e-85bc-3a76765a3eac",
+      "finishedAt": "2026-09-09T19:54:24.273Z"
+    },
+    {
+      "case": "focus",
+      "run": 3,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:54:27.644Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r3-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r3-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r3-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r3-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r3-seedpost-s04.png",
+                "requestedTop": 2016,
+                "actualTop": 2016
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2016,
+              "pwd": 2016,
+              "end": 2016
+            },
+            "steps": 5,
+            "scrollMax": 2016
+          },
+          "at": 1788983672755
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 51,
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 2016,
+            "max": 2016,
+            "height": 2731,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983697590
+        },
+        {
+          "t": "focus-cycle-1",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1078,
+            "max": 1078,
+            "height": 1844,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1610,
+            "max": 2086,
+            "height": 2801,
+            "client": 715
+          },
+          "at": 1788983702267
+        },
+        {
+          "t": "focus-cycle-2",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1106,
+            "max": 1190,
+            "height": 1956,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1582,
+            "max": 2226,
+            "height": 2941,
+            "client": 715
+          },
+          "at": 1788983704805
+        },
+        {
+          "t": "focus-cycle-3",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1078,
+            "max": 1302,
+            "height": 2068,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1554,
+            "max": 2366,
+            "height": 3081,
+            "client": 715
+          },
+          "at": 1788983706853
+        },
+        {
+          "t": "focus-cycle-4",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1064,
+            "max": 1414,
+            "height": 2180,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1526,
+            "max": 2506,
+            "height": 3221,
+            "client": 715
+          },
+          "at": 1788983709005
+        },
+        {
+          "t": "focus-cycle-5",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1050,
+            "max": 1526,
+            "height": 2292,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1498,
+            "max": 2646,
+            "height": 3361,
+            "client": 715
+          },
+          "at": 1788983711218
+        },
+        {
+          "t": "focus-cycle-6",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1022,
+            "max": 1638,
+            "height": 2404,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1470,
+            "max": 2786,
+            "height": 3501,
+            "client": 715
+          },
+          "at": 1788983713237
+        },
+        {
+          "t": "focus-cycle-7",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1008,
+            "max": 1750,
+            "height": 2516,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1442,
+            "max": 2926,
+            "height": 3641,
+            "client": 715
+          },
+          "at": 1788983715331
+        },
+        {
+          "t": "focus-cycle-8",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 994,
+            "max": 1862,
+            "height": 2628,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1414,
+            "max": 3066,
+            "height": 3781,
+            "client": 715
+          },
+          "at": 1788983717513
+        },
+        {
+          "t": "focus-cycle-9",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 966,
+            "max": 1974,
+            "height": 2740,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1386,
+            "max": 3206,
+            "height": 3921,
+            "client": 715
+          },
+          "at": 1788983719582
+        },
+        {
+          "t": "focus-cycle-10",
+          "entered": true,
+          "exited": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 952,
+            "max": 2086,
+            "height": 2852,
+            "client": 766
+          },
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1358,
+            "max": 3346,
+            "height": 4061,
+            "client": 715
+          },
+          "at": 1788983721904
+        },
+        {
+          "t": "focus-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+            "top": 1358,
+            "max": 3416,
+            "height": 4131,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "focus-r3-focuspost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "focus-r3-focuspost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "focus-r3-focuspost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "focus-r3-focuspost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "focus-r3-focuspost-s04.png",
+                "requestedTop": 2428,
+                "actualTop": 2422
+              },
+              {
+                "name": "focus-r3-focuspost-s05.png",
+                "requestedTop": 3035,
+                "actualTop": 3038
+              },
+              {
+                "name": "focus-r3-focuspost-s06.png",
+                "requestedTop": 3486,
+                "actualTop": 3486
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 7,
+            "scrollMax": 3486
+          },
+          "at": 1788983726540
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983608.txt",
+      "seededPaneId": "653018f9-f10d-4c18-a573-2a4efcdb1826",
+      "finishedAt": "2026-09-09T19:55:26.541Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 1,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:55:29.945Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "05ecc0e9-6a8f-4237-9f83-e520bc3d10bc",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-seedpost-s04.png",
+                "requestedTop": 2030,
+                "actualTop": 2030
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2030,
+              "pwd": 2030,
+              "end": 2030
+            },
+            "steps": 5,
+            "scrollMax": 2030
+          },
+          "at": 1788983735043
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 68,
+          "scroll": {
+            "paneId": "05ecc0e9-6a8f-4237-9f83-e520bc3d10bc",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983765204
+        },
+        {
+          "t": "ticket-hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "05ecc0e9-6a8f-4237-9f83-e520bc3d10bc",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-board10-s04.png",
+                "requestedTop": 2114,
+                "actualTop": 2114
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2114
+          },
+          "at": 1788983791104
+        },
+        {
+          "t": "ticket-hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "05ecc0e9-6a8f-4237-9f83-e520bc3d10bc",
+            "top": 2114,
+            "max": 2114,
+            "height": 2829,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r1-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r1-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r1-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r1-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r1-tabs10-s04.png",
+                "requestedTop": 2198,
+                "actualTop": 2198
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2198
+          },
+          "at": 1788983807204
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983668.txt",
+      "seededPaneId": "05ecc0e9-6a8f-4237-9f83-e520bc3d10bc",
+      "finishedAt": "2026-09-09T19:56:47.204Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 2,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:56:50.698Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "63cb6556-f5d3-4e3e-bdf4-2080562fa931",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-seedpost-s04.png",
+                "requestedTop": 2030,
+                "actualTop": 2030
+              }
+            ],
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "end15": 2030,
+              "pwd": 2030,
+              "end": 2030
+            },
+            "steps": 5,
+            "scrollMax": 2030
+          },
+          "at": 1788983816093
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 86,
+          "scroll": {
+            "paneId": "63cb6556-f5d3-4e3e-bdf4-2080562fa931",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983841300
+        },
+        {
+          "t": "ticket-hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "63cb6556-f5d3-4e3e-bdf4-2080562fa931",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-board10-s04.png",
+                "requestedTop": 2114,
+                "actualTop": 2114
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2114
+          },
+          "at": 1788983865987
+        },
+        {
+          "t": "ticket-hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "63cb6556-f5d3-4e3e-bdf4-2080562fa931",
+            "top": 2114,
+            "max": 2114,
+            "height": 2829,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r2-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r2-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r2-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r2-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r2-tabs10-s04.png",
+                "requestedTop": 2142,
+                "actualTop": 2142
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2142
+          },
+          "at": 1788983882228
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983730.txt",
+      "seededPaneId": "63cb6556-f5d3-4e3e-bdf4-2080562fa931",
+      "finishedAt": "2026-09-09T19:58:02.229Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 3,
+      "surface": "ticket",
+      "startedAt": "2026-09-09T19:58:05.847Z",
+      "events": [
+        {
+          "t": "seed-post",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "d10c3112-b842-4c97-b79a-5c2bdf856a30",
+            "top": 1946,
+            "max": 1946,
+            "height": 2661,
+            "client": 715
+          },
+          "dpr": 2,
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 2030
+              },
+              {
+                "name": "hideshow-r3-seedpost-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-seedpost-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-seedpost-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-seedpost-s04.png",
+                "requestedTop": 1988,
+                "actualTop": 1988
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": true,
+              "long15": true,
+              "end15": true,
+              "pwd": true,
+              "end": true
+            },
+            "whereFound": {
+              "end15": 2030,
+              "pwd": 2030,
+              "end": 2030,
+              "short15": 602,
+              "long15": 602
+            },
+            "steps": 5,
+            "scrollMax": 1988
+          },
+          "at": 1788983891310
+        },
+        {
+          "t": "pressure-panes-created",
+          "liveTerminalHosts": 104,
+          "scroll": {
+            "paneId": "d10c3112-b842-4c97-b79a-5c2bdf856a30",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "backOnSeededPane": true,
+          "at": 1788983916144
+        },
+        {
+          "t": "ticket-hideshow-board10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "d10c3112-b842-4c97-b79a-5c2bdf856a30",
+            "top": 2030,
+            "max": 2030,
+            "height": 2745,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-board10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r3-board10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-board10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-board10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-board10-s04.png",
+                "requestedTop": 2114,
+                "actualTop": 2114
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2114
+          },
+          "at": 1788983941524
+        },
+        {
+          "t": "ticket-hideshow-tabs10",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "d10c3112-b842-4c97-b79a-5c2bdf856a30",
+            "top": 2114,
+            "max": 2114,
+            "height": 2829,
+            "client": 715
+          },
+          "shots": {
+            "shots": [
+              {
+                "name": "hideshow-r3-tabs10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0
+              },
+              {
+                "name": "hideshow-r3-tabs10-s01.png",
+                "requestedTop": 607,
+                "actualTop": 602
+              },
+              {
+                "name": "hideshow-r3-tabs10-s02.png",
+                "requestedTop": 1214,
+                "actualTop": 1218
+              },
+              {
+                "name": "hideshow-r3-tabs10-s03.png",
+                "requestedTop": 1821,
+                "actualTop": 1820
+              },
+              {
+                "name": "hideshow-r3-tabs10-s04.png",
+                "requestedTop": 2198,
+                "actualTop": 2198
+              }
+            ],
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "long15": false,
+              "end15": false,
+              "pwd": false,
+              "end": false
+            },
+            "whereFound": {},
+            "steps": 5,
+            "scrollMax": 2198
+          },
+          "at": 1788983958653
+        }
+      ],
+      "referenceFile": "/tmp/volli-reflow-1788983811.txt",
+      "seededPaneId": "d10c3112-b842-4c97-b79a-5c2bdf856a30",
+      "finishedAt": "2026-09-09T19:59:18.653Z"
+    }
+  ]
+}
