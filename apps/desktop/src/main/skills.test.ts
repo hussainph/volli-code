@@ -77,13 +77,14 @@ describe("readProjectSkills", () => {
     await expect(readProjectSkills(missingDir())).resolves.toEqual({ ok: true, skills: [] });
   });
 
-  it("sorts skills by slug so the list is stable", async () => {
-    const dir = makeSkillsDir({ beta: "B", alpha: "A" });
+  it("sorts skills by slug in one locale-independent order", async () => {
+    // No case-only pairs: the test must also work on a case-insensitive file system.
+    const dir = makeSkillsDir({ i: "lower i", K: "upper K", J: "upper J", l: "lower l" });
 
     const result = await readProjectSkills(dir);
 
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.skills.map((skill) => skill.name)).toEqual(["alpha", "beta"]);
+    if (result.ok) expect(result.skills.map((skill) => skill.name)).toEqual(["J", "K", "i", "l"]);
   });
 
   it("skips a directory the /name grammar cannot spell", async () => {

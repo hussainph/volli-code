@@ -72,7 +72,7 @@ These grades describe observable prompt architecture, not task success rates.
 2. **Explicit trust semantics.** Repository files, Ticket prose, tool output, and RESOURCE bodies are clearly material rather than new authority. The competitors load project instructions effectively, but do not draw this boundary as consistently.
 3. **Cache-aware placement.** Volatile Runtime Brief and environment facts are message-side. The stable prompt and frozen tool surface can remain byte-stable across turns and reattachments.
 4. **Measurability.** `volli prompt baseline --json` exposes section-level character/token estimates and cache classes. Prompt cost is a product-visible contract rather than an invisible side effect.
-5. **Bounded progressive disclosure.** The skills index is name-sorted and capped at 2,048 characters of resource text (about 512 estimated tokens before its delimiter). It shortens descriptions, then withholds the alphabetic tail, and says when either happened without changing Auto/Manual/Off or permitted `/skill` invocation.
+5. **Bounded progressive disclosure.** The skills index is sorted by a locale-independent ASCII-ordinal Skill-name order and capped at 2,048 characters of resource text (about 512 estimated tokens before its delimiter). It shortens descriptions, then withholds the ordinal tail, and says when either happened without changing Auto/Manual/Off or permitted `/skill` invocation.
 6. **Compact execution contract.** One 778-character, roughly 195-token layer distinguishes reporting from implementation, requires convention inspection and change preservation, routes toward specialized/parallel tools, and defines verification and completion evidence.
 
 Primary sources: [`packages/agent-runtime/src/prompt.ts`](../../packages/agent-runtime/src/prompt.ts), [`packages/agent-runtime/src/prompt-baseline.ts`](../../packages/agent-runtime/src/prompt-baseline.ts), [`packages/shared/src/skill.ts`](../../packages/shared/src/skill.ts), [`packages/shared/src/agent-tool-surface.ts`](../../packages/shared/src/agent-tool-surface.ts).
@@ -109,7 +109,7 @@ Primary sources: [`system.ts`](https://github.com/anomalyco/opencode/blob/830d5e
 VC-332 implements the recommendation without importing native tool descriptions or introducing model-specific prompt forks:
 
 - one product-literal **Execution** section at 778 characters / roughly 195 estimated tokens, inside the proposed 150–250-token budget;
-- a deterministic 2,048-character total budget for skills-index resource text, with stable name ordering, 160-character overflow descriptions, alphabetic-tail omission, and an in-budget disclosure notice; and
+- a deterministic 2,048-character total budget for skills-index resource text, with stable ASCII-ordinal name ordering, 160-character overflow descriptions, ordinal-tail omission, and an in-budget disclosure notice; and
 - focused snapshot, cache-stability, policy, `/skill`, ceiling, and runtime coverage.
 
 The remaining model-specific question stays evidence-gated: add a small overlay only if evaluation shows that one model family needs it, rather than forking the whole prompt preemptively.

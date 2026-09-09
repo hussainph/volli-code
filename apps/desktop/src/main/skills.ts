@@ -37,6 +37,7 @@
 import { promises as fsp, type Dirent } from "node:fs";
 import { join } from "node:path";
 import {
+  compareSkillNames,
   errorMessage,
   isSkillName,
   mergeSkills,
@@ -95,7 +96,7 @@ export async function readSkillDir(
   const slugs = entries
     .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && isSkillName(entry.name))
     .map((entry) => entry.name)
-    .toSorted((a, b) => a.localeCompare(b))
+    .toSorted(compareSkillNames)
     .slice(0, MAX_SKILLS_PER_DIR);
 
   const skills: SkillReference[] = [];

@@ -197,6 +197,18 @@ export function globalSkillsDir(homeDir: string): string {
 }
 
 /**
+ * Locale-independent Skill-name order, shared by every supply and consumer.
+ *
+ * Skill names contain ASCII alone, so JavaScript's code-unit comparison is an
+ * ordinal byte order. Do not use the host's default locale here: a locale may
+ * change which alphabetic tail the bounded index omits, making equal inputs
+ * produce different Cache Prefix bytes on two hosts.
+ */
+export function compareSkillNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
  * The two tiers merged into the one list every surface sees: a project skill
  * wins a slug the personal tier also defines.
  *
@@ -213,7 +225,7 @@ export function mergeSkills(input: {
   const byName = new Map<string, SkillReference>();
   for (const skill of input.global) byName.set(skill.name, skill);
   for (const skill of input.project) byName.set(skill.name, skill);
-  return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  return [...byName.values()].toSorted((a, b) => compareSkillNames(a.name, b.name));
 }
 
 /**
@@ -675,7 +687,7 @@ function indexEntry(skill: SkillReference, limit: number): SkillsIndexEntry {
  * permitted explicit invocation route. The sorted rows take a deterministic
  * degradation path: the ordinary 1024-character description clamp, then a
  * compact 160-character clamp after aggregate overflow, then removal from the
- * alphabetic tail until the entire resource text is at most
+ * locale-independent ordinal tail until the entire resource text is at most
  * {@link SKILLS_INDEX_MAX_CHARS}. Every shortening or omission emits a concise
  * notice inside that same ceiling.
  *
@@ -689,7 +701,7 @@ export function skillsIndexResource(
   const injected = new Set(injectedNames);
   const sorted = skills
     .filter((skill) => skill.effectivePolicy.modelDiscoverable && !injected.has(skill.name))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => compareSkillNames(a.name, b.name));
   if (sorted.length === 0) return null;
 
   const ordinaryEntries = sorted.map((skill) => indexEntry(skill, INDEX_DESCRIPTION_LIMIT));

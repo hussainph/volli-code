@@ -102,6 +102,17 @@ describe("mergeSkills", () => {
 
     expect(mergeSkills({ project: [project], global: [global] })).toEqual([global, project]);
   });
+
+  it("uses one locale-independent order for valid mixed-case names", () => {
+    const mixed = ["i", "J", "I", "j"].map((name) => skill({ name }));
+
+    expect(mergeSkills({ project: mixed, global: [] }).map((candidate) => candidate.name)).toEqual([
+      "I",
+      "J",
+      "i",
+      "j",
+    ]);
+  });
 });
 
 describe("isSkillName", () => {
@@ -321,6 +332,27 @@ describe("skillsIndexResource", () => {
     expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
     expect(resource?.text).toContain("entries were omitted; permitted /skill invocation");
     expect(resource?.text).not.toContain("descriptions shortened");
+  });
+
+  it("uses locale-independent ordering to choose the overflow survivors", () => {
+    const skills = ["i", "J", "I", "j"].map((name) =>
+      skill({
+        name,
+        description: "",
+        root: `/skills/${name}/${"x".repeat(650)}`,
+      }),
+    );
+
+    const resource = skillsIndexResource(skills);
+    const listed =
+      resource?.text
+        .split("\n")
+        .filter((line) => line.startsWith("- "))
+        .map((line) => line.split(" ")[1]) ?? [];
+
+    expect(resource?.text.length).toBeLessThanOrEqual(SKILLS_INDEX_MAX_CHARS);
+    expect(listed).toEqual(["I", "J"]);
+    expect(resource?.text).toContain("entries were omitted; permitted /skill invocation");
   });
 
   it("keeps a disclosure inside the ceiling when even one entry path cannot fit", () => {
