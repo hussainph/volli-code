@@ -393,29 +393,21 @@ describe("DATA_IPC descriptor table", () => {
     const { guard } = DATA_IPC["volli:project-session-defaults"];
     const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
 
-    it("accepts both fields null — the shape that clears both overrides", () => {
-      expect(guard([{ id: "p1", harness: null, model: null }])).toBe(true);
+    it("accepts null to clear the Chat model override", () => {
+      expect(guard([{ id: "p1", model: null }])).toBe(true);
     });
 
-    it("accepts a harness and a full model selection", () => {
-      expect(guard([{ id: "p1", harness: "codex", model }])).toBe(true);
+    it("accepts a full model selection", () => {
+      expect(guard([{ id: "p1", model }])).toBe(true);
     });
 
     it("rejects a model missing a field or carrying an unknown reasoning level", () => {
-      expect(guard([{ id: "p1", harness: null, model: { providerId: "a", modelId: "b" } }])).toBe(
-        false,
-      );
-      expect(
-        guard([{ id: "p1", harness: null, model: { ...model, reasoningLevel: "extreme" } }]),
-      ).toBe(false);
-    });
-
-    it("rejects a non-string harness", () => {
-      expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
+      expect(guard([{ id: "p1", model: { providerId: "a", modelId: "b" } }])).toBe(false);
+      expect(guard([{ id: "p1", model: { ...model, reasoningLevel: "extreme" } }])).toBe(false);
     });
 
     it("rejects a missing id, non-record payload, or wrong arity", () => {
-      expect(guard([{ harness: null, model: null }])).toBe(false);
+      expect(guard([{ model: null }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });
