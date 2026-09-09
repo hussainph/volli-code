@@ -476,6 +476,12 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        // The Session concurrency budget (VC-339). In the gate because every
+        // branch of it is a rule about a machine nobody watches: a miscount
+        // hands one Session the whole box while three others build, and a
+        // missed no-clobber branch overwrites what a person put in their own
+        // login shell. Neither is visible anywhere until the laptop swaps.
+        "**/src/main/session-concurrency.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",
