@@ -310,7 +310,7 @@ import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { desktopBrowserPort } from "./browser/agent-port";
-import { relayHoldNotices } from "./browser/hold-notices";
+import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
   createCursorOverlay,
@@ -2735,15 +2735,18 @@ app.whenReady().then(async () => {
   // the Session does not have to learn a takeover by failing on it.
   if (sessionRuntime !== null) {
     relayHoldNotices(browserTabs, {
-      steer: async ({ sessionId, text }) => {
+      // The notice rides as a marked user message (VC-330): the metadata is
+      // what lets the chat draw Volli's line as its own quiet row rather
+      // than a bubble in the person's voice.
+      steer: async (notice) => {
         const commandId = randomUUID();
         const delivered = await sessionRuntime.command({
           commandId,
-          sessionId,
+          sessionId: notice.sessionId,
           command: {
             kind: "message.submit",
             delivery: "steer",
-            message: { id: `${commandId}:message`, role: "user", parts: [{ type: "text", text }] },
+            message: holdNoticeMessage(notice, `${commandId}:message`),
           },
         });
         const status = delivered.receipt?.status;

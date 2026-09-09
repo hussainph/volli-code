@@ -73,12 +73,13 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
-  weaveContextNotices,
+  projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
   type InteractionSubmission,
   type MessageDelivery,
   type QueuedMessage,
+  type TranscriptRow,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -138,6 +139,7 @@ import {
   InteractionReceiptLine,
 } from "@renderer/components/chat/interaction-ui";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
@@ -1007,12 +1009,12 @@ export function ChatPlane({
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
-  // The turns with durable context notices laid between them. Every input is
-  // held to its identity — the turn list by `useStableList`, the notice lists
-  // by folds that replace an array only when one lands — so this recomputes
-  // when the conversation moves and not once per frame.
+  // The portable Session Surface Model: ordinary Turns, host-authored notices,
+  // and durable context notices in their transcript order. Every input is held
+  // to its identity, so this recomputes when the conversation moves and not
+  // once per streamed frame.
   const rows = React.useMemo(
-    () => weaveContextNotices(turns, session.compactions, session.reasoningDrops),
+    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
     [session.compactions, session.reasoningDrops, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
@@ -1107,26 +1109,15 @@ export function ChatPlane({
                   </ConversationEmptyState>
                 ) : (
                   <ContentColumn className={MESSAGE_GAP}>
-                    {rows.map((row) =>
-                      row.kind === "compaction" ? (
-                        <CompactionBoundary
-                          key={`compaction:${row.compaction.sequence}`}
-                          compaction={row.compaction}
-                        />
-                      ) : row.kind === "reasoning-drop" ? (
-                        <ReasoningDropNotice
-                          key={`reasoning-drop:${row.drop.sequence}`}
-                          drop={row.drop}
-                        />
-                      ) : (
-                        <ChatTurn
-                          key={row.messages[0]?.id}
-                          messages={row.messages}
-                          context={turnContext}
-                          live={row.messages === liveTurn}
-                        />
-                      ),
-                    )}
+                    {rows.map((row) => (
+                      <ChatTranscriptRow
+                        key={transcriptRowKey(row)}
+                        row={row}
+                        context={turnContext}
+                        live={row.kind === "turn" && row.messages === liveTurn}
+                        {...(onOpenSession === undefined ? {} : { onOpenSession })}
+                      />
+                    ))}
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                     {working ? (
                       <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
@@ -1529,6 +1520,48 @@ export interface TurnContext {
   /** The ids with a decision in flight — one card in flight is not all of them. */
   resolving: ReadonlySet<string>;
   onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
+}
+
+function transcriptRowKey(row: TranscriptRow): string {
+  switch (row.kind) {
+    case "turn":
+      return row.messages[0]?.id ?? "empty-turn";
+    case "host-notice":
+      return row.messageId;
+    case "compaction":
+      return `compaction:${row.compaction.sequence}`;
+    case "reasoning-drop":
+      return `reasoning-drop:${row.drop.sequence}`;
+  }
+}
+
+/** The desktop mapping of one portable transcript row; it owns no projection rules. */
+export function ChatTranscriptRow({
+  row,
+  context,
+  live,
+  onOpenSession,
+}: {
+  row: TranscriptRow;
+  context: TurnContext;
+  live: boolean;
+  onOpenSession?(sessionId: string): void;
+}) {
+  switch (row.kind) {
+    case "host-notice":
+      return (
+        <HostNoticeRow
+          notice={row.notice}
+          {...(onOpenSession === undefined ? {} : { onOpenSession })}
+        />
+      );
+    case "compaction":
+      return <CompactionBoundary compaction={row.compaction} />;
+    case "reasoning-drop":
+      return <ReasoningDropNotice drop={row.drop} />;
+    case "turn":
+      return <ChatTurn messages={row.messages} context={context} live={live} />;
+  }
 }
 
 /**

@@ -53,9 +53,21 @@ export type BrowserHoldEnd = "release" | "turn-end" | "attachment-end" | "closed
 export type BrowserHoldEvent =
   | { kind: "taken"; tabId: string; holder: BrowserSessionHolder }
   | { kind: "released"; tabId: string; holder: BrowserSessionHolder; why: BrowserHoldEnd }
-  | { kind: "person-took"; tabId: string; displaced: BrowserSessionHolder | null }
+  | {
+      kind: "person-took";
+      tabId: string;
+      tabTitle: string;
+      tabHostname: string;
+      displaced: BrowserSessionHolder | null;
+    }
   | { kind: "person-handed-back"; tabId: string }
-  | { kind: "ask-to-leave"; tabId: string; holder: BrowserSessionHolder };
+  | {
+      kind: "ask-to-leave";
+      tabId: string;
+      tabTitle: string;
+      tabHostname: string;
+      holder: BrowserSessionHolder;
+    };
 
 /**
  * The provenance and product scope required to create a Browser Tab. This is
@@ -288,6 +300,15 @@ function boundedBrowserTitle(title: string): string {
 
 function boundedBrowserUrl(url: string): string {
   return url.slice(0, BROWSER_URL_MAX_CHARS);
+}
+
+/** A notice needs a nameable host, never a URL path or query. */
+function browserHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
 function boundedBrowserError(error: string | null): string | null {
@@ -827,7 +848,13 @@ export class BrowserTabHost {
     if (displaced !== null) {
       this.emitHold({ kind: "released", tabId, holder: displaced, why: "takeover" });
     }
-    this.emitHold({ kind: "person-took", tabId, displaced });
+    this.emitHold({
+      kind: "person-took",
+      tabId,
+      tabTitle: entry.state.title,
+      tabHostname: browserHostname(entry.state.url),
+      displaced,
+    });
     return { tab: { ...entry.state }, displaced };
   }
 
@@ -851,7 +878,13 @@ export class BrowserTabHost {
     const entry = this.requireTab(tabId);
     if (entry.hold?.kind !== "session") return null;
     const holder = entry.hold.holder;
-    this.emitHold({ kind: "ask-to-leave", tabId, holder });
+    this.emitHold({
+      kind: "ask-to-leave",
+      tabId,
+      tabTitle: entry.state.title,
+      tabHostname: browserHostname(entry.state.url),
+      holder,
+    });
     return holder;
   }
 
