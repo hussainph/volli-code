@@ -8,6 +8,7 @@ import { defineConfig } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -113,6 +114,10 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
   },
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339). Stated
+    // once at the top level rather than per project: the worker pool is global
+    // to the invocation, and both projects below draw from it.
+    ...SHARED_MACHINE_TEST_WORKERS,
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
