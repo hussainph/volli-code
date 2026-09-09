@@ -49,7 +49,7 @@ export function partitionPaneTabs<T extends { id: string }>(
  * `TabStrip` requires one because a surface can draw several tablists at once —
  * which a split surface now does by construction, so "Pane 2 tabs" is what
  * tells them apart for AT and for a `getByRole("tablist")` query alike. Counted
- * from 1: the primary pane is pane 1, the one the surface's own strip draws.
+ * from 1: the primary pane is pane 1, at the start of the main tab bar.
  */
 export function paneStripLabel(pane: ResolvedSplitViewPane): string {
   return `Pane ${pane.index + 1} tabs`;

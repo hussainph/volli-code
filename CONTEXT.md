@@ -27,15 +27,16 @@ _Avoid_: ticket worktree, artifact view
 The project-level tabbed workspace, and the app's landing page. Its permanent
 first tab is the Board; the project's own Board Sessions and Project Files
 open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
-fills the surface and Home's tab strip steps aside, so only one tab strip is
-ever on screen.
+fills the surface and Home's tab bar steps aside, so the two surfaces' tabs
+never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Split view**:
 A tabbed surface's plane divided into Panes, each holding a subset of that
 surface's tabs (VC-202). Both surfaces have one, each keeps its own, and tabs
 never cross between them. Splits open right or down only, which keeps the
-permanent tab's Pane in the top left and the surface's own tab strip over it. A
+permanent tab's Pane in the top left. Top-edge Panes divide the main tab bar;
+only Panes below a down split add lower tab strips (VC-333). A
 surface with no split is not "a split view of one" — it is the plane it always
 was, and the app stores nothing for it.
 _Avoid_: split screen, editor group, pane tree, multi-pane mode
