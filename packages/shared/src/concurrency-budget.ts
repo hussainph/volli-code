@@ -65,6 +65,50 @@ function clampToPositiveInteger(value: number): number {
 }
 
 /**
+ * A project's own worker cap, LOWERED by an ambient budget and never raised by
+ * one — the rule this repository's `vitest.workers.ts` resolves its
+ * `maxWorkers` through, and the correction VC-339's review demanded.
+ *
+ * A budget is a ceiling on what one Session may take, not a licence to take it.
+ * Written naively the two collide and the wrong one wins: vitest re-reads
+ * `VITEST_MAX_WORKERS` AFTER config resolution and assigns it over whatever the
+ * config said, so a Session alone on an 8-core laptop — budget 8 — raised a
+ * repository that had deliberately capped itself at 2 back to 8 (measured: 6
+ * workers with the variable at 6, even under `--maxWorkers=2`). Taking the
+ * minimum is what makes the hint able to say "take less" and unable to say
+ * "take more".
+ *
+ * `requested` is a string because it comes from an environment: anything that
+ * is not a positive integer — unset, empty, `abc`, `0` — states no budget at
+ * all and leaves the cap alone, which is also how vitest itself reads the
+ * variable (a truthiness check, then `parseInt`).
+ */
+export function loweredParallelism(cap: number, requested: string | undefined): number {
+  const ceiling = clampToPositiveInteger(cap);
+  if (requested === undefined || requested.length === 0) return ceiling;
+  const asked = Number.parseInt(requested, 10);
+  if (!Number.isFinite(asked) || asked < 1) return ceiling;
+  return Math.min(ceiling, asked);
+}
+
+/**
+ * Whether a command line already states its own worker count — `--maxWorkers 4`
+ * or `--maxWorkers=4`.
+ *
+ * An explicit flag is a person or a CI job saying what this one invocation may
+ * take, and it outranks both the repository's cap and the ambient budget: CI
+ * has the machine to itself and asks for every core it paid for. Volli's own
+ * hint then has to step aside rather than clamp it, because vitest would
+ * otherwise apply the environment variable over the flag — see
+ * `vitest.workers.ts`, the one caller.
+ */
+export function namesWorkerCountExplicitly(argv: readonly string[]): boolean {
+  return argv.some(
+    (argument) => argument === "--maxWorkers" || argument.startsWith("--maxWorkers="),
+  );
+}
+
+/**
  * How a budget of N is spelled for one toolchain: the variable, and the value
  * it wants N wrapped in.
  *

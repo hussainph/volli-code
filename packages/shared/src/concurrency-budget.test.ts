@@ -4,6 +4,8 @@ import {
   VOLLI_CONCURRENCY_HINT_ENV,
   concurrencyBudget,
   concurrencyBudgetEnv,
+  loweredParallelism,
+  namesWorkerCountExplicitly,
 } from "./concurrency-budget";
 
 describe("concurrencyBudget", () => {
@@ -94,5 +96,49 @@ describe("concurrencyBudgetEnv", () => {
   it("never writes a budget below one, whatever it is handed", () => {
     expect(concurrencyBudgetEnv(0, {})[VOLLI_CONCURRENCY_HINT_ENV]).toBe("1");
     expect(concurrencyBudgetEnv(2.9, {})["MAKEFLAGS"]).toBe("-j2");
+  });
+});
+
+// VC-339 review: a budget is a ceiling on what one Session may take, not a
+// licence to take it. vitest re-reads `VITEST_MAX_WORKERS` after config
+// resolution and assigns it over the config, so a Session alone on an 8-core
+// laptop — budget 8 — raised this repository's deliberate cap of 2 back to 8
+// (measured in review: 6 workers with the variable at 6, even under
+// `--maxWorkers=2`). These are the rules `vitest.workers.ts` resolves through.
+describe("loweredParallelism", () => {
+  it("lets an ambient budget lower a cap", () => {
+    expect(loweredParallelism(2, "1")).toBe(1);
+    expect(loweredParallelism(8, "3")).toBe(3);
+  });
+
+  it("never lets an ambient budget raise a cap", () => {
+    expect(loweredParallelism(2, "8")).toBe(2);
+    expect(loweredParallelism(2, "3")).toBe(2);
+  });
+
+  it("keeps the cap when the environment states no usable budget", () => {
+    expect(loweredParallelism(2, undefined)).toBe(2);
+    expect(loweredParallelism(2, "")).toBe(2);
+    expect(loweredParallelism(2, "abc")).toBe(2);
+    expect(loweredParallelism(2, "0")).toBe(2);
+    expect(loweredParallelism(2, "-4")).toBe(2);
+  });
+
+  it("clamps an unusable cap to one rather than to nothing", () => {
+    expect(loweredParallelism(0, undefined)).toBe(1);
+    expect(loweredParallelism(Number.NaN, "4")).toBe(1);
+  });
+});
+
+describe("namesWorkerCountExplicitly", () => {
+  it("sees a worker count stated on the command line, in either spelling", () => {
+    expect(namesWorkerCountExplicitly(["vitest", "run", "--maxWorkers=4"])).toBe(true);
+    expect(namesWorkerCountExplicitly(["vitest", "run", "--maxWorkers", "4"])).toBe(true);
+  });
+
+  it("is not fooled by a neighbouring flag or by no flag at all", () => {
+    expect(namesWorkerCountExplicitly(["vitest", "run", "--coverage"])).toBe(false);
+    expect(namesWorkerCountExplicitly(["vitest", "run", "--minWorkers=4"])).toBe(false);
+    expect(namesWorkerCountExplicitly([])).toBe(false);
   });
 });
