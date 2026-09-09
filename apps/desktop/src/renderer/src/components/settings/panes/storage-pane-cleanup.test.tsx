@@ -190,7 +190,15 @@ async function mountPane(): Promise<void> {
   });
 }
 
-function findByText(text: string, scope: ParentNode = document.body): HTMLElement {
+function orphanSection(): HTMLElement {
+  const section = [...document.querySelectorAll("section")].find(
+    (candidate) => candidate.querySelector("h2")?.textContent === "Orphaned worktrees",
+  );
+  if (!section) throw new Error("no Orphaned worktrees section");
+  return section;
+}
+
+function findByText(text: string, scope: ParentNode = orphanSection()): HTMLElement {
   const match = [...scope.querySelectorAll("button")].find((node) =>
     node.textContent?.includes(text),
   );

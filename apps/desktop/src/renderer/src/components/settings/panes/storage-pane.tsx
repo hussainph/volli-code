@@ -32,10 +32,7 @@ import {
   DATA_EXPORT_CONTENTS,
   DATA_EXPORT_LIMITS,
 } from "../../../../../data-export-copy";
-import type {
-  DirtyWorktreeOrphan,
-  PiSessionOrphanInventory,
-} from "../../../../../ipc/contract";
+import type { DirtyWorktreeOrphan, PiSessionOrphanInventory } from "../../../../../ipc/contract";
 import {
   cleanupOutcome,
   cleanupRejectionMessage,

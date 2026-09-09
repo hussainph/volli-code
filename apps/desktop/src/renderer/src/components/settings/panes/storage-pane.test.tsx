@@ -72,11 +72,14 @@ function bridge(
     worktree: {
       orphans: vi.fn(async () => ({
         ok: true as const,
+        revision: "worktree-scan-revision-1",
         scannedAt: 1_700_000_000_000,
         retentionDays: 30,
         prunable: [],
         removable: [],
         keptRecent: [],
+        keptMetadata: [],
+        unreadableProjects: [],
         dirty: [],
         runs: [],
       })),
@@ -174,11 +177,16 @@ describe("StoragePane", () => {
   // person reads before pressing it is part of the fix, so it is asserted.
   it("offers a scan, never a rescan, before anything has loaded", () => {
     const html = renderToStaticMarkup(<StoragePane />);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    const worktrees = [...host.querySelectorAll("section")].find(
+      (section) => section.querySelector("h2")?.textContent === "Orphaned worktrees",
+    );
 
     expect(html).toContain("Scan for orphaned worktrees");
     expect(html).not.toContain("Rescan");
-    // The destructive action is not reachable until a scan has produced one.
-    expect(html).not.toContain("Clean up…");
+    // The worktree cleanup action is not reachable until a scan has produced one.
+    expect(worktrees?.textContent).not.toContain("Clean up…");
   });
 
   it("says what retention takes and what it keeps, including the Keep exemption", () => {
