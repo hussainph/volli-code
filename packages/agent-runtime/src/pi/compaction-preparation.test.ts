@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
-import { findModelCutPoint, prepareModelCompaction } from "./compaction-preparation";
+import { prepareModelCompaction } from "./compaction-preparation";
 import { estimateMessageTokens } from "./token-counting";
 
 function model(): Model<Api> {
@@ -123,18 +123,47 @@ describe("prepareModelCompaction", () => {
     expect(prepareModelCompaction(path, SETTINGS, model())).toBeUndefined();
   });
 
-  it("never cuts between a tool call and its result", () => {
+  it("never cuts between a tool call and its result, at any keep budget", () => {
+    // A long tool round, so a budget can land on every position inside it. The
+    // rule under pressure is structural, not statistical: whatever the budget,
+    // no retained tail may open with an orphaned `toolResult`, and no call
+    // carried into the tail may leave its result behind in the summarized
+    // prefix. Both are provider 400s, not merely untidy transcripts.
     const path: Entry[] = [
-      entry(user("read the file")),
-      entry(assistant("looking", { id: "call-1", name: "read", path: "/tmp/a.ts" })),
-      entry(toolResult("call-1", "file contents here")),
+      entry(user("read three files")),
+      entry(assistant("first", { id: "call-1", name: "read", path: "/tmp/a.ts" })),
+      entry(toolResult("call-1", "a contents".repeat(50))),
+      entry(assistant("second", { id: "call-2", name: "read", path: "/tmp/b.ts" })),
+      entry(toolResult("call-2", "b contents".repeat(50))),
+      entry(assistant("third", { id: "call-3", name: "read", path: "/tmp/c.ts" })),
+      entry(toolResult("call-3", "c contents".repeat(50))),
       entry(assistant("done reading")),
+      entry(user("thanks")),
+      entry(assistant("any time")),
     ];
-    const prepared = prepareModelCompaction(path, SETTINGS, model());
-    expect(prepared).toBeDefined();
-    const tail = prepared?.retainedTail ?? [];
-    expect(tail.length).toBeGreaterThan(0);
-    expect(tail[0]?.role).not.toBe("toolResult");
+    const budgets = [1, 10, 50, 120, 300, 900, 5_000, 20_000];
+    const observed = new Set<number>();
+    for (const keepRecentTokens of budgets) {
+      const prepared = prepareModelCompaction(path, { ...SETTINGS, keepRecentTokens }, model());
+      expect(prepared).toBeDefined();
+      const tail = prepared!.retainedTail;
+      observed.add(tail.length);
+      expect(tail[0]?.role).not.toBe("toolResult");
+      // Every call that crossed into the tail has its result there too, and no
+      // result in the tail is missing the call that produced it.
+      const calls = new Set<string>();
+      const results = new Set<string>();
+      for (const message of [...prepared!.turnPrefixMessages, ...tail]) {
+        if (message.role === "assistant")
+          for (const block of message.content) if (block.type === "toolCall") calls.add(block.id);
+        if (message.role === "toolResult") results.add(message.toolCallId);
+      }
+      expect([...results].every((id) => calls.has(id))).toBe(true);
+      expect([...calls].every((id) => results.has(id))).toBe(true);
+    }
+    // The budgets really did move the cut: a rule that held because every
+    // budget produced the same tail would prove nothing about grouping.
+    expect(observed.size).toBeGreaterThan(2);
   });
 
   it("keeps the estimator's grouping intact: a tiny budget keeps only the current turn's tail, split at the turn start", () => {
@@ -282,14 +311,36 @@ describe("prepareModelCompaction", () => {
     expect(prepared?.fileOps.edited.has("/tmp/prev-mod.ts")).toBe(true);
   });
 
-  it("agrees with Pi's turn-start rule through findModelCutPoint", () => {
+  it("retains rather than orphans a tool result that alone exceeds the keep budget", () => {
+    // A branch whose newest entry is a tool result has no valid cut point at or
+    // after it, so the estimator cannot buy room by cutting there however
+    // expensive it says the result is. Pi keeps the whole compactable range
+    // instead, and this pins that the model-aware estimator does not talk it
+    // into an orphaned `tool_result` — the shape a provider answers with a 400.
+    // The honest cost is that one oversized tool result makes compaction a
+    // no-op for that request, which the overflow path is what answers.
     const path: Entry[] = [
-      entry(user("turn start")),
-      entry(assistant("mid reply")),
-      entry(user("next turn")),
+      entry(user("read it")),
+      entry(assistant("reply one")),
+      entry(user("and again")),
+      entry(assistant("looking", { id: "call-9", name: "read", path: "/tmp/z.ts" })),
+      entry(toolResult("call-9", "z contents".repeat(4_000))),
     ];
-    const cut = findModelCutPoint(path, 0, path.length, 1, model());
-    expect(cut.firstKeptEntryIndex).toBe(2);
-    expect(cut.isSplitTurn).toBe(false);
+    const keepRecentTokens = 5_000;
+    const resultEntry = path[4]!;
+    expect(resultEntry.type).toBe("message");
+    expect(estimateMessageTokens((resultEntry as MessageEntry).message, model())).toBeGreaterThan(
+      keepRecentTokens,
+    );
+    const prepared = prepareModelCompaction(path, { ...SETTINGS, keepRecentTokens }, model());
+    expect(prepared).toBeDefined();
+    expect(prepared!.messagesToSummarize).toEqual([]);
+    expect(prepared!.retainedTail.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
   });
 });

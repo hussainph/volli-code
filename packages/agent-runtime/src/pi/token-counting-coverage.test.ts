@@ -6,12 +6,20 @@
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import { countTokens as countO200kRaw } from "gpt-tokenizer/encoding/o200k_base";
+import { countTokens as countCl100kRaw } from "gpt-tokenizer/encoding/cl100k_base";
 import { describe, expect, it } from "vite-plus/test";
 import {
   estimateContextTokens,
   estimateMessageTokens,
   projectedContextTokens,
 } from "./token-counting";
+
+/** The module's own framing constant, restated so counts here are exact. */
+const PER_MESSAGE_FRAMING = 8;
+const LITERAL = { disallowedSpecial: new Set<string>() };
+const countO200k = (text: string) => countO200kRaw(text, LITERAL);
+const countCl100k = (text: string) => countCl100kRaw(text, LITERAL);
 
 function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
   return {
@@ -82,11 +90,22 @@ describe("tokenizer selection", () => {
     expect(estimateMessageTokens(user("<|im_end|>"), azureLegacy)).toBeGreaterThan(9);
   });
 
-  it("routes gpt-3.5 ids to cl100k and o-series ids to o200k", () => {
+  it("routes gpt-3.5 ids to cl100k and o-series ids to o200k, and the two disagree", () => {
     const legacy = model({ id: "gpt-3.5-turbo", api: "openai-completions", provider: "openai" });
     const reasoning = model({ id: "o4-mini", api: "openai-completions", provider: "openai" });
-    expect(estimateMessageTokens(user(TEXT.repeat(80)), legacy)).toBeGreaterThan(0);
-    expect(estimateMessageTokens(user(TEXT.repeat(80)), reasoning)).toBeGreaterThan(0);
+    // A text the two published vocabularies genuinely tokenize differently:
+    // o200k merges longer byte runs, so it produces strictly fewer tokens. A
+    // `> 0` assertion here would pass with both routes wired to the same
+    // counter, which is the mistake this pins.
+    const dense = 'トークン化のテスト🧪{"key":"value","n":12345}'.repeat(40);
+    const legacyTokens = estimateMessageTokens(user(dense), legacy);
+    const reasoningTokens = estimateMessageTokens(user(dense), reasoning);
+    expect(legacyTokens).toBe(PER_MESSAGE_FRAMING + countCl100k(dense));
+    expect(reasoningTokens).toBe(PER_MESSAGE_FRAMING + countO200k(dense));
+    expect(reasoningTokens).toBeLessThan(legacyTokens);
+    // Both are real tokenizers, so both sit well under the conservative
+    // fallback the same text would otherwise be charged.
+    expect(legacyTokens).toBeLessThan(estimateMessageTokens(user(dense), model()));
   });
 
   it("falls back to the conservative estimator for an OpenAI-API id with no published vocabulary", () => {

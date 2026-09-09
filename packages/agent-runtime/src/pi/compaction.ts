@@ -5,11 +5,9 @@
  */
 
 import {
-  calculateContextTokens,
   compact,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
-  getLastAssistantUsage,
   insertEntry,
   setValue,
   shouldCompact,
@@ -28,8 +26,12 @@ import type { SessionUsage } from "@volli/shared";
 import { prepareModelCompaction } from "./compaction-preparation";
 import {
   compactProviderNative,
-  providerCompactionFromDetails,
+  nativeCompactionAvailable,
   nativeCompactionSupport,
+  providerCompactionFromDetails,
+  readProviderCompaction,
+  type NativeRequestObservation,
+  type ProviderCompactionState,
 } from "./provider-compaction";
 import { estimateContextTokens, projectedContextTokens } from "./token-counting";
 import { piContext, type Context } from "./pi-context";
@@ -50,32 +52,6 @@ export function contextWindowOf(model: { readonly contextWindow: number }): numb
   return Number.isFinite(model.contextWindow) && model.contextWindow > 0
     ? Math.floor(model.contextWindow)
     : undefined;
-}
-
-/**
- * The context the model was actually holding when it last answered.
- *
- * Two of Pi's own functions and nothing between them: `getLastAssistantUsage`
- * picks the message — newest first, skipping the aborted and errored replies
- * whose usage describes a request that never completed — and
- * `calculateContextTokens` reads the occupancy off it, preferring the
- * provider's own `totalTokens` and falling back to the four fields the
- * transcript records per message (`usageOf`) summed. Cache reads and writes
- * belong in that sum: they are prompt tokens the model held, and counting
- * `input` alone understates a cached turn to the point of uselessness.
- *
- * Summing the four here by hand would be close enough to look right and would
- * still be a second rule. It is the one Pi applies to compute the
- * `tokensBefore` this feature reports, so a hand-rolled sum would put the
- * number that DECIDES to compact and the number that DESCRIBES the compaction
- * on different definitions of one quantity — agreeing for every provider that
- * totals the way we assumed, and silently disagreeing for the first that does
- * not.
- */
-export function occupiedContextTokens(path: readonly Entry[]): number | undefined {
-  const boundary = path.findLastIndex((entry) => entry.type === "compaction");
-  const usage = getLastAssistantUsage(path.slice(boundary + 1));
-  return usage === undefined ? undefined : calculateContextTokens(usage);
 }
 
 /** Apply the resolved reserve policy to measured-plus-estimated request occupancy. */
@@ -147,24 +123,67 @@ export function estimatedContextTokens(
   return estimateContextTokens(messages, model);
 }
 
-/** Expand opaque checkpoints from original history when changing model/provider. */
-export function compactionPathForModel(path: readonly Entry[], model: Model<Api>): Entry[] {
-  return path.filter((entry) => {
+/**
+ * The durable branch as the CURRENT route can actually replay it.
+ *
+ * A provider-native checkpoint is opaque state bound to one model on one
+ * endpoint, not a portable prose summary, so an entry holding one survives this
+ * filter only when the model, the API family and the resolved route all still
+ * match. Everything it replaces is still on disk, so dropping the entry does
+ * not lose the conversation — it rebuilds it.
+ *
+ * Three ways an entry fails to survive, and they are not the same fact:
+ *
+ * - **Another model or API.** Expected, and silent: switching models is a
+ *   thing people do, and the original history is exactly what should be sent.
+ * - **A route that cannot replay it.** The catalog said `api.anthropic.com`
+ *   and the credential that actually resolves is an OAuth subscription or an
+ *   endpoint override, so the checkpoint would be replayed at a backend that
+ *   never minted it. Also silent; also rebuilt.
+ * - **An unreadable checkpoint.** Reported, because nothing about it is
+ *   expected. The Session still attaches and still runs on its original
+ *   history: fail-closed belongs on the OUTGOING projection, where sending the
+ *   empty placeholder would ask a model to continue from nothing, and refusing
+ *   to open the Session at all would answer a corrupt entry with a corrupt
+ *   product (VC-331).
+ */
+export interface ModelCompactionPath {
+  path: Entry[];
+  /** Sanitized notices for checkpoints that could not be read at all. */
+  discarded: readonly string[];
+}
+
+export function compactionPathForModel(
+  path: readonly Entry[],
+  model: Model<Api>,
+  nativeRouteAvailable: boolean,
+): ModelCompactionPath {
+  const discarded: string[] = [];
+  const kept = path.filter((entry) => {
     if (entry.type !== "compaction") return true;
-    const state = providerCompactionFromDetails(entry.details);
+    const read = readProviderCompaction(entry.details);
+    if (read.kind === "absent") return true;
+    if (read.kind === "malformed") {
+      discarded.push(read.reason);
+      return false;
+    }
+    // The catalog check is re-applied rather than trusted from the caller: the
+    // flag says whether the RESOLVED credential can replay a checkpoint, and
+    // this function must still be correct about the model it was handed.
     return (
-      state === undefined ||
-      (state.kind === model.api &&
-        state.model === model.id &&
-        nativeCompactionSupport(model).supported)
+      read.state.kind === model.api &&
+      read.state.model === model.id &&
+      nativeRouteAvailable &&
+      nativeCompactionSupport(model).supported
     );
   });
+  return { path: kept, discarded };
 }
 
 function withoutNativeCompactions(path: readonly Entry[]): Entry[] {
   return path.filter(
     (entry) =>
-      entry.type !== "compaction" || providerCompactionFromDetails(entry.details) === undefined,
+      entry.type !== "compaction" || readProviderCompaction(entry.details).kind === "absent",
   );
 }
 
@@ -246,12 +265,8 @@ function entryToContextMessages(entry: Entry): AgentMessage[] {
       return replayableMessage(entry.message) ? [entry.message] : [];
     case "compaction": {
       const native = providerCompactionFromDetails(entry.details);
-      // OpenAI's canonical window can retain substantial input. Its placeholder
-      // must not count as the whole checkpoint. Estimate the serialized native
-      // window until a real reply meters it; onPayload replaces this text before
-      // sending, and local/model-switch fallback reconstructs original history.
       const summary =
-        native?.kind === "openai-responses" ? JSON.stringify(native.items) : entry.summary;
+        native?.kind === "openai-responses" ? openAIWindowStandIn(native) : entry.summary;
       return [
         createCompactionSummaryMessage(summary, entry.tokensBefore, entry.timestamp),
         ...entry.retainedTail.filter(replayableMessage).map(withoutRetainedUsage),
@@ -264,6 +279,45 @@ function entryToContextMessages(entry: Entry): AgentMessage[] {
     case "custom":
       return [];
   }
+}
+
+/**
+ * How much of a request an OpenAI canonical window occupies, before anything
+ * has measured it.
+ *
+ * The checkpoint's own text placeholder is a sentence; the window it stands for
+ * is not, and counting the sentence would tell a Session it had emptied a
+ * context it had not. So the window is serialized and estimated — exactly, for
+ * the ordinary items OpenAI retained, which are real text this runtime can
+ * tokenize.
+ *
+ * **The opaque part is bounded rather than tokenized whole.** `encrypted_content`
+ * is ciphertext with no published local token count and no fixed ratio to what
+ * it encodes; a multi-megabyte blob run through a tokenizer produces a number
+ * that is not an estimate of anything, and a request budget built on it would
+ * conclude a freshly compacted Session had no room left — the exact failure
+ * compaction exists to prevent. So the blob counts up to a ceiling and no
+ * further: small checkpoints cost what they serialize, large ones cost the cap.
+ * It is deliberately the conservative direction (a checkpoint never reads as
+ * free) with a deliberate ceiling (it can never read as the whole window), and
+ * the provider's next reply replaces the whole estimate with a measurement.
+ *
+ * This text never reaches a provider: `onPayload` substitutes the canonical
+ * items for it, and a route that cannot do that reconstructs original history.
+ */
+const MAX_OPAQUE_CHECKPOINT_CHARS = 48_000;
+
+function openAIWindowStandIn(
+  native: Extract<ProviderCompactionState, { kind: "openai-responses" }>,
+): string {
+  return JSON.stringify(
+    native.items.map((item) => {
+      const opaque = item["encrypted_content"];
+      return typeof opaque === "string" && opaque.length > MAX_OPAQUE_CHECKPOINT_CHARS
+        ? { ...item, encrypted_content: opaque.slice(0, MAX_OPAQUE_CHECKPOINT_CHARS) }
+        : item;
+    }),
+  );
 }
 
 /**
@@ -310,6 +364,15 @@ export type CompactionOutcome =
        * returns is already the aggregate.
        */
       usage: SessionUsage | null;
+      /**
+       * Why the provider's own compaction was not used, when one was tried and
+       * refused. Sanitized. Present only on a local summary that followed a
+       * failed native attempt: the compaction succeeded, so this is not a
+       * failure to report to the person, but it is the difference between a
+       * Session quietly running on the more lossy mechanism and one whose
+       * support read can say why.
+       */
+      nativeFailure?: string;
     }
   /** Pi found nothing to compact — an empty path, or one already ending in a compaction. */
   | { kind: "skipped" }
@@ -345,6 +408,8 @@ export interface CompactionInput {
    */
   retainedTail?: (tail: readonly AgentMessage[]) => AgentMessage[];
   signal?: AbortSignal;
+  /** The attachment's instrumentation seam for native HTTP calls (VC-331). */
+  onNativeRequest?: (observation: NativeRequestObservation) => void;
 }
 
 /**
@@ -354,7 +419,14 @@ export interface CompactionInput {
  * which Pi's durable storage does not accept.
  */
 export async function compactSession(input: CompactionInput): Promise<CompactionOutcome> {
-  const path = compactionPathForModel(input.path, input.model);
+  // The route decides whether an existing checkpoint is replayable at all; a
+  // checkpoint this credential cannot replay is expanded back into the original
+  // history before anything is summarized.
+  const { path } = compactionPathForModel(
+    input.path,
+    input.model,
+    await nativeCompactionAvailable(input.model, input.models, input.signal),
+  );
   let prepared = prepareModelCompaction(path, input.settings, input.model);
   if (prepared === undefined) return { kind: "skipped" };
   const tokensBefore = projectedContextTokens(
@@ -390,6 +462,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
           previousState,
           customInstructions: input.customInstructions,
           signal: input.signal,
+          ...(input.onNativeRequest ? { onNativeRequest: input.onNativeRequest } : {}),
         });
   if (native.kind === "compacted") {
     const entry = await appendCompactionEntry(
@@ -401,8 +474,8 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
         summary: native.textSummary || "Provider-native context checkpoint.",
         retainedTail: input.retainedTail?.(prepared.retainedTail) ?? prepared.retainedTail,
         tokensBefore,
-        usage: native.rawUsage,
-        details: { providerCompaction: native.state } as unknown as JsonValue,
+        ...(native.rawUsage ? { usage: native.rawUsage } : {}),
+        details: durableDetails({ providerCompaction: native.state }),
         fromHook: false,
       }),
       context,
@@ -454,6 +527,11 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     };
 
   const compacted = { ...result.value, usage: combinedUsage(result.value.usage, nativeUsage) };
+  // A native attempt that was tried and refused is recorded beside the local
+  // summary that replaced it. Sanitized, and additive to whatever Pi put in
+  // `details` — Pi reads its own file lists out of that object and ignores
+  // keys it did not write.
+  const nativeFailure = native.kind === "failed" ? native.message : undefined;
   const provisioned: NewEntry<CompactionEntry> = {
     type: "compaction",
     id: input.sidecar.idGenerator.next(),
@@ -462,7 +540,15 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
     retainedTail: input.retainedTail?.(compacted.retainedTail) ?? compacted.retainedTail,
     tokensBefore: compacted.tokensBefore,
     usage: compacted.usage,
-    details: compacted.details,
+    // `Object.assign` rather than a spread: Pi types `details` as any JSON
+    // value, and a primitive source contributes nothing here instead of
+    // needing a shape check that its own writer makes unreachable.
+    details:
+      nativeFailure === undefined
+        ? compacted.details
+        : durableDetails(
+            Object.assign({}, compacted.details, { nativeCompactionFailure: nativeFailure }),
+          ),
     // Pi's own compaction hook did not write this one; this module is the
     // caller Pi does not have. The flag exists so a hook-driven compaction can
     // be told from an application-driven one, and ours is the latter.
@@ -472,6 +558,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   return {
     kind: "compacted",
     entry,
+    ...(nativeFailure === undefined ? {} : { nativeFailure }),
     messages: contextMessages([...input.path, entry]),
     // `CompactResult` carries a provider usage block but no API family, so the
     // basis comes from the model the summary was generated on — the same
@@ -541,4 +628,15 @@ async function appendCompactionEntry(
  */
 function durableJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * The one place a runtime-shaped object becomes Pi's `JsonValue`.
+ *
+ * The assertion is not hopeful: the round trip is what makes it true, because
+ * a value that survives `JSON.stringify` and `JSON.parse` IS JSON — and a
+ * value that does not survive it throws here rather than at the durable write.
+ */
+function durableDetails(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }

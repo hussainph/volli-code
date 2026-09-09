@@ -137,6 +137,24 @@ export function providerErrorClass(
 }
 
 /**
+ * The same bounded classes, for a request whose only diagnostic is its status.
+ *
+ * A direct HTTP call — provider-native compaction is the one this runtime
+ * makes — has a status code where a stream has provider prose. Mapped here
+ * rather than beside the caller so both halves of the vocabulary stay in the
+ * module that owns it, and a class added to {@link PROVIDER_ERROR_PATTERNS}
+ * has one obvious place to gain its status codes too.
+ */
+export function providerErrorClassForStatus(status: number): ProviderErrorClass {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate-limit";
+  if (status === 503 || status === 529) return "overloaded";
+  if (status === 408 || status === 504) return "timeout";
+  if (status >= 400 && status < 500) return "invalid-request";
+  return "unknown";
+}
+
+/**
  * Reduces and records one observation without delivering it to the Session.
  *
  * This is the observability-only path for a fact that must not become durable

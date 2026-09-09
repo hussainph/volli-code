@@ -10,7 +10,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { branchTip, insertEntry, setValue, type StreamFn } from "@earendil-works/pi-agent-core";
+import {
+  branchTip,
+  DEFAULT_COMPACTION_SETTINGS,
+  insertEntry,
+  setValue,
+  type StreamFn,
+} from "@earendil-works/pi-agent-core";
 import {
   JsonlSessionRepo,
   NodeExecutionEnv,
@@ -45,6 +51,7 @@ import {
   type ObservabilityEvent,
   type CompactionObservation,
   type RuntimeAskUserRequest,
+  type ProviderAttemptEvent,
   type RuntimeObservation,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -749,8 +756,59 @@ function entryRecords(path: string): Record<string, unknown>[] {
   return readJsonl(path).filter((record) => record["kind"] === "entry");
 }
 
+/**
+ * The same catalog, answering a different credential.
+ *
+ * A proxy rather than a spread: `Models` is a class instance, so copying its
+ * enumerable own properties would drop every method it inherits.
+ */
+function withResolvedAuth(
+  models: Models,
+  resolved: { auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined,
+): Models {
+  return new Proxy(models, {
+    get(target, property) {
+      if (property === "getAuth") return async () => resolved;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/** One runtime over this fixture's data dir, with the models a test supplies. */
+function runtimeFor(attachment: Attachment, models: Models) {
+  return createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+}
+
 function compactionEntries(sessionFilePath: string): Record<string, unknown>[] {
   return entryRecords(sessionFilePath).filter((entry) => entry["type"] === "compaction");
+}
+
+/**
+ * A durable provider-native checkpoint, made unreadable in place.
+ *
+ * Not a hand-built sidecar: the file is exactly what a real compaction wrote,
+ * with the one blob a partial write or a truncated flush would damage replaced
+ * by a shape the validator refuses.
+ */
+function corruptNativeCheckpoint(sessionFilePath: string): void {
+  const lines = readFileSync(sessionFilePath, "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => {
+      const parsed: unknown = JSON.parse(line);
+      const records = Array.isArray(parsed) ? parsed : [parsed];
+      let touched = false;
+      for (const record of records as Record<string, unknown>[]) {
+        const details = record["details"] as Record<string, unknown> | undefined;
+        if (record["type"] !== "compaction" || details?.["providerCompaction"] === undefined)
+          continue;
+        details["providerCompaction"] = { kind: "anthropic-messages", block: { type: "???" } };
+        touched = true;
+      }
+      return touched ? JSON.stringify(parsed) : line;
+    });
+  writeFileSync(sessionFilePath, `${lines.join("\n")}\n`);
 }
 
 /** Write a coherent current-format sidecar while a test replaces its history. */
@@ -5407,6 +5465,30 @@ describe("compacting a context that reached its reserve", () => {
     await handle.close();
   });
 
+  it("never shrinks the output ceiling below a usable answer, however full the estimate reads", async () => {
+    // The occupancy half of the ceiling is an estimate, and a conservative one.
+    // An estimate that reads at or past the window must not be able to hand the
+    // model a one-token answer: a Session that silently produces nothing has no
+    // error to recover from, where a provider's refusal has overflow recovery.
+    const attachment = fixture();
+    const script = scriptedStream([settles("answer"), settles("second answer")]);
+    const ceilings: (number | undefined)[] = [];
+    const stream: StreamFn = (model, context, options) => {
+      ceilings.push(options?.maxTokens);
+      return script(model, context, options);
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      // A window smaller than the request that is about to be sent: the
+      // subtraction goes negative and the floor is the only thing left.
+      models: modelsWithStream(stream, [{ id: MODEL_ID, contextWindow: 5_000 }]),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("dense input ".repeat(20_000));
+    expect(ceilings[0]).toBe(4_096);
+    await handle.close();
+  });
+
   it("automatically compacts a 264k OpenAI Codex tool loop", async () => {
     const attachment = fixture();
     const calls: ProviderCall[] = [];
@@ -5421,7 +5503,13 @@ describe("compacting a context that reached its reserve", () => {
       streamSimple: scriptedStream([
         recording(calls, settles("old answer")),
         recording(calls, (emit) => {
-          emit.occupies(250_000);
+          // Deliberately BELOW the executor's fixed 16,384-token reserve
+          // threshold (264,000 - 16,384 = 247,616) and above the proportional
+          // one (264,000 - 26,400 = 237,600). A Session on the flat reserve
+          // sails past this and overruns on its next tool result; this is the
+          // 264k Codex failure the ticket names, and the number is what makes
+          // this test distinguish the fix from the behaviour it replaced.
+          emit.occupies(240_000);
           emit.toolCall("read", { path: "MARKER.txt" });
           emit.finish();
         }),
@@ -5429,6 +5517,7 @@ describe("compacting a context that reached its reserve", () => {
         recording(calls, settles("finished the same turn")),
       ]) as typeof faux.provider.streamSimple,
     });
+    expect(240_000).toBeLessThan(264_000 - DEFAULT_COMPACTION_SETTINGS.reserveTokens);
     const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
     const handle = await runtime.startSession({
       ...attachment.spec,
@@ -5900,7 +5989,7 @@ describe("provider-native context persistence", () => {
           settles("finished"),
         ]);
         const stream: StreamFn = async (model, context, options) => {
-          const payload = { messages: toAnthropicMessages(context.messages) };
+          const payload = { messages: toAnthropicMessages(context.messages, model) };
           requests.push((await options?.onPayload?.(payload, model)) ?? payload);
           headers.push(options?.headers);
           return script(model, context, options);
@@ -6038,7 +6127,229 @@ describe("provider-native context persistence", () => {
       await second.submitUserMessage("use the other model");
       expect(JSON.stringify(requests[4])).not.toContain("opaque-checkpoint");
       expect(JSON.stringify(requests[4])).toContain("original answer");
+      // The native compaction was metered ONCE, and the restart did not buy it
+      // again. A replayed maintenance bill is the failure this guards: the
+      // record is named after the durable compaction entry precisely so a
+      // recovered attachment lands on the row it already has, and a second
+      // distinct entry id here would be spend nobody spent.
+      const compactionUsage = attachment.observations.filter(
+        (observation) => observation.kind === "usage" && observation.usage.cause === "compaction",
+      ) as Extract<RuntimeObservation, { kind: "usage" }>[];
+      expect(compactionUsage).toHaveLength(1);
+      expect(compactionUsage[0]?.turnId).toBeNull();
+      expect(compactionUsage[0]?.entryId).toBe(
+        compactionEntries(recovery.sessionFilePath)[0]?.["id"],
+      );
+      expect(new Set(compactionUsage.map((observation) => observation.entryId)).size).toBe(1);
       await second.close();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * A Session that compacted natively, restarted under a different resolved
+   * credential.
+   *
+   * The catalog entry does not move: the same provider id, the same model id,
+   * the same `baseUrl`. What moves is what `getAuth` answers — which is the
+   * only thing that decides where the request actually goes. An opaque
+   * checkpoint minted by the metered public API is not replayable at an OAuth
+   * backend or behind a gateway, so the restart has to rebuild from the
+   * original durable history rather than project state into a request the
+   * other endpoint never issued.
+   */
+  const nativeClaudeRestart = async (
+    resolvedAuth: { auth: { apiKey?: string; baseUrl?: string }; source?: string } | undefined,
+  ) => {
+    const attachment = fixture();
+    const nativeBlock = { type: "compaction", content: "native Claude summary" };
+    const fetch = vi.fn(
+      async (url: string) =>
+        new Response(
+          JSON.stringify(
+            url.endsWith("count_tokens")
+              ? { input_tokens: 60_000 }
+              : {
+                  stop_reason: "compaction",
+                  content: [nativeBlock],
+                  usage: { input_tokens: 1000, output_tokens: 50 },
+                },
+          ),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const requests: unknown[] = [];
+      const headers: (Record<string, string> | undefined)[] = [];
+      const script = scriptedStream([
+        settles("original answer"),
+        settlesHolding("recent answer", 200_000),
+        settles("finished"),
+        settles("after restart"),
+      ]);
+      const stream: StreamFn = async (model, context, options) => {
+        const payload = { messages: toAnthropicMessages(context.messages, model) };
+        requests.push((await options?.onPayload?.(payload, model)) ?? payload);
+        headers.push(options?.headers as Record<string, string> | undefined);
+        return script(model, context, options);
+      };
+      const models = modelsWithStream(stream, [
+        { id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" },
+      ]);
+      const spec = {
+        ...attachment.spec,
+        model: {
+          providerId: PROVIDER_ID,
+          modelId: "claude-opus-4-6",
+          reasoningLevel: "off" as const,
+        },
+      };
+      const first = await runtimeFor(attachment, models).startSession(spec);
+      await first.submitUserMessage("original request");
+      await first.submitUserMessage(PASTED);
+      await first.submitUserMessage("continue");
+      const recovery = first.recovery!;
+      expect(JSON.stringify(requests.at(-1))).toContain("native Claude summary");
+      await first.close();
+
+      // The credential resolves differently now. Nothing else changed.
+      const rerouted = withResolvedAuth(models, resolvedAuth);
+      const second = await runtimeFor(attachment, rerouted).startSession({ ...spec, recovery });
+      await second.submitUserMessage("resume");
+      await second.close();
+      return { requests, headers, observations: attachment.observations };
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  };
+
+  it.each([
+    [
+      "an OAuth subscription",
+      { auth: { apiKey: "sk-ant-oat01-example" }, source: "Anthropic OAuth" },
+    ],
+    [
+      "an endpoint override",
+      { auth: { apiKey: "sk-ant-api03", baseUrl: "https://gateway.example/v1" } },
+    ],
+    ["no credential at all", undefined],
+  ] as const)(
+    "rebuilds original history when the resolved route becomes %s",
+    async (_label, resolvedAuth) => {
+      const { requests, headers } = await nativeClaudeRestart(resolvedAuth);
+      const last = JSON.stringify(requests.at(-1));
+      // The checkpoint is gone and the history it replaced is back — not an
+      // empty placeholder, and not opaque state sent somewhere it cannot be read.
+      expect(last).not.toContain("native Claude summary");
+      expect(last).toContain("original answer");
+      // …and the beta header that only a native checkpoint earns is gone too.
+      expect(headers.at(-1)?.["anthropic-beta"] ?? "").not.toContain("compact-2026-01-12");
+    },
+  );
+
+  it("keeps the checkpoint when the resolved route is still the one that minted it", async () => {
+    const { requests, headers } = await nativeClaudeRestart({
+      auth: { apiKey: "sk-ant-api03-example" },
+      source: "ANTHROPIC_API_KEY",
+    });
+    const last = JSON.stringify(requests.at(-1));
+    expect(last).toContain("native Claude summary");
+    expect(last).not.toContain("original answer");
+    expect(headers.at(-1)?.["anthropic-beta"]).toContain("compact-2026-01-12");
+  });
+
+  it("attaches and rebuilds from original history when a durable checkpoint is unreadable", async () => {
+    // Fail-closed belongs on the outgoing projection, where sending an empty
+    // placeholder would ask the model to continue from nothing. It must not
+    // reach the attach: the history the checkpoint replaced is still on disk,
+    // and a Session nobody can open is a worse answer than a Session that is
+    // briefly larger than it was.
+    const attachment = fixture();
+    const nativeBlock = { type: "compaction", content: "native Claude summary" };
+    const fetch = vi.fn(
+      async (url: string, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify(
+            url.endsWith("count_tokens")
+              ? { input_tokens: 60_000 }
+              : { stop_reason: "compaction", content: [nativeBlock] },
+          ),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const requests: unknown[] = [];
+      const script = scriptedStream([
+        settles("original answer"),
+        settlesHolding("recent answer", 200_000),
+        settles("finished"),
+        settles("after recovery"),
+      ]);
+      const stream: StreamFn = async (model, context, options) => {
+        const payload = { messages: toAnthropicMessages(context.messages, model) };
+        requests.push((await options?.onPayload?.(payload, model)) ?? payload);
+        return script(model, context, options);
+      };
+      const models = modelsWithStream(stream, [
+        { id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" },
+      ]);
+      const spec = {
+        ...attachment.spec,
+        model: {
+          providerId: PROVIDER_ID,
+          modelId: "claude-opus-4-6",
+          reasoningLevel: "off" as const,
+        },
+      };
+      const first = await runtimeFor(attachment, models).startSession(spec);
+      await first.submitUserMessage("original request");
+      await first.submitUserMessage(PASTED);
+      await first.submitUserMessage("continue");
+      const recovery = first.recovery!;
+      expect(JSON.stringify(requests.at(-1))).toContain("native Claude summary");
+      await first.close();
+      // Corrupt the checkpoint on disk, exactly as a truncated or partly
+      // written details blob would read back.
+      corruptNativeCheckpoint(recovery.sessionFilePath);
+
+      const second = await runtimeFor(attachment, models).startSession({ ...spec, recovery });
+      await second.submitUserMessage("resume");
+      // The Session attached and ran. What it ran ON is the point: the
+      // unreadable checkpoint contributed nothing, and the history it had
+      // replaced is what the recovered Session carried forward.
+      const last = JSON.stringify(requests.at(-1));
+      expect(last).not.toContain("native Claude summary");
+      expect(last).toContain("original answer");
+      // No second native call was needed to get there: the rebuild is a read
+      // of history already on disk, not a fresh compaction bought to replace it.
+      expect(fetch).toHaveBeenCalledTimes(2);
+      // The recovery is recorded once, sanitized, so a Session whose context
+      // grew back is legible afterwards.
+      const markers = entryRecords(recovery.sessionFilePath).filter(
+        (entry) =>
+          entry["type"] === "custom" &&
+          (entry["data"] as Record<string, unknown> | undefined)?.["kind"] ===
+            "native-checkpoint-discarded",
+      );
+      expect(markers).toHaveLength(1);
+      const marker = markers[0]!["data"] as Record<string, unknown>;
+      expect(String(marker["reason"])).toContain("original history");
+      await second.close();
+
+      // A third attach does not record it again.
+      const third = await runtimeFor(attachment, models).startSession({ ...spec, recovery });
+      await third.close();
+      expect(
+        entryRecords(recovery.sessionFilePath).filter(
+          (entry) =>
+            entry["type"] === "custom" &&
+            (entry["data"] as Record<string, unknown> | undefined)?.["kind"] ===
+              "native-checkpoint-discarded",
+        ),
+      ).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -8827,6 +9138,119 @@ describe("usage limits", () => {
       ["five_hour", 37],
       ["seven_day", 4],
     ]);
+  });
+
+  it("folds a native compaction's own response headers into the same holder", async () => {
+    // Provider-native compaction is the one model call that does not go
+    // through `streamSimple`, so without its own report it would be a hole in
+    // both halves of the instrumentation: a Usage Window that reads stale
+    // after a compaction, and maintenance spend with no request behind it.
+    const attachment = fixture();
+    const holder = new UsageLimitsHolder();
+    const fetch = vi.fn(
+      async (url: string) =>
+        new Response(
+          JSON.stringify(
+            url.endsWith("count_tokens")
+              ? { input_tokens: 60_000 }
+              : {
+                  stop_reason: "compaction",
+                  content: [{ type: "compaction", content: "native Claude summary" }],
+                },
+          ),
+          {
+            headers: {
+              "content-type": "application/json",
+              "anthropic-ratelimit-unified-5h-utilization": "0.81",
+              "anthropic-ratelimit-unified-7d-utilization": "0.12",
+            },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const attempts: ProviderAttemptEvent[] = [];
+      const models = modelsWithStream(
+        scriptedStream([
+          settles("original answer"),
+          settlesHolding("recent answer", 200_000),
+          settles("finished"),
+        ]),
+        [{ id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" }],
+      );
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models,
+        usageLimits: { holder, fetch: unusedFetch },
+        observability: {
+          record: (event) => {
+            if (event.kind === "provider-attempt") attempts.push(event);
+          },
+        },
+      });
+      const handle = await runtime.startSession({
+        ...attachment.spec,
+        model: { providerId: PROVIDER_ID, modelId: "claude-opus-4-6", reasoningLevel: "off" },
+      });
+      await handle.submitUserMessage("original request");
+      await handle.submitUserMessage(PASTED);
+      await handle.submitUserMessage("continue");
+      await handle.close();
+
+      expect(holder.get(PROVIDER_ID)?.windows.map((window) => window.usedPercent)).toEqual([
+        81, 12,
+      ]);
+      // One envelope per native HTTP call, beside the streamed ones. No token
+      // counts: compaction spend is its own `usage.recorded` fact, and
+      // repeating it here would double it wherever both are read.
+      const native = attempts.filter((event) => event.chunkCount === undefined);
+      expect(native).toHaveLength(2);
+      expect(native.every((event) => event.stopReason === "stop")).toBe(true);
+      expect(native.every((event) => event.modelId === "claude-opus-4-6")).toBe(true);
+      expect(native.every((event) => event.inputTokens === undefined)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("classifies a refused native compaction without keeping the provider's prose", async () => {
+    const attachment = fixture();
+    const fetch = vi.fn(async () => new Response("slow down", { status: 429 }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const attempts: ProviderAttemptEvent[] = [];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            settles("original answer"),
+            settlesHolding("recent answer", 200_000),
+            settles("summarized locally"),
+            settles("finished"),
+          ]),
+          [{ id: "claude-opus-4-6", baseUrl: "https://api.anthropic.com" }],
+        ),
+        observability: {
+          record: (event) => {
+            if (event.kind === "provider-attempt") attempts.push(event);
+          },
+        },
+      });
+      const handle = await runtime.startSession({
+        ...attachment.spec,
+        model: { providerId: PROVIDER_ID, modelId: "claude-opus-4-6", reasoningLevel: "off" },
+      });
+      await handle.submitUserMessage("original request");
+      await handle.submitUserMessage(PASTED);
+      await handle.submitUserMessage("continue");
+      await handle.close();
+      const refused = attempts.filter((event) => event.stopReason === "error");
+      expect(refused).toHaveLength(1);
+      expect(refused[0]?.providerErrorClass).toBe("rate-limit");
+      expect(JSON.stringify(refused[0])).not.toContain("slow down");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("builds its own holder when the host opts in without one, and carries the read onto the row", async () => {

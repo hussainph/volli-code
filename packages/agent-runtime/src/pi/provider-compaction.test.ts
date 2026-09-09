@@ -1,19 +1,17 @@
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { COMPACTION_SUMMARY_PREFIX } from "@earendil-works/pi-agent-core";
 import {
   ANTHROPIC_COMPACT_MIN_TRIGGER_TOKENS,
   compactProviderNative,
-  isProviderCompactionDetails,
   nativeCompactionSupport,
   projectAnthropicCompaction,
   projectOpenAICompaction,
   providerCompactionFromDetails,
+  readProviderCompaction,
   toAnthropicMessages,
   type ProviderCompactionState,
 } from "./provider-compaction";
-
-const COMPACTION_SUMMARY_PREFIX =
-  "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 
 const OPENAI_MODEL: Model<Api> = {
   id: "gpt-5.3-codex",
@@ -152,7 +150,25 @@ describe("compactProviderNative — OpenAI", () => {
     const outcome = await compactProviderNative({
       model: OPENAI_MODEL,
       models: modelsReturningAuth({ apiKey: "sk-test" }),
-      messages: [user("hello"), assistant("hi")],
+      messages: [
+        user("hello"),
+        {
+          ...assistant("hi"),
+          content: [
+            { type: "text" as const, text: "hi" },
+            { type: "toolCall" as const, id: "call_1", name: "ls", arguments: { path: "." } },
+          ],
+          stopReason: "toolUse" as const,
+        },
+        {
+          role: "toolResult" as const,
+          toolCallId: "call_1",
+          toolName: "ls",
+          content: [{ type: "text" as const, text: "a.txt" }],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
       enabled: true,
       fetch: fetch as unknown as typeof fetch,
     });
@@ -163,7 +179,23 @@ describe("compactProviderNative — OpenAI", () => {
     const request = JSON.parse(init.body as string);
     expect(request.model).toBe(OPENAI_MODEL.id);
     expect(request.store).toBeUndefined();
-    expect(Array.isArray(request.input)).toBe(true);
+    // The conversation reaches the endpoint as a Responses-API window, not as
+    // an array of something. Every turn is present, on the right role, and the
+    // tool round is intact — a shape assertion that only says "an array" would
+    // pass on an empty one.
+    const input = request.input as Record<string, unknown>[];
+    expect(input.filter((item) => item["role"] === "user")).toHaveLength(1);
+    expect(input.filter((item) => item["role"] === "assistant")).toHaveLength(1);
+    expect(input.some((item) => item["type"] === "function_call" && item["name"] === "ls")).toBe(
+      true,
+    );
+    expect(
+      input.some(
+        (item) => item["type"] === "function_call_output" && JSON.stringify(item).includes("a.txt"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(input)).toContain("hello");
+    expect(JSON.stringify(input)).toContain("hi");
     // The canonical window is stored verbatim — byte-identical JSON, never
     // re-encoded through a local type.
     expect(JSON.stringify(outcome.state.items)).toBe(JSON.stringify(canonicalWindow));
@@ -420,37 +452,40 @@ describe("compactProviderNative — Anthropic", () => {
   });
 
   it("projects tool use and results to the wire", () => {
-    const wire = toAnthropicMessages([
-      user("run it"),
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "using the tool" },
-          { type: "toolCall", id: "call_1", name: "ls", arguments: { path: "." } },
-        ],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: ANTHROPIC_MODEL.id,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    const wire = toAnthropicMessages(
+      [
+        user("run it"),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "using the tool" },
+            { type: "toolCall", id: "call_1", name: "ls", arguments: { path: "." } },
+          ],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: ANTHROPIC_MODEL.id,
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 3,
         },
-        stopReason: "toolUse",
-        timestamp: 3,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "ls",
-        content: [{ type: "text", text: "a.txt" }],
-        isError: false,
-        timestamp: 4,
-      },
-    ]);
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "ls",
+          content: [{ type: "text", text: "a.txt" }],
+          isError: false,
+          timestamp: 4,
+        },
+      ],
+      ANTHROPIC_MODEL,
+    );
     expect(typeof wire).not.toBe("string");
     if (typeof wire === "string") return;
     expect(wire).toEqual([
@@ -465,12 +500,7 @@ describe("compactProviderNative — Anthropic", () => {
       {
         role: "user",
         content: [
-          {
-            type: "tool_result",
-            tool_use_id: "call_1",
-            is_error: false,
-            content: [{ type: "text", text: "a.txt" }],
-          },
+          { type: "tool_result", tool_use_id: "call_1", is_error: false, content: "a.txt" },
         ],
       },
     ]);
@@ -574,10 +604,10 @@ describe("details round trip", () => {
     };
     const details = { providerCompaction: JSON.parse(JSON.stringify(state)) };
     expect(providerCompactionFromDetails(details)).toEqual(state);
-    expect(isProviderCompactionDetails(details)).toBe(true);
-    expect(isProviderCompactionDetails({ other: true })).toBe(false);
-    expect(isProviderCompactionDetails(undefined)).toBe(false);
+    expect(readProviderCompaction(details)).toEqual({ kind: "state", state });
+    expect(readProviderCompaction({ other: true }).kind).toBe("absent");
+    expect(readProviderCompaction(undefined).kind).toBe("absent");
     // A Pi-written details object (arbitrary JSON) never reads as native.
-    expect(isProviderCompactionDetails({ pi: "whatever Pi wrote" })).toBe(false);
+    expect(readProviderCompaction({ pi: "whatever Pi wrote" }).kind).toBe("absent");
   });
 });

@@ -87,9 +87,11 @@ import {
 import { projectedContextTokens } from "./token-counting";
 import {
   ANTHROPIC_COMPACT_BETA,
+  nativeCompactionAvailable,
   providerCompactionFromDetails,
   projectOpenAICompaction,
   projectAnthropicCompaction,
+  type NativeRequestObservation,
 } from "./provider-compaction";
 import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
@@ -102,9 +104,11 @@ import type { RefreshableCatalogs } from "./model-catalog";
 import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
+  providerErrorClassForStatus,
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { headerUsageUpdate } from "./usage-limits/passive";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
@@ -548,11 +552,69 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  * refused on its first turn, every time; or, for the withheld reply, strip
  * everything again on every attach and throw away reasoning that was validly
  * bound to the stripped replay.
+ *
+ * The second kind is `native-checkpoint-discarded`: a provider-native
+ * compaction checkpoint that could not be read, recorded with the sanitized
+ * reason it could not. It is a diagnostic rather than a replay instruction —
+ * the replay already rebuilt itself from the original history the checkpoint
+ * replaced — and it is durable so that a support read can see a Session whose
+ * context grew back, instead of a Session that silently did (VC-331).
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
 
+/**
+ * The room a request leaves for the reply it is about to ask for.
+ *
+ * Not the compaction reserve and not a second spelling of it: this one is
+ * subtracted from a single request's own output ceiling, where the reserve is
+ * the threshold a Session compacts at. They are separated because they answer
+ * to different pressures — the ceiling wants to be tight, the threshold wants
+ * to be early — and one number serving both was how a 1M-window Session ended
+ * up compacting 16,384 tokens from the end of its window.
+ */
+const OUTPUT_CEILING_HEADROOM_TOKENS = 4_096;
+
+/**
+ * The smallest output ceiling this runtime will impose on itself. Below it the
+ * estimate stops being a safety margin and starts being the failure — see
+ * `outputCeiling`.
+ */
+const MIN_OUTPUT_CEILING_TOKENS = 4_096;
+
+/**
+ * How much of a model's window a Session keeps free of conversation.
+ *
+ * Volli configures no per-model reserve — those were retired with the policy
+ * that carried them (VC-155) and nothing here brings them back: there is no
+ * setting, no ladder of numbers, and no question a person is asked. What this
+ * does is stop treating the executor's ONE fixed number as if it described
+ * every window. Pi defaults its reserve to 16,384 tokens, which is a sensible
+ * allowance on a 200k model and a rounding error on a 1M one: a Session that
+ * waits until 983,616 tokens are spent has left itself less than one dense
+ * tool result of room, and a single unmeasured round can carry it past the
+ * window before the next check. So the threshold is the LARGER of the
+ * executor's own reserve and a share of the window — the executor's number
+ * where the executor's number is the bigger claim, and a proportional one
+ * where it is not.
+ *
+ * Deliberately not applied to Pi's summary generation, which keeps the smaller
+ * reserve: that number bounds how long a summary may be, and a 1M-window model
+ * has no reason to write an 80,000-token one.
+ */
+const THRESHOLD_HEADROOM_SHARE = 0.1;
+
+function thresholdHeadroom(reserveTokens: number, contextWindow: number): number {
+  return Math.max(reserveTokens, Math.ceil(contextWindow * THRESHOLD_HEADROOM_SHARE));
+}
+
 interface ReasoningElisionMarker {
   kind: "reasoning-dropped";
+}
+
+interface DiscardedCheckpointMarker {
+  kind: "native-checkpoint-discarded";
+  /** Sanitized; the same diagnostic discipline as `RuntimeFailure`. */
+  reason: string;
 }
 
 function isReasoningElisionMarker(entry: Entry): boolean {
@@ -561,6 +623,15 @@ function isReasoningElisionMarker(entry: Entry): boolean {
     entry.customType === VOLLI_CONTEXT_MARKER &&
     isRecord(entry.data) &&
     entry.data["kind"] === "reasoning-dropped"
+  );
+}
+
+function isDiscardedCheckpointMarker(entry: Entry): boolean {
+  return (
+    entry.type === "custom" &&
+    entry.customType === VOLLI_CONTEXT_MARKER &&
+    isRecord(entry.data) &&
+    entry.data["kind"] === "native-checkpoint-discarded"
   );
 }
 
@@ -1337,10 +1408,19 @@ async function attachSession(
      * restart, with nothing anywhere saying so. {@link contextMessages} is Pi's
      * own elision rule and is the only way messages are derived here.
      */
-    const recoveredPath = compactionPathForModel(
+    //
+    // The route, not the catalog, decides whether a durable native checkpoint
+    // may be replayed: a Session whose credential is now an OAuth subscription
+    // or points at another endpoint would otherwise send opaque state to a
+    // backend that never minted it. Resolved once here and again on model
+    // selection, which is when a Session's route is re-decided anyway.
+    const nativeRoute = await nativeCompactionAvailable(model, models, spec.signal);
+    const replayable = compactionPathForModel(
       conversationPath(withDroppedReasoning(recoveredEntries), conversationReader),
       model,
+      nativeRoute,
     );
+    const recoveredPath = replayable.path;
     const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
     let nativeCompactionState =
       recoveredCompaction?.type === "compaction"
@@ -1446,6 +1526,22 @@ async function attachSession(
       });
       activeAttentionReasons.add("partial-turn");
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
+    }
+    // An unreadable checkpoint is a recovered Session, not an unattachable one:
+    // the history it replaced is still on disk and is what {@link contextMessages}
+    // just rebuilt from. Recorded once so a Session that quietly grew its
+    // context back is legible afterwards, and not again on the next attach.
+    if (replayable.discarded.length > 0 && !recoveredEntries.some(isDiscardedCheckpointMarker)) {
+      for (const reason of new Set(replayable.discarded)) {
+        await mainBranch.appendCustomEntry(
+          VOLLI_CONTEXT_MARKER,
+          {
+            kind: "native-checkpoint-discarded",
+            reason: sanitizeDiagnostic(reason),
+          } satisfies DiscardedCheckpointMarker,
+          piContext(),
+        );
+      }
     }
     // No preflight before the tools are built. There is no boundary left to
     // prove: an attachment that hands Pi its own environment cannot fail for
@@ -1691,28 +1787,44 @@ async function attachSession(
       };
     };
 
-    const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+    /**
+     * The output ceiling this request may honestly ask for.
+     *
+     * Pi's simple adapter clamps `max_tokens` against the context using its own
+     * chars/4 estimate, which understates dense code and JSON badly enough that
+     * a request can reserve more output than the window has left. A model-aware
+     * ceiling replaces it; the adapter is free to clamp further.
+     *
+     * **It is floored, and the floor is the point.** The occupancy half of this
+     * subtraction is an ESTIMATE, and a deliberately conservative one — an
+     * opaque provider checkpoint has no local token count at all. An estimate
+     * that reads high must not be able to hand the model a one-token answer:
+     * that turns "we may be near the window" into a Session that produces
+     * nothing, silently, with no error to recover from. Below the floor this
+     * stops shrinking and lets the provider be the one to say no — which is a
+     * refusal overflow recovery already knows how to answer.
+     */
+    const outputCeiling = (
+      requestModel: Parameters<StreamFn>[0],
+      context: Parameters<StreamFn>[1],
+    ): number | undefined => {
       const window = contextWindowOf(requestModel);
-      // Pi's simple adapter still clamps output with chars/4. Supply a tighter
-      // model-aware ceiling so a dense unmeasured prompt cannot reserve more
-      // output than actually fits (the final adapter may clamp further).
-      const maxTokens =
-        window === undefined
-          ? undefined
-          : Math.max(
-              1,
-              Math.min(
-                requestModel.maxTokens,
-                window -
-                  projectedContextTokens(
-                    context.messages,
-                    requestModel,
-                    context.systemPrompt,
-                    context.tools,
-                  ) -
-                  4096,
-              ),
-            );
+      if (window === undefined) return undefined;
+      const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
+      const occupied = projectedContextTokens(
+        context.messages,
+        requestModel,
+        context.systemPrompt,
+        context.tools,
+      );
+      return Math.max(
+        floor,
+        Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
+      );
+    };
+
+    const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      const maxTokens = outputCeiling(requestModel, context);
       return models.streamSimple(requestModel, context, {
         ...options,
         ...(maxTokens === undefined ? {} : { maxTokens }),
@@ -1897,7 +2009,11 @@ async function attachSession(
      * rather than beside it — the global switch IS `enabled`, which
      * `shouldCompact` reads — not a second condition wrapped around Pi's rule.
      * The reserve is always the executor's own default: per-model reserve
-     * budgets were retired with the policy that carried them (VC-155).
+     * budgets were retired with the policy that carried them (VC-155). What
+     * the THRESHOLD uses is that default widened by {@link thresholdHeadroom}
+     * on a large window — derived, never configured. These settings are also
+     * what Pi's summary generation is run under, and it keeps the unwidened
+     * number: the reserve bounds how long a summary may be.
      *
      * **What switching automatic compaction off does to the overflow path:
      * nothing.** `enabled` is read by `shouldCompact` and by nothing else in
@@ -1969,6 +2085,49 @@ async function attachSession(
      * the next turn may well be refused for context length, and a refusal with
      * no record of the summary that was tried first reads as arbitrary.
      */
+    /**
+     * What a native compaction's own HTTP calls contribute to instrumentation.
+     *
+     * Native compaction is the one model call this runtime makes that does not
+     * go through `streamSimple`, and a request that skips that seam skips both
+     * things the seam does: the passive Usage Window read off the response's
+     * rate-limit headers, and the attempt envelope every other provider request
+     * emits. Neither absence is visible — a Usage Window would simply read stale
+     * after a compaction, and the spend would appear in the ledger with no
+     * request behind it — which is exactly why they are worth closing.
+     *
+     * The header mapping is the same product-owned function `instrumentStreamFn`
+     * uses, not a second copy of it. Token counts are deliberately NOT here:
+     * compaction spend is recorded as its own `usage.recorded` fact against the
+     * compaction entry, and repeating it on the envelope would double it in any
+     * surface that reads both.
+     */
+    const observeNativeRequest = (observation: NativeRequestObservation): void => {
+      const requestModel = agent.state.model;
+      try {
+        const update = headerUsageUpdate(requestModel.provider, observation.headers, host.now());
+        if (update !== null) host.usageLimits?.holder.apply(requestModel.provider, update);
+      } catch {
+        // A lost capture, never a lost compaction.
+      }
+      try {
+        host.observability.record({
+          kind: "provider-attempt",
+          providerId: requestModel.provider,
+          modelId: requestModel.id,
+          api: requestModel.api,
+          stopReason: observation.status < 400 ? "stop" : "error",
+          ...(observation.status < 400
+            ? {}
+            : { providerErrorClass: providerErrorClassForStatus(observation.status) }),
+          durationMs: observation.durationMs,
+          runId,
+        });
+      } catch {
+        // A sink that throws costs the measurement, never the compaction.
+      }
+    };
+
     const compactContext = async (input: {
       reason: CompactionReason;
       path: readonly Entry[];
@@ -1995,6 +2154,7 @@ async function attachSession(
           settings: compactionSettings(),
           systemPrompt: agent.state.systemPrompt,
           tools: agent.state.tools,
+          onNativeRequest: observeNativeRequest,
           // The resources this Session had activated ride INSIDE the durable
           // entry, ahead of the kept turns, rather than being inserted into
           // the live array once the entry is written. What the model is sent
@@ -2101,11 +2261,9 @@ async function attachSession(
       try {
         const settings = compactionSettings();
         if (!settings.enabled) return false;
-        // Headroom grows with the context window. Keep this separate from
-        // Pi's summary-output reserve: a 1M model need not write an 80k summary.
         const thresholdSettings = {
           ...settings,
-          reserveTokens: Math.max(settings.reserveTokens, Math.ceil(contextWindow * 0.1)),
+          reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
         const occupied = projectedContextTokens(
           [...agent.state.messages, ...additional],
@@ -2559,8 +2717,16 @@ async function attachSession(
           };
         // Opaque state is model-bound. Reconstruct from durable original history
         // on a model switch rather than pretending its placeholder is a summary.
+        // The new pair's own resolved route decides: the same catalog model
+        // reached through OAuth or an endpoint override cannot replay a
+        // checkpoint the metered public API minted (VC-331).
+        const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
         await rewritingTheContext(async () => {
-          const path = compactionPathForModel(await conversationBranch(), selected);
+          const { path } = compactionPathForModel(
+            await conversationBranch(),
+            selected,
+            selectedRoute,
+          );
           const latest = path.findLast((entry) => entry.type === "compaction");
           nativeCompactionState =
             latest?.type === "compaction"

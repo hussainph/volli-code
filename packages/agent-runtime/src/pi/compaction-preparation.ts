@@ -5,7 +5,6 @@
  * by context reconstruction, so it spends no keep-recent budget here either.
  */
 import {
-  findCutPoint,
   getOrThrow,
   prepareCompaction,
   type Entry,
@@ -14,18 +13,6 @@ import {
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { withoutReasoning } from "./reasoning";
 import { estimateMessageTokens } from "./token-counting";
-
-export function findModelCutPoint(
-  entries: readonly Entry[],
-  start: number,
-  end: number,
-  keepRecentTokens: number,
-  model: Model<Api>,
-): ReturnType<typeof findCutPoint> {
-  return findCutPoint([...entries], start, end, keepRecentTokens, (message) =>
-    estimateMessageTokens(withoutReasoning(message), model),
-  );
-}
 
 export function prepareModelCompaction(
   path: readonly Entry[],
