@@ -43,6 +43,9 @@ class FakeAlert implements NativeAlert {
   onClose(listener: () => void): void {
     this.listeners.set("close", listener);
   }
+  onShow(listener: () => void): void {
+    this.listeners.set("show", listener);
+  }
   onFailed(listener: (message: string) => void): void {
     this.failure = listener;
   }
@@ -52,7 +55,7 @@ class FakeAlert implements NativeAlert {
   close(): void {
     this.closed += 1;
   }
-  fire(event: "click" | "close"): void {
+  fire(event: "click" | "close" | "show"): void {
     this.listeners.get(event)?.();
   }
   fail(message: string): void {
@@ -70,6 +73,7 @@ function harness(
   const alerts: FakeAlert[] = [];
   const activated: (NotificationTarget | null)[] = [];
   const failures: { producer: string; message: string }[] = [];
+  const shown: string[] = [];
   const errors: unknown[] = [];
   const dispatcher = createNotificationDispatcher({
     preferences: () => options.preferences ?? DEFAULT_NOTIFICATION_PREFERENCES,
@@ -82,9 +86,10 @@ function harness(
     },
     activate: (target) => activated.push(target),
     onDeliveryFailure: (failure) => failures.push(failure),
+    onDeliveryShown: ({ producer }) => shown.push(producer),
     onError: (error) => errors.push(error),
   });
-  return { dispatcher, alerts, activated, failures, errors };
+  return { dispatcher, alerts, activated, failures, shown, errors };
 }
 
 describe("createNotificationDispatcher", () => {
@@ -281,6 +286,21 @@ describe("createNotificationDispatcher", () => {
     expect(dispatcher.retained()).toBe(0);
   });
 
+  it("reports a delivery the OS took, and keeps holding it for the click", () => {
+    // `show` is not `close`: the alert is still on screen, and its click still
+    // needs a listener to reach.
+    const { dispatcher, alerts, shown } = harness();
+    dispatcher.deliver({
+      producer: "run-attention",
+      title: "…",
+      body: "…",
+      target: SESSION_TARGET,
+    });
+    alerts[0]!.fire("show");
+    expect(shown).toEqual(["run-attention"]);
+    expect(dispatcher.retained()).toBe(1);
+  });
+
   it("never lets a broken alert fail the work that raised it", () => {
     const errors: unknown[] = [];
     const dispatcher = createNotificationDispatcher({
@@ -292,6 +312,7 @@ describe("createNotificationDispatcher", () => {
       },
       activate: () => {},
       onDeliveryFailure: () => {},
+      onDeliveryShown: () => {},
       onError: (error) => errors.push(error),
     });
     expect(
@@ -316,6 +337,7 @@ describe("createNotificationDispatcher", () => {
         throw new Error("window gone");
       },
       onDeliveryFailure: () => {},
+      onDeliveryShown: () => {},
       onError: (error) => errors.push(error),
     });
     dispatcher.deliver({ producer: "agent-notify", title: "…", body: "…", target: null });
@@ -337,6 +359,7 @@ describe("createNotificationDispatcher", () => {
         onClick: () => {},
         onClose: () => {},
         onFailed: () => {},
+        onShow: () => {},
         show: () => {
           throw new Error("notification centre refused");
         },
@@ -344,6 +367,7 @@ describe("createNotificationDispatcher", () => {
       }),
       activate: () => {},
       onDeliveryFailure: () => {},
+      onDeliveryShown: () => {},
       onError: (error) => errors.push(error),
     });
     expect(
@@ -394,6 +418,7 @@ describe("createNotificationDispatcher", () => {
       },
       activate: () => {},
       onDeliveryFailure: () => {},
+      onDeliveryShown: () => {},
     });
     dispatcher.deliver({ producer: "agent-notify", title: "…", body: "…", target: null });
     expect(warn).toHaveBeenCalled();

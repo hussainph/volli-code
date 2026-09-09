@@ -23,7 +23,7 @@ import {
   type NotificationTarget,
 } from "@volli/shared";
 
-import type { VolliIpcEvent } from "../../ipc/contract";
+import type { NotificationSettingsView, VolliIpcEvent } from "../../ipc/contract";
 import { createActiveTargetRegistry } from "./active-targets";
 import { createNotificationActivation } from "./activation";
 import {
@@ -73,12 +73,13 @@ export interface NotificationRuntime {
   bindWindowOpener(open: () => void): void;
 }
 
-/** Wraps Electron's `Notification` in the four signals the dispatcher uses. */
+/** Wraps Electron's `Notification` in the five signals the dispatcher uses. */
 function nativeAlert(input: { title: string; body: string }): NativeAlert {
   const notification = new Notification({ title: input.title, body: input.body });
   return {
     onClick: (listener) => void notification.on("click", listener),
     onClose: (listener) => void notification.on("close", listener),
+    onShow: (listener) => void notification.on("show", listener),
     onFailed: (listener) =>
       void notification.on("failed", (_event, error: string) =>
         listener(error === "" ? "The system did not deliver the notification." : error),
@@ -86,6 +87,14 @@ function nativeAlert(input: { title: string; body: string }): NativeAlert {
     show: () => notification.show(),
     close: () => notification.close(),
   };
+}
+
+/** The Settings view, to every live window (see `broadcast.ts` for the shape). */
+function broadcastNotificationSettings(view: NotificationSettingsView): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isDestroyed()) continue;
+    window.webContents.send("volli:notification-settings" satisfies VolliIpcEvent, view);
+  }
 }
 
 /**
@@ -130,6 +139,9 @@ export function createNotificationRuntime(options: {
           db: options.db,
           supported: () => Notification.isSupported(),
           now: () => Date.now(),
+          // Every window, the whole view: a Settings page already open follows
+          // a failure that lands behind it, and two windows on the page agree.
+          onChange: broadcastNotificationSettings,
         });
   const registry = createActiveTargetRegistry({ windows: () => BrowserWindow.getAllWindows() });
   let openWindow: (() => void) | null = null;
@@ -162,6 +174,7 @@ export function createNotificationRuntime(options: {
       console.warn(`[volli] notification not delivered (${failure.producer}): ${failure.message}`);
       settings?.noteDeliveryFailure(failure);
     },
+    onDeliveryShown: () => settings?.noteDeliveryShown(),
   });
 
   const runtime: NotificationRuntime = {

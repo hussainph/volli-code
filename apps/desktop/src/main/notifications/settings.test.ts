@@ -13,17 +13,24 @@ import { DEFAULT_NOTIFICATION_PREFERENCES } from "@volli/shared";
 import { setAppState } from "../db/app-state-repo";
 import { openTestDb, type TestDb } from "../db/test-helpers";
 import { NOTIFICATION_PREFERENCES_KEY } from "../notification-preferences";
-import { createNotificationSettings, NotificationSettingsError } from "./settings";
+import {
+  createNotificationSettings,
+  NotificationSettingsError,
+  type NotificationSettingsView,
+} from "./settings";
 
 let ctx: TestDb;
 afterEach(() => ctx?.cleanup());
 
-function settings(options: { supported?: boolean } = {}) {
+function settings(
+  options: { supported?: boolean; onChange?: (view: NotificationSettingsView) => void } = {},
+) {
   ctx ??= openTestDb();
   return createNotificationSettings({
     db: ctx.db,
     supported: () => options.supported ?? true,
     now: () => 1000,
+    ...(options.onChange === undefined ? {} : { onChange: options.onChange }),
   });
 }
 
@@ -146,6 +153,61 @@ describe("a delivery Electron reported as failed", () => {
     ctx = openTestDb();
     settings().noteDeliveryFailure({ producer: "run-attention", message: "first" });
     expect(settings().view().deliveryFailure).toBeNull();
+  });
+
+  it("is retired by a later delivery the OS took (round 5)", () => {
+    // The fault it described is not the state of things any more; a page
+    // still showing it would ask the person to fix what already works.
+    ctx = openTestDb();
+    const service = settings();
+    service.noteDeliveryFailure({ producer: "run-attention", message: "first" });
+    service.noteDeliveryShown();
+    expect(service.view().deliveryFailure).toBeNull();
+  });
+});
+
+describe("the view moving while a page is open", () => {
+  /**
+   * A failure lands in the background; Settings may already be on screen. So
+   * every move of the view is pushed whole, and a page follows the pushes
+   * rather than polling for a fault.
+   */
+  it("pushes the whole view after a write", () => {
+    ctx = openTestDb();
+    const pushed: NotificationSettingsView[] = [];
+    const service = settings({ onChange: (view) => pushed.push(view) });
+    service.set({ event: "swept", enabled: false });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]?.preferences.events.swept).toBe(false);
+    expect(pushed[0]?.supported).toBe(true);
+  });
+
+  it("pushes a failure as it lands, and again when it is retired", () => {
+    ctx = openTestDb();
+    const pushed: NotificationSettingsView[] = [];
+    const service = settings({ onChange: (view) => pushed.push(view) });
+    service.noteDeliveryFailure({ producer: "update-ready", message: "refused" });
+    service.noteDeliveryShown();
+    expect(pushed.map((view) => view.deliveryFailure?.message ?? null)).toEqual(["refused", null]);
+  });
+
+  it("pushes nothing for a show with no failure to retire", () => {
+    // Every alert the OS takes reports `show`; a push per alert would be a
+    // re-render of Settings for nothing that changed.
+    ctx = openTestDb();
+    const pushed: NotificationSettingsView[] = [];
+    settings({ onChange: (view) => pushed.push(view) }).noteDeliveryShown();
+    expect(pushed).toEqual([]);
+  });
+
+  it("pushes nothing for a write that was refused", () => {
+    ctx = openTestDb();
+    const pushed: NotificationSettingsView[] = [];
+    const service = settings({ onChange: (view) => pushed.push(view) });
+    expect(() => service.set({ event: "nope" as never, enabled: true })).toThrow(
+      NotificationSettingsError,
+    );
+    expect(pushed).toEqual([]);
   });
 });
 

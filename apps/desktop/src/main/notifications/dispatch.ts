@@ -104,13 +104,16 @@ export type NotificationRequest = {
  * The Electron `Notification` surface this module uses, and nothing more.
  *
  * A port rather than the class itself for two reasons: main's own tests must
- * never post an OS alert, and the four signals below are the whole of what
+ * never post an OS alert, and the five signals below are the whole of what
  * Electron reliably offers here (VC-295 rule 4 — there is no permission read
- * among them, which is why Settings does not claim one).
+ * among them, which is why Settings does not claim one; `show` says the OS
+ * took the alert, not that anyone was allowed to see it).
  */
 export interface NativeAlert {
   onClick(listener: () => void): void;
   onClose(listener: () => void): void;
+  /** The OS took it: Electron's `show` event, which fires after `show()` lands. */
+  onShow(listener: () => void): void;
   onFailed(listener: (message: string) => void): void;
   show(): void;
   close(): void;
@@ -132,6 +135,13 @@ export interface NotificationDispatchPorts {
   activate(target: NotificationTarget | null): void;
   /** Electron reported the OS did not deliver it — Settings shows the latest. */
   onDeliveryFailure(input: { producer: NotificationProducer; message: string }): void;
+  /**
+   * Electron reported the OS took it. Not a claim that anybody SAW it — a
+   * notification the OS has muted still reports `show` — only that delivery
+   * got past the point an earlier one failed at, which is what lets Settings
+   * retire a failure that is no longer current (round 5).
+   */
+  onDeliveryShown(input: { producer: NotificationProducer }): void;
   /** Diagnostics seam. Defaults to `console.warn`. */
   onError?: (error: unknown) => void;
 }
@@ -185,6 +195,7 @@ export function createNotificationDispatcher(
           release();
           ports.onDeliveryFailure({ producer: request.producer, message });
         });
+        alert.onShow(() => ports.onDeliveryShown({ producer: request.producer }));
         alert.show();
         return { delivered: true };
       } catch (error) {

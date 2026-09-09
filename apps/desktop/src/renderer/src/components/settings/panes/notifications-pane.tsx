@@ -28,9 +28,13 @@
  * hint says the system owns the rest, and a reported failure is shown as the
  * fault it is with the one route that fixes it.
  *
- * The view is only ever set from what the WRITE returned (main reads the row
- * back), so a switch on this page cannot show a value the database did not
- * accept.
+ * The view is only ever set from what main READ BACK — the answer to a write,
+ * or a push after the view moved — so a switch on this page cannot show a
+ * value the database did not accept. The push matters for the fault half: a
+ * delivery failure lands in the background at whatever moment the OS refuses
+ * an alert, and this page may already be open when it does (round 5). It
+ * subscribes first and reads second, like every other primed surface, so a
+ * push that lands between the two is not lost.
  */
 import * as React from "react";
 import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
@@ -91,6 +95,9 @@ export function NotificationsPane() {
 
   React.useEffect(() => {
     let cancelled = false;
+    const unsubscribe = window.api.notifications.onSettingsChanged((next) => {
+      if (!cancelled) setView(next);
+    });
     void window.api.notifications
       .settings()
       .then((result) => {
@@ -105,6 +112,7 @@ export function NotificationsPane() {
       });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
@@ -157,9 +165,10 @@ export function NotificationsPane() {
           hint={
             <>
               Volli asks the system to show these; the system decides whether they appear, and{" "}
-              {SYSTEM_SETTINGS_ROUTE} is where that is allowed or refused. An alert for a session or
-              ticket you already have open and focused isn&rsquo;t sent — that window is already
-              showing it.
+              {SYSTEM_SETTINGS_ROUTE} is where that is allowed or refused. One isn&rsquo;t sent when
+              the exact question, failure, or ticket it is about is already in front of you in the
+              focused Volli window — a window behind another app, or one showing something else,
+              still gets it.
             </>
           }
         >

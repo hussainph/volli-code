@@ -2406,6 +2406,13 @@ export type VolliIpcEvent =
   // this is a navigation, and two windows obeying it would be two places the
   // person did not ask to go.
   | "volli:notification-activated"
+  // Settings → Notifications moved (VC-295): a switch was written, or a delivery
+  // Electron reported as failed landed or was retired by a later one that
+  // showed. The payload is the WHOLE `NotificationSettingsView`, never a delta,
+  // so a page that missed an earlier push is whole again on the next one. Every
+  // window, because a failure is a machine fact and a page open in two windows
+  // must not disagree about it.
+  | "volli:notification-settings"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.

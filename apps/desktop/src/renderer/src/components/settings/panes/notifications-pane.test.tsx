@@ -49,6 +49,8 @@ let root: Root;
 let settings: () => Promise<NotificationSettingsResult>;
 let set: (event: string | null, enabled: boolean) => Promise<NotificationSettingsResult>;
 let writes: { event: string | null; enabled: boolean }[];
+/** Main's push of a moved view, as the pane subscribed to it. */
+let pushes: Set<(view: NotificationSettingsView) => void>;
 
 /** Installs the one bridge namespace this pane touches. */
 function stubApi(): void {
@@ -60,8 +62,18 @@ function stubApi(): void {
         writes.push({ event, enabled });
         return set(event, enabled);
       },
+      onSettingsChanged: (callback: (view: NotificationSettingsView) => void) => {
+        pushes.add(callback);
+        return () => pushes.delete(callback);
+      },
     },
   };
+}
+
+async function push(view: NotificationSettingsView): Promise<void> {
+  await act(async () => {
+    for (const listener of pushes) listener(view);
+  });
 }
 
 async function render(): Promise<void> {
@@ -79,6 +91,7 @@ function switchFor(id: string): HTMLButtonElement {
 
 beforeEach(() => {
   writes = [];
+  pushes = new Set();
   settings = () => Promise.resolve({ ok: true, settings: ALL_ON });
   set = () => Promise.resolve({ ok: true, settings: ALL_ON });
   stubApi();
@@ -219,5 +232,68 @@ describe("NotificationsPane", () => {
     await render();
 
     expect(container.textContent ?? "").toContain("can't show notifications");
+  });
+
+  it("explains the OS's part and the exact-item rule without claiming a permission", async () => {
+    await render();
+
+    // The prose lives behind the master row's summoned `(i)`, so the page
+    // itself lectures nobody; focusing the trigger opens it into the body.
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="About Notify me"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => {
+      trigger!.focus();
+      // React hears focus as `focusin`; jsdom's `focus()` does not always raise it.
+      trigger!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("the system decides whether they appear");
+    expect(text).toContain("System Settings → Notifications → Volli Code");
+    expect(text).toContain("exact question, failure, or ticket");
+    expect(text).toContain("focused Volli window");
+    // Never a permission state: Electron gives the app none to report.
+    expect(text).not.toMatch(/\b(Allowed|Denied)\b/);
+  });
+
+  it("follows a delivery failure that lands while the page is open, and its retirement", async () => {
+    await render();
+    expect(container.textContent ?? "").not.toContain("didn't deliver");
+
+    await push({
+      ...ALL_ON,
+      deliveryFailure: { producer: "update-ready", message: "Refused.", at: 2000 },
+    });
+    expect(container.textContent ?? "").toContain("didn't deliver");
+    expect(container.textContent ?? "").toContain("Refused.");
+
+    await push(ALL_ON);
+    expect(container.textContent ?? "").not.toContain("didn't deliver");
+  });
+
+  it("follows a switch written from another window", async () => {
+    await render();
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("true");
+
+    await push({
+      ...ALL_ON,
+      preferences: {
+        ...ALL_ON.preferences,
+        events: { ...ALL_ON.preferences.events, swept: false },
+      },
+    });
+
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("false");
+    expect(writes).toEqual([]);
+  });
+
+  it("stops listening when it unmounts", async () => {
+    await render();
+    expect(pushes.size).toBe(1);
+    await act(async () => {
+      root.unmount();
+    });
+    expect(pushes.size).toBe(0);
+    // `afterEach` unmounts again; a second unmount of an unmounted root is a no-op.
   });
 });

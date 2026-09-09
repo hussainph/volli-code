@@ -205,6 +205,7 @@ import type {
   TicketsResult,
   NotificationPendingActivationResult,
   NotificationSettingsResult,
+  NotificationSettingsView,
   UiZoomCommand,
   UnsavedDocumentsReport,
   UpdateChannel,
@@ -1238,6 +1239,18 @@ const api = {
     /** One switch move; `event: null` is the master switch. Answers with the stored view. */
     set: (event: NotificationEvent | null, enabled: boolean): Promise<NotificationSettingsResult> =>
       invoke("volli:notifications-set", { event, enabled }),
+    /**
+     * The view moved behind the page: a write in another window, or a delivery
+     * failure that landed (or was retired) while Settings was open. The whole
+     * view every time.
+     */
+    onSettingsChanged: (callback: (view: NotificationSettingsView) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, view: NotificationSettingsView) =>
+        callback(view);
+      ipcRenderer.on("volli:notification-settings" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:notification-settings" satisfies VolliIpcEvent, listener);
+    },
     /** What this window is showing, so main can suppress an alert for it. */
     setActiveTarget: (target: NotificationTarget | null): void => {
       ipcRenderer.send("volli:notification-active-target" satisfies VolliIpcChannel, target);

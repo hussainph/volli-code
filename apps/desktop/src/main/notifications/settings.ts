@@ -11,6 +11,16 @@
  * to pass through. A generic string→string write cannot refuse a category that
  * does not exist; this can, and does.
  *
+ * And a command over a ROW, not over the ledger. The boundary's command → event
+ * → projection shape is for domain history — Session and Ticket facts that a
+ * second host would have to sequence and every client would have to project.
+ * This record is neither: it is machine-local host configuration (the read
+ * beside it says so — "it names a host"), it does not travel with a Session or
+ * a Ticket, and no other client will ever need to replay how it got its value.
+ * `observability/settings.ts` (VC-119) is the same shape for the same reason,
+ * and this follows it rather than inventing a preference event stream with one
+ * reader.
+ *
  * ── THE VIEW IS READ BACK, NEVER ECHOED ───────────────────────────────────
  * {@link NotificationSettings.set} returns what the ROW says after the write,
  * not the request it was handed. That is what lets the pane show only accepted
@@ -31,7 +41,18 @@
  * The failure latch is PROCESS-LOCAL on purpose. It describes this launch's
  * delivery, not a preference, and a stored one would outlive the state that
  * caused it — a person who fixed their System Settings would be told forever
- * about a refusal from last week.
+ * about a refusal from last week. And it is CURRENT on purpose (round 5): a
+ * later alert the OS reports as shown retires it, because the fault it
+ * described is demonstrably not the state of things any more, and a Settings
+ * page still showing it would be asking the person to fix what already works.
+ *
+ * ── THE VIEW MOVES WHILE THE PAGE IS OPEN ─────────────────────────────────
+ * A failure lands in the background, at whatever moment the OS refuses an
+ * alert, and the page that explains it may already be on screen. So every
+ * change to the view — a write, a failure noted, a failure retired — is handed
+ * to {@link NotificationSettingsPorts.onChange} with the whole view, and the
+ * host fans it out to every window. A page reads once on mount and then
+ * follows the pushes; it never has to poll for a fault.
  */
 import type Database from "better-sqlite3";
 import {
@@ -84,6 +105,8 @@ export interface NotificationSettingsPorts {
   /** `Notification.isSupported()`, injected so tests never touch Electron. */
   supported(): boolean;
   now(): number;
+  /** The whole view, after anything in it moved. Optional: a test service may not care. */
+  onChange?: (view: NotificationSettingsView) => void;
 }
 
 export interface NotificationSettings {
@@ -94,6 +117,8 @@ export interface NotificationSettings {
   set(update: NotificationPreferenceUpdate): NotificationSettingsView;
   /** Records what Electron said about a delivery that did not land. */
   noteDeliveryFailure(input: { producer: NotificationProducer; message: string }): void;
+  /** A later delivery the OS took: the latched failure, if any, is no longer current. */
+  noteDeliveryShown(): void;
 }
 
 export function createNotificationSettings(ports: NotificationSettingsPorts): NotificationSettings {
@@ -104,6 +129,11 @@ export function createNotificationSettings(ports: NotificationSettingsPorts): No
     supported: ports.supported(),
     deliveryFailure,
   });
+  const changed = (): NotificationSettingsView => {
+    const next = view();
+    ports.onChange?.(next);
+    return next;
+  };
 
   return {
     view,
@@ -129,10 +159,16 @@ export function createNotificationSettings(ports: NotificationSettingsPorts): No
               events: { ...current.events, [update.event]: update.enabled },
             };
       writeNotificationPreferences(ports.db, next, ports.now());
-      return view();
+      return changed();
     },
     noteDeliveryFailure(input) {
       deliveryFailure = { producer: input.producer, message: input.message, at: ports.now() };
+      changed();
+    },
+    noteDeliveryShown() {
+      if (deliveryFailure === null) return;
+      deliveryFailure = null;
+      changed();
     },
   };
 }
