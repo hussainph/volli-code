@@ -80,6 +80,7 @@ import {
   type AutomationEditorDraft,
 } from "./editor-draft";
 import { TimeZonePicker } from "./time-zone-picker";
+import { AutomationAuthoringButton } from "./automation-authoring-button";
 
 const NO_MODELS: readonly ComposerModel[] = [];
 
@@ -665,7 +666,19 @@ export function AutomationEditorPanel({
               </div>
             ) : null}
             <section className="flex min-h-0 flex-col gap-2">
-              <SectionLabel>Instructions</SectionLabel>
+              <div className="flex items-center justify-between gap-2">
+                <SectionLabel>Instructions</SectionLabel>
+                <AutomationAuthoringButton
+                  projectId={projectId}
+                  context={{
+                    name,
+                    instructions,
+                    trigger,
+                    runtime,
+                    skillSlugs: skills.map((skill) => skill.name),
+                  }}
+                />
+              </div>
               <ComposerPickerStack
                 value={instructions}
                 onValueChange={setInstructions}

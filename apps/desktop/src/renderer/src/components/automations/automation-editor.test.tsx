@@ -11,6 +11,9 @@ import {
 } from "@volli/shared";
 
 import { AutomationEditorPanel } from "./automation-editor";
+import { startAutomationAuthoring } from "./automation-authoring";
+
+vi.mock("./automation-authoring", () => ({ startAutomationAuthoring: vi.fn(async () => null) }));
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { useAutomationsStore } from "@renderer/stores/automations";
@@ -334,6 +337,24 @@ function seededDraft(): Parameters<typeof saveEditorDraft>[1] {
 }
 
 describe("automation editor drafts (VC-329)", () => {
+  it("hands the current idea and skill catalogue to a drafting chat without saving a record", async () => {
+    await mountEditor();
+    expect(buttonContaining("Draft in chat").disabled).toBe(true);
+    await typeName("Review idea");
+    await typeInstructions("Use the user's review approach and report findings");
+    await act(async () => buttonContaining("Draft in chat").click());
+    expect(startAutomationAuthoring).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({
+        name: "Review idea",
+        instructions: "Use the user's review approach and report findings",
+        skillSlugs: [LONG_SKILL.name],
+      }),
+    );
+    expect(window.api.automations.create).not.toHaveBeenCalled();
+    expect(loadEditorDraft("p1")?.name).toBe("Review idea");
+  });
+
   it("writes every field change into the draft cache", async () => {
     await mountEditor();
     await typeName("Nightly sweep");
