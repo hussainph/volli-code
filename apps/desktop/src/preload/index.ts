@@ -1119,6 +1119,10 @@ const api = {
     /** Debounced recursive watch on the ticket worktree; pair with `unwatchChangeSet` on leave. */
     watchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-watch", { ticketId }),
+    pauseChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-pause", { ticketId }),
+    resumeChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-resume", { ticketId }),
     unwatchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-unwatch", { ticketId }),
     /** Subscribes to debounced worktree filesystem changes for Change Set refresh. */

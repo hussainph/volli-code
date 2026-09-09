@@ -100,6 +100,8 @@ vi.mock("./worktree", () => ({
   // a no-op stand-in keeps real `fs.watch` handles out of the suite.
   WorktreeChangeWatchManager: class {
     watch = vi.fn(() => ({ ok: true as const }));
+    pause = vi.fn(() => ({ ok: true as const }));
+    resume = vi.fn(() => ({ ok: true as const }));
     unwatch = vi.fn();
     unwatchTicket = vi.fn();
   },

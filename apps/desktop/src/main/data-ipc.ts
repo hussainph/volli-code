@@ -1398,6 +1398,12 @@ export function registerDataIpcHandlers(
       }
     },
 
+    "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
+      changeWatchManager.pause(sender, input.ticketId),
+
+    "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
+      changeWatchManager.resume(sender, input.ticketId),
+
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
       changeWatchManager.unwatch(sender, input.ticketId);
       return { ok: true };

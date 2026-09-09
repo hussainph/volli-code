@@ -210,7 +210,7 @@ describe("WorktreeChangeWatchManager", () => {
 
   it("refreshes ignored paths when .gitignore changes, then broadcasts that source change", async () => {
     vi.useFakeTimers();
-    let ignoredOutput = "target/\0";
+    let ignoredOutput = ".gitignore\0target/\0";
     const git = vi.fn(async () => ignoredOutput);
     manager = makeManager({ git, gitPathIsDirectory: () => false });
     const webContents = makeWebContents();
@@ -297,6 +297,41 @@ describe("WorktreeChangeWatchManager", () => {
 
     manager.unwatch(windowB as never, "t1");
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses background subscribers and re-arms once on foreground resume", async () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const foreground = makeWebContents(1);
+    const background = makeWebContents(2);
+
+    await manager.watch(foreground as never, "t1", "/wt/t1");
+    await manager.watch(background as never, "t1", "/wt/t1");
+    expect(manager.pause(background as never, "t1")).toEqual({ ok: true });
+    expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
+
+    watchCalls[0]!.cb("change", "src/foreground.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(foreground.send).toHaveBeenCalledTimes(1);
+    expect(background.send).not.toHaveBeenCalled();
+
+    expect(manager.pause(foreground as never, "t1")).toEqual({ ok: true });
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
+    watchCalls[0]!.cb("change", "src/background.ts");
+    vi.advanceTimersByTime(WATCH_MAX_WAIT_MS);
+    expect(foreground.send).toHaveBeenCalledTimes(1);
+    expect(background.send).not.toHaveBeenCalled();
+
+    expect(await manager.resume(background as never, "t1")).toEqual({ ok: true });
+    expect(watchCalls).toHaveLength(2);
+    expect(background.send).toHaveBeenCalledTimes(1);
+
+    foreground.send.mockClear();
+    background.send.mockClear();
+    watchCalls[1]!.cb("change", "src/resumed.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(foreground.send).not.toHaveBeenCalled();
+    expect(background.send).toHaveBeenCalledTimes(1);
   });
 
   it("unwatchTicket drops every window subscription on that ticket", async () => {

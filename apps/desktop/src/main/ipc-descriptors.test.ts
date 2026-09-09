@@ -1605,10 +1605,12 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:worktree-change-set / volli:worktree-change-watch / volli:worktree-change-unwatch", () => {
+  describe("ticket-id Change Set and watch channels", () => {
     const channels = [
       "volli:worktree-change-set",
       "volli:worktree-change-watch",
+      "volli:worktree-change-watch-pause",
+      "volli:worktree-change-watch-resume",
       "volli:worktree-change-unwatch",
     ] as const;
 
@@ -1848,8 +1850,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 60 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(60);
+    it("covers all 62 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(62);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
@@ -1869,6 +1871,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-set");
       expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-watch-pause");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-watch-resume");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");

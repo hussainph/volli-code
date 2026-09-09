@@ -17,12 +17,7 @@ import type {
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
 } from "../../ipc/contract";
-import {
-  GIT_COMMAND_TIMEOUT_MS,
-  GIT_MAX_BUFFER,
-  runGitCapturingAsync,
-  stderrOf,
-} from "./git";
+import { GIT_COMMAND_TIMEOUT_MS, GIT_MAX_BUFFER, runGitCapturingAsync, stderrOf } from "./git";
 import type { RunGitAsync } from "./types";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
@@ -54,6 +49,8 @@ interface WorktreeWatchSubscriber {
   webContents: WebContents;
   ticketId: string;
   root: SharedWorktreeWatch;
+  /** Only foreground subscribers receive change broadcasts. */
+  active: boolean;
   onDestroyed: () => void;
 }
 
@@ -67,6 +64,8 @@ interface SharedWorktreeWatch {
   maxWaitAt: number | null;
   /** Git-reported ignored files and directory prefixes, always slash-normalized. */
   ignoredPaths: Set<string>;
+  /** Monotonic token preventing an older async ignore read from replacing a newer one. */
+  ignoreLoadId: number;
   /** Directories already found not to be ignored, so they are checked only once. */
   checkedDirectories: Set<string>;
   /** Newly-created directories waiting for one batched `git check-ignore --stdin`. */
@@ -264,11 +263,7 @@ export class WorktreeChangeWatchManager {
    * that subscriber to the new root; the old recursive watcher survives only
    * when another subscriber still references it.
    */
-  async watch(
-    webContents: WebContents,
-    ticketId: string,
-    worktreePath: string,
-  ): Promise<Result> {
+  async watch(webContents: WebContents, ticketId: string, worktreePath: string): Promise<Result> {
     const key = this.keyFor(webContents, ticketId);
     const existing = this.subs.get(key);
     if (existing) {
@@ -289,6 +284,7 @@ export class WorktreeChangeWatchManager {
         debounceTimer: null,
         maxWaitAt: null,
         ignoredPaths: new Set(),
+        ignoreLoadId: 0,
         checkedDirectories: new Set(),
         pendingDirectoryEvents: new Set(),
         directoryCheckQueued: false,
@@ -297,51 +293,59 @@ export class WorktreeChangeWatchManager {
         skipGitEvents: this.gitPathIsDirectory(worktreePath),
       };
       this.roots.set(worktreePath, root);
-      root.armPromise = this.armRoot(root);
     }
 
     const sub: WorktreeWatchSubscriber = {
       webContents,
       ticketId,
       root,
+      active: true,
       onDestroyed: () => this.teardownSubscriber(key),
     };
     this.subs.set(key, sub);
     root.subscribers.set(key, sub);
     webContents.once("destroyed", sub.onDestroyed);
+    return this.ensureRootArmed(root);
+  }
 
-    const armPromise = root.armPromise;
-    if (armPromise === null) {
-      this.teardownSubscriber(key);
-      return { ok: false, error: "The worktree watch could not be started." };
-    }
+  private ensureRootArmed(root: SharedWorktreeWatch): Promise<Result> {
+    if (root.watcher !== null) return Promise.resolve({ ok: true });
+    if (root.armPromise !== null) return root.armPromise;
+    const armPromise = this.armRoot(root);
+    root.armPromise = armPromise;
+    void armPromise.then(() => {
+      if (root.armPromise === armPromise) root.armPromise = null;
+    });
     return armPromise;
   }
 
   private async armRoot(root: SharedWorktreeWatch): Promise<Result> {
+    const ignoreLoadId = ++root.ignoreLoadId;
     try {
       const ignoredOutput = await this.git(
         ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
         root.worktreePath,
       );
       if (!this.isRootLive(root)) return { ok: true };
-      root.ignoredPaths = ignoredPathSet(ignoredOutput);
+      if (root.ignoreLoadId === ignoreLoadId) {
+        root.ignoredPaths = ignoredPathSet(ignoredOutput);
+        root.checkedDirectories.clear();
+      }
+      if (!this.hasActiveSubscribers(root)) return { ok: true };
     } catch (error) {
       this.teardownRoot(root);
       return { ok: false, error: stderrOf(error) };
     }
 
     try {
-      const watcher = this.watchFn(
-        root.worktreePath,
-        { recursive: true },
-        (eventType, filename) => {
-          this.handleFsEvent(root, eventType, filename);
-        },
-      );
+      let watcher: WorktreeWatchHandle;
+      watcher = this.watchFn(root.worktreePath, { recursive: true }, (eventType, filename) => {
+        if (root.watcher !== watcher) return;
+        this.handleFsEvent(root, eventType, filename);
+      });
       root.watcher = watcher;
       watcher.on("error", (error: Error) => {
-        if (!this.isRootLive(root)) return;
+        if (!this.isRootLive(root) || root.watcher !== watcher) return;
         // Every subscriber is frozen by a shared-handle fault. Tell each
         // renderer first, then release the root and all of its references.
         this.emitWatchError(root, this.watchErrorMessage(root, error));
@@ -358,6 +362,30 @@ export class WorktreeChangeWatchManager {
   /** Releases one subscriber and closes its root only when the refcount hits zero. */
   unwatch(webContents: WebContents, ticketId: string): void {
     this.teardownSubscriber(this.keyFor(webContents, ticketId));
+  }
+
+  /** Pauses one background subscriber and the OS watcher if no foreground ref remains. */
+  pause(webContents: WebContents, ticketId: string): Result {
+    const sub = this.subs.get(this.keyFor(webContents, ticketId));
+    if (!sub) return { ok: false, error: "This worktree watch is not subscribed." };
+    sub.active = false;
+    if (!this.hasActiveSubscribers(sub.root)) this.disarmRoot(sub.root);
+    return { ok: true };
+  }
+
+  /** Re-arms a paused root and sends this subscriber one catch-up refresh. */
+  async resume(webContents: WebContents, ticketId: string): Promise<Result> {
+    const key = this.keyFor(webContents, ticketId);
+    const sub = this.subs.get(key);
+    if (!sub) return { ok: false, error: "This worktree watch is not subscribed." };
+    if (sub.active) return { ok: true };
+    sub.active = true;
+    const result = await this.ensureRootArmed(sub.root);
+    if (!result.ok) return result;
+    if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) return { ok: true };
+    const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
+    sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
+    return { ok: true };
   }
 
   /**
@@ -377,6 +405,13 @@ export class WorktreeChangeWatchManager {
     return this.roots.get(root.worktreePath) === root;
   }
 
+  private hasActiveSubscribers(root: SharedWorktreeWatch): boolean {
+    for (const sub of root.subscribers.values()) {
+      if (sub.active) return true;
+    }
+    return false;
+  }
+
   private handleFsEvent(
     root: SharedWorktreeWatch,
     eventType: string,
@@ -390,6 +425,13 @@ export class WorktreeChangeWatchManager {
     // bookkeeping write.
     if (root.skipGitEvents && isSelfFedGitEvent(filename)) {
       if (path === ".git/info/exclude") this.queueIgnoredPathRefresh(root, false);
+      return;
+    }
+    // The root rules file can itself be ignored; it still controls every other
+    // path and must always invalidate the cache. Nested rules under an ignored
+    // parent cannot affect traversal, so those are filtered normally first.
+    if (path === ".gitignore") {
+      this.queueIgnoredPathRefresh(root, true);
       return;
     }
     if (path !== null && isIgnoredPath(root.ignoredPaths, path)) return;
@@ -423,10 +465,7 @@ export class WorktreeChangeWatchManager {
     this.scheduleBroadcast(root);
   }
 
-  private queueIgnoredPathRefresh(
-    root: SharedWorktreeWatch,
-    broadcastAfterRefresh: boolean,
-  ): void {
+  private queueIgnoredPathRefresh(root: SharedWorktreeWatch, broadcastAfterRefresh: boolean): void {
     root.ignoreRefreshNeedsBroadcast ||= broadcastAfterRefresh;
     if (root.ignoreRefreshTimer !== null) clearTimeout(root.ignoreRefreshTimer);
     root.ignoreRefreshTimer = setTimeout(() => {
@@ -436,14 +475,17 @@ export class WorktreeChangeWatchManager {
   }
 
   private async refreshIgnoredPaths(root: SharedWorktreeWatch): Promise<void> {
+    const ignoreLoadId = ++root.ignoreLoadId;
     try {
       const output = await this.git(
         ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
         root.worktreePath,
       );
       if (!this.isRootLive(root)) return;
-      root.ignoredPaths = ignoredPathSet(output);
-      root.checkedDirectories.clear();
+      if (root.ignoreLoadId === ignoreLoadId) {
+        root.ignoredPaths = ignoredPathSet(output);
+        root.checkedDirectories.clear();
+      }
     } catch {
       // Fail open: an ignore refresh must not freeze an otherwise healthy
       // Change Set watch. The previous cache remains valid for older rules.
@@ -495,6 +537,7 @@ export class WorktreeChangeWatchManager {
 
   /** Trailing debounce with a max-wait ceiling, shared by the whole root. */
   private scheduleBroadcast(root: SharedWorktreeWatch): void {
+    if (!this.hasActiveSubscribers(root)) return;
     const now = this.now();
     if (root.maxWaitAt === null) root.maxWaitAt = now + this.maxWaitMs;
     if (root.debounceTimer !== null) clearTimeout(root.debounceTimer);
@@ -504,7 +547,7 @@ export class WorktreeChangeWatchManager {
       root.maxWaitAt = null;
       if (!this.isRootLive(root)) return;
       for (const [key, sub] of root.subscribers) {
-        if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
+        if (!sub.active || this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
         const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
         sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
       }
@@ -527,12 +570,14 @@ export class WorktreeChangeWatchManager {
     if (!sub.webContents.isDestroyed()) {
       sub.webContents.removeListener("destroyed", sub.onDestroyed);
     }
-    if (sub.root.subscribers.size === 0) this.teardownRoot(sub.root);
+    if (sub.root.subscribers.size === 0) {
+      this.teardownRoot(sub.root);
+    } else if (!this.hasActiveSubscribers(sub.root)) {
+      this.disarmRoot(sub.root);
+    }
   }
 
-  private teardownRoot(root: SharedWorktreeWatch): void {
-    if (!this.isRootLive(root)) return;
-    this.roots.delete(root.worktreePath);
+  private disarmRoot(root: SharedWorktreeWatch): void {
     if (root.debounceTimer !== null) {
       clearTimeout(root.debounceTimer);
       root.debounceTimer = null;
@@ -542,9 +587,16 @@ export class WorktreeChangeWatchManager {
       root.ignoreRefreshTimer = null;
     }
     root.maxWaitAt = null;
+    root.ignoreRefreshNeedsBroadcast = false;
     root.pendingDirectoryEvents.clear();
     root.watcher?.close();
     root.watcher = null;
+  }
+
+  private teardownRoot(root: SharedWorktreeWatch): void {
+    if (!this.isRootLive(root)) return;
+    this.roots.delete(root.worktreePath);
+    this.disarmRoot(root);
 
     for (const [key, sub] of root.subscribers) {
       this.subs.delete(key);
