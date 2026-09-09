@@ -174,7 +174,7 @@ export function ComposerFooter({
                 <CaretDownIcon weight="bold" className="size-3" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-80">
               <CreateRunAutomationItems
                 groups={automationRun.groups}
                 ready={automationRun.ready}
