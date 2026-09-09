@@ -38,6 +38,7 @@ export * from "./blob";
 export * from "./markdown-image";
 export * from "./ticket-events";
 export * from "./ticket-await";
+export * from "./session-await";
 export * from "./untrusted-content";
 export * from "./change-set";
 export * from "./worktree-collisions";

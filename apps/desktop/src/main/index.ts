@@ -224,6 +224,7 @@ import { createAgentToolDoor } from "./agent-tool-door";
 import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
 import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
@@ -838,9 +839,19 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
-  const sessionActivityWatch =
+  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
+  // watch: a write returns from the engine, the bus fans the committed event
+  // out to whichever `session_await` is parked on it, and only then does the
+  // watch mark the row dirty. Same construction-site rule as the watch — this
+  // is the only place the engine is made, so no caller can hold an unwatched
+  // one. See `session-wake.ts`.
+  const sessionWakeBus =
     watchedDb !== null
-      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
+      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+      : null;
+  const sessionActivityWatch =
+    watchedDb !== null && sessionWakeBus !== null
+      ? watchSessionActivity(sessionWakeBus.engine, {
           publish: broadcastSessionActivity,
           // Read on the push path as well as the fetch path, so a Run's bolt
           // survives its Session's first turn (VC-131): the renderer upserts
@@ -1843,6 +1854,11 @@ app.whenReady().then(async () => {
           // post-commit wake bus until a planner fact matches.
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
           subscribeTicketWake,
+          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
+          // read through a closure because the bus and the door are composed
+          // under different null-guards in this same function.
+          subscribeSessionWake: (listener) =>
+            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>
@@ -1949,12 +1965,17 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
-  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
-  // durable Session itself intentionally remains open; only the binding ends.
+  // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
+  // structured attachment stays reattachable, but a turn left active by the
+  // prior process is reconciled now so `session list` cannot call it idle.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
       await closeStaleAttachments({
         engine: sessionEngine,
+        reconcile: (input) =>
+          sessionRuntime === null
+            ? Promise.reject(new Error("The Session runtime is unavailable during boot recovery."))
+            : sessionRuntime.reconcile(input),
         projectIds: listProjects(dbHandle.db).map((project) => project.id),
         newId: randomUUID,
         now: Date.now,

@@ -647,6 +647,52 @@ returned by every wake or timeout makes the watch window continuous. A cursor
 is ledger order; `occurredAt` is metadata and must never be used as one.
 _Avoid_: watch verb, `volli ticket wait`, polling loop
 
+**Session Await**:
+The control-tier wait between Sessions: a Session's `session_await` tool call
+parks its turn until a watched Session finishes a turn (`for: turn`), signals
+done or blocked (`verdict`), or is stopped (`stopped`) — then wakes with that
+one fact (VC-324). Same discipline as **Await**, one ledger over: one or many
+short session ids, the same `timeoutSeconds`, and the same opaque `cursor`.
+The first cursor comes from the `session_start`, `session_send`, or
+`session_delegate` receipt; each wake or timeout returns the next cursor to
+chain, so a Board Session supervising a fleet misses nothing between calls
+without polling `session list`. A Board Session
+may await any Session in its project; a ticket Session only itself and the
+subagents it delegated. What may be awaited is per-actor policy data
+(`awaitableSessions`); a Board Session no longer needs every child to post a
+Ticket Signal at the end of every stage just to be waited on.
+_Avoid_: `volli session wait` (a CLI verb must never wait), polling loop,
+waking on every Session Event (bookkeeping would hand back a turn per write)
+
+**Session Wake**:
+The one durable Session Event a Session Await parks on, returned with the same
+opaque `cursor` discipline as a Ticket Wake — the cursor is ledger order and
+`occurredAt` is metadata that must never be used as one. One await kind maps
+to a LIST of Session Event kinds: `turn` wakes on both `turn.completed` and
+`turn.interrupted`, because "the child is done talking" wants both while still
+naming which it got — an interruption is a wake, not a missing wake.
+_Avoid_: notification, treating `turn.completed` and `turn.interrupted` as one
+
+**`awaitableSessions`**:
+The Session-await half of an actor's policy list, beside `awaitable` (VC-324):
+which of `turn`, `verdict`, `stopped` (and `$defaults`) the actor may wait on
+another Session with. A separate list under a separate name, never a widened
+`awaitable`: Ticket await kinds name planner facts and this list names Session
+Events — two ledgers, two sequences, and two cursors. A document naming a
+Ticket kind in this list is refused, not filtered.
+_Avoid_: merged await list, shared vocabulary with `awaitable`
+
+**`interrupted`**:
+The red listing state a Session reads when its latest turn ended by
+interruption, an active failure Attention explains that interruption, and
+nothing has started since: `session list` and `session peek` say `interrupted`,
+with why. It sits below working and above idle — stopped still outranks it —
+and a Session that resumed reads working again. A deliberate user cancellation
+has no failure Attention and stays out of this state. A fleet that read idle
+while four of its members had been cut off is the failure this state exists to
+end.
+_Avoid_: idle (for a failed interruption), error, crashed
+
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space

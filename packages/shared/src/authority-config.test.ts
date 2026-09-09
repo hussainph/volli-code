@@ -13,6 +13,7 @@ import {
   resolveAuthorityPolicy,
   validateAuthorityPolicyOverride,
 } from "./authority-config";
+import { SESSION_AWAIT_KINDS } from "./session-await";
 import { TICKET_AWAIT_KINDS } from "./ticket-await";
 import { VERB_REGISTRY, verbTier } from "./verb-registry";
 
@@ -42,6 +43,7 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
     expect(anonymous.coordinationVerbs).toEqual([]);
     expect(anonymous.peek).toBe("none");
     expect(anonymous.awaitable).toEqual([]);
+    expect(anonymous.awaitableSessions).toEqual([]);
   });
 
   it("lets an authenticated Session read only its own transcript (VC-92 ruling 3)", () => {
@@ -61,6 +63,18 @@ describe("DEFAULT_AUTHORITY_POLICY", () => {
     expect(DEFAULT_AUTHORITY_POLICY.actors.user.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
     expect(DEFAULT_AUTHORITY_POLICY.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
     expect(DEFAULT_AUTHORITY_POLICY.actors.unauthenticated.awaitable).toEqual([]);
+  });
+
+  it("takes the same posture on the Session vocabulary, in a list of its own (VC-324)", () => {
+    // Two lists, never one merged vocabulary: `signal` is a Ticket verdict and
+    // `verdict` is a Session's own, and a project must be able to allow one
+    // without the other.
+    expect(DEFAULT_AUTHORITY_POLICY.actors.user.awaitableSessions).toEqual([
+      ...SESSION_AWAIT_KINDS,
+    ]);
+    expect(DEFAULT_AUTHORITY_POLICY.actors.session.awaitableSessions).toEqual([
+      ...SESSION_AWAIT_KINDS,
+    ]);
   });
 
   it("names a policy for every actor kind, so no caller falls through the table", () => {
@@ -188,6 +202,22 @@ describe("additive inheritance", () => {
     });
     expect(resolved.actors.session.awaitable).toEqual(["status", "signal", "comment"]);
   });
+
+  it("splices the Session awaitable list independently of the Ticket one", () => {
+    const resolved = resolveAuthorityPolicy({
+      actors: { session: { awaitableSessions: ["stopped"] } },
+    });
+    expect(resolved.actors.session.awaitableSessions).toEqual(["stopped"]);
+    // Narrowing one list leaves the other exactly as the defaults had it.
+    expect(resolved.actors.session.awaitable).toEqual([...TICKET_AWAIT_KINDS]);
+  });
+
+  it("resolves a document written before the Session list existed to the defaults", () => {
+    // Tolerant on read: an older stored override records departures only, so an
+    // absent field must inherit rather than deny.
+    const resolved = resolveAuthorityPolicy({ actors: { session: { peek: "none" } } });
+    expect(resolved.actors.session.awaitableSessions).toEqual([...SESSION_AWAIT_KINDS]);
+  });
 });
 
 describe("parseAuthorityPolicyOverride", () => {
@@ -290,6 +320,32 @@ describe("parseAuthorityPolicyOverride", () => {
     });
     expect(
       parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["ticket.signal"] } } }),
+    ).toEqual({});
+  });
+
+  it("reads the two await vocabularies apart, so neither admits the other's words", () => {
+    expect(
+      parseAuthorityPolicyOverride({
+        actors: { session: { awaitableSessions: [AUTHORITY_DEFAULTS_TOKEN, "turn"] } },
+      }),
+    ).toEqual({
+      actors: { session: { awaitableSessions: [AUTHORITY_DEFAULTS_TOKEN, "turn"] } },
+    });
+    // Every Session kind is admitted to its own list, not just `turn`.
+    expect(
+      parseAuthorityPolicyOverride({
+        actors: { session: { awaitableSessions: ["verdict", "stopped"] } },
+      }),
+    ).toEqual({ actors: { session: { awaitableSessions: ["verdict", "stopped"] } } });
+    // A Ticket kind in the Session list, and a Session kind in the Ticket one.
+    expect(
+      parseAuthorityPolicyOverride({ actors: { session: { awaitableSessions: ["comment"] } } }),
+    ).toEqual({});
+    expect(
+      parseAuthorityPolicyOverride({ actors: { session: { awaitable: ["verdict"] } } }),
+    ).toEqual({});
+    expect(
+      parseAuthorityPolicyOverride({ actors: { session: { awaitableSessions: "all" } } }),
     ).toEqual({});
   });
 
@@ -470,6 +526,31 @@ describe("validateAuthorityPolicyOverride", () => {
     expect(
       validateAuthorityPolicyOverride({
         actors: { session: { awaitable: [AUTHORITY_DEFAULTS_TOKEN, "status"] } },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("validates the Session await list against its own vocabulary", () => {
+    expect(
+      validateAuthorityPolicyOverride({ actors: { session: { awaitableSessions: "all" } } }),
+    ).toEqual({
+      ok: false,
+      errors: ["actors.session.awaitableSessions must be an array."],
+    });
+    expect(
+      validateAuthorityPolicyOverride({ actors: { session: { awaitableSessions: ["comment"] } } }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        `actors.session.awaitableSessions entries must be one of: ${[
+          ...SESSION_AWAIT_KINDS,
+          AUTHORITY_DEFAULTS_TOKEN,
+        ].join(", ")}.`,
+      ],
+    });
+    expect(
+      validateAuthorityPolicyOverride({
+        actors: { session: { awaitableSessions: [AUTHORITY_DEFAULTS_TOKEN, "verdict"] } },
       }).ok,
     ).toBe(true);
   });

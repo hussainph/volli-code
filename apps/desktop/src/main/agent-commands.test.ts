@@ -2343,6 +2343,67 @@ describe("agent command service", () => {
       },
       provenance,
     });
+    // The fifth honest state (VC-324): a turn that DIED. The runtime raised a
+    // transport Attention and then interrupted the turn — the shape a network
+    // dead end leaves behind, and the other one "idle" used to hide.
+    const interrupted = await sessionEngine.createSession({
+      commandId: "create-interrupted",
+      projectId: "project-one",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Interrupted",
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attach",
+      kind: "attachment.opened",
+      sessionId: interrupted.session.id,
+      occurredAt: 1_000,
+      provenance,
+      attachment: {
+        id: "attachment-interrupted",
+        sessionId: interrupted.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "pi-interrupted", detail: null },
+        authority: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-turn",
+      kind: "turn.started",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attention",
+      kind: "attention.raised",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_500,
+      provenance,
+      attention: {
+        id: "attention-interrupted",
+        kind: "adapter_unrecoverable",
+        attachmentId: "attachment-interrupted",
+        detail: null,
+        diagnostic: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-end",
+      kind: "turn.interrupted",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 3_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -2389,6 +2450,16 @@ describe("agent command service", () => {
             id: stopped.session.id.slice(0, 8),
             status: "stopped",
             waitingOn: null,
+            interruptedReason: null,
+          }),
+          // A dead turn is not quiet: the word says it, and the coarse reason
+          // rides beside it the way a waiting row's errand does.
+          expect.objectContaining({
+            id: interrupted.session.id.slice(0, 8),
+            status: "interrupted",
+            waitingOn: null,
+            interruptedReason: "stopped-by-runtime",
+            lastActivityAgeMs: 7_000,
           }),
         ]),
       },
@@ -2401,7 +2472,20 @@ describe("agent command service", () => {
       args: { id: stopped.session.id.slice(0, 8) },
       ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
-    expect(peek).toMatchObject({ ok: true, data: { status: "stopped", waitingOn: null } });
+    expect(peek).toMatchObject({
+      ok: true,
+      data: { status: "stopped", waitingOn: null, interruptedReason: null },
+    });
+    const interruptedPeek = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: interrupted.session.id.slice(0, 8) },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(interruptedPeek).toMatchObject({
+      ok: true,
+      data: { status: "interrupted", interruptedReason: "stopped-by-runtime" },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {

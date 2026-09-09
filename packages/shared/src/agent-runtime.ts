@@ -1696,9 +1696,40 @@ export type InteractionObservation =
 
 export type RuntimeMessageDelivery = "queue" | "steer" | "replace";
 
+/**
+ * How long a submit waits before it answers its caller (VC-324).
+ *
+ * `"turn"` is what every caller has always got and stays the default: the
+ * promise settles when the target's run has settled, so the composer's Receipt
+ * and its observation failure still arrive at turn end.
+ *
+ * `"opened"` settles as soon as the runtime has durably taken the message into
+ * a turn — the `{kind:"turn", state:"started"}` observation is committed and
+ * the Command is marked accepted — and leaves the run itself to finish on its
+ * own. It exists for a SUPERVISOR steering another Session: one promise was
+ * carrying two facts ("the message is in" and "the target finished thinking"),
+ * and a supervisor is only owed the first. It is not fire-and-forget — the
+ * durable Command and the turn opening are both still awaited.
+ */
+export type RuntimeMessageSettle = "turn" | "opened";
+
 /** Observable outcome of one delivery attempt. Never silently reinterpreted. */
 export type DeliveryOutcome =
-  | { kind: "delivered"; delivery: "prompt" | "queue" | "steer" | "retry" }
+  | {
+      kind: "delivered";
+      delivery: "prompt" | "queue" | "steer" | "retry";
+      /**
+       * True only when this delivery OPENED a turn that is still running
+       * (VC-324) — the `settle: "opened"` answer on an idle target.
+       *
+       * Absent everywhere else, and tolerated as absent on read: a delivery
+       * that joined a turn already streaming reports nothing here, which is
+       * how a supervisor tells "joined a running turn" from "opened a new
+       * one". A `settle: "turn"` delivery never sets it either, because by the
+       * time it answers the turn it opened has already ended.
+       */
+      turnOpened?: boolean;
+    }
   | {
       kind: "rejected";
       reason: "busy-unsupported" | "closed" | "replace-unsupported" | "retry-unavailable";
@@ -1759,6 +1790,12 @@ export interface RuntimeAttachmentHandle {
      * restore exact instructions instead of trusting a generated summary.
      */
     resources?: readonly PromptResource[],
+    /**
+     * How long this call waits before answering (VC-324). Trailing and
+     * optional, defaulting to `"turn"`, so every existing caller keeps the
+     * behaviour it was written against.
+     */
+    settle?: RuntimeMessageSettle,
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

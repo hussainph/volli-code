@@ -129,6 +129,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "The canonical ordered Session history; payload working directories are stripped.",
   },
   {
+    table: "session_event_sequence",
+    decision: "include",
+    reason:
+      "The durable total order over Session events across Sessions (`session_await` cursors); per-Session sequences alone cannot order two Sessions' facts against each other.",
+  },
+  {
     table: "session_commands",
     decision: "include",
     reason: "Explicit intent, persisted before delivery; receipts and events reference it.",
@@ -328,6 +334,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "session_commands",
   "session_provenances",
   "session_events",
+  "session_event_sequence",
   "session_command_receipts",
   "ticket_comments",
   "ticket_signals",
