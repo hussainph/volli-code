@@ -231,6 +231,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "orphaned worktrees",
             "pi sessions",
             "pi session logs",
+            "orphaned logs",
             "orphaned pi logs",
             "scan",
             "clean up",
