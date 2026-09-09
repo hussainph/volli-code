@@ -107,13 +107,18 @@ describe("source precedence and truthful ownership", () => {
     ]);
   });
 
-  it("sorts skills before assigning names", () => {
+  it("sorts skills in locale-independent order before assigning names", () => {
     const entries = resolveSlashNamespace({
       templates: [],
-      skills: [skill({ name: "beta" }), skill({ name: "alpha" })],
+      skills: [
+        skill({ name: "i" }),
+        skill({ name: "J" }),
+        skill({ name: "I" }),
+        skill({ name: "j" }),
+      ],
     }).entries;
 
-    expect(entries.map((entry) => entry.name)).toEqual(["alpha", "beta"]);
+    expect(entries.map((entry) => entry.name)).toEqual(["I", "J", "i", "j"]);
   });
 
   it("reports a duplicate template as shadowed by a command, not a verb", () => {

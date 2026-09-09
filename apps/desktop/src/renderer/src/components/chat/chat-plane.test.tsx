@@ -96,9 +96,11 @@ describe("SessionBlocker hit testing", () => {
     // blocker inside it opting back in. Asserted without pinning attribute
     // ORDER — the element grew a `data-slot` ahead of its class and the whole
     // hit-testing claim went with it, which is a test describing a render
-    // rather than a behaviour.
+    // rather than a behaviour. Keeps main's `data-slot` requirement, since the
+    // slot is how this element is addressed, without re-pinning the position
+    // of the next attribute somebody adds.
     expect(html).toMatch(
-      /^<div class="pointer-events-none"><div\b[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
+      /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
     );
     expect(html).toContain('aria-label="Dismiss"');
   });
