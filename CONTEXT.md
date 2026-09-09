@@ -248,14 +248,23 @@ session (when meaning a tab)
 **Headless tab**:
 A Browser Tab a Session opened and nobody has asked to see (VC-238). It has
 its real viewport, wake hold, console and screenshots, but is in no strip, in
-no tab order, and attached to no window. Every Session-created tab is born
-this way; a person's own tabs never are. A headless tab is visible only in the
-chat that owns it — as the **tab card** under the browser row that touched it,
+no tab order, and on no surface a person can look at. Every Session-created tab
+is born this way; a person's own tabs never are. Headless is a fact about
+presentation, never about rendering: the host still parks the page in an
+internal compositor host it never shows and never hands to the person (today an
+off-screen window in Electron main, VC-278), because a page with no compositor
+surface cannot be captured or clicked at all — its screenshots never answer and
+its clicks reach nothing while its accessibility tree reads perfectly. "Drawn
+nowhere a person can look" is the rule; "attached to nothing" is not, and would
+stay wrong however the Browser host is later split between a **Client Surface**
+and the host that serves it. A headless tab is visible only in the chat that
+owns it — as the **tab card** under the browser row that touched it,
 and in the Activity Island's tabs cluster above the composer (VC-268), whose
 card lists every tab the Session and its children hold — and it closes with
 its owner Session's attachment or when its Ticket is archived. The model can never
 reveal one; the person can.
-_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it is)
+_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it
+is), off-screen tab (where the host parks it, not what headless means)
 
 **Tab owner**:
 The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
@@ -271,12 +280,12 @@ _Avoid_: creator, session tab (ambiguous with the Session's own tabs)
 
 **Presentation**:
 Where a Browser Tab is drawn, decided by the person and held by main:
-`headless` (nowhere), `preview` (pinned live above the owning chat's
-composer, one per Session), or `tab` (an item in the Home or Ticket strip,
-marked as driven). A person's tabs are always `tab`. Show, Hide and Open as
-tab change presentation and nothing else — not the owner, the generation,
-the cookies, or anything the agent sees. A tab the person has shown is
-theirs and survives its Session.
+`headless` (on no surface a person can look at), `preview` (pinned live above
+the owning chat's composer, one per Session), or `tab` (an item in the Home or
+Ticket strip, marked as driven). A person's tabs are always `tab`. Show, Hide
+and Open as tab change presentation and nothing else — not the owner, the
+generation, the cookies, or anything the agent sees. A tab the person has shown
+is theirs and survives its Session.
 _Avoid_: visibility (that is whether the native plane is attached right now),
 shown/hidden as states (they are the actions)
 **Tab hold**:

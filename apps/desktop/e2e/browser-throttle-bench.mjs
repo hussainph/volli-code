@@ -305,8 +305,8 @@ Page.captureScreenshot on a detached tab (bound ${SCREENSHOT_BOUND_MS}ms)
   with hold                          ${shotHeld.ms}ms  ${shotHeld.outcome}
   NOTE: the last two rows are a tab ATTACHED once and then detached. Do not
   read them as "a hold fixes screenshots" — it does not for a tab that was
-  never attached, which is the shape agent tabs actually run in. See VC-278
-  and e2e/browser-headless-capture-probe.mjs.
+  never parented, which was the Headless-tab shape before VC-278 added the
+  never-shown stage. See e2e/browser-headless-capture-probe.mjs.
 
 Window's OWN renderer while the window is minimised (ticks/s)
   no hold anywhere                   ${ownMinimised.ticksPerSecond.toFixed(1)}
