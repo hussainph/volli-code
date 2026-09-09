@@ -1,5 +1,6 @@
 import {
   app,
+  BaseWindow,
   BrowserWindow,
   WebContentsView,
   dialog,
@@ -302,7 +303,7 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -2620,6 +2621,24 @@ app.whenReady().then(async () => {
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // The off-screen stage every tab waits in until a person shows it (VC-278).
+    // A tab nobody has revealed still needs a window to hold its compositor
+    // surface, or its clicks land nowhere and its screenshots never answer.
+    //
+    // A BaseWindow, deliberately: it holds views but has no webContents, so it
+    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
+    // picks the app window out of, and that `activate` counts before
+    // re-creating one. `show: false` is load-bearing and must stay: showing
+    // this would put an agent's page on screen with nothing in the UI claiming
+    // to have shown it.
+    createStageWindow: () =>
+      new BaseWindow({
+        show: false,
+        width: BROWSER_DEFAULT_BOUNDS.width,
+        height: BROWSER_DEFAULT_BOUNDS.height,
+        skipTaskbar: true,
+        focusable: false,
+      }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
     // The pictures a transcript card shows (VC-238): live captures bounded in
