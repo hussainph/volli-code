@@ -1473,8 +1473,9 @@ export function registerDataIpcHandlers(
         input?.dryRun === undefined ? {} : { dryRun: input.dryRun },
       );
       // Nothing about any ticket's identity moved — the checkouts are all still
-      // there, on the same branches — but the Settings table and any surface
-      // reading worktree state should re-read what is now on disk.
+      // there, on the same branches, and git's own records are untouched — but
+      // the Settings table and any surface reading worktree state should re-read
+      // what is now on disk.
       if (!report.dryRun && report.removedCount > 0) broadcastDataChanged({ kind: "worktree" });
       return { ok: true, report };
     },

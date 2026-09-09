@@ -66,7 +66,6 @@ const TRIM_REPORT: WorktreeTrimSweepReport = {
       reason: "An agent is still running in this worktree. Stop it first.",
     },
   ],
-  pruned: ["project-1"],
   totalBytes: 2_048,
   removedCount: 1,
   dryRun: false,
@@ -258,7 +257,6 @@ describe("Settings → Storage build artifacts", () => {
     expect(text).toContain("Freed");
     expect(text).toContain("2.0 KB");
     expect(text).toContain("kept 1");
-    expect(text).toContain("metadata pruned");
     expect(text).toContain("node_modules/");
     expect(text).toContain("Skipped — An agent is still running in this worktree. Stop it first.");
     // The table it was based on is re-read, since every trimmed row changed.

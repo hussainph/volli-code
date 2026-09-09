@@ -17,6 +17,7 @@ import {
   setRetentionTtlDays,
   trimFinishedWorktree,
 } from "./retention";
+import type { BusyWorktreeSite } from "./activity";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { setTrimSettings } from "./trim-settings";
 import { listTicketEvents } from "../db/events-repo";
@@ -223,7 +224,8 @@ describe("reclaimIfStale", () => {
     return {
       worktree: { db: ctx.db, git, blobsRoot: "unused" },
       now: () => NOW,
-      busyWorktreeSites: async () => busy.map((directory) => ({ directory })),
+      busyWorktreeSites: async () =>
+        busy.map((directory) => ({ directory, surface: "terminal" as const })),
     };
   }
 
@@ -442,7 +444,7 @@ describe("trimFinishedWorktree", () => {
     }
   }
 
-  function trimDeps(busy: { directory: string; surface: "terminal" | "agent" }[] = []) {
+  function trimDeps(busy: BusyWorktreeSite[] = []) {
     return {
       worktree: {
         db: ctx.db,

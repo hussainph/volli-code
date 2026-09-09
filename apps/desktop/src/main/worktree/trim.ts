@@ -55,6 +55,7 @@ import { isAbsolute, join, relative as relativePath, resolve } from "node:path";
 
 import type { WorktreeTrimKeep, WorktreeTrimRemoval, WorktreeTrimReport } from "../../ipc/contract";
 
+import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isInside } from "./paths";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
@@ -75,20 +76,6 @@ export const DEFAULT_TRIM_KEEP_PATTERNS: readonly string[] = [
   "*.key",
   ".claude/settings.local.json",
 ];
-
-/**
- * A live surface inside a worktree — the busy question every destructive path
- * asks. `surface` is optional because the reclaim's seam has always been typed
- * without it: the refusal reads better when it can say "agent" or "terminal",
- * and still refuses when all it knows is that something is there.
- */
-export interface WorktreeBusySite {
-  directory: string;
-  surface?: "terminal" | "agent";
-}
-
-/** What {@link trimIgnoredArtifacts} needs to answer "is anything working in here?". */
-export type BusyWorktreeSites = (target: string) => Promise<readonly WorktreeBusySite[]>;
 
 /** The trim's inputs. `keepPatterns` defaults to {@link DEFAULT_TRIM_KEEP_PATTERNS}. */
 export interface TrimInput {
@@ -309,21 +296,6 @@ export async function countIgnoredArtifacts(
 // ---- refusals --------------------------------------------------------------
 
 /**
- * Why a destructive worktree action is refused, in the words the other guards
- * already use: what is in the way, and the one thing that clears it.
- */
-export function busyRefusal(site: WorktreeBusySite): string {
-  switch (site.surface) {
-    case "agent":
-      return "An agent is still running in this worktree. Stop it first.";
-    case "terminal":
-      return "A terminal is still running in this worktree. Close it first.";
-    default:
-      return "Something is still running in this worktree.";
-  }
-}
-
-/**
  * Changes to TRACKED files, from `git status --porcelain`. Untracked lines
  * (`??`) are deliberately not counted: untracked-but-not-ignored work is never
  * touched by a trim, so refusing on it would refuse in every worktree where
@@ -372,9 +344,12 @@ export async function trimIgnoredArtifacts(
 
   if (!existsSync(worktreePath)) return err("That worktree folder is missing.");
 
-  const sites = (await input.busySites?.(worktreePath)) ?? [];
-  const busy = sites.find((site) => isInside(worktreePath, site.directory));
-  if (busy !== undefined) return err(busyRefusal(busy));
+  // The ONE busy question (`activity.ts`), asked the same way the manual remove,
+  // the orphan delete, and the cleanup ask it. VC-284 wrote that module because
+  // two copies of "is anything running in there?" is two answers; a trim with its
+  // own copy would have been the third.
+  const busy = busySiteWithin(worktreePath, (await input.busySites?.(worktreePath)) ?? []);
+  if (busy !== null) return err(busyRefusal(busy));
 
   const tracked = await trackedChangeRefusal(git, worktreePath);
   if (tracked !== null) return err(tracked);

@@ -166,14 +166,7 @@ export {
   listIgnoredPaths,
   trimIgnoredArtifacts,
 } from "./trim";
-export type {
-  BusyWorktreeSites,
-  TrimInput,
-  WorktreeBusySite,
-  WorktreeTrimKeep,
-  WorktreeTrimRemoval,
-  WorktreeTrimReport,
-} from "./trim";
+export type { TrimInput, WorktreeTrimKeep, WorktreeTrimRemoval, WorktreeTrimReport } from "./trim";
 export {
   defaultTrimSettings,
   getTrimSettings,

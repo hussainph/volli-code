@@ -790,9 +790,9 @@ export interface VolliDataIpcContract {
    */
   "volli:worktree-trim-scan": { args: []; result: WorktreeTrimScanResult };
   /**
-   * The trim itself, across every non-active owned worktree, with `git worktree
-   * prune` in the same pass. `{ dryRun: true }` measures and reports without
-   * removing anything or touching git metadata.
+   * The trim itself, across every non-active owned worktree. `{ dryRun: true }`
+   * measures and reports without removing anything. Git metadata is untouched:
+   * pruning is the confirmed orphan cleanup's act, not this one's.
    */
   "volli:worktree-trim": { args: [input?: WorktreeTrimInput]; result: WorktreeTrimResult };
   /** The preserved-configuration allowlist and the automatic-trim opt-out. */
@@ -3397,13 +3397,16 @@ export type WorktreeTrimScanResult = Result<{ worktrees: WorktreeTrimScanEntry[]
 
 /**
  * What a manual trim across every non-active worktree did: the per-worktree
- * reports, the worktrees it refused and why, and the projects whose stale
- * `.git/worktrees` metadata was pruned in the same pass.
+ * reports and the worktrees it refused, with the reason.
+ *
+ * No metadata pruning here on purpose — `git worktree prune` drops every stale
+ * record in a repository, so it belongs to the confirmed orphan cleanup that
+ * reviews a set before taking it (VC-284), never to a second action running it
+ * blind.
  */
 export interface WorktreeTrimSweepReport {
   worktrees: WorktreeTrimReport[];
   skipped: { path: string; reason: string }[];
-  pruned: string[];
   totalBytes: number;
   removedCount: number;
   dryRun: boolean;

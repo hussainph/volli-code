@@ -32,10 +32,11 @@ import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
 import type { WorktreeTrimReport } from "../../ipc/contract";
+import type { BusyWorktreeSites } from "./activity";
 import type { AgentSiteReleaseReport } from "./agent-sites";
 import { runGitCapturingAsync } from "./git";
 import { remove, type WorktreeRemoveOptions } from "./remove";
-import { trimIgnoredArtifacts, type BusyWorktreeSites } from "./trim";
+import { trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
@@ -179,8 +180,13 @@ export interface ReclaimDeps {
   now: () => number;
   /** Ends the bindings rooted in the checkout, exactly as the manual remove does. */
   releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
-  /** Where work is genuinely in flight; a busy directory is never reclaimed. */
-  busyWorktreeSites?: (target: string) => Promise<readonly { directory: string }[]>;
+  /**
+   * Where work is genuinely in flight; a busy directory is never reclaimed. The
+   * shared seam (`activity.ts`) rather than a local `{ directory }` shape, so the
+   * automatic reclaim, the automatic trim, and every manual destructive route ask
+   * one question with one answer (VC-284, VC-340).
+   */
+  busyWorktreeSites?: BusyWorktreeSites;
 }
 
 /** Why a reclaim did or didn't happen — the caller logs/notifies off this. */

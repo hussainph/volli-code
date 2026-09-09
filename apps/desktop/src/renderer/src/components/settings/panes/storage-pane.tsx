@@ -459,7 +459,6 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
           {formatFileSize(report.totalBytes)} · {report.removedCount} path(s) in{" "}
           {report.worktrees.length} worktree(s)
           {keptCount > 0 ? ` · kept ${keptCount}` : ""}
-          {report.pruned.length > 0 ? " · metadata pruned" : ""}
         </span>
       </PrefRow>
       {offenders.map((offender) => (

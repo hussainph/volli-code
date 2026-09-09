@@ -9,11 +9,22 @@
  * read beside it — {@link scanTrimTargets} — that answers "which of these are
  * carrying artifacts, and which are off limits" without removing anything.
  *
- * `git worktree prune` rides along with the action rather than living apart from
- * it, because the two are the same complaint measured twice: `.git/worktrees`
- * held 171 admin entries for 143 directories. Pruning is the cheapest, safest
- * tier of the launch sweep (see `sweep.ts`), and doing it here means the count on
- * disk and the count in git metadata agree once the action finishes.
+ * What this action deliberately does NOT do is prune git metadata, and the reason
+ * is worth stating because the ticket asked for it. VC-340 was written when the
+ * launch sweep still pruned on its own; VC-284 then made pruning a CONFIRMED act
+ * over a reviewed set, because `git worktree prune` takes no path argument — it
+ * drops every stale record in the repository, including ones that went stale
+ * after the report a person read, and ones a ticket still claims. `cleanup.ts`
+ * earns the right to run it with a synchronous final gate that re-lists the
+ * prunable set and refuses unless it is EXACTLY the confirmed set. A blind prune
+ * inside a different action would give that back, so the 171-vs-143 metadata
+ * complaint stays where it now belongs: Settings → Storage → Orphaned worktrees,
+ * which reports prunable records and prunes them on confirmation.
+ *
+ * The worktree set here is also not the orphan scan's. That one reports
+ * checkouts with no ticket; this one covers every worktree this database owns,
+ * claimed or not — a Done ticket's own checkout is the most common carrier of a
+ * dead dependency tree, and it is never an orphan.
  *
  * Ownership is answered exactly as every other destructive worktree path answers
  * it (`containers.ts`): only a strict leaf inside a container THIS database
@@ -31,13 +42,9 @@ import { listWorktreePathOwners } from "../db/tickets-repo";
 import { isOwnedWorktreeLeaf, ownedContainers } from "./containers";
 import { parseWorktreeList, runGitCapturingAsync } from "./git";
 import { homeDir } from "./home";
-import { canonicalize, isInside } from "./paths";
-import {
-  busyRefusal,
-  countIgnoredArtifacts,
-  trimIgnoredArtifacts,
-  type BusyWorktreeSites,
-} from "./trim";
+import { canonicalize } from "./paths";
+import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
+import { countIgnoredArtifacts, trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
 import { type WorktreeDeps } from "./types";
 
@@ -107,9 +114,8 @@ async function activeReason(deps: TrimSweepDeps, worktree: OwnedWorktree): Promi
   // `git worktree lock` is respected absolutely, exactly as dirty detection
   // respects it: a lock is a person saying "leave this alone".
   if (worktree.locked) return "This worktree is locked.";
-  const sites = (await deps.busySites?.(worktree.path)) ?? [];
-  const busy = sites.find((site) => isInside(worktree.path, site.directory));
-  return busy === undefined ? null : busyRefusal(busy);
+  const busy = busySiteWithin(worktree.path, (await deps.busySites?.(worktree.path)) ?? []);
+  return busy === null ? null : busyRefusal(busy);
 }
 
 /**
@@ -144,14 +150,9 @@ export async function scanTrimTargets(
 }
 
 /**
- * Trims every non-active owned worktree and prunes each project's stale worktree
- * metadata in the same pass.
- *
- * Prune runs FIRST and for every project: it is the tier that cannot lose data
- * (git only forgets admin entries whose directory is already gone), and running
- * it up front means the listing the trim then walks is the one git still stands
- * behind. A prune failure is recorded by omission from `pruned` and never stops
- * the trim.
+ * Trims every non-active owned worktree, reporting each one it took, each one it
+ * refused, and why. A worktree that had nothing to trim is not reported at all:
+ * a list of a hundred "nothing here" rows is how the two that mattered get lost.
  */
 export async function trimAllWorktrees(
   deps: TrimSweepDeps,
@@ -163,21 +164,10 @@ export async function trimAllWorktrees(
   const report: WorktreeTrimSweepReport = {
     worktrees: [],
     skipped: [],
-    pruned: [],
     totalBytes: 0,
     removedCount: 0,
     dryRun,
   };
-
-  for (const project of listProjects(deps.worktree.db)) {
-    if (dryRun) continue; // a preview measures; it does not touch git metadata
-    try {
-      deps.worktree.git(["worktree", "prune"], project.path);
-      report.pruned.push(project.id);
-    } catch {
-      // Unreadable git: the trim below simply finds nothing for this project.
-    }
-  }
 
   for (const worktree of ownedWorktrees(deps)) {
     const reason = await activeReason(deps, worktree);

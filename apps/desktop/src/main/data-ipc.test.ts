@@ -2912,7 +2912,6 @@ describe("the build-artifact channels", () => {
       },
     ],
     skipped: [{ path: "/wt/two", reason: "An agent is still running in this worktree." }],
-    pruned: ["project-1"],
     totalBytes: 4096,
     removedCount: 1,
     dryRun: false,

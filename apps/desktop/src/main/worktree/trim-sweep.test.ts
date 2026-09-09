@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import type { BusyWorktreeSite } from "./activity";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
@@ -109,7 +110,7 @@ function addWorktree(
   return path;
 }
 
-function deps(install: Install, busy: { directory: string; surface?: "agent" }[] = []) {
+function deps(install: Install, busy: BusyWorktreeSite[] = []) {
   return {
     worktree: {
       db: ctx.db,
@@ -194,7 +195,6 @@ describe("trimAllWorktrees — the Settings action", () => {
     expect(report.removedCount).toBe(2);
     expect(report.totalBytes).toBeGreaterThan(0);
     expect(report.skipped).toEqual([]);
-    expect(report.pruned).toEqual([PROJECT_ID]);
     for (const path of [first, second]) {
       expect(existsSync(join(path, "node_modules"))).toBe(false);
       expect(existsSync(join(path, ".env"))).toBe(true);
@@ -233,7 +233,11 @@ describe("trimAllWorktrees — the Settings action", () => {
     expect(existsSync(join(dirty, "node_modules"))).toBe(true);
   });
 
-  it("leaves .git/worktrees agreeing with what is on disk", async () => {
+  // The boundary VC-284 drew and this action respects: `git worktree prune` takes
+  // no path argument, so it belongs to the confirmed cleanup that reviews a set
+  // before taking it. A trim that pruned on the side would drop records nobody
+  // confirmed — including one that went stale after the report a person read.
+  it("leaves stale git metadata to the confirmed cleanup, and a vanished checkout alone", async () => {
     const install = seedInstall();
     addWorktree(install, "VC-10-j");
     const vanished = addWorktree(install, "VC-11-k");
@@ -244,13 +248,14 @@ describe("trimAllWorktrees — the Settings action", () => {
 
     const report = await trimAllWorktrees(deps(install));
 
-    expect(report.pruned).toEqual([PROJECT_ID]);
-    expect(metadataEntries(install)).toEqual(["VC-10-j"]);
-    expect(
-      readdirSync(install.container, { withFileTypes: true }).filter((entry) =>
-        entry.isDirectory(),
-      ),
-    ).toHaveLength(1);
+    expect(metadataEntries(install)).toEqual(["VC-10-j", "VC-11-k"]);
+    // The missing directory is reported, not silently skipped.
+    expect(report.skipped).toEqual([
+      { path: vanished, reason: "That worktree folder is missing." },
+    ]);
+    expect(report.worktrees.map((entry) => entry.worktreePath)).toEqual([
+      canonicalize(join(install.container, "VC-10-j")),
+    ]);
   });
 
   it("measures without removing under dryRun, and leaves git metadata alone", async () => {
@@ -264,7 +269,6 @@ describe("trimAllWorktrees — the Settings action", () => {
     expect(report.dryRun).toBe(true);
     expect(report.removedCount).toBe(1);
     expect(report.totalBytes).toBeGreaterThan(0);
-    expect(report.pruned).toEqual([]);
     expect(existsSync(join(path, "node_modules"))).toBe(true);
     expect(metadataEntries(install)).toHaveLength(2);
   });
