@@ -225,8 +225,7 @@ export async function sessionListVerb(
       // so the two move together exactly as `waitingOn` and "waiting" do —
       // a `stopped` row that was interrupted on the way down says `stopped`
       // and hands the caller no second, older reason.
-      interruptedReason:
-        record.activity === "interrupted" ? sessionInterruptionReason(projection) : null,
+      interruptedReason: interruptedReason(record, projection),
       // Age of the newest durable fact, against the caller's clock — beside
       // `ageMs` (age since creation), which stays for sorting what is old.
       lastActivityAgeMs: Math.max(0, now() - record.lastActivityAt),
@@ -272,6 +271,13 @@ function modelCells(projection: SessionProjection): Record<string, unknown> {
  * `costUsd: null` is the honest answer for a Session nothing could price —
  * never `0`, which would say a provider reported no charge.
  */
+function interruptedReason(
+  record: ReturnType<typeof chatSessionRecord>,
+  projection: SessionProjection,
+): ReturnType<typeof sessionInterruptionReason> {
+  return record.activity === "interrupted" ? sessionInterruptionReason(projection) : null;
+}
+
 function usageCells(usage: SessionUsageSummary | undefined): Record<string, unknown> {
   const summary = usage ?? EMPTY_SESSION_USAGE_SUMMARY;
   return {
@@ -341,8 +347,7 @@ export async function sessionPeekVerb(
       status: record.activity,
       waitingOn: record.waitingOn,
       // See `session list` — the state word's reason, on the same guard.
-      interruptedReason:
-        record.activity === "interrupted" ? sessionInterruptionReason(chat.projection) : null,
+      interruptedReason: interruptedReason(record, chat.projection),
       lastActivityAgeMs: Math.max(0, observedAt - record.lastActivityAt),
       turns: tail.turns,
       turnDepth: tail.turnDepth,

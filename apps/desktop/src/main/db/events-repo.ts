@@ -21,6 +21,11 @@ import {
   type TicketStatusEntry,
 } from "@volli/shared";
 import { prepared } from "./prepared";
+import {
+  createSequenceCursorCodec,
+  currentSqliteSequence,
+  firstMatchingSequencedRow,
+} from "./sequence-cursor";
 
 interface TicketEventRow {
   id: string;
@@ -202,31 +207,14 @@ interface SequencedTicketEventRow extends TicketEventRow {
  * use a different cursor while preserving the `ticket.await` contract.
  */
 const TICKET_EVENT_CURSOR_PREFIX = "ticket-event-v1:";
+const TICKET_EVENT_CURSOR = createSequenceCursorCodec(TICKET_EVENT_CURSOR_PREFIX, "Ticket Event");
 
-export function encodeTicketEventCursor(sequence: number): string {
-  if (!Number.isSafeInteger(sequence) || sequence < 0) {
-    throw new Error(`Invalid Ticket Event sequence: ${String(sequence)}`);
-  }
-  return `${TICKET_EVENT_CURSOR_PREFIX}${sequence.toString(36)}`;
-}
-
-export function decodeTicketEventCursor(cursor: unknown): number | null {
-  if (typeof cursor !== "string" || !cursor.startsWith(TICKET_EVENT_CURSOR_PREFIX)) return null;
-  const encoded = cursor.slice(TICKET_EVENT_CURSOR_PREFIX.length);
-  if (!/^(?:0|[1-9a-z][0-9a-z]*)$/.test(encoded)) return null;
-  const sequence = Number.parseInt(encoded, 36);
-  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
-}
+export const encodeTicketEventCursor = TICKET_EVENT_CURSOR.encode;
+export const decodeTicketEventCursor = TICKET_EVENT_CURSOR.decode;
 
 /** The database-wide high-water cursor at this instant. */
 export function currentTicketEventCursor(db: Database.Database): string {
-  // AUTOINCREMENT's own high-water mark, not MAX(rows): deleting the newest
-  // event must not make a cursor move backwards.
-  const row = prepared<[], { sequence: number }>(
-    db,
-    "SELECT seq AS sequence FROM sqlite_sequence WHERE name = 'ticket_event_sequence'",
-  ).get();
-  return encodeTicketEventCursor(row?.sequence ?? 0);
+  return encodeTicketEventCursor(currentSqliteSequence(db, "ticket_event_sequence"));
 }
 
 /**
@@ -276,20 +264,20 @@ export function firstMatchingTicketEventAfter(
   eventKinds: readonly string[],
   cursor: string,
 ): SequencedTicketEvent | undefined {
-  if (ticketIds.length === 0 || eventKinds.length === 0) return undefined;
   const sequence = decodeTicketEventCursor(cursor);
   if (sequence === null) return undefined;
-  const row = prepared<[number, string, string], SequencedTicketEventRow>(
+  const row = firstMatchingSequencedRow<SequencedTicketEventRow>(
     db,
-    `SELECT e.*, ordered.sequence AS sequence
-       FROM ticket_event_sequence ordered
-       JOIN ticket_events e ON e.id = ordered.event_id
-      WHERE ordered.sequence > ?
-        AND ordered.ticket_id IN (SELECT value FROM json_each(?))
-        AND ordered.kind IN (SELECT value FROM json_each(?))
-      ORDER BY ordered.sequence ASC
-      LIMIT 1`,
-  ).get(sequence, JSON.stringify(ticketIds), JSON.stringify(eventKinds));
+    {
+      select: "e.*, ordered.sequence AS sequence",
+      sequenceTable: "ticket_event_sequence",
+      eventTable: "ticket_events",
+      ownerColumn: "ticket_id",
+    },
+    ticketIds,
+    eventKinds,
+    sequence,
+  );
   return row === undefined
     ? undefined
     : { event: mapTicketEvent(row), cursor: encodeTicketEventCursor(row.sequence) };

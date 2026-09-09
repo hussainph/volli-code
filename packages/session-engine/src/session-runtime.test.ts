@@ -2977,6 +2977,7 @@ describe("SessionRuntime native adapter contract", () => {
       status: "accepted",
       acceptedAt: 200,
       native: null,
+      delivery: "prompt",
       turnOpened: true,
     };
     const opened = await runtime.command({
@@ -2995,10 +2996,11 @@ describe("SessionRuntime native adapter contract", () => {
       delivery: "steer",
       settle: "opened",
     });
-    expect(opened.turnOpened).toBe(true);
+    expect(opened).toMatchObject({ delivery: "prompt", turnOpened: true });
     // The durable Receipt still says only that the runtime accepted the
     // Command; how the delivery landed is transport detail (VC-324).
     expect(opened.receipt).toMatchObject({ status: "accepted" });
+    expect(opened.receipt).not.toHaveProperty("delivery");
     expect(opened.receipt).not.toHaveProperty("turnOpened");
   });
 

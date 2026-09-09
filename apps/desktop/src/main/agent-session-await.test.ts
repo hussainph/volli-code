@@ -26,7 +26,10 @@ import type { SessionEngine } from "@volli/session-engine";
 
 import { awaitSessionTool, type AwaitSessionPorts } from "./agent-session-await";
 import { insertProject, listProjects } from "./db/projects-repo";
-import { encodeSessionEventCursor } from "./db/session-events-cursor-repo";
+import {
+  currentSessionEventCursor,
+  encodeSessionEventCursor,
+} from "./db/session-events-cursor-repo";
 import { openTestDb, testProject } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { createSessionWakeBus } from "./session-wake";
@@ -259,13 +262,14 @@ describe("session.await — waking", () => {
     expect(result.text).toMatch(/^cursor: session-event-v1:/m);
   });
 
-  it("says interrupted, never ended, and that a person must restart it", async () => {
+  it("says interrupted, never ended, and names the existing continuation path", async () => {
     const h = harness();
     const pending = h.call({ sessions: handle(WORKER), for: "turn" });
     await h.commit(WORKER, INTERRUPTED);
     const result = await pending;
     expect(result.text).toContain("was interrupted mid-turn");
-    expect(result.text).toContain("a person must restart it");
+    expect(result.text).toContain(`Use session_send on Session ${handle(WORKER)} to continue it`);
+    expect(result.text).toContain("otherwise a person can reattach it");
     expect(result.text).not.toMatch(/ended/);
   });
 
@@ -323,6 +327,20 @@ describe("session.await — waking", () => {
 });
 
 describe("session.await — the cursor", () => {
+  it("replays work that finished before the first await from its dispatch cursor", async () => {
+    const h = harness();
+    const dispatchCursor = currentSessionEventCursor(h.db);
+    h.commitSilently(WORKER, COMPLETED);
+
+    const result = await h.call({
+      sessions: handle(WORKER),
+      for: "turn",
+      cursor: dispatchCursor,
+    });
+
+    expect(result.text).toContain(`Session ${handle(WORKER)} completed its turn.`);
+  });
+
   it("replays a matching fact committed while no wait was parked", async () => {
     const h = harness();
     vi.useFakeTimers();

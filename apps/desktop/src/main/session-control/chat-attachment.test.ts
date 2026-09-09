@@ -137,11 +137,12 @@ describe("chatSessionRecord", () => {
     });
   });
 
-  it("keeps a durable open attachment reattachable but not live after relaunch", () => {
+  it("does not call a durable attachment live before boot recovery binds it", () => {
     const attachment = structuredAttachment({ adapterId: "pi" });
     const relaunched = projectionWith([attachment], {
-      // The ledger still projects the attachment as open so Pi can lazily
-      // rehydrate it. This is durable history, not a process-local binding.
+      // The ledger initially projects the attachment as open. Boot recovery
+      // reconciles an active turn before listings are served; this unit pins
+      // the lower-level rule that durable openness is not process liveness.
       liveExecutor: attachment,
       turnActive: true,
     });
@@ -217,13 +218,13 @@ describe("chatSessionRecord outcome", () => {
         chatSessionRecord(projectionWith([structuredAttachment()], { lastTurnOutcome })),
       ).toMatchObject({ activity: "idle", outcome: lastTurnOutcome });
     }
-    // `interrupted` is the one outcome the activity word now reads too
-    // (VC-324); the outcome still rides the row unchanged beside it.
+    // A bare interrupted outcome can be a deliberate cancellation. The outcome
+    // still rides the row, but only a failure Attention makes the red activity.
     expect(
       chatSessionRecord(
         projectionWith([structuredAttachment()], { lastTurnOutcome: "interrupted" }),
       ),
-    ).toMatchObject({ activity: "interrupted", outcome: "interrupted" });
+    ).toMatchObject({ activity: "idle", outcome: "interrupted" });
   });
 
   it("keeps the outcome beside a stop rather than under it", () => {
@@ -294,14 +295,23 @@ describe("chatSessionRecord activity", () => {
   // VC-324. The other half of VC-86's hiding: a turn that DIED read "idle",
   // indistinguishable from one that finished quietly, though the ledger had
   // already said `turn.interrupted` out loud.
-  it("reads a Session whose last turn was interrupted as interrupted", () => {
+  it("reads a failed interruption as interrupted", () => {
     expect(
       chatSessionRecord(
         projectionWith([structuredAttachment({ status: "closed", closedAt: 5 })], {
           lastTurnOutcome: "interrupted",
+          ...attentionOf("partial_turn_interrupted"),
         }),
       ),
     ).toMatchObject({ activity: "interrupted", waitingOn: null, outcome: "interrupted" });
+  });
+
+  it("keeps a deliberate interruption out of the red failure state", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], { lastTurnOutcome: "interrupted" }),
+      ),
+    ).toMatchObject({ activity: "idle", waitingOn: null, outcome: "interrupted" });
   });
 
   it("keeps a quiet Session that finished or failed out of it", () => {
@@ -337,6 +347,7 @@ describe("chatSessionRecord activity", () => {
       chatSessionRecord(
         projectionWith([structuredAttachment()], {
           lastTurnOutcome: "interrupted",
+          ...attentionOf("adapter_unrecoverable"),
           ...openInteraction(),
         }),
       ),

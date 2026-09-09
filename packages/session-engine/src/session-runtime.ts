@@ -250,6 +250,12 @@ export interface SessionRuntimeCommandResult {
   receipt: CommandReceipt | null;
   throughSequence: number;
   /**
+   * How the adapter delivered a `message.submit`, in memory only. This is the
+   * authoritative distinction between a prompt that began a turn and a steer
+   * that joined one; the durable Receipt records acceptance, not transport.
+   */
+  delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"];
+  /**
    * Whether a `message.submit` OPENED the turn it landed in (VC-324).
    *
    * In-memory answer to this call, never durable: the receipt records that the
@@ -1277,9 +1283,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     // Read off the adapter's receipt rather than the durable one: how a
     // delivery landed is transport detail this call answers, and the ledger's
     // receipt says only that the runtime accepted the Command.
-    return receipt.status === "accepted" && receipt.turnOpened !== undefined
-      ? { ...result, turnOpened: receipt.turnOpened }
-      : result;
+    if (receipt.status !== "accepted") return result;
+    return {
+      ...result,
+      ...(receipt.delivery === undefined ? {} : { delivery: receipt.delivery }),
+      ...(receipt.turnOpened === undefined ? {} : { turnOpened: receipt.turnOpened }),
+    };
   }
 
   /**

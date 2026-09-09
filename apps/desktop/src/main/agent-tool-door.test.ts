@@ -237,6 +237,7 @@ describe("session_start through the Agent Tool Surface", () => {
 
     expect(result.text).toContain("Started Session abcdef12 on VC-1");
     expect(result.text).toContain("openai-codex/gpt-5.6-sol");
+    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
     // The public short handle, never a full UUID: no other Volli surface takes
     // one back, so handing a model one would be handing it an unusable id.
     expect(result.text).not.toContain(STARTED_SESSION);
@@ -1081,7 +1082,13 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
    * still be in flight when the caller's turn stops waiting; `turnOpened` is
    * the runtime's answer about which turn the steer landed in (VC-324).
    */
-  function superviseHarness(options: { delivery?: Promise<unknown>; turnOpened?: boolean } = {}) {
+  function superviseHarness(
+    options: {
+      delivery?: Promise<unknown>;
+      landed?: "prompt" | "queue" | "steer" | "retry";
+      turnOpened?: boolean;
+    } = {},
+  ) {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1171,6 +1178,9 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
               if (options.delivery !== undefined) await options.delivery;
               return {
                 receipt: { status: "accepted" },
+                ...(options.landed === undefined
+                  ? { delivery: "steer" as const }
+                  : { delivery: options.landed }),
                 ...(options.turnOpened === undefined ? {} : { turnOpened: options.turnOpened }),
               };
             },
@@ -1219,6 +1229,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
 
     expect(result.text).toContain("Delivered into Session bbbbbbbb");
     expect(result.text).toContain("mid-stream");
+    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
     const submitted = h.sends.find(
       (request) => (request as { command?: { kind?: string } }).command?.kind === "message.submit",
     ) as { commandId: string; command: { delivery: string; message: { parts: unknown[] } } };
@@ -1230,7 +1241,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
   });
 
   it("tells a new turn from one already running, and asks the runtime to settle on the open", async () => {
-    const h = superviseHarness({ turnOpened: true });
+    const h = superviseHarness({ landed: "prompt", turnOpened: true });
 
     const result = await h.call("session.send", {
       session: TARGET_SESSION.slice(0, 8),
@@ -1361,6 +1372,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     ]);
     expect(result.text).toContain(`Delegated to subagent Session ${CHILD_SESSION.slice(0, 8)}`);
     expect(result.text).toContain('"Token refresh hunt"');
+    expect(result.text).toMatch(/Session cursor: session-event-v1:[0-9a-z]+/);
     // The two facts the model must act on: keep working, and the answer
     // arrives as a message.
     expect(result.text).toMatch(/arrive|delivered/);

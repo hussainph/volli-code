@@ -294,6 +294,14 @@ export interface PreviousSessionRow {
   kind: SessionRowKind;
   /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
   endedOrQuietAt: number;
+  /**
+   * A chat Session's own activity, carried past the quiet window (VC-324);
+   * `null` for a terminal, whose only honest past tense is ended. The record's
+   * `interrupted` is durable — it survives a relaunch — so this is what lets a
+   * Previous row keep saying the last turn died after every other trace of
+   * the Session going quiet has aged away.
+   */
+  activity: ChatSessionRecord["activity"] | null;
   /** See {@link ActiveSessionRow.provenance} — both bands carry it, for one reason. */
   provenance: SessionProvenance;
   target: ActiveSessionTarget | null;
@@ -860,6 +868,7 @@ export function buildActiveSessionListing(
         title: row.title,
         kind: "terminal",
         endedOrQuietAt: recency,
+        activity: null,
         // Taken off the Active row rather than looked up again: the two bands
         // are one Session seen at two ages, so a second read is a second
         // chance for them to disagree.
@@ -887,6 +896,7 @@ export function buildActiveSessionListing(
         title: tab.title,
         kind: "terminal",
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
+        activity: null,
         provenance: provenanceOf(tab.sessionId),
         target: { kind: "terminal", tabId: tab.sessionId, paneId: tab.activePaneId },
         cleaned: false,
@@ -1030,6 +1040,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "terminal",
         endedOrQuietAt: record.endedAt,
+        activity: null,
         provenance: provenanceOf(record.id),
         // The Session's own saved record, addressed by the two things that
         // outlive its PTY (VC-290). This used to be `null`, and a null target
@@ -1068,6 +1079,9 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "chat",
         endedOrQuietAt: record.lastActivityAt,
+        // Carried verbatim off the Active row's record: interrupted survives
+        // the quiet window (VC-324).
+        activity: record.activity,
         provenance: row.provenance,
         target: row.target,
         cleaned: false,

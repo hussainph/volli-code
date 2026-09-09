@@ -1961,12 +1961,17 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
-  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
-  // durable Session itself intentionally remains open; only the binding ends.
+  // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
+  // structured attachment stays reattachable, but a turn left active by the
+  // prior process is reconciled now so `session list` cannot call it idle.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
       await closeStaleAttachments({
         engine: sessionEngine,
+        reconcile: (input) =>
+          sessionRuntime === null
+            ? Promise.reject(new Error("The Session runtime is unavailable during boot recovery."))
+            : sessionRuntime.reconcile(input),
         projectIds: listProjects(dbHandle.db).map((project) => project.id),
         newId: randomUUID,
         now: Date.now,

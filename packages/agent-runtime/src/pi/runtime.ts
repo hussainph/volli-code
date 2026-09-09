@@ -1572,6 +1572,10 @@ async function attachSession(
      * callback having fired.
      */
     let turnOpening: { opened: boolean; release: () => void } | undefined;
+    // The latest run released at its opening boundary. Close awaits its
+    // cleanup after Pi becomes idle so no detached observer work outlives the
+    // attachment that owned it.
+    let detachedRunSettled: Promise<void> = Promise.resolve();
     const reportTurnOpened = (): void => {
       const opening = turnOpening;
       if (opening === undefined) return;
@@ -1580,16 +1584,11 @@ async function attachSession(
       opening.release();
     };
     /**
-     * A detached run's own rejection, held for the next command boundary.
-     *
-     * The same bargain {@link OrderedObservationDelivery} already makes for an
-     * observer that threw: a failure nobody is waiting on is retained rather
-     * than thrown into a Pi callback, and the next command to reach a boundary
-     * consumes it. A turn that FAILS needs none of this — it raises its
-     * Attention from the run-end handler exactly as it does when the submit is
-     * awaited, because nothing there reads who is waiting.
+     * A detached run reports through its own durable observations. Once the
+     * opening Command boundary has read any failure it owns, failures from the
+     * rest of that run are consumed at run end — never retained for an
+     * unrelated later Command.
      */
-    let detachedRunFailure: unknown;
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
     const persistAcceptedDelivery = async (
@@ -1629,12 +1628,8 @@ async function attachSession(
     const observationDelivery = new OrderedObservationDelivery(observe);
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
-    /** Everything one command boundary owes its caller: an observer that threw, or a detached run that did. */
-    const consumeRunFailure = (): unknown => {
-      const detached = detachedRunFailure;
-      detachedRunFailure = undefined;
-      return observationDelivery.consumeFailure() ?? detached;
-    };
+    /** An observer failure from the run this command boundary still owns. */
+    const consumeRunFailure = (): unknown => observationDelivery.consumeFailure();
 
     // Assigned the statement after `new Agent` and read only from inside a Pi
     // callback, which cannot fire before a run starts. Declared here because the
@@ -2474,26 +2469,33 @@ async function attachSession(
           // the turn has opened, and the turn's own end reaches the Session
           // through the observations it publishes either way (VC-324).
           const released = Promise.withResolvers<void>();
+          const boundaryChecked = Promise.withResolvers<void>();
           const opening = { opened: false, release: released.resolve };
           turnOpening = opening;
-          void run()
-            /* v8 ignore next 3 -- Pi settles provider failures into observations; a rejection here is defensive. */
-            .catch((error: unknown) => {
-              detachedRunFailure ??= error;
-            })
-            // A run that ended without ever opening a turn must not park its
-            // caller for the life of the attachment. Releasing here leaves
-            // `opened` false, which is what the answer below reads.
-            .finally(() => {
-              if (turnOpening === opening) turnOpening = undefined;
-              released.resolve();
-            });
+          // A run that ended without ever opening a turn must not park its
+          // caller for the life of the attachment. The run-end cleanup waits
+          // until this caller has consumed the opening boundary, then drops
+          // any later observer failure instead of charging a future Command.
+          const finishDetachedRun = async (): Promise<void> => {
+            /* v8 ignore next 3 -- Pi opens a turn before a run can settle; this only releases an impossible defensive no-open path. */
+            if (turnOpening === opening) {
+              turnOpening = undefined;
+            }
+            released.resolve();
+            await boundaryChecked.promise;
+            consumeRunFailure();
+          };
+          // Pi converts provider failures into run-end observations. The same
+          // cleanup handles both Promise outcomes so a defensive rejection is
+          // neither unhandled nor retained for another Command.
+          detachedRunSettled = run().then(finishDetachedRun, finishDetachedRun);
           await released.promise;
           // The same command boundary the awaited path keeps, read at the
           // moment this one answers: a run that failed on its way to opening a
           // turn, or an observer that threw committing the turn's start, is
           // this caller's to be told about.
           const failed = consumeRunFailure();
+          boundaryChecked.resolve();
           if (failed !== undefined) {
             throw failed;
           }
@@ -2674,6 +2676,7 @@ async function attachSession(
         spec.signal?.removeEventListener("abort", onAbort);
         interruptTurn();
         await agent.waitForIdle();
+        await detachedRunSettled;
         unsubscribe?.();
         unsubscribe = undefined;
         // Cleanup runs on an uncancellable context on purpose: this is the

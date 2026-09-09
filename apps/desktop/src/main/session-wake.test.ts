@@ -207,21 +207,26 @@ describe("the Session wake bus", () => {
   });
 
   it("announces what a failed write committed before it threw", async () => {
-    const { bus, wakes } = setup();
-    const engine = createSessionWakeBus(
+    const { bus } = setup();
+    const outer = createSessionWakeBus(
       {
         ...bus.engine,
         observe: async () => {
           // A command that committed one transaction and then failed. The
           // fact is durably in the log whatever the caller was told.
-          bus.engine.observe({} as never);
+          await bus.engine.observe({} as never);
           throw new Error("the runtime went away");
         },
       },
       { db: ctx.db },
     );
-    await expect(engine.engine.observe({} as never)).rejects.toThrow("the runtime went away");
+    const wakes: SessionWake[] = [];
+    outer.subscribe((wake) => wakes.push(wake));
 
+    await expect(outer.engine.observe({} as never)).rejects.toThrow("the runtime went away");
+
+    // Assert the wrapper under test, not the inner setup bus: its `finally`
+    // drain is what promises a committed Event survives a rejected write.
     expect(wakes.map(({ event }) => event.payload.kind)).toEqual(["turn.completed"]);
   });
 

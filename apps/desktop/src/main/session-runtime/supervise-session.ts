@@ -345,16 +345,13 @@ export interface SendSessionOutcome {
   sessionId: string;
   handle: string;
   title: string | null;
-  /** Whether the target had a turn open when the steer was submitted. */
-  midTurn: boolean;
   /**
-   * Whether this send OPENED the target's turn rather than joining a running
-   * one (VC-324) — the runtime's own answer, not the projection's guess.
-   *
-   * False for a steer into a streaming target, and false when the runtime did
-   * not say: a supervisor reading it learns that no turn is known to have been
-   * opened, which is the safe direction to be wrong in.
+   * Whether the runtime delivered the message into a turn already in flight.
+   * `null` means the adapter did not report how delivery landed; the caller
+   * must not replace that absence with a projection sampled before dispatch.
    */
+  midTurn: boolean | null;
+  /** Whether this send opened the target's turn, from the runtime's own answer. */
   turnOpened: boolean;
 }
 
@@ -417,7 +414,12 @@ export async function sendSessionMessageOperation(
     sessionId: target.session.id,
     handle: shortSessionId(target.session.id),
     title: target.session.title,
-    midTurn: target.turnActive,
+    // Delivery is an adapter fact. The target projection was read before the
+    // Command and can race with another caller opening a turn in between.
+    midTurn:
+      delivered.delivery === undefined
+        ? null
+        : delivered.delivery === "steer" || delivered.delivery === "queue",
     turnOpened: delivered.turnOpened ?? false,
   };
 }

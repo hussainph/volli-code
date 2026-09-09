@@ -4,6 +4,8 @@ import { insertProject } from "./projects-repo";
 import {
   currentSessionEventCursor,
   currentSessionEventSequence,
+  cursorBeforeSessionCommand,
+  cursorBeforeSessionEvents,
   decodeSessionEventCursor,
   encodeSessionEventCursor,
   firstMatchingSessionEventAfter,
@@ -111,6 +113,45 @@ describe("currentSessionEventCursor", () => {
     // AUTOINCREMENT's own mark, not MAX(sequence): a cursor that moved back
     // would replay every fact above it as if it were new.
     expect(currentSessionEventSequence(db())).toBe(before);
+  });
+});
+
+describe("dispatch cursors", () => {
+  it("points before a Session's first event, including after an idempotent replay", () => {
+    setup(["s-one", "s-two"]);
+    append("s-two", { kind: "session.archived" });
+    append("s-one", { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
+
+    const cursor = cursorBeforeSessionEvents(db(), "s-one");
+    expect(cursor).toBe("session-event-v1:1");
+    expect(firstMatchingSessionEventAfter(db(), ["s-one"], TURN_KINDS, cursor!)).toMatchObject({
+      event: { payload: { kind: "turn.completed" } },
+    });
+    expect(cursorBeforeSessionEvents(db(), "missing")).toBeUndefined();
+  });
+
+  it("points before a Command even when the turn ends before its receipt is read", () => {
+    setup(["s-one"]);
+    db()
+      .prepare(
+        "INSERT INTO session_commands (id, session_id, created_at, intent, route) VALUES ('c-1', 's-one', 1, ?, NULL)",
+      )
+      .run(JSON.stringify({ kind: "session.archive" }));
+    db()
+      .prepare(
+        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+         VALUES ('command-event', 's-one', 1, 1, 1, ?, NULL, 'c-1', ?)`,
+      )
+      .run(PROVENANCE, JSON.stringify({ kind: "session.archived" }));
+    nextSequence.set("s-one", 1);
+    append("s-one", { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
+
+    const cursor = cursorBeforeSessionCommand(db(), "s-one", "c-1");
+    expect(cursor).toBe("session-event-v1:0");
+    expect(firstMatchingSessionEventAfter(db(), ["s-one"], TURN_KINDS, cursor!)).toMatchObject({
+      event: { payload: { kind: "turn.completed" } },
+    });
+    expect(cursorBeforeSessionCommand(db(), "s-one", "missing")).toBeUndefined();
   });
 });
 

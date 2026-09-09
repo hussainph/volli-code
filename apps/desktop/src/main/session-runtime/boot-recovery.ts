@@ -1,8 +1,10 @@
 /**
- * The attachments a relaunch has to retire before anything reads the ledger.
+ * The attachments a relaunch has to recover before anything reads the ledger.
  *
  * One executor can answer for a local attachment after a quit, and it is the
- * structured one: Pi rehydrates from its own recovery sidecar. Everything else
+ * structured one: Pi rehydrates from its own recovery sidecar. A turn that was
+ * active at process loss is reconciled eagerly so its interruption becomes a
+ * durable Session fact before listings read it. Everything else
  * is over the moment the process is. A terminal companion's PTY died with the
  * process that owned it. A binding written under any other adapter id — the
  * departed `opencode` runtime, or whatever a future build retires — names a
@@ -31,6 +33,8 @@ export interface BootRecoveryAttachment {
 export interface BootRecoverySession {
   readonly session: { readonly id: string };
   readonly attachments: readonly BootRecoveryAttachment[];
+  /** Whether the durable ledger still has a turn open from the prior process. */
+  readonly turnActive: boolean;
 }
 
 /** The two Session Engine verbs boot recovery is allowed to reach. */
@@ -42,6 +46,8 @@ export interface BootRecoveryEngine {
 
 export interface BootRecoveryOptions {
   engine: BootRecoveryEngine;
+  /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
+  reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   projectIds: readonly string[];
   newId: () => string;
   now: () => number;
@@ -53,27 +59,38 @@ export interface BootRecoveryOptions {
   onError: (attachmentId: string, error: unknown) => void;
 }
 
-/** Closes every stale open attachment across the given projects; returns how many. */
+/**
+ * Reconciles structured turns left open by a crash and closes every attachment
+ * that cannot survive this process. Returns how many attachments were closed.
+ */
 export async function closeStaleAttachments(options: BootRecoveryOptions): Promise<number> {
   let closed = 0;
   for (const projectId of options.projectIds) {
     const sessions = await options.engine.listSessions({ projectId, scope: "all" });
     for (const projection of sessions) {
       for (const attachment of projection.attachments) {
-        if (!isStaleOnBoot(attachment)) continue;
+        if (needsStructuredTurnRecovery(projection, attachment)) {
+          try {
+            await options.reconcile({
+              sessionId: projection.session.id,
+              attachmentId: attachment.id,
+            });
+            continue;
+          } catch (error) {
+            // The host found a turn with no surviving process. Record that
+            // failure predicate even when the runtime could not reconstruct
+            // its own sidecar, then close the unusable attachment so the
+            // durable projection no longer claims the turn is active.
+            options.onError(attachment.id, error);
+            await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
+          }
+        } else if (!isStaleOnBoot(attachment)) {
+          continue;
+        } else if (projection.turnActive) {
+          await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
+        }
         try {
-          await options.engine.observe({
-            id: options.newId(),
-            kind: "attachment.closed",
-            sessionId: projection.session.id,
-            attachmentId: attachment.id,
-            occurredAt: options.now(),
-            provenance: {
-              source: { kind: "system", id: "desktop-recovery", detail: null },
-              venue: { id: "local", kind: "local" },
-            },
-            outcome: "interrupted",
-          });
+          await closeInterrupted(options, projection.session.id, attachment.id);
           closed += 1;
         } catch (error) {
           options.onError(attachment.id, error);
@@ -82,6 +99,74 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
     }
   }
   return closed;
+}
+
+async function tryRaiseCrashRecoveryAttention(
+  options: BootRecoveryOptions,
+  sessionId: string,
+  attachmentId: string,
+): Promise<void> {
+  try {
+    await raiseCrashRecoveryAttention(options, sessionId, attachmentId);
+  } catch (error) {
+    options.onError(attachmentId, error);
+  }
+}
+
+function raiseCrashRecoveryAttention(
+  options: BootRecoveryOptions,
+  sessionId: string,
+  attachmentId: string,
+): Promise<unknown> {
+  return options.engine.observe({
+    id: options.newId(),
+    kind: "attention.raised",
+    sessionId,
+    attachmentId,
+    occurredAt: options.now(),
+    provenance: {
+      source: { kind: "system", id: "desktop-recovery", detail: null },
+      venue: { id: "local", kind: "local" },
+    },
+    attention: {
+      id: `${attachmentId}:boot-recovery`,
+      attachmentId,
+      kind: "partial_turn_interrupted",
+      detail: "The prior desktop process ended while this turn was active.",
+      diagnostic: null,
+    },
+  });
+}
+
+function closeInterrupted(
+  options: BootRecoveryOptions,
+  sessionId: string,
+  attachmentId: string,
+): Promise<unknown> {
+  return options.engine.observe({
+    id: options.newId(),
+    kind: "attachment.closed",
+    sessionId,
+    attachmentId,
+    occurredAt: options.now(),
+    provenance: {
+      source: { kind: "system", id: "desktop-recovery", detail: null },
+      venue: { id: "local", kind: "local" },
+    },
+    outcome: "interrupted",
+  });
+}
+
+function needsStructuredTurnRecovery(
+  session: BootRecoverySession,
+  attachment: BootRecoveryAttachment,
+): boolean {
+  return (
+    session.turnActive &&
+    attachment.adapterId === STRUCTURED_ADAPTER_ID &&
+    attachment.venue.kind === "local" &&
+    attachment.status === "open"
+  );
 }
 
 function isStaleOnBoot(attachment: BootRecoveryAttachment): boolean {

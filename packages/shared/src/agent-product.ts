@@ -125,7 +125,7 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     baseline: "VC-6",
     build: "VC-324",
     added: [
-      "session_await, the named Agent Tool Surface tool that parks a Session until a watched Session finishes a turn (for: turn), signals done or blocked (verdict), or is stopped (stopped); any is the union. It takes one or many short session ids, the same timeoutSeconds, and the same opaque cursor discipline as ticket_await: chain the cursor every wake or timeout returns and nothing between calls is missed. A Board Session may await any Session in its project; a ticket Session only itself and the subagents it delegated. It replaces polling session list.",
+      "session_await, the named Agent Tool Surface tool that parks a Session until a watched Session finishes a turn (for: turn), signals done or blocked (verdict), or is stopped (stopped); any is the union. It takes one or many short session ids, the same timeoutSeconds, and the same opaque cursor discipline as ticket_await: begin with the cursor returned by session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed. A Board Session may await any Session in its project; a ticket Session only itself and the subagents it delegated. It replaces polling session list.",
       "A turn that ended by interruption wakes as interrupted, never as ended: the two are distinct Session Events, and a fleet that read idle in a listing while four of its members had been cut off is the failure this tool was built for.",
     ],
     changed: [

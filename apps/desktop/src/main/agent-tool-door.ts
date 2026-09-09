@@ -62,6 +62,11 @@ import { awaitTicketTool } from "./agent-await";
 import type { SubscribeTicketWake } from "./agent-await";
 import { awaitSessionTool } from "./agent-session-await";
 import type { SubscribeSessionWake } from "./session-wake";
+import {
+  currentSessionEventCursor,
+  cursorBeforeSessionCommand,
+  cursorBeforeSessionEvents,
+} from "./db/session-events-cursor-repo";
 import type { AutomationRunRequest, RunAutomationOutcome } from "./automations/run";
 import { StructuredSessionsError } from "./session-runtime/sessions";
 import { DelegateSessionError } from "./session-runtime/delegate-session";
@@ -424,6 +429,7 @@ async function startSessionTool(
     );
   }
 
+  const cursorBeforeStart = currentSessionEventCursor(options.db);
   try {
     const started = await startSessionOperation(
       {
@@ -463,10 +469,12 @@ async function startSessionTool(
       override.choice !== undefined && "tier" in override.choice
         ? ` (${override.choice.tier} tier)`
         : "";
+    const cursor = cursorBeforeSessionEvents(options.db, started.sessionId) ?? cursorBeforeStart;
     return {
       text: [
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
+        `Session cursor: ${cursor}. Pass it to session_await to include every event from this dispatch.`,
         started.state === "ready"
           ? "It is attached and its kickoff turn has been submitted. It runs on its own from here and does not report back into this Session; use `volli session peek` to look in on it."
           : "It was created but its attachment needs recovery, so no kickoff was submitted. A person can retry it from the app.",
@@ -571,11 +579,13 @@ async function sendSessionTool(
   if (!handle.ok) return refusal(handle.text);
   const message = requiredText(request.input, "message", "the steering text to deliver.");
   if (!message.ok) return refusal(message.text);
+  const operationId = `${session.sessionId}:${request.toolCallId}`;
+  const cursorBeforeSend = currentSessionEventCursor(options.db);
   const withdrawn = sendWithdrawal(signal);
   try {
     const outcome = await Promise.race([
       sendSessionMessageOperation(ports, {
-        operationId: `${session.sessionId}:${request.toolCallId}`,
+        operationId,
         callerSessionId: session.sessionId,
         projectId: session.projectId,
         handle: handle.value,
@@ -588,14 +598,19 @@ async function sendSessionTool(
         `This turn stopped waiting before Volli could confirm steering into Session ${handle.value}. The message may still have been delivered; \`volli session peek ${handle.value}\` says whether it was.`,
       );
     }
+    const cursor =
+      cursorBeforeSessionCommand(options.db, outcome.sessionId, operationId) ?? cursorBeforeSend;
     return {
       text: [
         `Delivered into Session ${outcome.handle}${outcome.title === null ? "" : ` (${JSON.stringify(outcome.title)})`}, marked as coming from this Session.`,
         outcome.turnOpened
           ? "It opened a new turn, which is running now; this call did not wait for it to finish."
-          : outcome.midTurn
+          : outcome.midTurn === true
             ? "A turn was already open, so the model reads it mid-stream."
-            : "No new turn is known to have opened.",
+            : outcome.midTurn === false
+              ? "The adapter took it as a new prompt, but did not confirm that a turn opened."
+              : "The adapter accepted it but did not report whether it opened or joined a turn.",
+        `Session cursor: ${cursor}. Pass it to session_await to include every event from this dispatch.`,
         "Nothing reports back into this Session; use `volli session peek` to observe the effect.",
       ].join(" "),
     };
@@ -835,6 +850,7 @@ async function delegateSessionTool(
   const override = readModelOverride(request.input);
   if (!override.ok) return refusal(override.text);
   const modelOverride = startSessionModelOverride(override.choice, override.reasoning);
+  const cursorBeforeDelegate = currentSessionEventCursor(options.db);
   try {
     const outcome = await delegations.delegate({
       operationId: `${session.sessionId}:${request.toolCallId}`,
@@ -851,8 +867,9 @@ async function delegateSessionTool(
       text: [
         `Delegated to subagent Session ${outcome.handle}, titled ${JSON.stringify(outcome.title)}.`,
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
+        `Session cursor: ${cursorBeforeSessionEvents(options.db, outcome.childSessionId) ?? cursorBeforeDelegate}. Pass it to session_await to include every event from this dispatch.`,
         outcome.state === "running"
-          ? `It is attached and working on the task in this Session's working directory. Keep working: when its first turn completes, a notice marked as Volli's will arrive in this Session naming it, and \`volli session answer ${outcome.handle}\` reads its final message — do not wait or poll for it. \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
+          ? `It is attached and working on the task in this Session's working directory. Keep working while it runs; if this turn must park, use session_await instead of polling. When its first turn completes, a notice marked as Volli's will arrive in this Session naming it, and \`volli session answer ${outcome.handle}\` reads its final message. \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
           : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; no notice will arrive until then.",
       ].join("\n"),
     };

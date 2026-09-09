@@ -7,7 +7,6 @@ import {
   SESSION_AWAIT_EVENT_KINDS,
   SESSION_AWAIT_FOR,
   SESSION_AWAIT_KINDS,
-  SESSION_AWAIT_PLANNED_KINDS,
   sessionAwaitEventKinds,
   sessionAwaitKindsFor,
 } from "./session-await";
@@ -33,14 +32,13 @@ describe("the Session await vocabulary", () => {
     }
   });
 
-  it("keeps Phase 2's kinds out of the vocabulary it declares them beside", () => {
-    // Declared so they slot in, implemented nowhere: a `for` value the handler
-    // cannot wake on would park a turn until its timeout with nothing to say.
-    for (const planned of SESSION_AWAIT_PLANNED_KINDS) {
-      expect(SESSION_AWAIT_FOR).not.toContain(planned);
-      expect(isSessionAwaitFor(planned)).toBe(false);
+  it("refuses kinds it does not implement, so no request parks forever", () => {
+    // A half-implemented kind that parks until its timeout would be worse
+    // than a word the tool does not know.
+    for (const speculative of ["question", "trouble"]) {
+      expect(SESSION_AWAIT_FOR).not.toContain(speculative);
+      expect(isSessionAwaitFor(speculative)).toBe(false);
     }
-    expect(SESSION_AWAIT_PLANNED_KINDS).toEqual(["question", "trouble"]);
   });
 
   it("bounds one wait at the same fleet size a ticket wait allows", () => {

@@ -588,37 +588,32 @@ function parseActor(value: unknown): AuthorityActorPolicyOverride | undefined {
   if (coordinationVerbs !== undefined) actor.coordinationVerbs = coordinationVerbs;
   const peek = enumOrUndefined(row.peek, PEEK_DISCLOSURES);
   if (peek !== undefined) actor.peek = peek;
-  const awaitable = parseAwaitableList(row.awaitable);
+  const awaitable = parseAwaitableList(row.awaitable, TICKET_AWAIT_KINDS);
   if (awaitable !== undefined) actor.awaitable = awaitable;
-  const awaitableSessions = parseAwaitableSessionsList(row.awaitableSessions);
+  const awaitableSessions = parseAwaitableList(row.awaitableSessions, SESSION_AWAIT_KINDS);
   if (awaitableSessions !== undefined) actor.awaitableSessions = awaitableSessions;
   return Object.keys(actor).length === 0 ? undefined : actor;
 }
 
-function parseAwaitableList(value: unknown): AuthorityAwaitableOverride | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const allowed = [...TICKET_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
-  return value.every(
-    (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
-  )
-    ? (value as AuthorityAwaitableOverride)
-    : undefined;
-}
-
 /**
- * The Session-await list's read path. A separate function rather than one
- * parameterised over both vocabularies, so a document naming a Ticket kind in
- * the Session list is dropped rather than quietly admitted.
+ * One await list's read path, parameterized over its vocabulary.
+ *
+ * Shared by the two lists because they were byte-identical apart from the
+ * vocabulary — while the vocabularies themselves stay apart, which is what
+ * stops a Ticket kind being accepted into the Session list. All-or-nothing
+ * like every list here: a list that lost an unreadable entry would grant
+ * strictly less than the document says, with nothing to show it happened.
  */
-function parseAwaitableSessionsList(
+function parseAwaitableList<V extends readonly string[]>(
   value: unknown,
-): AuthorityAwaitableSessionsOverride | undefined {
+  vocabulary: V,
+): readonly V[number][] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const allowed = [...SESSION_AWAIT_KINDS, AUTHORITY_DEFAULTS_TOKEN] as const;
+  const allowed = [...vocabulary, AUTHORITY_DEFAULTS_TOKEN] as const;
   return value.every(
     (entry) => typeof entry === "string" && (allowed as readonly string[]).includes(entry),
   )
-    ? (value as AuthorityAwaitableSessionsOverride)
+    ? (value as readonly V[number][])
     : undefined;
 }
 

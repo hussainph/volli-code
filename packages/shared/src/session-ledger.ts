@@ -443,9 +443,10 @@ export function sessionAwaitsUser(
  * budget ran out and it raised an `adapter_unrecoverable` /
  * `adapter_disconnected` / `transport_retrying` Attention before writing the
  * interruption. `crash-recovered` is the app finding the turn afterwards — the
- * `partial_turn_interrupted` Attention lazy rehydration raises for a turn no
- * process was left running. `unknown` is an interruption with no failure
- * Attention beside it, which is what a deliberate stop of the turn looks like.
+ * `partial_turn_interrupted` Attention recovery raises for a turn no process
+ * was left running. An interruption with no failure Attention is a deliberate
+ * cancellation or an incomplete record and does not enter the red listing
+ * state.
  *
  * Deliberately NOT a network/auth/provider vocabulary: which transport fault
  * produced the dead end is classified inside the runtime and thrown away
@@ -453,11 +454,7 @@ export function sessionAwaitsUser(
  * guessing. Widening this vocabulary is a change to what the runtime RECORDS,
  * not to what this function reads.
  */
-export const SESSION_INTERRUPTION_REASONS = [
-  "stopped-by-runtime",
-  "crash-recovered",
-  "unknown",
-] as const;
+export const SESSION_INTERRUPTION_REASONS = ["stopped-by-runtime", "crash-recovered"] as const;
 
 export type SessionInterruptionReason = (typeof SESSION_INTERRUPTION_REASONS)[number];
 
@@ -500,7 +497,7 @@ export function sessionInterruptionReason(
   for (const [kind, reason] of INTERRUPTION_ATTENTIONS) {
     if (projection.attention.active.some((attention) => attention.kind === kind)) return reason;
   }
-  return "unknown";
+  return null;
 }
 
 /**

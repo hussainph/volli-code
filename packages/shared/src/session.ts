@@ -306,11 +306,12 @@ export function shortSessionId(sessionId: string): string {
  * orchestrator is asking about. A PTY never produces it.
  *
  * "interrupted" (VC-324) is the other half of that same hiding: a Session whose
- * turn DIED — the retry budget ran out, the app was killed mid-turn, a stop
- * cut the turn short — read "idle", indistinguishable from one that finished
- * quietly, even though the ledger had said `turn.interrupted` out loud. It is
- * derived from that committed fact alone ({@link sessionEndedInterrupted}),
- * never from silence, and a PTY never produces it either.
+ * turn DIED — the retry budget ran out or the app was killed mid-turn — read
+ * "idle", indistinguishable from one that finished quietly. It is derived
+ * from the committed `turn.interrupted` fact together with its active failure
+ * Attention ({@link sessionEndedInterrupted}), never from silence. A deliberate
+ * user cancellation has no failure Attention and does not become this red
+ * state; a PTY never produces it either.
  */
 export const SESSION_ACTIVITY_STATES = [
   "working",

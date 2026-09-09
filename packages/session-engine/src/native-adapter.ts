@@ -1,5 +1,6 @@
 import type {
   AuthoritySnapshot,
+  DeliveryOutcome,
   ModelSelection,
   RuntimeMessageSettle,
   RuntimeObservation,
@@ -120,6 +121,12 @@ export type DeliveryReceipt =
       status: "accepted";
       acceptedAt: number;
       native: SessionNativeReference | null;
+      /**
+       * How the adapter actually delivered this message. Transport detail,
+       * not durable receipt content: a supervisor uses it to distinguish a
+       * prompt that opened a turn from a steer that joined one already open.
+       */
+      delivery?: Extract<DeliveryOutcome, { kind: "delivered" }>["delivery"];
       /**
        * Whether this delivery OPENED the turn it landed in, rather than
        * joining one already running (VC-324).

@@ -5029,6 +5029,26 @@ describe("settling a submit on the turn opening (VC-324)", () => {
     expect(kinds(observations)).toContain("turn:completed");
   });
 
+  it("reports an observer failure from the turn-opening boundary to that caller", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    spec.observer = async (observation) => {
+      observations.push(observation);
+      if (observation.kind === "turn" && observation.state === "started") {
+        throw new Error("turn store unavailable");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("opened anyway")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(
+      handle.submitUserMessage("go", "steer", "command-opening-failed", [], [], "opened"),
+    ).rejects.toThrow("turn store unavailable");
+    await handle.close();
+  });
+
   it("raises the same Attention when the detached run fails", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const raised = Promise.withResolvers<void>();
@@ -5051,6 +5071,46 @@ describe("settling a submit on the turn opening (VC-324)", () => {
     expect(attentions(observations)).toEqual([
       expect.objectContaining({ reason: "runtime-failure", message: "malformed provider payload" }),
     ]);
+    await handle.close();
+  });
+
+  it("does not charge a detached run failure to the next command", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const detachedFailed = Promise.withResolvers<void>();
+    const runEnded = Promise.withResolvers<void>();
+    spec.observer = async (observation) => {
+      observations.push(observation);
+      if (observation.kind === "turn" && observation.state === "interrupted") {
+        runEnded.resolve();
+      }
+      if (observation.kind === "attention" && observation.state === "raised") {
+        detachedFailed.resolve();
+        throw new Error("attention store unavailable");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail("malformed provider payload"),
+          settles("the next command still runs"),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(
+      handle.submitUserMessage("first", "steer", "command-detached", [], [], "opened"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    await detachedFailed.promise;
+    await runEnded.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(handle.submitUserMessage("second")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
     await handle.close();
   });
 

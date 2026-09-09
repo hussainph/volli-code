@@ -34,6 +34,11 @@ import {
 } from "@volli/shared";
 
 import { prepared } from "./prepared";
+import {
+  createSequenceCursorCodec,
+  currentSqliteSequence,
+  firstMatchingSequencedRow,
+} from "./sequence-cursor";
 
 /** One durable Session Event together with the opaque cursor after it. */
 export interface SequencedSessionEvent {
@@ -62,21 +67,13 @@ interface SequencedSessionEventRow {
  * is refused rather than silently read as another ledger's position.
  */
 const SESSION_EVENT_CURSOR_PREFIX = "session-event-v1:";
+const SESSION_EVENT_CURSOR = createSequenceCursorCodec(
+  SESSION_EVENT_CURSOR_PREFIX,
+  "Session Event",
+);
 
-export function encodeSessionEventCursor(sequence: number): string {
-  if (!Number.isSafeInteger(sequence) || sequence < 0) {
-    throw new Error(`Invalid Session Event sequence: ${String(sequence)}`);
-  }
-  return `${SESSION_EVENT_CURSOR_PREFIX}${sequence.toString(36)}`;
-}
-
-export function decodeSessionEventCursor(cursor: unknown): number | null {
-  if (typeof cursor !== "string" || !cursor.startsWith(SESSION_EVENT_CURSOR_PREFIX)) return null;
-  const encoded = cursor.slice(SESSION_EVENT_CURSOR_PREFIX.length);
-  if (!/^(?:0|[1-9a-z][0-9a-z]*)$/.test(encoded)) return null;
-  const sequence = Number.parseInt(encoded, 36);
-  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
-}
+export const encodeSessionEventCursor = SESSION_EVENT_CURSOR.encode;
+export const decodeSessionEventCursor = SESSION_EVENT_CURSOR.decode;
 
 /**
  * The database-wide high-water mark at this instant, as a number.
@@ -88,16 +85,44 @@ export function decodeSessionEventCursor(cursor: unknown): number | null {
  * receives only {@link encodeSessionEventCursor}'s opaque string.
  */
 export function currentSessionEventSequence(db: Database.Database): number {
-  const row = prepared<[], { sequence: number }>(
-    db,
-    "SELECT seq AS sequence FROM sqlite_sequence WHERE name = 'session_event_sequence'",
-  ).get();
-  return row?.sequence ?? 0;
+  return currentSqliteSequence(db, "session_event_sequence");
 }
 
 /** The database-wide high-water cursor at this instant, opaque. */
 export function currentSessionEventCursor(db: Database.Database): string {
   return encodeSessionEventCursor(currentSessionEventSequence(db));
+}
+
+/** The cursor immediately before this Session's first durable Event. */
+export function cursorBeforeSessionEvents(
+  db: Database.Database,
+  sessionId: string,
+): string | undefined {
+  const row = prepared<[string], { sequence: number | null }>(
+    db,
+    "SELECT MIN(sequence) AS sequence FROM session_event_sequence WHERE session_id = ?",
+  ).get(sessionId);
+  return row?.sequence === null || row?.sequence === undefined
+    ? undefined
+    : encodeSessionEventCursor(Math.max(0, row.sequence - 1));
+}
+
+/** The cursor immediately before the first Event recorded for one Command. */
+export function cursorBeforeSessionCommand(
+  db: Database.Database,
+  sessionId: string,
+  commandId: string,
+): string | undefined {
+  const row = prepared<[string, string], { sequence: number | null }>(
+    db,
+    `SELECT MIN(ordered.sequence) AS sequence
+       FROM session_event_sequence ordered
+       JOIN session_events event ON event.id = ordered.event_id
+      WHERE ordered.session_id = ? AND event.command_id = ?`,
+  ).get(sessionId, commandId);
+  return row?.sequence === null || row?.sequence === undefined
+    ? undefined
+    : encodeSessionEventCursor(Math.max(0, row.sequence - 1));
 }
 
 const SEQUENCED_COLUMNS = `e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
@@ -142,20 +167,20 @@ export function firstMatchingSessionEventAfter(
   eventKinds: readonly string[],
   cursor: string,
 ): SequencedSessionEvent | undefined {
-  if (sessionIds.length === 0 || eventKinds.length === 0) return undefined;
   const sequence = decodeSessionEventCursor(cursor);
   if (sequence === null) return undefined;
-  const row = prepared<[number, string, string], SequencedSessionEventRow>(
+  const row = firstMatchingSequencedRow<SequencedSessionEventRow>(
     db,
-    `SELECT ${SEQUENCED_COLUMNS}
-       FROM session_event_sequence ordered
-       JOIN session_events e ON e.id = ordered.event_id
-      WHERE ordered.sequence > ?
-        AND ordered.session_id IN (SELECT value FROM json_each(?))
-        AND ordered.kind IN (SELECT value FROM json_each(?))
-      ORDER BY ordered.sequence ASC
-      LIMIT 1`,
-  ).get(sequence, JSON.stringify(sessionIds), JSON.stringify(eventKinds));
+    {
+      select: SEQUENCED_COLUMNS,
+      sequenceTable: "session_event_sequence",
+      eventTable: "session_events",
+      ownerColumn: "session_id",
+    },
+    sessionIds,
+    eventKinds,
+    sequence,
+  );
   return row === undefined ? undefined : mapSequenced(row);
 }
 

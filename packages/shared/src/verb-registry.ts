@@ -1190,6 +1190,7 @@ export const VERB_REGISTRY = [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
+        "Its receipt includes a Session cursor; pass that cursor to session_await so a fast completion between these calls is replayed rather than missed.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1900,7 +1901,8 @@ export const VERB_REGISTRY = [
       description: [
         "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
         "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
-        "The message is delivered marked as steering from this Session; it does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn and includes a Session cursor for a lossless later session_await.",
+        "It does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
         "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
       ].join(" "),
       input: [
@@ -1994,7 +1996,7 @@ export const VERB_REGISTRY = [
       // The last line is the same one every control-tier tool ends on.
       description: [
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll or wait for it. Several may run at once.",
+        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once.",
         "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
@@ -2089,7 +2091,7 @@ export const VERB_REGISTRY = [
         "Wait until one of the named Sessions finishes or is interrupted mid-turn, signals done or blocked, or is stopped, then wake with that one event.",
         "Use it after delegating or steering work: it replaces polling `volli session list` in a loop and sleeping in bash, both of which waste turns or wedge the session.",
         "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
-        "Every wake and timeout returns an opaque cursor; pass it unchanged to the next call and nothing committed in between is missed.",
+        "Begin with the Session cursor returned by session_start, session_send or session_delegate; every wake and timeout returns the next cursor to chain so nothing committed in between is missed.",
         "A Board Session may await any Session in its project; a Ticket Session may await itself and the subagents it delegated. What may be awaited is project policy; a refusal names what the policy allows.",
       ].join(" "),
       input: [
@@ -2116,7 +2118,7 @@ export const VERB_REGISTRY = [
           name: "cursor",
           type: "string",
           description:
-            "Wake immediately on the first matching event after this opaque cursor. Copy the cursor returned by the previous wake or timeout unchanged; omit it on the first wait to start watching from now.",
+            "Wake immediately on the first matching event after this opaque cursor. Start with the cursor returned by session_start, session_send or session_delegate, then copy each wake or timeout cursor unchanged; omit it only to start watching from now.",
         },
       ],
     },

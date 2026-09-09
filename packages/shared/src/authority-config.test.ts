@@ -331,6 +331,12 @@ describe("parseAuthorityPolicyOverride", () => {
     ).toEqual({
       actors: { session: { awaitableSessions: [AUTHORITY_DEFAULTS_TOKEN, "turn"] } },
     });
+    // Every Session kind is admitted to its own list, not just `turn`.
+    expect(
+      parseAuthorityPolicyOverride({
+        actors: { session: { awaitableSessions: ["verdict", "stopped"] } },
+      }),
+    ).toEqual({ actors: { session: { awaitableSessions: ["verdict", "stopped"] } } });
     // A Ticket kind in the Session list, and a Session kind in the Ticket one.
     expect(
       parseAuthorityPolicyOverride({ actors: { session: { awaitableSessions: ["comment"] } } }),

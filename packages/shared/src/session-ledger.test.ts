@@ -1660,12 +1660,8 @@ describe("sessionInterruptionReason", () => {
     return { ...base, attention: { active, primary: active[0] ?? null } };
   }
 
-  it("names the three reasons and nothing else", () => {
-    expect(SESSION_INTERRUPTION_REASONS).toEqual([
-      "stopped-by-runtime",
-      "crash-recovered",
-      "unknown",
-    ]);
+  it("names the two durable failure reasons and nothing else", () => {
+    expect(SESSION_INTERRUPTION_REASONS).toEqual(["stopped-by-runtime", "crash-recovered"]);
   });
 
   it("is null while a turn is open, whatever the last one did", () => {
@@ -1689,10 +1685,10 @@ describe("sessionInterruptionReason", () => {
     ).toBeNull();
   });
 
-  it("says unknown when nothing explains the interruption", () => {
-    expect(sessionInterruptionReason(interrupted)).toBe("unknown");
+  it("does not turn an unexplained or deliberate cancellation into a red interruption", () => {
+    expect(sessionInterruptionReason(interrupted)).toBeNull();
     // An Attention outside the failure list explains nothing either.
-    expect(sessionInterruptionReason(withAttention(interrupted, "input_required"))).toBe("unknown");
+    expect(sessionInterruptionReason(withAttention(interrupted, "input_required"))).toBeNull();
   });
 
   it("reads a crash recovery off partial_turn_interrupted", () => {
@@ -1729,7 +1725,7 @@ describe("sessionInterruptionReason", () => {
       event(1, { kind: "turn.started", attachmentId, turnId: "t1" }),
       event(2, { kind: "turn.interrupted", attachmentId, turnId: "t1" }),
     ];
-    expect(sessionInterruptionReason(projectSession(session, events))).toBe("unknown");
+    expect(sessionInterruptionReason(projectSession(session, events))).toBeNull();
     // A newer turn is the answer changing on its own — no history walk needed.
     expect(
       sessionInterruptionReason(
@@ -1751,7 +1747,15 @@ describe("sessionEndedInterrupted", () => {
 
   it("is the yes/no of sessionInterruptionReason", () => {
     expect(sessionEndedInterrupted(quiet)).toBe(false);
-    expect(sessionEndedInterrupted({ ...quiet, lastTurnOutcome: "interrupted" })).toBe(true);
+    expect(sessionEndedInterrupted({ ...quiet, lastTurnOutcome: "interrupted" })).toBe(false);
+    const failure = raised("adapter_unrecoverable");
+    expect(
+      sessionEndedInterrupted({
+        ...quiet,
+        lastTurnOutcome: "interrupted",
+        attention: { active: [failure], primary: failure },
+      }),
+    ).toBe(true);
   });
 });
 

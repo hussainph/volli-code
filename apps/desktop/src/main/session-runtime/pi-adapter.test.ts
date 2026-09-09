@@ -1420,6 +1420,7 @@ describe("Pi native adapter dispatch", () => {
       status: "accepted",
       acceptedAt: 1000,
       native: binding.native,
+      delivery: "prompt",
     });
   });
 
@@ -1547,8 +1548,10 @@ describe("Pi native adapter dispatch", () => {
       variant: null,
     });
 
-    // Absent on the command is `"turn"`, and the receipt claims no open turn.
+    // Absent on the command is `"turn"`. Delivery remains a transient adapter
+    // answer while the receipt claims no turn is still open.
     expect(runtime.settles).toEqual(["turn"]);
+    expect(plain).toMatchObject({ delivery: "prompt" });
     expect(plain).not.toHaveProperty("turnOpened");
 
     runtime.outcomes.push({ kind: "delivered", delivery: "prompt", turnOpened: true });
@@ -1566,7 +1569,7 @@ describe("Pi native adapter dispatch", () => {
     });
 
     expect(runtime.settles).toEqual(["turn", "opened"]);
-    expect(opened).toMatchObject({ status: "accepted", turnOpened: true });
+    expect(opened).toMatchObject({ status: "accepted", delivery: "prompt", turnOpened: true });
   });
 
   it("rejects a message with nothing in it to send", async () => {

@@ -81,6 +81,7 @@ import {
 } from "./db/session-events-cursor-repo";
 import type { SubscribeSessionWake } from "./session-wake";
 import { terminalSessionRecord } from "./session-control/terminal-attachment";
+import { optionalPositiveNumber, parkForWake, waitRefusal as refusal } from "./agent-wait";
 
 /** The Session read this tool needs: handles resolve inside one project's listing. */
 export type AwaitSessionEngine = Pick<SessionEngine, "listSessions">;
@@ -99,24 +100,6 @@ export interface AwaitSessionPorts {
    * reports in words rather than by throwing.
    */
   sessions: () => AwaitSessionEngine | null;
-}
-
-/** A refusal the model reads and can act on. Never a thrown error. */
-function refusal(text: string): RuntimeVerbResult {
-  return { text };
-}
-
-/** One optional positive number field, or a refusal naming the field. */
-function optionalPositiveNumber(
-  input: Readonly<Record<string, unknown>>,
-  field: string,
-): { ok: true; value: number | undefined } | { ok: false; text: string } {
-  const raw = input[field];
-  if (raw === undefined || raw === null) return { ok: true, value: undefined };
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    return { ok: false, text: `\`${field}\` must be a positive number when given.` };
-  }
-  return { ok: true, value: raw };
 }
 
 /** Who ended a Session's work, in the vocabulary the stop fact carries. */
@@ -160,7 +143,7 @@ function wakeText(handle: string, event: SessionEvent, cursor: string): string {
     // `idle` in a listing while four of its members had been cut off.
     lines.push(
       `Session ${handle} was interrupted mid-turn; its work did not finish.`,
-      "Volli has no verb to resume a Session, so a person must restart it.",
+      `Use session_send on Session ${handle} to continue it when its executor is available; otherwise a person can reattach it in the app.`,
     );
   } else if (payload.kind === "session.signaled") {
     lines.push(`Session ${handle} signaled ${payload.signal}.`);
@@ -297,64 +280,46 @@ export async function awaitSessionTool(
   const eventKindSet = new Set<string>(eventKinds);
   const handles = [...watched.values()].join(", ");
 
-  return new Promise<RuntimeVerbResult>((resolve, reject) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const settle = (act: () => void): void => {
-      if (settled) return;
-      settled = true;
-      unsubscribe();
-      if (timer !== undefined) clearTimeout(timer);
-      signal.removeEventListener("abort", withdraw);
-      act();
-    };
-    const withdraw = (): void =>
-      settle(() => reject(new Error("The wait was withdrawn before any event arrived.")));
-    const unsubscribe = ports.subscribeSessionWake((wake) => {
+  // Subscribe first, establish/replay the cursor second: the shared wait
+  // lifecycle guarantees an event is included in the durable query or arrives
+  // through the live subscription — never neither.
+  const continuousCursor = cursor ?? currentSessionEventCursor(ports.db);
+  return parkForWake({
+    signal,
+    subscribe: ports.subscribeSessionWake,
+    onWake: (wake) => {
       const handle = watched.get(wake.event.sessionId);
-      if (handle === undefined || !eventKindSet.has(wake.event.payload.kind)) return;
-      settle(() => resolve({ text: wakeText(handle, wake.event, wake.cursor) }));
-    });
-
-    // Subscribe first, establish/replay the cursor second: the read is
-    // synchronous (better-sqlite3 does not yield), so an event is either
-    // included in the durable query or arrives through the live subscription —
-    // never neither. A first call intentionally starts at "now", while still
-    // returning that baseline on a timeout so the gap before a retry is
-    // replayable.
-    const continuousCursor = cursor ?? currentSessionEventCursor(ports.db);
-    if (cursor !== undefined) {
-      const replayed = firstMatchingSessionEventAfter(
-        ports.db,
-        [...watched.keys()],
-        eventKinds,
-        cursor,
-      );
-      const handle = replayed === undefined ? undefined : watched.get(replayed.event.sessionId);
-      if (replayed !== undefined && handle !== undefined) {
-        settle(() => resolve({ text: wakeText(handle, replayed.event, replayed.cursor) }));
-        return;
-      }
-    }
-
-    if (timeout.value !== undefined) {
-      timer = setTimeout(
-        () =>
-          settle(() =>
-            resolve({
-              text: [
-                `No matching event within ${timeout.value} seconds on ${handles} (waiting for: ${kinds.join(", ")}).`,
-                `cursor: ${continuousCursor}. Pass this cursor unchanged to the next session_await; events committed after this wait began will be replayed.`,
-              ].join("\n"),
-            }),
-          ),
-        timeout.value * 1000,
-      );
-    }
-
-    // Read rather than trusted to the listener: a signal that aborted while
-    // the subscription opened would never fire again (ask_user's lesson).
-    if (signal.aborted) withdraw();
-    else signal.addEventListener("abort", withdraw, { once: true });
+      return handle === undefined || !eventKindSet.has(wake.event.payload.kind)
+        ? undefined
+        : { text: wakeText(handle, wake.event, wake.cursor) };
+    },
+    ...(cursor === undefined
+      ? {}
+      : {
+          replay: () => {
+            const replayed = firstMatchingSessionEventAfter(
+              ports.db,
+              [...watched.keys()],
+              eventKinds,
+              cursor,
+            );
+            const handle =
+              replayed === undefined ? undefined : watched.get(replayed.event.sessionId);
+            return replayed === undefined || handle === undefined
+              ? undefined
+              : { text: wakeText(handle, replayed.event, replayed.cursor) };
+          },
+        }),
+    ...(timeout.value === undefined
+      ? {}
+      : {
+          timeoutMs: timeout.value * 1000,
+          onTimeout: () => ({
+            text: [
+              `No matching event within ${timeout.value} seconds on ${handles} (waiting for: ${kinds.join(", ")}).`,
+              `cursor: ${continuousCursor}. Pass this cursor unchanged to the next session_await; events committed after this wait began will be replayed.`,
+            ].join("\n"),
+          }),
+        }),
   });
 }

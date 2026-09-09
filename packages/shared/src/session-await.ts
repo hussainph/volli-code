@@ -50,23 +50,6 @@ export const SESSION_AWAIT_KINDS = ["turn", "verdict", "stopped"] as const;
 export type SessionAwaitKind = (typeof SESSION_AWAIT_KINDS)[number];
 
 /**
- * The kinds Phase 2 adds, declared here and implemented nowhere.
- *
- * Written down rather than left in a note because the shape of the map below
- * is what decides whether they slot in: `question` is `interaction.opened` and
- * `trouble` is an `attention.raised` of a failure kind — one event kind each,
- * with `trouble` needing a payload-level filter the Phase-1 kinds do not. A
- * reader adding them moves the name from this list into
- * {@link SESSION_AWAIT_KINDS} and gives {@link SESSION_AWAIT_EVENT_KINDS} its
- * row; the compiler names every other site.
- *
- * It is NOT part of the `for` vocabulary, so asking for one today is refused
- * by the same branch that refuses a misspelling — a half-implemented kind that
- * parks forever would be worse than a word the tool does not know.
- */
-export const SESSION_AWAIT_PLANNED_KINDS = ["question", "trouble"] as const;
-
-/**
  * One parked turn may watch a fleet, not an unbounded request payload. The
  * same hundred {@link MAX_TICKET_AWAIT_TARGETS} allows, for the same reason
  * and deliberately the same number: the two tools are one discipline, and a

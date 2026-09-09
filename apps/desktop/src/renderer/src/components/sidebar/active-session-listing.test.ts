@@ -811,6 +811,32 @@ describe("buildActiveSessionListing — chat Sessions", () => {
     expect(titles(result.active)).toEqual(["Actually working", "Closed mid-turn"]);
   });
 
+  it("carries a chat's interrupted activity into Previous, so it stays dead after a relaunch (VC-324)", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          ticketId: "t1",
+          title: "Died last night",
+          live: false,
+          activity: "interrupted",
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 5_000_000,
+    });
+
+    expect(titles(result.active)).toEqual([]);
+    // The row the Previous band renders is built from THIS field, so the dot
+    // survives every relaunch the record does.
+    expect(result.previous).toMatchObject([{ title: "Died last night", activity: "interrupted" }]);
+  });
+
   it("bands a ticket's live terminal and its quiet chat separately, each on its own state", () => {
     const result = buildActiveSessionListing({
       tickets: [ticket({ id: "t1", status: "doing" })],
@@ -2519,6 +2545,7 @@ function previousRow(
     title: "Chat",
     kind: "chat",
     endedOrQuietAt: 1_000,
+    activity: "idle",
     provenance: PERSON_STARTED,
     target: null,
     cleaned: false,
