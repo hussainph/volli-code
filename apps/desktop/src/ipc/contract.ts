@@ -54,6 +54,20 @@ import type {
   ModelAccessSignInType,
   DeliberateMoveChoice,
   ModelSelection,
+  NotificationEvent,
+  NotificationPreferences,
+  NotificationProducer,
+  NotificationTarget,
+  OrphanAgeBasis,
+  OrphanCleanupItem,
+  OrphanCleanupItemKind,
+  OrphanCleanupItemState,
+  OrphanCleanupReceipt,
+  OrphanCleanupRejectionCode,
+  OrphanCleanupRun,
+  OrphanCleanupSource,
+  OrphanKeptReason,
+  OrphanMetadataKeptReason,
   PendingArmedRun,
   PendingArmedRunFailure,
   Project,
@@ -159,14 +173,9 @@ export type ProjectAuthorityPolicyResult =
   | { ok: true; project: Project }
   | { ok: false; error: string; errors?: readonly string[] };
 
-/**
- * One project's defaults for new Sessions (VC-111, migration 023). Both fields
- * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
- * why these two travel together where the theme pair does not.
- */
+/** One project's Chat model default; `null` means inherit (VC-111, migration 023). */
 export interface ProjectSessionDefaultsInput {
   id: string;
-  harness: string | null;
   model: ModelSelection | null;
 }
 
@@ -439,9 +448,34 @@ export interface WorktreeCommitInput {
   includeUnstaged?: boolean;
 }
 
-/** `{ rescan: true }` forces a fresh orphan sweep (Settings → Worktrees rescan); omitted/`false` returns the launch's cached report. */
+/**
+ * `{ refresh: true }` re-runs the READ-ONLY orphan scan (the Storage pane's
+ * Scan); omitted/`false` returns the launch's cached scan. Neither shape
+ * changes anything on disk — cleanup is its own confirmed channel (VC-284).
+ */
 export interface WorktreeOrphansInput {
-  rescan?: boolean;
+  refresh?: boolean;
+}
+
+/**
+ * The Storage pane's confirmed cleanup, as a COMMAND rather than a list of
+ * paths (VC-284 review, S1/C1).
+ *
+ * It carries no paths at all. `scanRevision` names the read-only scan a person
+ * reviewed, `itemIds` selects items out of the proposal main itself minted for
+ * that revision, and `commandId` is the caller's UUID — the same command id
+ * replayed answers with the first run's receipt instead of removing anything a
+ * second time. A revision main no longer holds, or an item id that revision
+ * never proposed, is REFUSED: a client cannot name a directory that no
+ * completed scan offered.
+ */
+export interface WorktreeOrphanCleanupInput {
+  /** Caller-minted UUID. Idempotent: one command id can only ever run once. */
+  commandId: string;
+  /** The opaque revision of the scan whose proposal was confirmed. */
+  scanRevision: string;
+  /** Ids of the proposed items to act on, from that scan's plan. */
+  itemIds: string[];
 }
 
 /** `{ path }` — the Settings list's explicit, user-confirmed dirty-orphan deletion target. */
@@ -599,7 +633,7 @@ export interface VolliDataIpcContract {
     args: [input: ProjectSkillModesInput];
     result: ProjectUpdateResult;
   };
-  /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+  /** Replaces this project's Chat model default (VC-111). */
   "volli:project-session-defaults": {
     args: [input: ProjectSessionDefaultsInput];
     result: ProjectUpdateResult;
@@ -728,15 +762,20 @@ export interface VolliDataIpcContract {
   /** A project's local branch names, for the base-branch picker. */
   "volli:worktree-branches": { args: [input: ProjectIdInput]; result: WorktreeBranchesResult };
   /**
-   * The launch's cached orphan report — the destructive sweep runs once per
-   * launch (main), so this never re-sweeps. `{ rescan: true }` forces the
-   * explicit Settings → Worktrees rescan. `opts` is optional on the wire (the
-   * existing test suite invokes this with no argument at all) — the preload
-   * always sends `opts ?? {}`, so both `[]` and `[{ rescan? }]` are live.
+   * The launch's cached orphan SCAN — read-only in every shape (VC-284), so a
+   * renderer reload costs nothing and changes nothing. `{ refresh: true }` runs
+   * the scan again. `opts` is optional on the wire (the existing test suite
+   * invokes this with no argument at all) — the preload always sends `opts ??
+   * {}`, so both `[]` and `[{ refresh? }]` are live.
    */
   "volli:worktree-orphans": {
     args: [opts?: WorktreeOrphansInput];
     result: WorktreeOrphansResult;
+  };
+  /** The confirmed, destructive cleanup of scanned orphans; main re-checks every target first. */
+  "volli:worktree-orphan-cleanup": {
+    args: [input: WorktreeOrphanCleanupInput];
+    result: WorktreeOrphanCleanupResult;
   };
   /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
   "volli:worktree-orphan-delete": {
@@ -769,6 +808,10 @@ export interface VolliDataIpcContract {
   };
   /** Starts a debounced recursive watch on the ticket worktree for Change Set refresh. */
   "volli:worktree-change-watch": { args: [input: TicketIdInput]; result: Result };
+  /** Releases one background subscriber without forgetting it, so focus can cheaply resume it. */
+  "volli:worktree-change-watch-pause": { args: [input: TicketIdInput]; result: Result };
+  /** Re-arms a paused worktree root and requests one catch-up Change Set refresh. */
+  "volli:worktree-change-watch-resume": { args: [input: TicketIdInput]; result: Result };
   "volli:worktree-change-unwatch": { args: [input: TicketIdInput]; result: Result };
   /** The one-click "commit remaining work" safety net; the message and the staging breadth are the caller's, with the historical defaults. */
   "volli:worktree-commit": { args: [input: WorktreeCommitInput]; result: WorktreeCommitResult };
@@ -1460,6 +1503,62 @@ export interface VolliAgentObservabilityIpcContract {
 }
 
 export type AgentObservabilityIpcChannel = keyof VolliAgentObservabilityIpcContract;
+
+// ---- notifications (VC-295) ------------------------------------------------
+
+/**
+ * What Settings → Notifications draws.
+ *
+ * Two delivery facts and no third: `supported` is `Notification.isSupported()`,
+ * and `deliveryFailure` is the most recent delivery Electron itself reported as
+ * failed this launch. There is deliberately no `permission` field — Electron
+ * gives this app no trustworthy read of the OS authorization state, and a
+ * Settings page that guessed one would be wrong in exactly the case that
+ * matters (a denied notification's `show()` succeeds silently).
+ */
+export interface NotificationSettingsView {
+  preferences: NotificationPreferences;
+  supported: boolean;
+  deliveryFailure: { producer: NotificationProducer; message: string; at: number } | null;
+}
+
+export type NotificationSettingsResult = Result<{ settings: NotificationSettingsView }>;
+
+export type NotificationPendingActivationResult = Result<{ target: NotificationTarget | null }>;
+
+/**
+ * The notification preference surface (VC-295), on its own door rather than the
+ * generic `app_state` write.
+ *
+ * docs/BOUNDARIES.md rule 5: a domain surface takes a validated command with
+ * IPC as dumb transport. The generic string→string write cannot refuse a
+ * category this build does not have; this can, and its refusal is the sentence
+ * the pane shows.
+ */
+export interface VolliNotificationIpcContract {
+  /** The preferences plus what is known about delivery on this machine. */
+  "volli:notifications-get": { args: []; result: NotificationSettingsResult };
+  /**
+   * One switch move. `event: null` is the master switch. Answers with the whole
+   * view read back from the stored row — never an echo of the request — so the
+   * pane can only ever show a value the write actually produced.
+   */
+  "volli:notifications-set": {
+    args: [update: { event: NotificationEvent | null; enabled: boolean }];
+    result: NotificationSettingsResult;
+  };
+  /**
+   * The target of a notification clicked while no window existed, taken once.
+   * A window that opens because of a click asks for it as it subscribes; a
+   * push into a page that has not subscribed yet would simply be lost.
+   */
+  "volli:notifications-pending-activation": {
+    args: [];
+    result: NotificationPendingActivationResult;
+  };
+}
+
+export type NotificationIpcChannel = keyof VolliNotificationIpcContract;
 
 // ---- Browser Tabs (VC-110) -------------------------------------------------
 
@@ -2245,6 +2344,12 @@ export interface VolliSendContract {
   // Send-based (ipcRenderer.send, not invoke): a fire-and-forget flow-control
   // ack needs no reply, and awaiting one per data event would defeat it.
   "volli:terminal-ack": { args: [sessionId: string, chars: number] };
+  // Send-based (ipcRenderer.send, not invoke): what this window is showing
+  // right now (VC-295), so main can suppress a native alert for a target the
+  // person is already looking at. It flips on every nav, needs no reply, and
+  // main's copy is advisory — a report that never arrives costs a duplicate
+  // alert, which is the harmless direction.
+  "volli:notification-active-target": { args: [target: NotificationTarget | null] };
   // Send-based (ipcRenderer.send, not invoke): visibility flips on every board
   // ⇄ session nav, needs no reply, and round-tripping an invoke per flip would
   // add latency to navigation for nothing.
@@ -2287,6 +2392,7 @@ export interface VolliInvokeContract
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
     VolliSystemIpcContract,
+    VolliNotificationIpcContract,
     VolliUpdateIpcContract {}
 
 export type IpcArgs<C extends keyof VolliInvokeContract> = VolliInvokeContract[C]["args"];
@@ -2331,6 +2437,21 @@ export type VolliIpcEvent =
   // until an unrelated refresh. The durable write is still the truth — this
   // only tells the windows to catch up.
   | "volli:session-retitled"
+  // A native alert was clicked (VC-295). Main has already brought the window
+  // forward; the payload is the alert's target, and routing to it — selecting
+  // the Session, then revealing the question or failure it named, or saying so
+  // when that item has since resolved — is the renderer's own knowledge. Sent
+  // to ONE window (the focused one, or the first live one), not fanned out:
+  // this is a navigation, and two windows obeying it would be two places the
+  // person did not ask to go.
+  | "volli:notification-activated"
+  // Settings → Notifications moved (VC-295): a switch was written, or a delivery
+  // Electron reported as failed landed or was retired by a later one that
+  // showed. The payload is the WHOLE `NotificationSettingsView`, never a delta,
+  // so a page that missed an earlier push is whole again on the next one. Every
+  // window, because a failure is a machine fact and a page open in two windows
+  // must not disagree about it.
+  | "volli:notification-settings"
   // Fired by the native View menu's zoom items. The renderer applies CSS zoom
   // to the content row (below the chrome band) rather than letting Electron
   // scale the whole page — see menu.ts for why the zoom roles are replaced.
@@ -3045,52 +3166,157 @@ export interface WorktreeBranchListing {
 /** A project's branch refs — returned by `volli:worktree-branches` for the base-branch pickers. */
 export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
-/** One orphan the sweep refused to remove, for the Settings → Worktrees list. */
+/** One orphan the scan refuses to propose for cleanup, for the Storage list. */
 export interface DirtyWorktreeOrphan {
   path: string;
   projectId?: string;
+  /** The project's display name, so a row can name a project and not an id (VC-284 review C6). */
+  projectName?: string;
   reason: string;
 }
 
 /**
- * One orphan the sweep DID delete (VC-113). It names the branch the deletion
- * kept, so the Settings list can say what was taken and what survived it — a
- * removal nobody can audit is indistinguishable from work going missing.
+ * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284
+ * review S1): the run projection, its item states, the acceptance receipt and
+ * the rejection codes describe the act itself, not the wire it crosses, so the
+ * core that mints and folds them never imports this catalog. They are
+ * re-exported here because every desktop process reads the channel types from
+ * this one file.
  */
-export interface RemovedWorktreeOrphan {
+export type {
+  OrphanAgeBasis,
+  OrphanCleanupItem,
+  OrphanCleanupItemKind,
+  OrphanCleanupItemState,
+  OrphanCleanupReceipt,
+  OrphanCleanupRejectionCode,
+  OrphanCleanupRun,
+  OrphanCleanupSource,
+  OrphanKeptReason,
+  OrphanMetadataKeptReason,
+};
+
+/**
+ * One clean, stale orphan a CLEANUP would remove (VC-284). The scan only names
+ * it: every field here is what the confirmation has to show before anything is
+ * touched — which directory, whose project, and the branch that survives it.
+ */
+export interface RemovableWorktreeOrphan {
+  /**
+   * This item's id inside its scan revision — what a cleanup command selects
+   * (VC-284 review C1). Scoped by the revision UUID, so an id from a superseded
+   * scan can never name work in the current one.
+   */
+  id: string;
   path: string;
-  /** The project whose container held it — every sweep tier knows this, so the type says so. */
+  /** The project whose container held it — every scan tier knows this, so the type says so. */
   projectId: string;
-  /** The branch the directory was on; retained in git, so nothing committed is lost. */
+  /** That project's display name, for a row that names a project rather than an id. */
+  projectName: string;
+  /** The branch the directory is on; retained by the removal, so nothing committed is lost. */
   branch: string | null;
   /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
-  lastTouchedAt: number | null;
+  lastTouchedAt: number;
+  /** Which of the two clocks that timestamp came from. */
+  ageBasis: OrphanAgeBasis;
+  /** Epoch ms it became eligible — the basis Storage shows for the verdict. */
+  removableAt: number;
 }
 
 /**
- * One clean orphan the sweep SPARED because it is still inside the retention
- * window (VC-113). `removableAt` is when it becomes eligible, so the list can
- * say "in 9 days" instead of leaving the user to guess whether it is safe.
+ * One clean orphan the scan KEEPS: still inside the retention window, its age
+ * unreadable (VC-113), or something is live inside it right now. `removableAt`
+ * is when it becomes eligible, so the list can say "in 9 days" instead of
+ * leaving the user to guess whether it is safe.
  */
 export interface KeptWorktreeOrphan {
   path: string;
   projectId: string;
+  projectName: string;
   branch: string | null;
   lastTouchedAt: number | null;
+  ageBasis: OrphanAgeBasis | null;
   removableAt: number | null;
+  reason: OrphanKeptReason;
+  /** What is live in it, when `reason` is `active`; `null` otherwise. */
+  detail: string | null;
 }
 
 /**
- * A `volli:worktree-orphans` sweep report: metadata pruned per project, stale
- * clean orphan dirs auto-removed (branches retained), clean orphans kept for
- * now, and dirty orphans left in place for the user (§7 — never auto-removed).
+ * One stale git ADMIN record a cleanup would prune — read out of the `prunable`
+ * marker in `git worktree list --porcelain`, so naming it costs nothing and
+ * changes nothing.
+ *
+ * One record per entry, not one bundle per project (VC-284 review C2): the
+ * confirmation shows records, so the plan has to carry records, and every one
+ * of them earns its own outcome in the durable history.
+ */
+export interface PrunableWorktreeMetadata {
+  /** This record's id inside its scan revision — what a cleanup command selects. */
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  /** The path git can no longer find. */
+  path: string;
+  /** Git's own reason, verbatim (`prunable <reason>`). */
+  reason: string;
+}
+
+/** One stale git record the scan reports but refuses to propose, and why. */
+export interface KeptWorktreeMetadata {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  path: string;
+  /** Git's own `prunable` reason. */
+  gitReason: string;
+  reason: OrphanMetadataKeptReason;
+}
+
+/**
+ * A project whose worktree listing could not be read (VC-284 review C5). It is
+ * reported rather than skipped in silence: without the listing, every checkout
+ * in that project's container is unaccounted for, and "we could not look" is a
+ * different statement from "there was nothing there".
+ */
+export interface UnreadableWorktreeProject {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  error: string;
+}
+
+/**
+ * A `volli:worktree-orphans` SCAN report (VC-284): read-only by construction.
+ * It names what a cleanup would remove, the metadata it would prune, what it
+ * keeps and why, the retention window those verdicts came from, and the
+ * cleanup history that lets Storage label past removals truthfully.
  */
 export type WorktreeOrphansResult = Result<{
-  pruned: string[];
-  removedClean: RemovedWorktreeOrphan[];
+  /** The opaque revision a cleanup command must name to act on this proposal. */
+  revision: string;
+  scannedAt: number;
+  retentionDays: number;
+  prunable: PrunableWorktreeMetadata[];
+  removable: RemovableWorktreeOrphan[];
   keptRecent: KeptWorktreeOrphan[];
+  keptMetadata: KeptWorktreeMetadata[];
+  unreadableProjects: UnreadableWorktreeProject[];
   dirty: DirtyWorktreeOrphan[];
+  runs: OrphanCleanupRun[];
 }>;
+
+/**
+ * Ack for a `volli:worktree-orphan-cleanup` — the confirmed, destructive half
+ * of the Storage pane. It answers with the local acceptance receipt and the
+ * durable run, so the caller shows exactly what was removed, what was skipped,
+ * what failed, and why. A refusal carries a code, because "scan again" and
+ * "this already ran" are different recoveries.
+ */
+export type WorktreeOrphanCleanupResult =
+  | { ok: true; receipt: OrphanCleanupReceipt; run: OrphanCleanupRun }
+  | { ok: false; error: string; code: OrphanCleanupRejectionCode };
 
 /**
  * Ack for a `volli:worktree-orphan-delete` — the Settings list's explicit,

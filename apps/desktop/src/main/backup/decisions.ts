@@ -129,6 +129,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "The canonical ordered Session history; payload working directories are stripped.",
   },
   {
+    table: "session_event_sequence",
+    decision: "include",
+    reason:
+      "The durable total order over Session events across Sessions (`session_await` cursors); per-Session sequences alone cannot order two Sessions' facts against each other.",
+  },
+  {
     table: "session_commands",
     decision: "include",
     reason: "Explicit intent, persisted before delivery; receipts and events reference it.",
@@ -258,6 +264,24 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
   },
   // ---- Excluded ------------------------------------------------------------
   {
+    table: "worktree_cleanup_commands",
+    decision: "exclude",
+    reason:
+      "Confirmed orphan-cleanup plans name checkout paths on the source machine; restoring one could make an old incomplete cleanup look actionable here.",
+  },
+  {
+    table: "worktree_cleanup_facts",
+    decision: "exclude",
+    reason:
+      "Cleanup outcomes describe directories and Git metadata on the source machine, so they have no truthful meaning after restore.",
+  },
+  {
+    table: "worktree_cleanup_receipts",
+    decision: "exclude",
+    reason:
+      "Acceptance receipts refer only to source-machine cleanup commands, which the bundle deliberately excludes.",
+  },
+  {
     table: "secrets",
     decision: "exclude",
     reason: "Credentials. A backup must never carry them, encrypted or not.",
@@ -310,6 +334,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "session_commands",
   "session_provenances",
   "session_events",
+  "session_event_sequence",
   "session_command_receipts",
   "ticket_comments",
   "ticket_signals",

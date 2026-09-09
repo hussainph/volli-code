@@ -18,22 +18,35 @@ function attachment(overrides: Partial<BootRecoveryAttachment> = {}): BootRecove
   };
 }
 
-function session(id: string, attachments: readonly BootRecoveryAttachment[]): BootRecoverySession {
-  return { session: { id }, attachments };
+function session(
+  id: string,
+  attachments: readonly BootRecoveryAttachment[],
+  turnActive = false,
+): BootRecoverySession {
+  return { session: { id }, attachments, turnActive };
 }
 
 interface Recorder {
   engine: BootRecoveryEngine;
   observed: SessionObservation[];
+  reconciled: Array<{ sessionId: string; attachmentId: string }>;
+  reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
 }
 
 function recorder(
   byProject: Record<string, readonly BootRecoverySession[]>,
   observe?: (observation: SessionObservation) => Promise<void>,
+  reconcile?: (input: { sessionId: string; attachmentId: string }) => Promise<void>,
 ): Recorder {
   const observed: SessionObservation[] = [];
+  const reconciled: Array<{ sessionId: string; attachmentId: string }> = [];
   return {
     observed,
+    reconciled,
+    reconcile: async (input) => {
+      reconciled.push(input);
+      await reconcile?.(input);
+    },
     engine: {
       listSessions: async ({ projectId }) => byProject[projectId] ?? [],
       observe: async (observation) => {
@@ -54,6 +67,7 @@ function sweep(
     onError,
     run: closeStaleAttachments({
       engine: target.engine,
+      reconcile: target.reconcile,
       projectIds,
       newId: () => `event-${++sequence}`,
       now: () => 1_700_000_000_000,
@@ -64,12 +78,30 @@ function sweep(
 
 describe("closeStaleAttachments", () => {
   it("closes a stale local terminal attachment as an interrupted, system-provenanced fact", async () => {
-    const target = recorder({ "project-1": [session("session-1", [attachment()])] });
+    const target = recorder({ "project-1": [session("session-1", [attachment()], true)] });
 
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(1);
     expect(target.observed).toEqual([
       {
         id: "event-1",
+        kind: "attention.raised",
+        sessionId: "session-1",
+        attachmentId: "attachment-1",
+        occurredAt: 1_700_000_000_000,
+        provenance: {
+          source: { kind: "system", id: "desktop-recovery", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+        attention: {
+          id: "attachment-1:boot-recovery",
+          attachmentId: "attachment-1",
+          kind: "partial_turn_interrupted",
+          detail: "The prior desktop process ended while this turn was active.",
+          diagnostic: null,
+        },
+      },
+      {
+        id: "event-2",
         kind: "attachment.closed",
         sessionId: "session-1",
         attachmentId: "attachment-1",
@@ -104,13 +136,67 @@ describe("closeStaleAttachments", () => {
     ]);
   });
 
-  it("leaves the one structured executor alone, because it owns its own recovery", async () => {
+  it("leaves a quiet structured executor alone for lazy recovery", async () => {
     const target = recorder({
       "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })])],
     });
 
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
     expect(target.observed).toEqual([]);
+    expect(target.reconciled).toEqual([]);
+  });
+
+  it("eagerly reconciles a structured turn left active by the prior process", async () => {
+    const target = recorder({
+      "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)],
+    });
+
+    await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
+    expect(target.reconciled).toEqual([{ sessionId: "session-1", attachmentId: "pi-1" }]);
+    expect(target.observed).toEqual([]);
+  });
+
+  it("closes a structured turn as interrupted when it cannot be rehydrated", async () => {
+    const target = recorder(
+      {
+        "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)],
+      },
+      undefined,
+      async () => Promise.reject(new Error("sidecar missing")),
+    );
+    const onError = vi.fn();
+
+    await expect(sweep(target, ["project-1"], onError).run).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledWith("pi-1", expect.any(Error));
+    expect(target.observed).toMatchObject([
+      {
+        attachmentId: "pi-1",
+        kind: "attention.raised",
+        attention: { kind: "partial_turn_interrupted" },
+      },
+      { attachmentId: "pi-1", kind: "attachment.closed", outcome: "interrupted" },
+    ]);
+  });
+
+  it("still closes a failed recovery when recording its Attention also fails", async () => {
+    const target = recorder(
+      {
+        "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)],
+      },
+      async (observation) => {
+        if (observation.kind === "attention.raised") throw new Error("attention write failed");
+      },
+      async () => Promise.reject(new Error("sidecar missing")),
+    );
+    const onError = vi.fn();
+
+    await expect(sweep(target, ["project-1"], onError).run).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(target.observed.at(-1)).toMatchObject({
+      attachmentId: "pi-1",
+      kind: "attachment.closed",
+      outcome: "interrupted",
+    });
   });
 
   it("leaves an attachment that is not an open local one alone", async () => {

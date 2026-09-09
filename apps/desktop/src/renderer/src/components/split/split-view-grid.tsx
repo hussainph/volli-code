@@ -17,9 +17,9 @@ import { cn } from "@renderer/lib/utils";
  * with no ring, no inner strip and no divider — the plane it always was. There
  * is no "split rendering path" to fall out of sync with the ordinary one.
  *
- * The caller keeps everything that is about tabs: which pane draws which strip
- * ({@link SplitViewGridProps.renderStrip}, null for the primary pane, whose
- * strip is the surface's own full-width one) and what a pane's front tab
+ * The caller keeps everything that is about tabs: each pane's strip
+ * ({@link SplitViewGridProps.renderStrip}, drawn here only below a down split;
+ * the top-edge panes share `SplitViewTabBar`) and what a pane's front tab
  * renders as ({@link SplitViewGridProps.renderContent}). This file owns the
  * geometry, the focus boundary and the ring — nothing else.
  *
@@ -38,7 +38,7 @@ import { cn } from "@renderer/lib/utils";
  */
 export interface SplitViewGridProps {
   view: ResolvedSplitView;
-  /** The pane's own tab strip, or null for the primary (the surface's is its). */
+  /** A lower pane's tab strip, or null when it holds no tabs. */
   renderStrip(pane: ResolvedSplitViewPane): React.ReactNode;
   /** What the pane's front tab draws — or its empty-pane menu. */
   renderContent(pane: ResolvedSplitViewPane): React.ReactNode;
@@ -83,6 +83,7 @@ export function SplitViewGrid({
       node={view.root}
       focusedPaneId={view.focusedPaneId}
       paneCount={view.panes.length}
+      topEdge
       renderStrip={renderStrip}
       renderContent={renderContent}
       renderOverlay={renderOverlay}
@@ -96,6 +97,12 @@ interface SplitViewNodeProps extends Omit<SplitViewGridProps, "view"> {
   node: ResolvedSplitViewNode;
   focusedPaneId: string;
   paneCount: number;
+  topEdge: boolean;
+}
+
+/** Shared by the main tab bar and the plane: split the 6px grip cost evenly. */
+export function splitFirstChildStyle(ratio: number): React.CSSProperties {
+  return { flex: `0 0 calc(${ratio * 100}% - 3px)` };
 }
 
 function SplitViewNodeView(props: SplitViewNodeProps) {
@@ -109,9 +116,7 @@ function SplitViewNodeView(props: SplitViewNodeProps) {
     >
       <div
         className="flex min-h-0 min-w-0 overflow-hidden"
-        // Split the 6px divider cost evenly, so a 0.5 ratio is visually equal —
-        // the terminal split's own arithmetic, for the same 1.5rem grip.
-        style={{ flex: `0 0 calc(${node.ratio * 100}% - 3px)` }}
+        style={splitFirstChildStyle(node.ratio)}
       >
         <SplitViewNodeView {...props} node={node.first} />
       </div>
@@ -121,7 +126,7 @@ function SplitViewNodeView(props: SplitViewNodeProps) {
         onChange={(ratio) => props.onResizeSplit(node.id, ratio)}
       />
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        <SplitViewNodeView {...props} node={node.second} />
+        <SplitViewNodeView {...props} node={node.second} topEdge={props.topEdge && row} />
       </div>
     </div>
   );
@@ -131,6 +136,7 @@ function SplitViewCell({
   pane,
   focusedPaneId,
   paneCount,
+  topEdge,
   renderStrip,
   renderContent,
   renderOverlay,
@@ -154,7 +160,7 @@ function SplitViewCell({
             : "ring-1 ring-border/50 ring-inset"),
       )}
     >
-      {renderStrip(pane)}
+      {topEdge ? null : renderStrip(pane)}
       {/* The content box, and the one thing allowed to cover it. A box of its
           own rather than the cell, so an overlay's `inset-0` means "the pane's
           content" and not "the content and the strip above it". */}

@@ -20,8 +20,11 @@ import {
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
+  SESSION_INTERRUPTION_REASONS,
   SESSION_USER_BLOCKING_ATTENTION_KINDS,
   sessionAwaitsUser,
+  sessionEndedInterrupted,
+  sessionInterruptionReason,
 } from "./session-ledger";
 import type {
   Session,
@@ -1634,6 +1637,125 @@ describe("sessionAwaitsUser", () => {
     expect(sessionAwaitsUser({ ...idle, attention: { active: [limited], primary: limited } })).toBe(
       false,
     );
+  });
+});
+
+describe("sessionInterruptionReason", () => {
+  type Subject = Parameters<typeof sessionInterruptionReason>[0];
+  // Annotated rather than `satisfies`-narrowed: the literal `null` and `[]`
+  // would otherwise pin every spread below to `never[]` and `null`.
+  const quiet: Subject = {
+    turnActive: false,
+    lastTurnOutcome: null,
+    attention: { active: [], primary: null },
+  };
+
+  const interrupted: Subject = { ...quiet, lastTurnOutcome: "interrupted" };
+
+  function withAttention(
+    base: Subject,
+    ...kinds: readonly Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">[]
+  ): typeof quiet {
+    const active = kinds.map(raised);
+    return { ...base, attention: { active, primary: active[0] ?? null } };
+  }
+
+  it("names the two durable failure reasons and nothing else", () => {
+    expect(SESSION_INTERRUPTION_REASONS).toEqual(["stopped-by-runtime", "crash-recovered"]);
+  });
+
+  it("is null while a turn is open, whatever the last one did", () => {
+    expect(sessionInterruptionReason({ ...interrupted, turnActive: true })).toBeNull();
+  });
+
+  it("is null for a Session that has never ended a turn", () => {
+    expect(sessionInterruptionReason(quiet)).toBeNull();
+  });
+
+  it("is null for a turn that completed or failed", () => {
+    expect(sessionInterruptionReason({ ...quiet, lastTurnOutcome: "completed" })).toBeNull();
+    expect(sessionInterruptionReason({ ...quiet, lastTurnOutcome: "failed" })).toBeNull();
+  });
+
+  it("never turns an Attention alone into an interruption", () => {
+    expect(
+      sessionInterruptionReason(
+        withAttention({ ...quiet, lastTurnOutcome: "completed" }, "adapter_unrecoverable"),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not turn an unexplained or deliberate cancellation into a red interruption", () => {
+    expect(sessionInterruptionReason(interrupted)).toBeNull();
+    // An Attention outside the failure list explains nothing either.
+    expect(sessionInterruptionReason(withAttention(interrupted, "input_required"))).toBeNull();
+  });
+
+  it("reads a crash recovery off partial_turn_interrupted", () => {
+    expect(sessionInterruptionReason(withAttention(interrupted, "partial_turn_interrupted"))).toBe(
+      "crash-recovered",
+    );
+  });
+
+  it("reads every transport dead end as stopped-by-runtime", () => {
+    for (const kind of [
+      "adapter_unrecoverable",
+      "adapter_disconnected",
+      "transport_retrying",
+    ] as const) {
+      expect(sessionInterruptionReason(withAttention(interrupted, kind))).toBe(
+        "stopped-by-runtime",
+      );
+    }
+  });
+
+  it("prefers the crash over the transport when both are raised", () => {
+    // Order is the fixed list's, never the projection's: a Session that
+    // exhausted its retries AND was found dangling holds both.
+    expect(
+      sessionInterruptionReason(
+        withAttention(interrupted, "adapter_unrecoverable", "partial_turn_interrupted"),
+      ),
+    ).toBe("crash-recovered");
+  });
+
+  it("reads it off a real projection, so predicate and fold cannot drift", () => {
+    const attachmentId = "attachment-interrupted";
+    const events = [
+      event(1, { kind: "turn.started", attachmentId, turnId: "t1" }),
+      event(2, { kind: "turn.interrupted", attachmentId, turnId: "t1" }),
+    ];
+    expect(sessionInterruptionReason(projectSession(session, events))).toBeNull();
+    // A newer turn is the answer changing on its own — no history walk needed.
+    expect(
+      sessionInterruptionReason(
+        projectSession(session, [
+          ...events,
+          event(3, { kind: "turn.started", attachmentId, turnId: "t2" }),
+        ]),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("sessionEndedInterrupted", () => {
+  const quiet = {
+    turnActive: false,
+    lastTurnOutcome: null,
+    attention: { active: [], primary: null },
+  } satisfies Parameters<typeof sessionEndedInterrupted>[0];
+
+  it("is the yes/no of sessionInterruptionReason", () => {
+    expect(sessionEndedInterrupted(quiet)).toBe(false);
+    expect(sessionEndedInterrupted({ ...quiet, lastTurnOutcome: "interrupted" })).toBe(false);
+    const failure = raised("adapter_unrecoverable");
+    expect(
+      sessionEndedInterrupted({
+        ...quiet,
+        lastTurnOutcome: "interrupted",
+        attention: { active: [failure], primary: failure },
+      }),
+    ).toBe(true);
   });
 });
 

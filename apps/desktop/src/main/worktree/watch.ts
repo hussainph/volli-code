@@ -25,6 +25,7 @@ import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { prepared } from "../db/prepared";
 import { listRetentionCandidates, updateTicketFields, type TicketRow } from "../db/tickets-repo";
+import type { NotificationRequest } from "../notifications/dispatch";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import {
   computeArchiveReadiness,
@@ -121,8 +122,14 @@ export interface RetentionPollDeps {
   net: RunNet;
   /** Injected clock (never `Date.now()` inline) — the TTL and readiness read it. */
   now: () => number;
-  /** Fires the single native "PR merged" notification. */
-  notify: (title: string, body: string) => void;
+  /**
+   * The one delivery path (VC-295). This watch posts three different alerts
+   * under three different policies — a merged PR (`finished`), a reclaimed
+   * worktree (`swept`), and a durable write that did not land (operational,
+   * never muteable) — so it names a producer per alert rather than a title and
+   * a body, and the preference is decided in one place for all three.
+   */
+  notify: (request: NotificationRequest) => void;
   /** Broadcast seam (wired to `broadcastDataChanged`) — called once when any observation changed. */
   onChange?: () => void;
   /**
@@ -294,7 +301,14 @@ export async function pollRetention(
             deps.now(),
             AUTOMATION_ACTOR,
           );
-          deps.notify("Pull request merged", ticket.title);
+          deps.notify({
+            producer: "pull-request-merged",
+            title: "Pull request merged",
+            body: ticket.title,
+            // The completion `finished` actually governs, and a click opens
+            // the ticket it merged for.
+            target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+          });
           result.changed = true;
         }
         store.notifiedMerged.add(ticket.id);
@@ -331,12 +345,17 @@ async function maybeReclaim(
   if (!deps.reclaim) return false;
   const outcome = await reclaimIfStale(deps.reclaim, ticket.id, prState);
   if (outcome.kind !== "reclaimed") return false;
-  deps.notify(
-    "Worktree removed",
-    outcome.branch === null
-      ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
-      : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
-  );
+  deps.notify({
+    producer: "worktree-reclaimed",
+    title: "Worktree removed",
+    body:
+      outcome.branch === null
+        ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
+        : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
+    // The folder is gone; the ticket it belonged to is what a person can still
+    // act on (its branch is kept, and the ticket is where recreating starts).
+    target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+  });
   return true;
 }
 
@@ -363,10 +382,21 @@ function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: stri
     return true;
   } catch (error) {
     console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
-    deps.notify(
-      "Couldn't save discovered PR",
-      `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
-    );
+    // Operational, and deliberately outside the switches: this is a durable
+    // write that failed in a background pass with no other user-visible
+    // surface (CLAUDE.md's never-swallow rule). A "worktree maintenance"
+    // preference that could hide a failed write would be a mute button on the
+    // one thing the pass cannot recover by itself.
+    //
+    // It still opens the ticket it is about. Operational means no preference is
+    // consulted, not that the person is left to find the card themselves — and
+    // this target is one the failure genuinely has rather than an invented one.
+    deps.notify({
+      producer: "worktree-record-failed",
+      title: "Couldn't save discovered PR",
+      body: `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
+      target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+    });
     return false;
   }
 }

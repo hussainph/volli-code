@@ -1560,6 +1560,35 @@ async function attachSession(
     };
     type PendingDelivery = PendingMessageDelivery | PendingRetryDelivery;
     let pendingRunDelivery: PendingDelivery | undefined;
+    /**
+     * The gate one `settle: "opened"` submit waits on, and whether the turn it
+     * was waiting for actually opened (VC-324).
+     *
+     * At most one exists at a time, because only an IDLE attachment takes this
+     * path and the submit that took it holds the attachment until Pi is
+     * streaming. `opened` is set where the `{kind:"turn", state:"started"}`
+     * observation has already been committed and the Command marked accepted,
+     * so a caller released by it is released on a durable fact rather than on a
+     * callback having fired.
+     */
+    let turnOpening: { opened: boolean; release: () => void } | undefined;
+    // The latest run released at its opening boundary. Close awaits its
+    // cleanup after Pi becomes idle so no detached observer work outlives the
+    // attachment that owned it.
+    let detachedRunSettled: Promise<void> = Promise.resolve();
+    const reportTurnOpened = (): void => {
+      const opening = turnOpening;
+      if (opening === undefined) return;
+      turnOpening = undefined;
+      opening.opened = true;
+      opening.release();
+    };
+    /**
+     * A detached run reports through its own durable observations. Once the
+     * opening Command boundary has read any failure it owns, failures from the
+     * rest of that run are consumed at run end — never retained for an
+     * unrelated later Command.
+     */
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
     const persistAcceptedDelivery = async (
@@ -1599,6 +1628,8 @@ async function attachSession(
     const observationDelivery = new OrderedObservationDelivery(observe);
     const commitObservation = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
       observationDelivery.deliver(observation);
+    /** An observer failure from the run this command boundary still owns. */
+    const consumeRunFailure = (): unknown => observationDelivery.consumeFailure();
 
     // Assigned the statement after `new Agent` and read only from inside a Pi
     // callback, which cannot fire before a run starts. Declared here because the
@@ -2167,6 +2198,11 @@ async function attachSession(
             acceptedUserMessages.add(delivery.message);
           }
         }
+        // Last, and only here: a `settle: "opened"` caller is released once the
+        // turn's own start is committed and its Command is durably accepted
+        // (VC-324). Everything it was promised has happened; the run has not
+        // ended, and it never claimed it had.
+        reportTurnOpened();
         return;
       }
 
@@ -2366,6 +2402,7 @@ async function attachSession(
         commandId,
         images = [],
         resources = [],
+        settle = "turn",
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -2399,9 +2436,11 @@ async function attachSession(
           pendingQueuedDeliveries.set(message, pending);
           if (delivery === "steer") agent.steer(message);
           else agent.followUp(message);
+          // No `turnOpened`: this message joined a turn that was already
+          // running, which is the distinction a supervisor reads (VC-324).
           return { kind: "delivered", delivery };
         }
-        observationDelivery.consumeFailure();
+        consumeRunFailure();
         // Before the message is composed, not after: compaction can change what
         // the context holds, and the Brief is prepended on an empty one. Held
         // as a rewrite so an explicit `/compact` arriving meanwhile is refused
@@ -2421,9 +2460,49 @@ async function attachSession(
           message,
           resources,
         };
-        await agent.prompt(message);
-        await settleRun();
-        const failed = observationDelivery.consumeFailure();
+        const run = async (): Promise<void> => {
+          await agent.prompt(message);
+          await settleRun();
+        };
+        if (settle === "opened") {
+          // The run is STARTED here and awaited nowhere: this call answers when
+          // the turn has opened, and the turn's own end reaches the Session
+          // through the observations it publishes either way (VC-324).
+          const released = Promise.withResolvers<void>();
+          const boundaryChecked = Promise.withResolvers<void>();
+          const opening = { opened: false, release: released.resolve };
+          turnOpening = opening;
+          // A run that ended without ever opening a turn must not park its
+          // caller for the life of the attachment. The run-end cleanup waits
+          // until this caller has consumed the opening boundary, then drops
+          // any later observer failure instead of charging a future Command.
+          const finishDetachedRun = async (): Promise<void> => {
+            /* v8 ignore next 3 -- Pi opens a turn before a run can settle; this only releases an impossible defensive no-open path. */
+            if (turnOpening === opening) {
+              turnOpening = undefined;
+            }
+            released.resolve();
+            await boundaryChecked.promise;
+            consumeRunFailure();
+          };
+          // Pi converts provider failures into run-end observations. The same
+          // cleanup handles both Promise outcomes so a defensive rejection is
+          // neither unhandled nor retained for another Command.
+          detachedRunSettled = run().then(finishDetachedRun, finishDetachedRun);
+          await released.promise;
+          // The same command boundary the awaited path keeps, read at the
+          // moment this one answers: a run that failed on its way to opening a
+          // turn, or an observer that threw committing the turn's start, is
+          // this caller's to be told about.
+          const failed = consumeRunFailure();
+          boundaryChecked.resolve();
+          if (failed !== undefined) {
+            throw failed;
+          }
+          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened };
+        }
+        await run();
+        const failed = consumeRunFailure();
         if (failed !== undefined) {
           throw failed;
         }
@@ -2597,6 +2676,7 @@ async function attachSession(
         spec.signal?.removeEventListener("abort", onAbort);
         interruptTurn();
         await agent.waitForIdle();
+        await detachedRunSettled;
         unsubscribe?.();
         unsubscribe = undefined;
         // Cleanup runs on an uncancellable context on purpose: this is the

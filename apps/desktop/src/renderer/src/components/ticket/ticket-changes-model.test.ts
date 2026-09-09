@@ -8,7 +8,6 @@ import {
   formatChangeStatus,
   presentChangeRow,
   presentChangeRowWithRecency,
-  selectChangeRow,
   sortChangeSetFiles,
   splitChangePath,
   type ChangesNavigatorState,
@@ -85,6 +84,7 @@ describe("presentChangeRow", () => {
       statusLabel: "Modified",
       countsLabel: "+3 −1",
       renameFrom: null,
+      accessibleName: "Modified: src/a.ts, 3 insertions, 1 deletion",
     });
   });
 
@@ -106,6 +106,8 @@ describe("presentChangeRow", () => {
       statusLabel: "Renamed",
       countsLabel: "+0 −0",
       renameFrom: "src/old-name.ts",
+      accessibleName:
+        "Renamed: src/new-name.ts, 0 insertions, 0 deletions, renamed from src/old-name.ts",
     });
   });
 
@@ -122,7 +124,30 @@ describe("presentChangeRow", () => {
     expect(presentChangeRowWithRecency(file({ path: "src/a.ts" }), recency)).toMatchObject({
       updatedLabel: "Updated",
       updatedDescription: "Updated since you last opened this file",
+      accessibleName:
+        "Modified: src/a.ts, 1 insertion, 0 deletions, updated since you last opened this file",
     });
+  });
+});
+
+describe("accessibleName", () => {
+  it("says binary in words and omits counts a racing snapshot never had", () => {
+    expect(presentChangeRow(file({ path: "logo.png", binary: true })).accessibleName).toBe(
+      "Modified: logo.png, binary file",
+    );
+    expect(
+      presentChangeRow(file({ path: "racing.ts", insertions: null, deletions: null }))
+        .accessibleName,
+    ).toBe("Modified: racing.ts");
+  });
+
+  it("pluralises counts honestly", () => {
+    expect(
+      presentChangeRow(file({ path: "a.ts", insertions: 1, deletions: 1 })).accessibleName,
+    ).toBe("Modified: a.ts, 1 insertion, 1 deletion");
+    expect(
+      presentChangeRow(file({ path: "b.ts", insertions: 2, deletions: 0 })).accessibleName,
+    ).toBe("Modified: b.ts, 2 insertions, 0 deletions");
   });
 });
 
@@ -141,8 +166,6 @@ function navigatorState(overrides: Partial<ChangesNavigatorState> = {}): Changes
   return {
     revision: null,
     files: [],
-    activeTabId: "doc",
-    listFocusPath: null,
     hiddenCount: 0,
     ...overrides,
   };
@@ -164,13 +187,8 @@ function snapshot(over: Partial<ChangeSetSnapshot> = {}): ChangeSetSnapshot {
 }
 
 describe("applyChangeSetRefresh", () => {
-  it("updates rows from the snapshot without opening, closing, or focusing a tab", () => {
-    const before = navigatorState({
-      activeTabId: "doc",
-      listFocusPath: "src/a.ts",
-      revision: "rev-1",
-      files: [file({ path: "src/a.ts" })],
-    });
+  it("updates rows from the snapshot and holds nothing else at all", () => {
+    const before = navigatorState({ revision: "rev-1", files: [file({ path: "src/a.ts" })] });
     const after = applyChangeSetRefresh(
       before,
       snapshot({
@@ -186,16 +204,17 @@ describe("applyChangeSetRefresh", () => {
 
     expect(after.revision).toBe("rev-2");
     expect(after.files.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]);
-    // The single most important behavioral contract in #108:
-    expect(after.activeTabId).toBe(before.activeTabId);
-    expect(after.listFocusPath).toBe(before.listFocusPath);
+    // The behavioral contract of #108, now structural (VC-311): the navigator
+    // carries no tab id and no focused path, so a refresh has nothing it could
+    // open, close or focus. The panel test proves the same for the rendered
+    // list, where the tab and the keyboard actually live.
+    expect(Object.keys(after).toSorted()).toEqual(["files", "hiddenCount", "revision"]);
   });
 
   it("is a no-op when the opaque revision is unchanged", () => {
     const before = navigatorState({
       revision: "same",
       files: [file({ path: "a.ts" })],
-      activeTabId: "file:a.ts",
     });
     const after = applyChangeSetRefresh(
       before,
@@ -228,17 +247,5 @@ describe("applyChangeSetRefresh", () => {
       snapshot({ revision: "full", files: [file({ path: "a.ts" })] }),
     );
     expect(after.hiddenCount).toBe(0);
-  });
-});
-
-describe("selectChangeRow", () => {
-  it("records a deliberate open intent for the path without stealing list focus", () => {
-    const before = navigatorState({ activeTabId: "doc", listFocusPath: null });
-    const { state, openPath } = selectChangeRow(before, "src/a.ts");
-    expect(openPath).toBe("src/a.ts");
-    expect(state.listFocusPath).toBe("src/a.ts");
-    // Host opens the tab; the navigator itself does not mutate activeTabId
-    // (decision #48 — initial keyboard focus stays in the Changes list).
-    expect(state.activeTabId).toBe("doc");
   });
 });

@@ -39,7 +39,13 @@ import { readSessionConcurrencyEnv } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
-import { createSetupRun, ensure, runGitCapturing } from "../worktree";
+import {
+  acquireWorktreeStartLease,
+  createSetupRun,
+  ensure,
+  runGitCapturing,
+  UNDER_DELETION_REFUSAL,
+} from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
 import { worktreeDeps, worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
@@ -516,6 +522,24 @@ export class PtyManager {
       }
     }
 
+    // A directory a destructive worktree act is holding right now (VC-284
+    // review C4). The orphan cleanup takes a lease over the exact path it is
+    // about to remove and keeps it across its awaits, so a terminal cannot be
+    // born inside a checkout that is mid-deletion.
+    //
+    // TAKEN, not merely asked (re-review C4): everything between here and the
+    // spawn awaits — harness files, the lazy `node-pty` import, a stat, a mkdir
+    // — and a cleanup that acquires during those awaits would remove a
+    // directory this terminal has already been cleared to start in. Holding a
+    // start lease makes that acquisition fail instead. Released the moment the
+    // shell is registered (or the attempt ends), because from then on the live
+    // PTY is what the activity guard sees.
+    const startLease = acquireWorktreeStartLease(cwd);
+    if (startLease === null) {
+      await recordAttachmentFailure(new Error(UNDER_DELETION_REFUSAL), cwd);
+      return { ok: false, error: UNDER_DELETION_REFUSAL };
+    }
+
     // The harness config that cannot live under `<userData>` — cursor's
     // `.cursor/hooks.json`, which it reads from its working directory and
     // nowhere else per-ticket. Worktree sessions only: the alternative is
@@ -523,7 +547,15 @@ export class PtyManager {
     // Board Session runs cursor unhooked rather than politely vandalized.
     // Refreshed every boot, because the command line names this launch's socket.
     if (worktreeOutcome !== null && this.agentRuntime !== null) {
-      await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
+      try {
+        await this.writeHarnessWorkspaceFiles(cwd, this.agentRuntime);
+      } catch (error) {
+        // This one write sits outside the try/finally below, and a lease that
+        // leaks would refuse every later cleanup and terminal under this path
+        // for the life of the process.
+        startLease.release();
+        throw error;
+      }
     }
 
     try {
@@ -844,6 +876,11 @@ export class PtyManager {
       this.agentRuntime?.revokeSessionToken?.(attachmentId);
       await recordAttachmentFailure(error, scope.cwd);
       return { ok: false, error: errorMessage(error) };
+    } finally {
+      // Every exit from the start — spawned, refused, or thrown — gives the
+      // directory back. A live PTY needs no lease: it is visible to the
+      // activity guard the destructive paths already ask.
+      startLease.release();
     }
   }
 

@@ -2,10 +2,9 @@
  * The Configure rail: two groups, seven categories, this project always.
  *
  * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
- * skills a repo's agents can reach, which commands it defines, which harness
- * its sessions start on. Putting it in Settings was the original surface's
- * central confusion: the same words appeared on both pages with no way to tell
- * which one won.
+ * skills a repo's agents can reach and which commands it defines. Putting it
+ * in Settings was the original surface's central confusion: the same words
+ * appeared on both pages with no way to tell which one won.
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
  */
@@ -143,14 +142,12 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           label: "Sessions",
           icon: CpuIcon,
           keywords: [
-            "harness",
+            "chat",
             "model",
-            "claude code",
-            "codex",
             "agents.md",
             "claude.md",
             "instructions",
-            "new sessions",
+            "new chats",
             "precedence",
             "override",
           ],

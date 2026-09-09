@@ -23,10 +23,13 @@
  * SIBLING, and the fill must sit on something that contains both or the row
  * un-tints the moment the pointer reaches the actions it just revealed.
  *
- * WHAT STAYS WITH THE CALLER: the list element and its ARIA (`role="listbox"`
- * / `role="option"` belong to the list, not to a row), drag handles, context
- * menus, store reads, and every `data-*` an end-to-end test aims at — those
- * pass through to the activation target, which is the thing a test clicks.
+ * WHAT STAYS WITH THE CALLER: the list element and its ARIA (the roles
+ * belong to the list, not to a row — and none of this app's lists is a
+ * `listbox`, because a `role="option"` row may not hold interactive children
+ * and these rows hold actions beside their target, VC-311), drag handles,
+ * context menus, store reads, and every `data-*` an end-to-end test aims at —
+ * those pass through to the activation target, which is the thing a test
+ * clicks.
  *
  * TWO DENSITIES, AND ONE HEIGHT PER DENSITY. `two-line` is 52px: two `text-ui`
  * line boxes and 12. It was 52 in the Diffs page and 56 in the Files page for
@@ -93,6 +96,18 @@ export function ListRow({
 }) {
   const activatable = onActivate !== null;
 
+  // THE CALLER'S OWN CLICK RUNS TOO, and this has to be composed rather than
+  // spread. The rest props are whatever a wrapper merged onto the row, and a
+  // Radix trigger that closes on click (Tooltip does) puts an `onClick` among
+  // them — spread after `onClick={onActivate}` it silently REPLACED the
+  // activation, leaving a row that highlights, rings, and opens nothing. The
+  // caller goes first and may cancel by preventing the default.
+  const { onClick: onClickFromCaller, ...attributes } = rest;
+  const activate = (event: React.MouseEvent<HTMLElement>): void => {
+    onClickFromCaller?.(event);
+    if (!event.defaultPrevented) onActivate?.();
+  };
+
   // A STRING is typeset by the row; a NODE is the caller's own element and must
   // grow and truncate itself. Both text slots read this way, and it is the only
   // reason three of the four rows could adopt: the sessions roster swaps its
@@ -151,14 +166,18 @@ export function ListRow({
       {activatable ? (
         <button
           type="button"
-          onClick={onActivate}
           className={target}
-          {...(rest as React.ComponentProps<"button">)}
+          {...(attributes as React.ComponentProps<"button">)}
+          onClick={activate}
         >
           {content}
         </button>
       ) : (
-        <div className={target} {...(rest as React.ComponentProps<"div">)}>
+        <div
+          className={target}
+          {...(attributes as React.ComponentProps<"div">)}
+          onClick={onClickFromCaller}
+        >
           {content}
         </div>
       )}

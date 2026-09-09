@@ -1,0 +1,299 @@
+// @vitest-environment jsdom
+/**
+ * Settings → Notifications as a person uses it (VC-295 round 2).
+ *
+ * The static render says the switches exist; these say what they DO — which is
+ * the half that was a preview for two tickets. Four behaviours carry the
+ * acceptance criteria: the stored record is what the page shows, an accepted
+ * write shows the accepted value, a refused write leaves the switch alone and
+ * says so, and a delivery the system reported as failed is on screen with the
+ * route that fixes it.
+ */
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import type {
+  NotificationSettingsResult,
+  NotificationSettingsView,
+} from "../../../../../ipc/contract";
+
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
+import { toastError } from "@renderer/lib/toast";
+
+import { NotificationsPane } from "./notifications-pane";
+
+const ALL_ON: NotificationSettingsView = {
+  preferences: {
+    enabled: true,
+    events: { "needs-you": true, finished: true, swept: true, update: true },
+  },
+  supported: true,
+  deliveryFailure: null,
+};
+
+/** A read the test finishes by hand, to see the page before its answer lands. */
+function deferredRead(): {
+  promise: Promise<NotificationSettingsResult>;
+  resolve: (result: NotificationSettingsResult) => void;
+} {
+  let settleRead: ((result: NotificationSettingsResult) => void) | null = null;
+  const promise = new Promise<NotificationSettingsResult>((settle) => {
+    settleRead = settle;
+  });
+  return { promise, resolve: (result) => settleRead?.(result) };
+}
+
+let container: HTMLDivElement;
+let root: Root;
+let settings: () => Promise<NotificationSettingsResult>;
+let set: (event: string | null, enabled: boolean) => Promise<NotificationSettingsResult>;
+let writes: { event: string | null; enabled: boolean }[];
+/** Main's push of a moved view, as the pane subscribed to it. */
+let pushes: Set<(view: NotificationSettingsView) => void>;
+
+/** Installs the one bridge namespace this pane touches. */
+function stubApi(): void {
+  (globalThis as { window?: unknown }).window = globalThis;
+  (globalThis as unknown as { api: unknown }).api = {
+    notifications: {
+      settings: () => settings(),
+      set: (event: string | null, enabled: boolean) => {
+        writes.push({ event, enabled });
+        return set(event, enabled);
+      },
+      onSettingsChanged: (callback: (view: NotificationSettingsView) => void) => {
+        pushes.add(callback);
+        return () => pushes.delete(callback);
+      },
+    },
+  };
+}
+
+async function push(view: NotificationSettingsView): Promise<void> {
+  await act(async () => {
+    for (const listener of pushes) listener(view);
+  });
+}
+
+async function render(): Promise<void> {
+  await act(async () => {
+    root.render(<NotificationsPane />);
+  });
+}
+
+/** The switch a row's label names, as a `role=switch` element. */
+function switchFor(id: string): HTMLButtonElement {
+  const element = container.querySelector<HTMLButtonElement>(`#${id}`);
+  if (element === null) throw new Error(`no switch ${id}`);
+  return element;
+}
+
+beforeEach(() => {
+  writes = [];
+  pushes = new Set();
+  settings = () => Promise.resolve({ ok: true, settings: ALL_ON });
+  set = () => Promise.resolve({ ok: true, settings: ALL_ON });
+  stubApi();
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  vi.mocked(toastError).mockClear();
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+describe("NotificationsPane", () => {
+  it("shows the stored record once it has been read, and only then", async () => {
+    // Never a position the database has not confirmed: before the read lands
+    // the switches are off and inoperable, which is what "show the accepted
+    // value" means for a page whose value lives in another process.
+    const read = deferredRead();
+    settings = () => read.promise;
+    await render();
+
+    expect(switchFor("notify-me").getAttribute("aria-checked")).toBe("false");
+    expect(switchFor("notify-me").disabled).toBe(true);
+
+    await act(async () => {
+      read.resolve({
+        ok: true,
+        settings: {
+          ...ALL_ON,
+          preferences: { enabled: true, events: { ...ALL_ON.preferences.events, swept: false } },
+        },
+      });
+    });
+
+    expect(switchFor("notify-me").getAttribute("aria-checked")).toBe("true");
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("false");
+    expect(switchFor("notify-needs-you").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("writes one category and shows the value the write came back with", async () => {
+    await render();
+    set = (event, enabled) =>
+      Promise.resolve({
+        ok: true,
+        settings: {
+          ...ALL_ON,
+          preferences: {
+            enabled: ALL_ON.preferences.enabled,
+            events: { ...ALL_ON.preferences.events, [String(event)]: enabled },
+          },
+        },
+      });
+
+    await act(async () => {
+      switchFor("notify-finished").click();
+    });
+
+    expect(writes).toEqual([{ event: "finished", enabled: false }]);
+    expect(switchFor("notify-finished").getAttribute("aria-checked")).toBe("false");
+    // Its neighbours are untouched: muting one category must not move another.
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("writes the master switch as its own act, not as a category", async () => {
+    await render();
+    set = () =>
+      Promise.resolve({
+        ok: true,
+        settings: {
+          ...ALL_ON,
+          preferences: { enabled: false, events: ALL_ON.preferences.events },
+        },
+      });
+
+    await act(async () => {
+      switchFor("notify-me").click();
+    });
+
+    expect(writes).toEqual([{ event: null, enabled: false }]);
+    expect(switchFor("notify-me").getAttribute("aria-checked")).toBe("false");
+    // Under an off master switch a category switch would be a choice with no
+    // effect, exactly as the delivery rule reads it (`enabled && events[e]`).
+    expect(switchFor("notify-swept").disabled).toBe(true);
+  });
+
+  it("leaves the switch where it was when the write is refused, and says why", async () => {
+    await render();
+    set = () => Promise.resolve({ ok: false, error: 'This build has no "swept" category.' });
+
+    await act(async () => {
+      switchFor("notify-swept").click();
+    });
+
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("true");
+    expect(vi.mocked(toastError)).toHaveBeenCalledWith(
+      'Couldn\'t change notifications: This build has no "swept" category.',
+    );
+  });
+
+  it("reports a read that failed rather than drawing switches it cannot stand behind", async () => {
+    settings = () => Promise.resolve({ ok: false, error: "database is locked" });
+
+    await render();
+
+    expect(vi.mocked(toastError)).toHaveBeenCalledWith(
+      "Couldn't read notification settings: database is locked",
+    );
+    expect(switchFor("notify-me").disabled).toBe(true);
+  });
+
+  it("puts a reported delivery failure on screen with the route that fixes it", async () => {
+    settings = () =>
+      Promise.resolve({
+        ok: true,
+        settings: {
+          ...ALL_ON,
+          deliveryFailure: {
+            producer: "run-attention",
+            message: "Notification permission denied.",
+            at: 1000,
+          },
+        },
+      });
+
+    await render();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("didn't deliver");
+    expect(text).toContain("Notification permission denied.");
+    expect(text).toContain("System Settings");
+  });
+
+  it("says so when the platform posts no native alerts at all", async () => {
+    settings = () => Promise.resolve({ ok: true, settings: { ...ALL_ON, supported: false } });
+
+    await render();
+
+    expect(container.textContent ?? "").toContain("can't show notifications");
+  });
+
+  it("explains the OS's part and the exact-item rule without claiming a permission", async () => {
+    await render();
+
+    // The prose lives behind the master row's summoned `(i)`, so the page
+    // itself lectures nobody; focusing the trigger opens it into the body.
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-label="About Notify me"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => {
+      trigger!.focus();
+      // React hears focus as `focusin`; jsdom's `focus()` does not always raise it.
+      trigger!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("the system decides whether they appear");
+    expect(text).toContain("System Settings → Notifications → Volli Code");
+    expect(text).toContain("exact question, failure, or ticket");
+    expect(text).toContain("focused Volli window");
+    // Never a permission state: Electron gives the app none to report.
+    expect(text).not.toMatch(/\b(Allowed|Denied)\b/);
+  });
+
+  it("follows a delivery failure that lands while the page is open, and its retirement", async () => {
+    await render();
+    expect(container.textContent ?? "").not.toContain("didn't deliver");
+
+    await push({
+      ...ALL_ON,
+      deliveryFailure: { producer: "update-ready", message: "Refused.", at: 2000 },
+    });
+    expect(container.textContent ?? "").toContain("didn't deliver");
+    expect(container.textContent ?? "").toContain("Refused.");
+
+    await push(ALL_ON);
+    expect(container.textContent ?? "").not.toContain("didn't deliver");
+  });
+
+  it("follows a switch written from another window", async () => {
+    await render();
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("true");
+
+    await push({
+      ...ALL_ON,
+      preferences: {
+        ...ALL_ON.preferences,
+        events: { ...ALL_ON.preferences.events, swept: false },
+      },
+    });
+
+    expect(switchFor("notify-swept").getAttribute("aria-checked")).toBe("false");
+    expect(writes).toEqual([]);
+  });
+
+  it("stops listening when it unmounts", async () => {
+    await render();
+    expect(pushes.size).toBe(1);
+    await act(async () => {
+      root.unmount();
+    });
+    expect(pushes.size).toBe(0);
+    // `afterEach` unmounts again; a second unmount of an unmounted root is a no-op.
+  });
+});

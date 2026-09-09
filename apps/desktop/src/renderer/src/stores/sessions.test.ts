@@ -19,6 +19,7 @@ import {
   createSessionsStore,
   findSessionPane,
   findTabBySessionId,
+  findTerminalPlacement,
   hydrateHarnessCatalog,
   projectScope,
   sessionActivityState,
@@ -882,6 +883,62 @@ describe("findTabBySessionId", () => {
 
     expect(findTabBySessionId(store.getState().byOwner, "b1")?.ownerId).toBe("t1");
     expect(findTabBySessionId(store.getState().byOwner, "ghost")).toBeNull();
+  });
+});
+
+describe("findTerminalPlacement", () => {
+  /**
+   * Where a notification click has to go when the Session it names is a
+   * TERMINAL (VC-295 round 2). A harness that reports "waiting on a human" is
+   * waiting in a pane, and a pane is three facts — which container, which tab,
+   * which leaf — none of which a Session id carries on its own.
+   */
+  it("places a ticket terminal by its tab and its scope", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(ticketScope("proj", "t1"), "root", shellLaunch("Session 1"));
+
+    expect(findTerminalPlacement(store.getState().byOwner, "root")).toEqual({
+      ownerId: "t1",
+      tabId: "root",
+      paneId: "root",
+      scope: { kind: "ticket", projectId: "proj", ticketId: "t1" },
+    });
+  });
+
+  it("places a split pane under the tab that holds it, not under itself", () => {
+    // The failure this prevents: opening `pane` as a tab id finds no tab, and
+    // the click lands nowhere.
+    const store = createSessionsStore();
+    store.getState().addSession(ticketScope("proj", "t1"), "root", shellLaunch("Session 1"));
+    store.getState().addSplit("t1", "root", "root", "pane", "vertical");
+
+    expect(findTerminalPlacement(store.getState().byOwner, "pane")).toEqual({
+      ownerId: "t1",
+      tabId: "root",
+      paneId: "pane",
+      scope: { kind: "ticket", projectId: "proj", ticketId: "t1" },
+    });
+  });
+
+  it("places a Board terminal under its project", () => {
+    const store = createSessionsStore();
+    store.getState().addSession(projectScope("proj"), "board-root", shellLaunch("Terminal 1"));
+
+    expect(findTerminalPlacement(store.getState().byOwner, "board-root")).toEqual({
+      ownerId: "proj",
+      tabId: "board-root",
+      paneId: "board-root",
+      scope: { kind: "project", projectId: "proj" },
+    });
+  });
+
+  it("answers null for a Session no terminal strip holds", () => {
+    // Which is how a chat Session is told apart from a terminal one: the
+    // caller asks the terminal registry, and a chat Session is simply not in it.
+    const store = createSessionsStore();
+    store.getState().addSession(projectScope("proj"), "board-root", shellLaunch("Terminal 1"));
+
+    expect(findTerminalPlacement(store.getState().byOwner, "a-chat-session")).toBeNull();
   });
 });
 

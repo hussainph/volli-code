@@ -36,6 +36,7 @@ import type {
   HarnessIpcChannel,
   IpcArgs,
   ModelAccessIpcChannel,
+  NotificationIpcChannel,
   PiSessionOrphanIpcChannel,
   ShellIpcChannel,
   ThemeIpcChannel,
@@ -91,6 +92,11 @@ function isOptionalFiniteNumber(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** Every member is a non-empty string — the shape a list of paths or ids has to have. */
+function isNonEmptyStringList(value: readonly unknown[]): value is string[] {
+  return value.every((entry) => typeof entry === "string" && entry.length > 0);
 }
 
 /**
@@ -419,8 +425,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input) || typeof input["id"] !== "string") return false;
-      const harness = input["harness"];
-      if (harness !== null && typeof harness !== "string") return false;
       const model = input["model"];
       if (model === null) return true;
       return (
@@ -839,17 +843,40 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   },
   "volli:worktree-orphans": {
     // `opts` is optional on the wire (the existing desktop test suite invokes
-    // this with no argument at all) — both `[]` and `[{ rescan? }]` are valid;
-    // only a present-but-non-boolean `rescan`, or a non-object first arg, rejects.
+    // this with no argument at all) — both `[]` and `[{ refresh? }]` are valid;
+    // only a present-but-non-boolean `refresh`, or a non-object first arg, rejects.
     guard: (args): args is IpcArgs<"volli:worktree-orphans"> => {
       if (args.length === 0) return true;
       if (args.length !== 1) return false;
       const [input] = args;
       return (
-        isRecord(input) && (input["rescan"] === undefined || typeof input["rescan"] === "boolean")
+        isRecord(input) && (input["refresh"] === undefined || typeof input["refresh"] === "boolean")
       );
     },
     invalidError: "Invalid request",
+  },
+  "volli:worktree-orphan-cleanup": {
+    // A command id, the scan revision it was confirmed against, and at least
+    // one item id from that scan's plan. NO PATHS: main resolves ids against
+    // the proposal it minted itself (VC-284 review C1), so this guard only has
+    // to say the shape is a cleanup command — whether the revision is current
+    // and the ids are real is a question only the plan can answer.
+    //
+    // The command id is held to UUID syntax like every other command channel
+    // (VC-284 re-review S1). It is the identity a destructive act is replayed
+    // under: a caller that may pick `"cmd-1"` can collide with another caller's
+    // id and be answered with somebody else's deletion.
+    guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      const { commandId, scanRevision, itemIds } = input;
+      if (!isDurableCommandId(commandId)) return false;
+      if (typeof scanRevision !== "string" || scanRevision.length === 0) return false;
+      if (!Array.isArray(itemIds) || itemIds.length === 0) return false;
+      return isNonEmptyStringList(itemIds);
+    },
+    invalidError: "Invalid cleanup request",
   },
   "volli:worktree-orphan-delete": {
     guard: (args): args is IpcArgs<"volli:worktree-orphan-delete"> => {
@@ -897,6 +924,16 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   },
   "volli:worktree-change-watch": {
     guard: (args): args is IpcArgs<"volli:worktree-change-watch"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:worktree-change-watch-pause": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-watch-pause"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:worktree-change-watch-resume": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-watch-resume"> =>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },
@@ -1330,11 +1367,16 @@ function isModelSelectionShape(value: unknown): boolean {
 }
 
 /**
- * Automation commands are durable retry identities, not an IPC-local counter.
- * The renderer mints UUIDs, so a retry can carry the exact same intent through
- * another host without deriving an id from this machine.
+ * A durable command id: a UUID, never an IPC-local counter (docs/BOUNDARIES.md
+ * rule 1). The renderer mints one so a retry can carry the exact same intent
+ * through another host without deriving an id from this machine.
+ *
+ * Shared by every command channel rather than copied per feature (VC-284
+ * re-review S1): the orphan cleanup transports a DELETION under this id, and a
+ * transport that accepts `"cmd-1"` accepts an id another writer could mint too,
+ * which is exactly the cross-writer collision the rule exists to prevent.
  */
-function isAutomationCommandId(value: unknown): value is string {
+function isDurableCommandId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -1402,7 +1444,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-create"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input) || !isAutomationCommandId(input["commandId"])) return false;
+      if (!isRecord(input) || !isDurableCommandId(input["commandId"])) return false;
       const projectId = input["projectId"];
       if (projectId !== null && typeof projectId !== "string") return false;
       return isAutomationDraftShape(input);
@@ -1415,7 +1457,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       const [input] = args;
       if (
         !isRecord(input) ||
-        !isAutomationCommandId(input["commandId"]) ||
+        !isDurableCommandId(input["commandId"]) ||
         typeof input["automationId"] !== "string"
       ) {
         return false;
@@ -1428,7 +1470,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-delete"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string",
     invalidError: "Invalid automation delete request",
   },
@@ -1441,7 +1483,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-run"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       isAutomationRunTargetShape(args[0]["target"]) &&
       typeof args[0]["ticketId"] === "string" &&
       (args[0]["modelOverride"] === null || isModelSelectionShape(args[0]["modelOverride"])),
@@ -1466,7 +1508,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-arm"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["projectId"] === "string" &&
       isTicketStatus(args[0]["status"]) &&
       (args[0]["automationId"] === null || typeof args[0]["automationId"] === "string"),
@@ -1487,7 +1529,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-set-column-order"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["projectId"] === "string" &&
       isTicketStatus(args[0]["status"]) &&
       Array.isArray(args[0]["rankedAutomationIds"]) &&
@@ -1511,7 +1553,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-set-enabled"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["enabled"] === "boolean",
     invalidError: "Invalid automation enablement request",
@@ -1542,7 +1584,7 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
     guard: (args): args is IpcArgs<"volli:automation-run-for-project"> =>
       args.length === 1 &&
       isRecord(args[0]) &&
-      isAutomationCommandId(args[0]["commandId"]) &&
+      isDurableCommandId(args[0]["commandId"]) &&
       typeof args[0]["automationId"] === "string" &&
       typeof args[0]["projectId"] === "string",
     invalidError: "Invalid automation run request",
@@ -1746,6 +1788,41 @@ export const AGENT_OBSERVABILITY_IPC: {
 export const AGENT_OBSERVABILITY_CHANNELS = Object.keys(
   AGENT_OBSERVABILITY_IPC,
 ) as readonly AgentObservabilityIpcChannel[];
+
+// ---- notification descriptor table (VC-295) -------------------------------
+// The guard is the shape check; WHICH categories exist is the service's
+// vocabulary question, and it answers a bad one with a sentence naming the
+// category rather than "Invalid request". Same split as the observability
+// endpoint above: a guard checks shape, a policy explains a refusal.
+
+function isNotificationPreferenceUpdate(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const event = value["event"];
+  return typeof value["enabled"] === "boolean" && (event === null || typeof event === "string");
+}
+
+export const NOTIFICATION_IPC: {
+  readonly [C in NotificationIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:notifications-get": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:notifications-set": {
+    guard: (args): args is IpcArgs<"volli:notifications-set"> =>
+      args.length === 1 && isNotificationPreferenceUpdate(args[0]),
+    invalidError: "Invalid notification preference",
+  },
+  "volli:notifications-pending-activation": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid request",
+  },
+};
+
+/** Every channel the notification surface owns, derived — never hand-synced. */
+export const NOTIFICATION_CHANNELS = Object.keys(
+  NOTIFICATION_IPC,
+) as readonly NotificationIpcChannel[];
 
 // ---- self-update descriptor table (VC-59) ---------------------------------
 // Every update request is argument-less — the state is main's to own and the

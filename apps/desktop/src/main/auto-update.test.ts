@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { UpdateUiState } from "../ipc/contract";
+import type { NotificationRequest } from "./notifications/dispatch";
 import {
   readAllowPrerelease,
   readUpdateChannel,
@@ -57,7 +58,7 @@ class FakeUpdater implements AutoUpdaterLike {
 interface Harness {
   updater: FakeUpdater;
   logs: string[];
-  notifications: { title: string; body: string }[];
+  notifications: NotificationRequest[];
   /** Every state the module announced through `onStateChange`, in order. */
   stateChanges: UpdateUiState[];
   /** What `hasUpdateSurface()` answers — flip it to simulate windows opening/closing. */
@@ -71,7 +72,7 @@ interface Harness {
 function makeHarness(): Harness {
   const updater = new FakeUpdater();
   const logs: string[] = [];
-  const notifications: { title: string; body: string }[] = [];
+  const notifications: NotificationRequest[] = [];
   const stateChanges: UpdateUiState[] = [];
   const surface = { present: false };
   return {
@@ -86,7 +87,7 @@ function makeHarness(): Harness {
         updater,
         allowPrerelease: overrides.allowPrerelease ?? false,
         currentVersion: "0.1.0",
-        notify: (title, body) => notifications.push({ title, body }),
+        notify: (request) => notifications.push(request),
         log: (line) => logs.push(line),
         onStateChange: (state) => stateChanges.push(state),
         hasUpdateSurface: () => surface.present,
@@ -378,8 +379,11 @@ describe("startAutoUpdate", () => {
     harness.updater.emit("update-downloaded", { version: "0.2.0" });
     expect(harness.notifications).toEqual([
       {
+        producer: "update-ready",
         title: "Update ready",
         body: "Volli Code 0.2.0 has been downloaded and will install when you quit.",
+        // A click opens the update surface rather than a random window (VC-295).
+        target: { kind: "update" },
       },
     ]);
     handle.stop();
@@ -469,12 +473,16 @@ describe("startAutoUpdate", () => {
 
     expect(harness.notifications).toEqual([
       {
+        producer: "update-ready",
         title: "Update ready",
         body: "Volli Code 0.2.0 has been downloaded and will install when you quit.",
+        target: { kind: "update" },
       },
       {
+        producer: "update-ready",
         title: "Update ready",
         body: "Volli Code 0.3.0 has been downloaded and will install when you quit.",
+        target: { kind: "update" },
       },
     ]);
     // The download itself still logs every time — only the notification dedupes.

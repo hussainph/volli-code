@@ -11,7 +11,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_FAILURE_ATTENTION_KINDS,
   SESSION_PERSON_NEEDS,
+  revealedSessionAttention,
+  sessionNotificationItem,
   sessionPersonNeed,
+  shownSessionNotificationItem,
 } from "./session-need";
 import { SESSION_ATTENTION_KINDS, SESSION_USER_BLOCKING_ATTENTION_KINDS } from "./session-ledger";
 import type { SessionAttention, SessionAttentionKind, SessionProjection } from "./session-ledger";
@@ -31,10 +34,28 @@ type Reading = Pick<SessionProjection, "interactions" | "attention" | "stopped">
 function projection(overrides: Partial<Reading> = {}): Reading {
   return {
     interactions: { active: [], all: [] } as unknown as SessionProjection["interactions"],
-    attention: { active: [], all: [] } as unknown as SessionProjection["attention"],
+    attention: { active: [], primary: null } as unknown as SessionProjection["attention"],
     stopped: null,
     ...overrides,
   };
+}
+
+/** A Session both asking a question and carrying these attentions. */
+function askingAndAttending(...kinds: readonly SessionAttentionKind[]): Reading {
+  return { ...waitingOnQuestion(), attention: attending(...kinds).attention };
+}
+
+/** The projection a ledger fold would produce for these active attentions. */
+function attending(...kinds: readonly SessionAttentionKind[]): Reading {
+  const active = kinds.map((kind) => attention(kind));
+  return projection({
+    // `primary` is the ledger's own answer — the NEWEST active attention — and
+    // it is what the chat plane's blocker row draws.
+    attention: {
+      active,
+      primary: active.at(-1) ?? null,
+    } as unknown as SessionProjection["attention"],
+  });
 }
 
 function waitingOnQuestion(): Reading {
@@ -47,9 +68,7 @@ function waitingOnQuestion(): Reading {
 }
 
 function raising(kind: SessionAttentionKind): Reading {
-  return projection({
-    attention: { active: [attention(kind)], all: [] } as unknown as SessionProjection["attention"],
-  });
+  return attending(kind);
 }
 
 describe("sessionPersonNeed", () => {
@@ -96,14 +115,7 @@ describe("sessionPersonNeed", () => {
   it("lets a failure outrank a question", () => {
     // The renderer settles this for the tab dot: a question held over a dead
     // transport is a memory, and sending someone to answer it wastes the trip.
-    const both: Reading = {
-      ...waitingOnQuestion(),
-      attention: {
-        active: [attention("adapter_disconnected")],
-        all: [],
-      } as unknown as SessionProjection["attention"],
-    };
-    expect(sessionPersonNeed(both)).toBe("error");
+    expect(sessionPersonNeed(askingAndAttending("adapter_disconnected"))).toBe("error");
   });
 
   it("needs nobody once the Session was stopped on purpose", () => {
@@ -117,5 +129,206 @@ describe("sessionPersonNeed", () => {
 
   it("names exactly the two states VC-112 does", () => {
     expect([...SESSION_PERSON_NEEDS]).toEqual(["waiting", "error"]);
+  });
+});
+
+describe("sessionNotificationItem", () => {
+  /**
+   * The one derivation both sides of the suppression comparison use (VC-295
+   * round 2). A producer names the item its alert is about with it, and a
+   * window reports the item it is showing with it — so "is the person already
+   * looking at this" is a comparison between two answers to the same question,
+   * rather than between two similar-looking guesses.
+   */
+  it("names the open question a waiting Session is blocked on", () => {
+    expect(sessionNotificationItem(waitingOnQuestion())).toEqual({
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("names the failure of a Session whose plumbing broke", () => {
+    expect(sessionNotificationItem(raising("adapter_disconnected"))).toEqual({
+      interactionId: null,
+      attentionId: "attention-adapter_disconnected",
+    });
+  });
+
+  it("lets a failure outrank a question, exactly as the need does", () => {
+    // Otherwise a click would land on a card that cannot be answered, and the
+    // suppression comparison would disagree with the alert that raised it.
+    expect(sessionNotificationItem(askingAndAttending("adapter_disconnected"))).toEqual({
+      interactionId: null,
+      attentionId: "attention-adapter_disconnected",
+    });
+  });
+
+  it("names the NEWEST failure when several are live — the one the row draws", () => {
+    // Round 3. The blocker row shows `attention.primary`, which the ledger
+    // defines as the newest active attention. An item chosen by scan order
+    // instead could name a failure the person cannot see, which is both a dead
+    // deep link and a window claiming to show something it does not.
+    expect(
+      sessionNotificationItem(attending("adapter_disconnected", "configuration_invalid")),
+    ).toEqual({ interactionId: null, attentionId: "attention-configuration_invalid" });
+  });
+
+  it("names nothing about a failure the newest attention has covered over", () => {
+    // A rate limit raised after a failure IS the row on screen. Naming the
+    // failure underneath it would send a click to a card nothing is drawing.
+    expect(sessionNotificationItem(attending("adapter_disconnected", "rate_limited"))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("names the open question over a blocking attention, because the card hides that row", () => {
+    // `sessionBlocker` stands down for a `permission_required` while a card is
+    // open — the card IS the answer to it — so the card is what is on screen.
+    expect(sessionNotificationItem(askingAndAttending("permission_required"))).toEqual({
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("names a blocking question raised as an Attention rather than an Interaction", () => {
+    // Nothing else is open, so the blocker row is what the person will see.
+    // `sessionAwaitsUser` accepts either; the item has to as well, or an alert
+    // about a permission prompt would carry no item at all.
+    expect(sessionNotificationItem(raising("permission_required"))).toEqual({
+      interactionId: null,
+      attentionId: "attention-permission_required",
+    });
+  });
+
+  it("names nothing for a Session that is merely working", () => {
+    expect(sessionNotificationItem(projection())).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("ignores an Attention nobody can act on", () => {
+    // A rate limit clears itself. Reporting it as the item on screen would
+    // suppress the question that arrives while it stands.
+    expect(sessionNotificationItem(raising("rate_limited"))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("names nothing once the Session was stopped on purpose", () => {
+    const stopped: SessionProjection["stopped"] = { at: 1, reason: null, by: { kind: "user" } };
+    expect(sessionNotificationItem({ ...waitingOnQuestion(), stopped })).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+});
+
+describe("revealedSessionAttention", () => {
+  /**
+   * The one answer to "which Attention is the row drawing" (VC-295 round 4).
+   * The blocker asks it, and so does the window reporting what it shows — two
+   * derivations is how the row came to draw one problem while the window
+   * claimed another was visible.
+   */
+  const active = [attention("adapter_disconnected"), attention("configuration_invalid")];
+
+  it("finds the named Attention while it is live", () => {
+    expect(revealedSessionAttention(active, "attention-adapter_disconnected")).toBe(active[0]);
+  });
+
+  it("answers null for one that has cleared, so the caller falls back", () => {
+    expect(revealedSessionAttention(active, "attention-gone")).toBeNull();
+  });
+
+  it("answers null when no click named one", () => {
+    expect(revealedSessionAttention(active, null)).toBeNull();
+  });
+});
+
+/** The item a click asked the plane to show: a failure, or a question. */
+const reveal = (attentionId: string) => ({ interactionId: null, attentionId });
+const revealQuestion = (interactionId: string) => ({ interactionId, attentionId: null });
+
+describe("shownSessionNotificationItem", () => {
+  const older = "attention-adapter_disconnected";
+  const newer = "attention-configuration_invalid";
+  const twoLive = attending("adapter_disconnected", "configuration_invalid");
+
+  it("names the newest Attention when no click has revealed one", () => {
+    expect(shownSessionNotificationItem(twoLive, null)).toEqual({
+      interactionId: null,
+      attentionId: newer,
+    });
+  });
+
+  it("names the revealed Attention, because that is the one the row draws", () => {
+    // The round-3 gap: the row showed `older` while the window reported
+    // `newer`, so the alert for `newer` — the problem NOT on screen — was
+    // suppressed.
+    expect(shownSessionNotificationItem(twoLive, reveal(older))).toEqual({
+      interactionId: null,
+      attentionId: older,
+    });
+  });
+
+  it("falls back to what the row falls back to when the revealed one has cleared", () => {
+    expect(shownSessionNotificationItem(twoLive, reveal("attention-gone"))).toEqual({
+      interactionId: null,
+      attentionId: newer,
+    });
+  });
+
+  it("leaves an open question in front of a reveal a card answers", () => {
+    // With a card open the blocker stands down for the kind that card answers,
+    // so the card is what is on screen and the report must say so.
+    expect(
+      shownSessionNotificationItem(
+        askingAndAttending("permission_required"),
+        reveal("attention-permission_required"),
+      ),
+    ).toEqual({ interactionId: "ask-1", attentionId: null });
+  });
+
+  it("names the revealed question when it is one of several open (round 5)", () => {
+    // The plane puts the revealed question in the foot slot (or scrolls to its
+    // row), so that — not the first — is what the person is looking at.
+    const twoQuestions = projection({
+      interactions: {
+        active: [{ id: "ask-1" }, { id: "ask-2" }],
+        all: [],
+      } as unknown as SessionProjection["interactions"],
+    });
+    expect(shownSessionNotificationItem(twoQuestions, revealQuestion("ask-2"))).toEqual({
+      interactionId: "ask-2",
+      attentionId: null,
+    });
+    expect(shownSessionNotificationItem(twoQuestions, revealQuestion("ask-gone"))).toEqual({
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("never lets a revealed question displace a failure row", () => {
+    // The failure is drawn above the card whichever question is in the slot.
+    expect(
+      shownSessionNotificationItem(
+        askingAndAttending("adapter_disconnected"),
+        revealQuestion("ask-1"),
+      ),
+    ).toEqual({ interactionId: null, attentionId: older });
+  });
+
+  it("says nothing about a Session that shows nothing", () => {
+    expect(shownSessionNotificationItem(projection(), reveal(older))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
+    expect(shownSessionNotificationItem(projection(), revealQuestion("ask-1"))).toEqual({
+      interactionId: null,
+      attentionId: null,
+    });
   });
 });
