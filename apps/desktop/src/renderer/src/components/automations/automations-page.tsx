@@ -274,10 +274,10 @@ function AutomationsSurface({
     ) : (
       <>
         <label className="flex items-center gap-2 text-ui text-muted-foreground">
-          Enabled
+          Automatic triggers
           <Switch
             checked={enabledIds.includes(selectedAutomation.id)}
-            aria-label={`Enabled on this machine: ${selectedAutomation.name}`}
+            aria-label={`Automatic triggers on this machine: ${selectedAutomation.name}`}
             onCheckedChange={(enabled) => void setEnabled(selectedAutomation.id, enabled)}
           />
         </label>
@@ -500,7 +500,9 @@ function AutomationRail({
                     {automation.name}
                   </span>
                   <span
-                    aria-label={enabledIds.includes(automation.id) ? "Enabled" : "Switched off"}
+                    aria-label={
+                      enabledIds.includes(automation.id) ? "Automatic triggers" : "Manual only"
+                    }
                     className={cn(
                       "size-2 shrink-0 rounded-full",
                       enabledIds.includes(automation.id) ? "bg-primary" : "border border-border",

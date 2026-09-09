@@ -16,17 +16,10 @@
  * in both states for the same reason: the answer to "nothing is offered here"
  * and to "I want a different one" is the same page.
  *
- * The bolt is filled only while the column is armed AND that Automation is
- * switched on here. Arming survives a switched-off machine-local switch, so
- * that state keeps a visible regular bolt and names both facts in its tooltip;
- * it must not use the filled mark that says a plain drop will start work.
- *
- * And an UNARMED column's bolt is invisible until the column is hovered, the
- * button is focused, or its menu is open. A board with nothing armed must read
- * exactly as it read before this feature existed; five permanent glyphs saying
- * "nothing here" is five pieces of chrome earning nothing. It stays in the
- * layout and in the accessibility tree the whole time — `opacity`, not
- * `hidden` — so tabbing to it reveals it and the header never reflows.
+ * The bolt is always visible: outline means unarmed, fill means armed.
+ * Automatic triggers are a separate machine-local choice. An armed Automation
+ * with those paused keeps its filled mark, but uses muted ink and names the
+ * pause explicitly. The menu exposes that switch beside the arming choice.
  *
  * The list is re-read on open. Arming is machine-local and the record is not:
  * an Automation authored anywhere else in the app is a change this menu's own
@@ -45,6 +38,7 @@ import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -82,6 +76,7 @@ export function ColumnArmingButton({
   const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const arm = useAutomationsStore((state) => state.arm);
+  const setEnabled = useAutomationsStore((state) => state.setEnabled);
 
   // The column's AUTHORED rank (VC-132) — the same order the lane view
   // arranges, so the menu and the lane are one list read twice. Deliberately
@@ -100,7 +95,7 @@ export function ColumnArmingButton({
       ? `Arm ${TICKET_STATUS_LABELS[status]}`
       : armingState === "ready"
         ? `${TICKET_STATUS_LABELS[status]} runs ${armed.name}`
-        : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — switched off`;
+        : `${TICKET_STATUS_LABELS[status]} is armed with ${armed.name} — automatic triggers off`;
 
   return (
     <DropdownMenu
@@ -123,19 +118,13 @@ export function ColumnArmingButton({
               data-armed={armed === null ? undefined : armed.id}
               data-arming-state={armingState}
               className={cn(
-                "shrink-0 transition-opacity duration-150",
-                armed === null
-                  ? [
-                      "text-muted-foreground opacity-0",
-                      "group-hover/column-header:opacity-100 focus-visible:opacity-100",
-                      "data-[state=open]:opacity-100",
-                    ]
-                  : "text-foreground",
+                "shrink-0",
+                armingState === "ready" ? "text-foreground" : "text-muted-foreground",
               )}
             >
               <LightningIcon
-                weight={armingState === "ready" ? "fill" : "regular"}
-                data-arming-mark={armingState === "ready" ? "filled" : "unfilled"}
+                weight={armed === null ? "regular" : "fill"}
+                data-arming-mark={armed === null ? "unfilled" : "filled"}
               />
             </Button>
           </DropdownMenuTrigger>
@@ -169,9 +158,8 @@ export function ColumnArmingButton({
                 {/* An Automation that is switched off on this machine can be
                     armed — arming is the column's choice and the switch is the
                     record's — but it will not fire until someone turns it on,
-                    so the row says so rather than letting a filled bolt
-                    promise a Run that never comes. The switch itself lives on
-                    the Automations page, where the same sentence is printed.
+                    so the row says so. The switch below and the Automations
+                    page both update the same machine-local preference.
                     (VC-112: a machine fires nothing until someone turns
                     something on there.) */}
                 {enabledIds.includes(automation.id) ? null : (
@@ -183,7 +171,21 @@ export function ColumnArmingButton({
             ))}
           </DropdownMenuRadioGroup>
         )}
+        {armed === null ? null : (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={enabledIds.includes(armed.id)}
+              onCheckedChange={(enabled) => void setEnabled(armed.id, enabled)}
+            >
+              Automatic triggers
+            </DropdownMenuCheckboxItem>
+          </>
+        )}
         <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-label font-normal text-muted-foreground">
+          ⌥-drag a ticket to choose an automation
+        </DropdownMenuLabel>
         {/* The link, not an editor: authoring lives on the page (VC-112), and
             what a column offers is decided by an Automation's Trigger there. */}
         <DropdownMenuItem

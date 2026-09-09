@@ -135,6 +135,15 @@ afterEach(async () => {
 });
 
 describe("a column's dropzone", () => {
+  it("keeps an unarmed column bolt visible without hover", async () => {
+    await mount(TICKETS);
+    const bolt = container?.querySelector('[data-column-arming="doing"]');
+    expect(bolt?.getAttribute("aria-label")).toBe("Arm Doing");
+    expect(bolt?.className).not.toContain("opacity-0");
+    expect(bolt?.className).not.toContain("group-hover");
+    expect(bolt?.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+  });
+
   it("is not the element that scrolls", async () => {
     await mount(TICKETS);
 

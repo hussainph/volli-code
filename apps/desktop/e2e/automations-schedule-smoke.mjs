@@ -196,7 +196,7 @@ try {
   await must(4, "the machine-local switch turns the schedule on here", async () => {
     // A machine fires nothing until someone turns something on there (VC-112),
     // so the switch is what puts this schedule in front of the timer at all.
-    await page.getByLabel("Enabled on this machine: Nightly sweep").click();
+    await page.getByLabel("Automatic triggers on this machine: Nightly sweep").click();
     const on = await waitUntil(
       "the enabled set to name this schedule",
       async () => {

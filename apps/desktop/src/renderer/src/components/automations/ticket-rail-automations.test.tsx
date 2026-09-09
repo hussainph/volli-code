@@ -312,7 +312,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).toContain("Switched off");
+    expect(text()).toContain("Manual only");
     await act(async () => {
       menuItem("Review sweep").click();
     });
@@ -324,7 +324,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).not.toContain("Switched off");
+    expect(text()).not.toContain("Manual only");
   });
 
   it("presses Run once where the column arms nothing", async () => {

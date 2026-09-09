@@ -278,7 +278,7 @@ try {
         items.includes("Run once") &&
         // Nobody switched anything on here, and a switched-off Automation is
         // still offered — with the note that says what off means.
-        items.includes("Switched off"),
+        items.includes("Manual only"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),
     };
   });

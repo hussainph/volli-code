@@ -126,8 +126,8 @@ export function BoardColumn({
         <Badge variant="count">{tickets.length}</Badge>
         <div className="flex-1" />
         {/* Arming lives on the column because that is what it is a property of
-            (VC-112). Trailing, so an unarmed board's header reads exactly as it
-            did before this existed. */}
+            (VC-112). Always visible so an unarmed column still offers an
+            obvious way to configure what happens on arrival. */}
         <ColumnArmingButton projectId={projectId} status={status} />
       </div>
       {/* The panel floats OVER the list rather than sitting above it in the

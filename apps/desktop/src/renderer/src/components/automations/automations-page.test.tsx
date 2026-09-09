@@ -337,18 +337,18 @@ describe("enable and disable", () => {
     // VC-112: a machine fires nothing until someone turns something on there.
     await mount({ automations: [automation()] });
 
-    expect(document.querySelector('[aria-label="Switched off"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Manual only"]')).not.toBeNull();
     expect(
-      (button("Enabled on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset.state,
     ).toBe("unchecked");
   });
 
   it("marks the selected record and rail row once switched on here", async () => {
     await mount({ automations: [automation()], enabled: ["automation-1"] });
 
-    expect(document.querySelector('[aria-label="Enabled"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Automatic triggers"]')).not.toBeNull();
     expect(
-      (button("Enabled on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset.state,
     ).toBe("checked");
   });
 
@@ -356,7 +356,7 @@ describe("enable and disable", () => {
     await mount({ automations: [automation()] });
 
     await act(async () => {
-      button("Enabled on this machine: Review sweep").click();
+      button("Automatic triggers on this machine: Review sweep").click();
     });
 
     expect(doors.setEnabled).toHaveBeenCalledWith({
@@ -654,10 +654,10 @@ describe("the lane view", () => {
     });
     await openLanes();
 
-    const label = "Doing is armed with Standards sweep — switched off";
+    const label = "Doing is armed with Standards sweep — automatic triggers off";
     const bolt = button(label);
     expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
-    expect(bolt.querySelector('[data-arming-mark="unfilled"]')).not.toBeNull();
+    expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
     expect((await showTooltip(bolt)).textContent).toBe(label);
 
     // No effective arming means no pin: the authored digit remains, and the
@@ -665,13 +665,13 @@ describe("the lane view", () => {
     const row = document.querySelector('[data-lane-row="doing:shared"]');
     expect(row?.getAttribute("data-lane-digit")).toBe("2");
     expect(row?.getAttribute("data-lane-arming")).toBe("switched-off");
-    expect(row?.textContent).toContain("Armed · Switched off");
+    expect(row?.textContent).toContain("Armed · Manual only");
 
     await openDropdown(bolt);
     const menuRow = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
       (candidate) => candidate.textContent?.includes("Standards sweep"),
     );
-    expect(menuRow?.textContent).toContain("Switched off");
+    expect(menuRow?.textContent).toContain("Manual only");
   });
 });
 
@@ -775,5 +775,22 @@ describe("schedules (VC-130)", () => {
     });
     expect(text()).toContain("Skipped");
     expect(text()).toContain("Choose a model.");
+  });
+});
+
+describe("column arming trigger control", () => {
+  it("lets an armed column enable automatic triggers without visiting the editor", async () => {
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["doing"] } })],
+      armings: [{ projectId: "p1", status: "doing", automationId: "automation-1", armedAt: 1 }],
+    });
+    await openLanes();
+    await openDropdown(button("Doing is armed with Review sweep — automatic triggers off"));
+    await act(async () =>
+      (document.querySelector('[data-slot="dropdown-menu-checkbox-item"]') as HTMLElement).click(),
+    );
+    expect(doors.setEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ automationId: "automation-1", enabled: true }),
+    );
   });
 });
