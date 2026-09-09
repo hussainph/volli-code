@@ -181,8 +181,8 @@ export function tabTitleWithProvenance(title: string, provenanceLine: string | n
 /**
  * What a strip needs to draw a ticket's tabs, whatever strip it is.
  *
- * Two now: the surface's own full-width strip ({@link TicketTabStrip}) and a
- * secondary pane's ({@link TicketPaneTabStrip}, VC-202). They differ in the
+ * Two now: the main bar's trailing strip ({@link TicketTabStrip}) and another
+ * pane's ({@link TicketPaneTabStrip}). They differ in the
  * tablist's name and in the trailing actions cluster — a pane strip has none,
  * because those controls act on the SURFACE and there is exactly one of it.
  * How a tab is DRAWN is shared, and shared as a component rather than as a
@@ -218,6 +218,7 @@ interface TicketTabListProps {
 }
 
 interface TicketTabStripProps extends TicketTabListProps {
+  label?: string;
   /** Disables the session-start control while a session of either kind is booting. */
   creating: boolean;
   /** Boots a terminal session tab — the same path as the rail's Terminal control. */
@@ -483,6 +484,7 @@ function TicketTab({
 
 /** Purely presentational tab strip — content lives in the caller (ticket-detail.tsx). */
 export function TicketTabStrip({
+  label = "Ticket tabs",
   creating,
   onNewSession,
   onNewChat,
@@ -493,7 +495,7 @@ export function TicketTabStrip({
 }: TicketTabStripProps) {
   return (
     <TabStrip
-      label="Ticket tabs"
+      label={label}
       reorder={reorderFor(list)}
       actions={
         <>
@@ -547,9 +549,8 @@ export function TicketTabStrip({
 }
 
 /**
- * ONE SECONDARY PANE's strip (VC-202): the same tabs, named for the pane, with
- * no actions cluster — the session-start control and the rail toggle act on the
- * whole workspace, and the workspace's own strip is where they stay.
+ * A pane's strip without actions. The session-start control and rail toggle
+ * stay at the main bar's right edge rather than following the primary pane.
  */
 export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { label: string }) {
   return (

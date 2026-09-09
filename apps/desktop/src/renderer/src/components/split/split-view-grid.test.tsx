@@ -56,7 +56,7 @@ function markup(view: ResolvedSplitView): string {
   return renderToStaticMarkup(
     <SplitViewGrid
       view={view}
-      renderStrip={(pane) => (pane.isPrimary ? null : <div data-testid={`strip-${pane.id}`} />)}
+      renderStrip={(pane) => <div data-testid={`strip-${pane.id}`} />}
       renderContent={(pane) => <div data-testid={`content-${pane.id}`}>{pane.activeTabId}</div>}
       onFocusPane={vi.fn()}
       onResizeSplit={vi.fn()}
@@ -72,16 +72,16 @@ describe("SplitViewGrid", () => {
     expect(html).not.toContain("ring-inset");
     expect(html).not.toContain("aria-label");
     expect(html).not.toContain('role="separator"');
-    // The primary pane draws no strip of its own: the surface's is its.
+    // Top-edge panes share the main bar, including the unsplit pane.
     expect(html).not.toContain("strip-root");
   });
 
-  it("gives the primary pane the permanent tab and the second pane its own", () => {
+  it("gives side-by-side panes their own content without nested strips", () => {
     const html = markup(split());
 
     expect(html).toContain(">doc</div>");
     expect(html).toContain(">term</div>");
-    expect(html).toContain('data-testid="strip-p1"');
+    expect(html).not.toContain('data-testid="strip-');
   });
 
   it("rings the focused pane in the terminal split's own vocabulary", () => {
