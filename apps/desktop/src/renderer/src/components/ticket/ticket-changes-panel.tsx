@@ -11,6 +11,15 @@
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
  * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
+ *
+ * THE LIST IS A LIST, NOT A LISTBOX (VC-311). A `role="option"` row may not
+ * hold interactive descendants, and this one holds three — the activation
+ * target plus Copy/Open — so the old `listbox`/`option` pair was an ARIA
+ * content-model violation screen readers answer by flattening the row. A plain
+ * `list` of `listitem`s permits named interactive children; the keyboard model
+ * is the tab order itself (row button, then its actions, focus-ringed by
+ * `ListRow`), and the open row carries `aria-current` rather than
+ * `aria-selected`, which without a listbox parent announced nothing anyway.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
@@ -43,6 +52,8 @@ import {
   applyChangeSetRefresh,
   presentChangeRowWithRecency,
   selectChangeRow,
+  splitFilenameForTruncation,
+  splitParentForTruncation,
   type ChangeRowPresentation,
   type ChangesNavigatorState,
 } from "@renderer/components/ticket/ticket-changes-model";
@@ -59,6 +70,7 @@ import { Input } from "@renderer/components/ui/input";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Notice } from "@renderer/components/ui/notice";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { useClippedReveal } from "@renderer/components/ui/value-reveal";
 import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 
@@ -122,6 +134,57 @@ function ChangesTitle({ count }: { count: number }) {
       <p className="text-ui font-medium">Diffs</p>
       <Badge variant="count-pill">{count}</Badge>
     </>
+  );
+}
+
+/**
+ * One line of a change row's text, cut from the MIDDLE so the tail a reader
+ * distinguishes files by never leaves the screen (VC-311): the head span is
+ * the only thing allowed to truncate; the tail span cannot shrink. The split
+ * itself is policy in the model (`splitFilenameForTruncation`,
+ * `splitParentForTruncation`) — suffix for a filename, last segment for a
+ * parent.
+ *
+ * THE FULL-PATH VIEW rides the row's own focus stop, not a `title`: a native
+ * tooltip is the pointer's alone, and this is a row a keyboard walks. Where
+ * the head is genuinely clipped, `useClippedReveal` (VC-288) opens the Radix
+ * tooltip below the line on hover AND on focus; where it is not, the ask is
+ * refused, so a list that fits stays quiet. `within` is what lets the reveal
+ * hear focus at all — it lands on the row's activation button and bubbles up
+ * past this line, never into it.
+ */
+function ChangeRowText({
+  split,
+  reveal,
+  className,
+}: {
+  split: { head: string; tail: string };
+  /** The full string the tooltip carries when this line clips; omit for none. */
+  reveal?: string;
+  className?: string;
+}) {
+  const headRef = React.useRef<HTMLSpanElement>(null);
+  // No reveal, no host: the hook would otherwise stand guard over a line that
+  // has nothing to open.
+  const clipped = useClippedReveal(headRef, {
+    within: reveal === undefined ? undefined : '[data-slot="changes-row"]',
+  });
+  const text = (
+    <span className={cn("flex min-w-0", className)}>
+      <span ref={headRef} className="min-w-0 truncate">
+        {split.head}
+      </span>
+      {split.tail === "" ? null : <span className="shrink-0">{split.tail}</span>}
+    </span>
+  );
+  if (reveal === undefined) return text;
+  return (
+    <Tooltip open={clipped.open} onOpenChange={clipped.onOpenChange}>
+      <TooltipTrigger asChild>{text}</TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-72 text-wrap font-mono">
+        {reveal}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -248,7 +311,6 @@ export function TicketChangesList({
     <ul
       data-testid="ticket-changes-list"
       className="min-h-0 flex-1 overflow-y-auto px-2 pb-8 [scroll-padding-bottom:2rem]"
-      role="listbox"
       aria-label="Change Set"
     >
       {rows.map((row) => {
@@ -256,17 +318,36 @@ export function TicketChangesList({
         const status = CHANGE_STATUS[row.statusKind];
         const StatusIcon = status.icon;
         return (
-          <li key={row.path} role="option" aria-selected={focused}>
+          <li key={row.path}>
             <ListRow
               density="two-line"
               selected={focused}
               data-testid="ticket-changes-row"
+              data-slot="changes-row"
               data-path={row.path}
               data-focused={focused ? "true" : undefined}
-              aria-label={`${row.statusLabel}: ${row.path}`}
+              // One AX stop per row: the name carries status, the FULL path
+              // (the visible lines middle-truncate), counts in words, rename
+              // origin and recency — everything VoiceOver must say, because the
+              // glyph, the status word and the counts it can also see say it
+              // for sighted readers in three different places.
+              aria-label={row.accessibleName}
+              // The list is not a selection widget; the open row marks itself
+              // current instead. `aria-selected` without a listbox parent is
+              // announced by nothing.
+              aria-current={focused ? "true" : undefined}
               onActivate={() => onSelectRow(row.path)}
               leading={<StatusIcon className={cn("size-4 shrink-0", status.ink)} weight="bold" />}
-              primary={row.filename}
+              primary={
+                <ChangeRowText
+                  split={splitFilenameForTruncation(row.filename)}
+                  // A repo-root file has no path line under the name to carry
+                  // the reveal, so the name line carries it — there the two
+                  // are the same string anyway.
+                  reveal={row.renameFrom === null && row.parentPath === "" ? row.path : undefined}
+                  className="text-ui font-medium"
+                />
+              }
               primaryTrailing={
                 <>
                   {row.updatedLabel !== undefined && row.updatedDescription !== undefined ? (
@@ -292,7 +373,23 @@ export function TicketChangesList({
                   </span>
                 </>
               }
-              secondary={row.renameFrom !== null ? `← ${row.renameFrom}` : row.parentPath}
+              secondary={
+                row.renameFrom !== null ? (
+                  <span className="flex min-w-0 text-ui text-muted-foreground/70">
+                    <span className="shrink-0">← </span>
+                    <ChangeRowText
+                      split={splitParentForTruncation(row.renameFrom)}
+                      reveal={`${row.path} ← ${row.renameFrom}`}
+                    />
+                  </span>
+                ) : (
+                  <ChangeRowText
+                    split={splitParentForTruncation(row.parentPath)}
+                    reveal={row.path}
+                    className="text-ui text-muted-foreground/70"
+                  />
+                )
+              }
               // A fixed column, so the numbers line up down the list and the
               // filename's truncation point never moves with them.
               trailing={

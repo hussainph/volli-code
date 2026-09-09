@@ -31,6 +31,41 @@ export function splitChangePath(path: string): { filename: string; parentPath: s
   return { filename: baseNameOf(path), parentPath: dirNameOf(path) };
 }
 
+/**
+ * Where a FILENAME may be cut, so the cut never takes the tail a reader
+ * compares filenames by (VC-311).
+ *
+ * Tail = everything from the first dot, because the audit's indistinguishable
+ * pair — `split-view-divider.test.tsx` next to `split-view-divider.tsx` —
+ * differs in the whole dotted run, not just the last extension: a cut at the
+ * LAST dot would leave both rows ending `.tsx`. A dotfile (`.gitignore`) has
+ * no dot after position 0, so it stays whole in the head — its distinguishing
+ * characters sit early, which end-truncation already preserves. `tail: ""`
+ * means "nothing is protected"; the caller truncates the head alone.
+ */
+export function splitFilenameForTruncation(filename: string): { head: string; tail: string } {
+  const dot = filename.indexOf(".");
+  return dot <= 0
+    ? { head: filename, tail: "" }
+    : { head: filename.slice(0, dot), tail: filename.slice(dot) };
+}
+
+/**
+ * Where a PARENT PATH may be cut — same rule, one segment down: the last
+ * directory survives, because that is the segment that tells two same-named
+ * files apart (`components/split/rail.tsx` vs `components/ui/rail.tsx`), while
+ * the head's early segments are context the rail can ellipsize first. The
+ * separator rides in the TAIL so a truncated head joins it cleanly
+ * (`apps/desktop/…` + `/split`); a repo-root file (parent `""`) has nothing to
+ * protect.
+ */
+export function splitParentForTruncation(parentPath: string): { head: string; tail: string } {
+  const slash = parentPath.lastIndexOf("/");
+  return slash === -1
+    ? { head: parentPath, tail: "" }
+    : { head: parentPath.slice(0, slash), tail: parentPath.slice(slash) };
+}
+
 /** Human label for a Change Set file status (including conflicted). */
 export function formatChangeStatus(status: ChangeSetFileStatus): string {
   return STATUS_LABELS[status];
@@ -65,11 +100,29 @@ export interface ChangeRowPresentation {
   updatedLabel?: "Updated";
   /** Accessible explanation accompanying {@link updatedLabel}. */
   updatedDescription?: "Updated since you last opened this file";
+  /**
+   * The activation target's accessible name — one string carrying everything a
+   * screen reader must say about the row (VC-311): status, FULL path (the two
+   * visible lines truncate), counts in words, rename origin, recency. Composed
+   * here rather than in the panel because every word of it is presentation
+   * policy, and the panel is a thin shell.
+   */
+  accessibleName: string;
+}
+
+/** Counts as words for {@link ChangeRowPresentation.accessibleName}. */
+function spokenCounts(file: ChangeSetFile): string | null {
+  if (file.binary) return "binary file";
+  if (file.insertions === null || file.deletions === null) return null;
+  const insertions = `${file.insertions} insertion${file.insertions === 1 ? "" : "s"}`;
+  const deletions = `${file.deletions} deletion${file.deletions === 1 ? "" : "s"}`;
+  return `${insertions}, ${deletions}`;
 }
 
 /** Compose the full row presentation from a Change Set file. */
 export function presentChangeRow(file: ChangeSetFile): ChangeRowPresentation {
   const { filename, parentPath } = splitChangePath(file.path);
+  const counts = spokenCounts(file);
   return {
     path: file.path,
     filename,
@@ -77,6 +130,13 @@ export function presentChangeRow(file: ChangeSetFile): ChangeRowPresentation {
     statusLabel: formatChangeStatus(file.status),
     countsLabel: formatChangeCounts(file),
     renameFrom: file.previousPath ?? null,
+    accessibleName: [
+      `${formatChangeStatus(file.status)}: ${file.path}`,
+      counts,
+      file.previousPath !== undefined ? `renamed from ${file.previousPath}` : null,
+    ]
+      .filter((part) => part !== null)
+      .join(", "),
   };
 }
 
@@ -96,6 +156,7 @@ export function presentChangeRowWithRecency(
       ? {
           updatedLabel: "Updated" as const,
           updatedDescription: "Updated since you last opened this file" as const,
+          accessibleName: `${row.accessibleName}, updated since you last opened this file`,
         }
       : {}),
   };

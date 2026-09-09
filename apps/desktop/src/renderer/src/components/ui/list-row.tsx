@@ -23,10 +23,13 @@
  * SIBLING, and the fill must sit on something that contains both or the row
  * un-tints the moment the pointer reaches the actions it just revealed.
  *
- * WHAT STAYS WITH THE CALLER: the list element and its ARIA (`role="listbox"`
- * / `role="option"` belong to the list, not to a row), drag handles, context
- * menus, store reads, and every `data-*` an end-to-end test aims at — those
- * pass through to the activation target, which is the thing a test clicks.
+ * WHAT STAYS WITH THE CALLER: the list element and its ARIA (the roles
+ * belong to the list, not to a row — and none of this app's lists is a
+ * `listbox`, because a `role="option"` row may not hold interactive children
+ * and these rows hold actions beside their target, VC-311), drag handles,
+ * context menus, store reads, and every `data-*` an end-to-end test aims at —
+ * those pass through to the activation target, which is the thing a test
+ * clicks.
  *
  * TWO DENSITIES, AND ONE HEIGHT PER DENSITY. `two-line` is 52px: two `text-ui`
  * line boxes and 12. It was 52 in the Diffs page and 56 in the Files page for

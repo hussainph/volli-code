@@ -84,16 +84,83 @@ describe("TicketChangesList", () => {
       ]),
     );
 
-    expect(html).toContain("rail.tsx");
-    expect(html).toContain("src");
+    expect(html).toContain(">rail<");
+    expect(html).toContain(">.tsx<");
+    expect(html).toContain(">src<");
     expect(html).toContain("Modified");
     expect(html).toContain("Binary");
     expect(html).toContain("Conflicted");
-    expect(html).toContain("src/old.ts");
-    expect(html).toContain("new.ts");
+    expect(html).toContain("← ");
+    expect(html).toContain(">/old.ts<");
+    expect(html).toContain(">new<");
     // Flat list — no nested tree markup.
     expect(html).not.toContain("<ul><ul>");
     expect(html).toContain('data-testid="ticket-changes-list"');
+  });
+
+  // THE LIST IS A LIST, NOT A LISTBOX (VC-311): an `option` may not hold
+  // interactive descendants, and every row here holds three (the activation
+  // target plus Copy/Open). The old `listbox`/`option` pair was a content-model
+  // violation screen readers answer by flattening the row.
+  it("draws a plain named list of list items with no selection widget roles", () => {
+    const html = render(listRows([file({ path: "src/a.ts" })]));
+
+    expect(html).not.toContain('role="listbox"');
+    expect(html).not.toContain('role="option"');
+    expect(html).not.toContain("aria-selected");
+    expect(html).toContain('aria-label="Change Set"');
+  });
+
+  it("marks the focused row current, not selected, and only that row", () => {
+    const rows = listRows([file({ path: "src/a.ts" }), file({ path: "src/b.ts" })]);
+    const html = renderToStaticMarkup(
+      <TooltipProvider>
+        <TicketChangesList rows={rows} focusPath="src/b.ts" onSelectRow={noop} />
+      </TooltipProvider>,
+    );
+
+    expect(html).toContain('aria-current="true"');
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(html).toContain(
+      'aria-label="Modified: src/b.ts, 1 insertion, 0 deletions" aria-current="true"',
+    );
+  });
+
+  it("carries status, the FULL path, and counts in words in the row's name", () => {
+    const html = render(
+      listRows([
+        file({
+          path: "apps/desktop/src/renderer/src/components/split/split-view-divider.test.tsx",
+          insertions: 11,
+          deletions: 2,
+        }),
+      ]),
+    );
+
+    expect(html).toContain(
+      'aria-label="Modified: apps/desktop/src/renderer/src/components/split/split-view-divider.test.tsx, 11 insertions, 2 deletions"',
+    );
+  });
+
+  // The audit's indistinguishable pair: end-truncation ate the tail that
+  // distinguishes them. Both halves of the cut are separate spans, and only
+  // the head may truncate.
+  it("protects the filename suffix and the parent's last segment from the cut", () => {
+    const html = render(
+      listRows([
+        file({
+          path: "apps/desktop/src/renderer/src/components/split/split-view-divider.test.tsx",
+        }),
+        file({ path: "apps/desktop/src/renderer/src/components/ui/split-view-divider.tsx" }),
+      ]),
+    );
+
+    // Suffixes ride in shrink-0 spans; heads in truncating ones.
+    expect(html).toContain(">.test.tsx<");
+    expect(html).toContain(">.tsx<");
+    expect(html).toContain(">/split<");
+    expect(html).toContain(">/ui<");
+    expect(html).toContain(">split-view-divider</span>");
   });
 
   // The two halves are separate marks in separate inks, so they must not be

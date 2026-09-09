@@ -11,6 +11,8 @@ import {
   selectChangeRow,
   sortChangeSetFiles,
   splitChangePath,
+  splitFilenameForTruncation,
+  splitParentForTruncation,
   type ChangesNavigatorState,
 } from "./ticket-changes-model";
 
@@ -85,6 +87,7 @@ describe("presentChangeRow", () => {
       statusLabel: "Modified",
       countsLabel: "+3 −1",
       renameFrom: null,
+      accessibleName: "Modified: src/a.ts, 3 insertions, 1 deletion",
     });
   });
 
@@ -106,6 +109,8 @@ describe("presentChangeRow", () => {
       statusLabel: "Renamed",
       countsLabel: "+0 −0",
       renameFrom: "src/old-name.ts",
+      accessibleName:
+        "Renamed: src/new-name.ts, 0 insertions, 0 deletions, renamed from src/old-name.ts",
     });
   });
 
@@ -122,7 +127,73 @@ describe("presentChangeRow", () => {
     expect(presentChangeRowWithRecency(file({ path: "src/a.ts" }), recency)).toMatchObject({
       updatedLabel: "Updated",
       updatedDescription: "Updated since you last opened this file",
+      accessibleName:
+        "Modified: src/a.ts, 1 insertion, 0 deletions, updated since you last opened this file",
     });
+  });
+});
+
+describe("splitFilenameForTruncation", () => {
+  it("protects everything from the FIRST dot, so the audit pair stays distinct", () => {
+    // A cut at the last dot would leave both of these ending ".tsx".
+    expect(splitFilenameForTruncation("split-view-divider.test.tsx")).toEqual({
+      head: "split-view-divider",
+      tail: ".test.tsx",
+    });
+    expect(splitFilenameForTruncation("split-view-divider.tsx")).toEqual({
+      head: "split-view-divider",
+      tail: ".tsx",
+    });
+  });
+
+  it("leaves a dotfile whole in the head — its distinguishing characters sit early", () => {
+    expect(splitFilenameForTruncation(".gitignore")).toEqual({ head: ".gitignore", tail: "" });
+  });
+
+  it("reports nothing protected for an extensionless name", () => {
+    expect(splitFilenameForTruncation("Makefile")).toEqual({ head: "Makefile", tail: "" });
+  });
+});
+
+describe("splitParentForTruncation", () => {
+  it("protects the last segment — the one that tells two same-named files apart", () => {
+    expect(splitParentForTruncation("apps/desktop/src/renderer/src/components/split")).toEqual({
+      head: "apps/desktop/src/renderer/src/components",
+      tail: "/split",
+    });
+  });
+
+  it("keeps a single-segment parent and the repo root whole", () => {
+    expect(splitParentForTruncation("src")).toEqual({ head: "src", tail: "" });
+    expect(splitParentForTruncation("")).toEqual({ head: "", tail: "" });
+  });
+
+  it("protects a rename source's basename too, for the line it is drawn on", () => {
+    expect(splitParentForTruncation("src/old-name.ts")).toEqual({
+      head: "src",
+      tail: "/old-name.ts",
+    });
+  });
+});
+
+describe("accessibleName", () => {
+  it("says binary in words and omits counts a racing snapshot never had", () => {
+    expect(presentChangeRow(file({ path: "logo.png", binary: true })).accessibleName).toBe(
+      "Modified: logo.png, binary file",
+    );
+    expect(
+      presentChangeRow(file({ path: "racing.ts", insertions: null, deletions: null }))
+        .accessibleName,
+    ).toBe("Modified: racing.ts");
+  });
+
+  it("pluralises counts honestly", () => {
+    expect(
+      presentChangeRow(file({ path: "a.ts", insertions: 1, deletions: 1 })).accessibleName,
+    ).toBe("Modified: a.ts, 1 insertion, 1 deletion");
+    expect(
+      presentChangeRow(file({ path: "b.ts", insertions: 2, deletions: 0 })).accessibleName,
+    ).toBe("Modified: b.ts, 2 insertions, 0 deletions");
   });
 });
 
