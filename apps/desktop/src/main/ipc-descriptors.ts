@@ -928,6 +928,16 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },
+  "volli:worktree-change-watch-pause": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-watch-pause"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:worktree-change-watch-resume": {
+    guard: (args): args is IpcArgs<"volli:worktree-change-watch-resume"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
   "volli:worktree-change-unwatch": {
     guard: (args): args is IpcArgs<"volli:worktree-change-unwatch"> =>
       args.length === 1 && isTicketIdInput(args[0]),

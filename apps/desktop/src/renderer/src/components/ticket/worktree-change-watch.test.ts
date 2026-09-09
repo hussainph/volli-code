@@ -5,10 +5,16 @@ import type {
   WorktreeWatchErrorEvent,
 } from "../../../../ipc/contract";
 
-import { subscribeWorktreeChanges, type WorktreeChangeWatchApi } from "./worktree-change-watch";
+import {
+  subscribeWorktreeChanges,
+  type WorktreeChangeWatchApi,
+  type WorktreeChangeWatchFocus,
+} from "./worktree-change-watch";
 
 interface FakeApi extends WorktreeChangeWatchApi {
   readonly watched: string[];
+  readonly paused: string[];
+  readonly resumed: string[];
   readonly unwatched: string[];
   /** Resolves the pending `watchChangeSet` promise for the given ticket. */
   settleWatch(ticketId: string, result: Result): void;
@@ -19,6 +25,8 @@ interface FakeApi extends WorktreeChangeWatchApi {
 
 function fakeApi(): FakeApi {
   const watched: string[] = [];
+  const paused: string[] = [];
+  const resumed: string[] = [];
   const unwatched: string[] = [];
   const pending = new Map<string, (result: Result) => void>();
   const listeners = new Set<(event: WorktreeChangedEvent) => void>();
@@ -26,10 +34,20 @@ function fakeApi(): FakeApi {
 
   return {
     watched,
+    paused,
+    resumed,
     unwatched,
     watchChangeSet(ticketId: string): Promise<Result> {
       watched.push(ticketId);
       return new Promise<Result>((resolve) => pending.set(ticketId, resolve));
+    },
+    pauseChangeSet(ticketId: string): Promise<Result> {
+      paused.push(ticketId);
+      return Promise.resolve({ ok: true });
+    },
+    resumeChangeSet(ticketId: string): Promise<Result> {
+      resumed.push(ticketId);
+      return Promise.resolve({ ok: true });
     },
     unwatchChangeSet(ticketId: string): Promise<Result> {
       unwatched.push(ticketId);
@@ -54,6 +72,24 @@ function fakeApi(): FakeApi {
       for (const listener of errorListeners) listener(event);
     },
     listenerCount: () => listeners.size + errorListeners.size,
+  };
+}
+
+function fakeFocus(initiallyFocused = true): WorktreeChangeWatchFocus & {
+  setFocused(focused: boolean): void;
+} {
+  let focused = initiallyFocused;
+  const listeners = new Set<(next: boolean) => void>();
+  return {
+    isFocused: () => focused,
+    subscribe(callback) {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    setFocused(next) {
+      focused = next;
+      for (const listener of listeners) listener(next);
+    },
   };
 }
 
@@ -113,6 +149,57 @@ describe("subscribeWorktreeChanges", () => {
     expect(api.unwatched).toEqual(["t1"]);
     api.emit({ ticketId: "t1" });
     expect(second.changes).toHaveLength(1);
+  });
+
+  it("pauses in the background, drops events there, and resumes on focus", async () => {
+    const api = fakeApi();
+    const focus = fakeFocus();
+    const spy = handlers();
+
+    subscribeWorktreeChanges(api, "t1", spy, focus);
+    api.settleWatch("t1", { ok: true });
+    await Promise.resolve();
+
+    focus.setFocused(false);
+    await Promise.resolve();
+    expect(api.paused).toEqual(["t1"]);
+
+    api.emit({ ticketId: "t1" });
+    expect(spy.changes).toHaveLength(0);
+
+    focus.setFocused(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(api.resumed).toEqual(["t1"]);
+  });
+
+  it("reports a pause failure once instead of retrying it in a loop", async () => {
+    const api = fakeApi();
+    api.pauseChangeSet = () => Promise.resolve({ ok: false, error: "pause failed" });
+    const focus = fakeFocus();
+    const spy = handlers();
+
+    subscribeWorktreeChanges(api, "t1", spy, focus);
+    api.settleWatch("t1", { ok: true });
+    await Promise.resolve();
+    focus.setFocused(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(spy.errors).toEqual(["pause failed"]);
+  });
+
+  it("starts a mounted background window paused after the watch is ready", async () => {
+    const api = fakeApi();
+    const focus = fakeFocus(false);
+
+    subscribeWorktreeChanges(api, "t1", handlers(), focus);
+    api.settleWatch("t1", { ok: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(api.paused).toEqual(["t1"]);
   });
 
   it("reports a watcher fault for this ticket only", () => {

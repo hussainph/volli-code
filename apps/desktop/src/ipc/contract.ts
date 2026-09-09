@@ -809,6 +809,10 @@ export interface VolliDataIpcContract {
   };
   /** Starts a debounced recursive watch on the ticket worktree for Change Set refresh. */
   "volli:worktree-change-watch": { args: [input: TicketIdInput]; result: Result };
+  /** Releases one background subscriber without forgetting it, so focus can cheaply resume it. */
+  "volli:worktree-change-watch-pause": { args: [input: TicketIdInput]; result: Result };
+  /** Re-arms a paused worktree root and requests one catch-up Change Set refresh. */
+  "volli:worktree-change-watch-resume": { args: [input: TicketIdInput]; result: Result };
   "volli:worktree-change-unwatch": { args: [input: TicketIdInput]; result: Result };
   /** The one-click "commit remaining work" safety net; the message and the staging breadth are the caller's, with the historical defaults. */
   "volli:worktree-commit": { args: [input: WorktreeCommitInput]; result: WorktreeCommitResult };

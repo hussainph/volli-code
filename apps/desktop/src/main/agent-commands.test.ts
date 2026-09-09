@@ -103,6 +103,15 @@ const ACTING_ENV: AgentRequest["ctx"]["env"] = {
  * twice would otherwise disarm its own earlier requests.
  */
 const mintedFor = new Map<string, string>();
+/**
+ * The `git diff --raw -z -M` records a worktree with these modified paths emits.
+ * Change Set reads take status from ONE raw diff process (VC-337), so a scripted
+ * git that still answered `--name-status` would be imitating a git we no longer
+ * call — and would report every worktree as untouched.
+ */
+function rawModified(paths: readonly string[]): string {
+  return paths.map((path) => `:100644 100644 1111111 2222222 M\u0000${path}\u0000`).join("");
+}
 /** One durable `todo_write` call, exactly as `observation-translation` writes it (VC-6). */
 function todoMessage(id: string, todos: readonly { content: string; status: string }[]): UIMessage {
   return {
@@ -5085,9 +5094,9 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
+      if (args[0] === "diff" && args.includes("--raw")) {
         const display = cwd.slice("/wt/".length);
-        return (touched[display] ?? []).map((path) => `M\u0000${path}\u0000`).join("");
+        return rawModified(touched[display] ?? []);
       }
       if (args[0] === "status") return "";
       return "";
@@ -5165,8 +5174,8 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
-        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? "M\u0000src/shared.ts\u0000" : "";
+      if (args[0] === "diff" && args.includes("--raw")) {
+        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? rawModified(["src/shared.ts"]) : "";
       }
       if (args[0] === "diff") return "";
       if (args[0] === "status") {
@@ -5253,7 +5262,7 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) return "M\u0000package.json\u0000";
+      if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
       if (args[0] === "diff") return "1\t0\tpackage.json\n";
       if (args[0] === "status") return "";
       return "";
