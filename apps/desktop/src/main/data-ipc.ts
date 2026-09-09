@@ -1384,7 +1384,7 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:worktree-change-watch": (input: TicketIdInput, sender): Result => {
+    "volli:worktree-change-watch": async (input: TicketIdInput, sender): Promise<Result> => {
       const status = readWorktreeStatus(worktreeDeps(db), input.ticketId);
       switch (status.kind) {
         case "missing-ticket":

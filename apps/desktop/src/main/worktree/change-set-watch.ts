@@ -5,6 +5,7 @@
  * {@link WATCH_DEBOUNCE_MS} cadence and window-scoped subscription lifecycle
  * (teardown on unwatch / `destroyed` — never leaks across tickets).
  */
+import { execFile } from "node:child_process";
 import { existsSync, statSync, watch as fsWatch } from "node:fs";
 import { join } from "node:path";
 import type { WebContents } from "electron";
@@ -15,6 +16,13 @@ import type {
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
 } from "../../ipc/contract";
+import {
+  GIT_COMMAND_TIMEOUT_MS,
+  GIT_MAX_BUFFER,
+  runGitCapturingAsync,
+  stderrOf,
+} from "./git";
+import type { RunGitAsync } from "./types";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
 export const WATCH_DEBOUNCE_MS = 250;
@@ -49,17 +57,38 @@ interface WorktreeWatchSubscription {
   debounceTimer: NodeJS.Timeout | null;
   /** Deadline for the current burst; null when no burst is pending. */
   maxWaitAt: number | null;
+  /** Git-reported ignored files and directory prefixes, always slash-normalized. */
+  ignoredPaths: Set<string>;
+  /** Directories already found not to be ignored, so they are checked only once. */
+  checkedDirectories: Set<string>;
+  /** Newly-created directories waiting for one batched `git check-ignore --stdin`. */
+  pendingDirectoryEvents: Set<string>;
+  directoryCheckQueued: boolean;
+  ignoreRefreshTimer: NodeJS.Timeout | null;
+  ignoreRefreshNeedsBroadcast: boolean;
   /** True when `.git` is a real directory here — see {@link isSelfFedGitEvent}. */
   skipGitEvents: boolean;
   onDestroyed: () => void;
 }
 
+/** Injectable stdin-based git seam for lazily classifying newly-created directories. */
+export type CheckIgnoredPaths = (
+  worktreePath: string,
+  paths: readonly string[],
+) => Promise<readonly string[]>;
+
 export interface WorktreeChangeWatchOptions {
   watch?: WorktreeWatchFn;
   debounceMs?: number;
   maxWaitMs?: number;
+  /** Async git seam used to derive the repository's complete current ignored set. */
+  git?: RunGitAsync;
+  /** Injectable `git check-ignore --stdin` seam for new-directory batches. */
+  checkIgnoredPaths?: CheckIgnoredPaths;
   /** Injectable `.git`-is-a-directory probe (see {@link isSelfFedGitEvent}). */
   gitPathIsDirectory?: (worktreePath: string) => boolean;
+  /** Injectable directory probe for lazy ignore checks. */
+  pathIsDirectory?: (worktreePath: string, relativePath: string) => boolean;
   /** Injectable clock, so the maxWait bound is testable with fake timers. */
   now?: () => number;
 }
@@ -71,6 +100,93 @@ function statGitPathIsDirectory(worktreePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Default directory probe; a missing/unreadable path is not a new directory. */
+function statPathIsDirectory(worktreePath: string, relativePath: string): boolean {
+  try {
+    return statSync(join(worktreePath, relativePath)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Runs the lazy path probe with NUL-delimited stdin. Exit 1 means none of the
+ * supplied paths are ignored, which is a successful classification rather
+ * than a failed git command.
+ */
+function checkIgnoredPathsWithGit(
+  worktreePath: string,
+  paths: readonly string[],
+): Promise<readonly string[]> {
+  if (paths.length === 0) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      "git",
+      ["check-ignore", "--stdin", "-z"],
+      {
+        cwd: worktreePath,
+        encoding: "utf8",
+        maxBuffer: GIT_MAX_BUFFER,
+        timeout: GIT_COMMAND_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
+      (error, stdout, stderr) => {
+        if (error === null || error.code === 1) {
+          resolve(splitNul(stdout));
+          return;
+        }
+        reject(new Error(stderr.trim() || error.message));
+      },
+    );
+    child.stdin?.end(`${paths.join("\0")}\0`);
+  });
+}
+
+/** Slash-normalizes a watch/git path and rejects paths outside the watch root. */
+function normalizeRepoPath(path: string): string | null {
+  const parts = path.replaceAll("\\", "/").split("/");
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (part.length === 0 || part === ".") continue;
+    if (part === "..") return null;
+    normalized.push(part);
+  }
+  return normalized.length > 0 ? normalized.join("/") : null;
+}
+
+/** Parses `git ls-files ... --directory -z` into exact files + directory prefixes. */
+function ignoredPathSet(output: string): Set<string> {
+  const ignored = new Set<string>();
+  for (const rawPath of splitNul(output)) {
+    const directory = rawPath.endsWith("/") || rawPath.endsWith("\\");
+    const path = normalizeRepoPath(rawPath);
+    if (path !== null) ignored.add(directory ? `${path}/` : path);
+  }
+  return ignored;
+}
+
+/** Set lookup is O(path depth), not O(number of ignored dependency files). */
+function isIgnoredPath(ignoredPaths: ReadonlySet<string>, path: string): boolean {
+  if (ignoredPaths.has(path) || ignoredPaths.has(`${path}/`)) return true;
+  let separator = path.indexOf("/");
+  while (separator >= 0) {
+    if (ignoredPaths.has(path.slice(0, separator + 1))) return true;
+    separator = path.indexOf("/", separator + 1);
+  }
+  return false;
+}
+
+function isIgnoreRulesEvent(path: string): boolean {
+  return path === ".gitignore" || path.endsWith("/.gitignore") || path === ".git/info/exclude";
+}
+
+function splitNul(output: string): string[] {
+  if (output.length === 0) return [];
+  const parts = output.split("\0");
+  if (parts[parts.length - 1] === "") parts.pop();
+  return parts;
 }
 
 /**
@@ -97,14 +213,20 @@ export class WorktreeChangeWatchManager {
   private readonly watchFn: WorktreeWatchFn;
   private readonly debounceMs: number;
   private readonly maxWaitMs: number;
+  private readonly git: RunGitAsync;
+  private readonly checkIgnoredPaths: CheckIgnoredPaths;
   private readonly gitPathIsDirectory: (worktreePath: string) => boolean;
+  private readonly pathIsDirectory: (worktreePath: string, relativePath: string) => boolean;
   private readonly now: () => number;
 
   constructor(options: WorktreeChangeWatchOptions = {}) {
     this.watchFn = options.watch ?? ((path, opts, listener) => fsWatch(path, opts, listener));
     this.debounceMs = options.debounceMs ?? WATCH_DEBOUNCE_MS;
     this.maxWaitMs = options.maxWaitMs ?? WATCH_MAX_WAIT_MS;
+    this.git = options.git ?? runGitCapturingAsync;
+    this.checkIgnoredPaths = options.checkIgnoredPaths ?? checkIgnoredPathsWithGit;
     this.gitPathIsDirectory = options.gitPathIsDirectory ?? statGitPathIsDirectory;
+    this.pathIsDirectory = options.pathIsDirectory ?? statPathIsDirectory;
     this.now = options.now ?? Date.now;
   }
 
@@ -135,7 +257,11 @@ export class WorktreeChangeWatchManager {
    * then be watching a directory that no longer belongs to it, so a differing
    * path restarts the watch rather than silently keeping the stale one.
    */
-  watch(webContents: WebContents, ticketId: string, worktreePath: string): Result {
+  async watch(
+    webContents: WebContents,
+    ticketId: string,
+    worktreePath: string,
+  ): Promise<Result> {
     const key = this.keyFor(webContents, ticketId);
     const existing = this.subs.get(key);
     if (existing) {
@@ -155,14 +281,32 @@ export class WorktreeChangeWatchManager {
       watcher: null,
       debounceTimer: null,
       maxWaitAt: null,
+      ignoredPaths: new Set(),
+      checkedDirectories: new Set(),
+      pendingDirectoryEvents: new Set(),
+      directoryCheckQueued: false,
+      ignoreRefreshTimer: null,
+      ignoreRefreshNeedsBroadcast: false,
       skipGitEvents: this.gitPathIsDirectory(worktreePath),
       onDestroyed: () => this.teardown(key),
     };
     this.subs.set(key, sub);
+    webContents.once("destroyed", sub.onDestroyed);
     try {
-      const watcher = this.watchFn(worktreePath, { recursive: true }, (_eventType, filename) => {
-        if (sub.skipGitEvents && isSelfFedGitEvent(filename)) return;
-        this.scheduleBroadcast(sub);
+      const ignoredOutput = await this.git(
+        ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
+        worktreePath,
+      );
+      if (!this.isLive(sub)) return { ok: true };
+      sub.ignoredPaths = ignoredPathSet(ignoredOutput);
+    } catch (error) {
+      this.teardown(key);
+      return { ok: false, error: stderrOf(error) };
+    }
+
+    try {
+      const watcher = this.watchFn(worktreePath, { recursive: true }, (eventType, filename) => {
+        this.handleFsEvent(sub, eventType, filename);
       });
       sub.watcher = watcher;
       watcher.on("error", (error: Error) => {
@@ -173,13 +317,12 @@ export class WorktreeChangeWatchManager {
         this.emitWatchError(sub, this.watchErrorMessage(sub, error));
         this.teardown(key);
       });
+      return { ok: true };
     } catch (error) {
       const message = this.watchErrorMessage(sub, error);
       this.teardown(key);
       return { ok: false, error: message };
     }
-    webContents.once("destroyed", sub.onDestroyed);
-    return { ok: true };
   }
 
   /** Tears down the watch; safe if never watched. */
@@ -199,6 +342,126 @@ export class WorktreeChangeWatchManager {
       if (sub.ticketId === ticketId) keys.push(key);
     }
     for (const key of keys) this.teardown(key);
+  }
+
+  private isLive(sub: WorktreeWatchSubscription): boolean {
+    return this.subs.get(this.keyFor(sub.webContents, sub.ticketId)) === sub;
+  }
+
+  private handleFsEvent(
+    sub: WorktreeWatchSubscription,
+    eventType: string,
+    filename: string | null,
+  ): void {
+    if (!this.isLive(sub)) return;
+    const path = filename === null ? null : normalizeRepoPath(filename);
+
+    // `.git/info/exclude` is the one meaningful `.git` event: refresh the
+    // filter, but retain the existing self-fed exclusion for every other git
+    // bookkeeping write.
+    if (sub.skipGitEvents && isSelfFedGitEvent(filename)) {
+      if (path === ".git/info/exclude") this.queueIgnoredPathRefresh(sub, false);
+      return;
+    }
+    if (path !== null && isIgnoredPath(sub.ignoredPaths, path)) return;
+    if (path !== null && isIgnoreRulesEvent(path)) {
+      this.queueIgnoredPathRefresh(sub, true);
+      return;
+    }
+    if (path === null) {
+      this.scheduleBroadcast(sub);
+      return;
+    }
+
+    // `ls-files --directory` cannot list an ignored directory that did not
+    // exist at watch start. A newly-created directory therefore gets one lazy
+    // check before its event is allowed to schedule a Change Set snapshot.
+    if (eventType === "rename" && !sub.checkedDirectories.has(path)) {
+      let directory = false;
+      try {
+        directory = this.pathIsDirectory(sub.worktreePath, path);
+      } catch {
+        // A probe racing deletion is simply not a newly-created directory.
+      }
+      if (directory) {
+        this.queueDirectoryCheck(sub, path);
+        return;
+      }
+    }
+    for (const pending of sub.pendingDirectoryEvents) {
+      if (path === pending || path.startsWith(`${pending}/`)) return;
+    }
+    this.scheduleBroadcast(sub);
+  }
+
+  private queueIgnoredPathRefresh(
+    sub: WorktreeWatchSubscription,
+    broadcastAfterRefresh: boolean,
+  ): void {
+    sub.ignoreRefreshNeedsBroadcast ||= broadcastAfterRefresh;
+    if (sub.ignoreRefreshTimer !== null) clearTimeout(sub.ignoreRefreshTimer);
+    sub.ignoreRefreshTimer = setTimeout(() => {
+      sub.ignoreRefreshTimer = null;
+      void this.refreshIgnoredPaths(sub);
+    }, this.debounceMs);
+  }
+
+  private async refreshIgnoredPaths(sub: WorktreeWatchSubscription): Promise<void> {
+    try {
+      const output = await this.git(
+        ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
+        sub.worktreePath,
+      );
+      if (!this.isLive(sub)) return;
+      sub.ignoredPaths = ignoredPathSet(output);
+      sub.checkedDirectories.clear();
+    } catch {
+      // Fail open: an ignore refresh must not freeze an otherwise healthy
+      // Change Set watch. The previous cache remains valid for older rules.
+    }
+    if (!this.isLive(sub)) return;
+    const broadcast = sub.ignoreRefreshNeedsBroadcast;
+    sub.ignoreRefreshNeedsBroadcast = false;
+    if (broadcast) this.scheduleBroadcast(sub);
+  }
+
+  private queueDirectoryCheck(sub: WorktreeWatchSubscription, path: string): void {
+    sub.pendingDirectoryEvents.add(path);
+    if (sub.directoryCheckQueued) return;
+    sub.directoryCheckQueued = true;
+    queueMicrotask(() => {
+      sub.directoryCheckQueued = false;
+      void this.flushDirectoryChecks(sub);
+    });
+  }
+
+  private async flushDirectoryChecks(sub: WorktreeWatchSubscription): Promise<void> {
+    if (!this.isLive(sub)) return;
+    const candidates = [...sub.pendingDirectoryEvents];
+    sub.pendingDirectoryEvents.clear();
+    let ignored = new Set<string>();
+    try {
+      const outputPaths = await this.checkIgnoredPaths(sub.worktreePath, candidates);
+      ignored = new Set(
+        outputPaths
+          .map((path) => normalizeRepoPath(path))
+          .filter((path): path is string => path !== null),
+      );
+    } catch {
+      // Fail open like a full refresh: one failed optimization probe must not
+      // suppress a real source change forever.
+    }
+    if (!this.isLive(sub)) return;
+    let shouldBroadcast = false;
+    for (const path of candidates) {
+      sub.checkedDirectories.add(path);
+      if (ignored.has(path)) {
+        sub.ignoredPaths.add(`${path}/`);
+      } else {
+        shouldBroadcast = true;
+      }
+    }
+    if (shouldBroadcast) this.scheduleBroadcast(sub);
   }
 
   /**
@@ -236,7 +499,12 @@ export class WorktreeChangeWatchManager {
       clearTimeout(sub.debounceTimer);
       sub.debounceTimer = null;
     }
+    if (sub.ignoreRefreshTimer !== null) {
+      clearTimeout(sub.ignoreRefreshTimer);
+      sub.ignoreRefreshTimer = null;
+    }
     sub.maxWaitAt = null;
+    sub.pendingDirectoryEvents.clear();
     sub.watcher?.close();
     sub.watcher = null;
     if (!sub.webContents.isDestroyed()) {
