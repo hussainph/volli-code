@@ -87,6 +87,15 @@ describe("Configure → Sessions", () => {
     expect(html).not.toContain("Inherit");
   });
 
+  it("indexes the visible Chat section and retires the removed Harness vocabulary", () => {
+    const category = configureGroups(project)
+      .flatMap((group) => group.categories)
+      .find((candidate) => candidate.key === "sessions");
+
+    expect(category?.keywords).toContain("chat");
+    expect(category?.keywords).not.toContain("harness");
+  });
+
   it("keeps a disabled model picker visible while its catalogue loads", () => {
     const html = renderConfigure("sessions");
     const modelRow = html.slice(html.indexOf('data-testid="project-session-model"'));
