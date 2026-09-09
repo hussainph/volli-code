@@ -21,11 +21,18 @@ vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) 
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
 import { createDesktopSessionLocationResolver } from "./location";
+import {
+  acquireDeletionLease,
+  acquireWorktreeStartLease,
+  resetDeletionLeasesForTest,
+  UNDER_DELETION_REFUSAL,
+} from "../worktree/deletion-lease";
 
 let testDb: TestDb | undefined;
 let scratchRoot: string | undefined;
 
 afterEach(() => {
+  resetDeletionLeasesForTest();
   testDb?.cleanup();
   testDb = undefined;
   if (scratchRoot !== undefined) rmSync(scratchRoot, { recursive: true, force: true });
@@ -286,5 +293,117 @@ describe("desktop Session location resolver", () => {
       `The Session's directory ${project.path} is gone and couldn't be recreated.`,
     );
     expect(ensureWorktree).not.toHaveBeenCalled();
+  });
+
+  // VC-284 re-review C4. An agent start is the other side of the deletion
+  // lease: a Session can still be bound to a directory this app now calls an
+  // orphan (deleting a ticket only clears `sessions.ticket_id`), so "an agent is
+  // about to work here" and "a cleanup is about to remove here" are two acts
+  // over one directory. Both take the lease, so they cannot both proceed.
+  describe("against a cleanup that is removing the directory", () => {
+    it("refuses to materialize or reaffirm a directory under an active deletion", async () => {
+      testDb = openTestDb();
+      const root = scratch();
+      const worktreePath = join(root, "VC-9-going");
+      mkdirSync(worktreePath, { recursive: true });
+      const project = testProject({ id: "project-1", path: join(root, "main") });
+      const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
+      insertProject(testDb.db, project);
+      insertTicket(testDb.db, ticket);
+      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const session = ticketSession(project.id, ticket.id);
+
+      const removing = acquireDeletionLease(worktreePath);
+      expect(removing).not.toBeNull();
+
+      // The turn gate — the directory exists, so without the lease this would
+      // have returned happily and the agent would have started writing into a
+      // checkout being removed.
+      await expect(resolver.reaffirm(session, worktreePath)).rejects.toThrow(
+        UNDER_DELETION_REFUSAL,
+      );
+      await expect(resolver.prepare(session)).rejects.toThrow(UNDER_DELETION_REFUSAL);
+      expect(ensureWorktree).not.toHaveBeenCalled();
+
+      // Given back, both go through again.
+      removing?.release();
+      await expect(resolver.reaffirm(session, worktreePath)).resolves.toBeUndefined();
+    });
+
+    it("refuses a Board Session's project root under an active deletion", async () => {
+      testDb = openTestDb();
+      const root = scratch();
+      const project = testProject({ id: "project-1", path: root });
+      insertProject(testDb.db, project);
+      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const session: Session = {
+        id: "project-session",
+        projectId: project.id,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        createdAt: 0,
+      };
+
+      const removing = acquireDeletionLease(root);
+      await expect(resolver.prepare(session)).rejects.toThrow(UNDER_DELETION_REFUSAL);
+      removing?.release();
+      await expect(resolver.prepare(session)).resolves.toEqual({
+        directory: root,
+        venue: { id: "local", kind: "local" },
+      });
+    });
+
+    it("holds the directory while it materializes, so a cleanup cannot take it mid-prepare", async () => {
+      testDb = openTestDb();
+      const root = scratch();
+      const worktreePath = join(root, "VC-10-starting");
+      const project = testProject({ id: "project-1", path: join(root, "main") });
+      const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
+      insertProject(testDb.db, project);
+      insertTicket(testDb.db, ticket);
+      const resolver = createDesktopSessionLocationResolver(testDb.db);
+      const session = ticketSession(project.id, ticket.id);
+
+      let leaseDuringEnsure: unknown = "unasked";
+      ensureWorktree.mockImplementation(async () => {
+        // `ensure` is git work plus a durable event: this is the window a
+        // cleanup used to be able to acquire in.
+        leaseDuringEnsure = acquireDeletionLease(worktreePath);
+        return {
+          ok: true,
+          value: {
+            identity: { worktreePath, branch: "volli/VC-10", baseBranch: "main" },
+            created: false,
+          },
+        };
+      });
+      mkdirSync(worktreePath, { recursive: true });
+
+      await expect(resolver.prepare(session)).resolves.toEqual({
+        directory: worktreePath,
+        venue: { id: "local", kind: "local" },
+      });
+
+      expect(leaseDuringEnsure).toBeNull();
+      // And the start gives it back, so the cleanup can have it afterwards.
+      const after = acquireDeletionLease(worktreePath);
+      expect(after).not.toBeNull();
+      after?.release();
+    });
+
+    it("lets two starts share a directory — they exclude deletion, not each other", () => {
+      const root = scratch();
+      const first = acquireWorktreeStartLease(root);
+      const second = acquireWorktreeStartLease(join(root, "src"));
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      // But neither of them may be deleted out from under.
+      expect(acquireDeletionLease(root)).toBeNull();
+      first?.release();
+      second?.release();
+      expect(acquireDeletionLease(root)).not.toBeNull();
+    });
   });
 });

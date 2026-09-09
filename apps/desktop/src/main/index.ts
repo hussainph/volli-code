@@ -225,15 +225,16 @@ import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { subscribeTicketWake } from "./ticket-wake";
-import { startOrphanSweep } from "./orphan-sweep";
+import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
+  reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
 } from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -2775,25 +2776,48 @@ app.whenReady().then(async () => {
     });
   });
 
-  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs that THIS database owns and that
-  // nothing has touched for the retention window (branches retained — VC-113
-  // scoped both the ownership and the timing); dirty orphans are
-  // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
-  // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
-  // volli:worktree-orphans handler. Deferred to did-finish-load so it never
-  // competes with first paint; a sweep failure is logged, not thrown.
+  // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching
+  // the app pruned git metadata and deleted every clean orphan past the
+  // retention window, with no confirmation and nothing on screen that had asked.
+  // Starting an app is not consent to delete, so a launch now only LOOKS — the
+  // report it produces is what Settings → Storage lists, and removing anything
+  // takes an explicit, confirmed cleanup through volli:worktree-orphan-cleanup.
+  // Deferred to did-finish-load so it never competes with first paint; a scan
+  // failure is logged, not thrown.
+  //
+  // The reconcile beside it closes the other half: a cleanup the app did not
+  // live long enough to finish is stamped interrupted here, so Storage can show
+  // what completed and what was never attempted instead of re-offering both.
   if (dbHandle.ok) {
     const db = dbHandle.db;
     mainWindow.webContents.once("did-finish-load", () => {
-      startOrphanSweep(worktreeDeps(db))
+      // Each announced-but-unsettled item is asked of git and disk before the
+      // run is stamped, so an already-removed folder is recorded as removed
+      // rather than described as work nobody attempted (review C3). Read-only,
+      // and never fatal to a launch.
+      void reconcileInterruptedCleanups({
+        worktree: worktreeDeps(db),
+        engine: orphanCleanupEngine(db),
+      })
+        .then((runs) => {
+          for (const run of runs) {
+            const done = run.items.filter((item) => item.state === "completed").length;
+            console.log(
+              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+        });
+      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
-            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
+            `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
           );
         })
         .catch((error) => {
-          console.error("[worktree] sweep failed:", errorMessage(error));
+          console.error("[worktree] scan failed:", errorMessage(error));
         });
     });
 

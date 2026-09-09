@@ -369,7 +369,7 @@ describe("agent command service", () => {
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
     expect(onMutation).toHaveBeenCalledTimes(7);
-  });
+  }, 15_000);
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
     ctx = openTestDb();

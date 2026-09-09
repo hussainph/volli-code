@@ -1861,6 +1861,59 @@ CREATE INDEX session_receipts_command_sequence ON session_command_receipts(comma
 CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
 `;
 
+/**
+ * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ *
+ * Deleting a worktree directory is a destructive product act, so it takes the
+ * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
+ * carrying the caller's UUID and the exact plan a person confirmed, immutable
+ * facts for what each item did, and receipts for local acceptance. Nothing here
+ * is ever UPDATEd — the previous design replaced one `app_state` JSON blob
+ * after every item, which is how an app that died mid-removal could come back
+ * and describe an already-deleted folder as work it never attempted.
+ *
+ * Three tables rather than one row because the fold needs order and identity:
+ * `rowid` is this ledger's provisional local order (rule 2, single writer at
+ * `cleanup-ledger.ts`) and is what the reads sort by — two facts can share a
+ * millisecond, and the fold's rules (a start before an outcome, the FIRST
+ * outcome wins) are about the order they were appended in. Every durable id is
+ * a UUID the core mints; the indexes below are for the filter, not the order.
+ *
+ * `ON DELETE RESTRICT` on both children, not CASCADE: a command that removed a
+ * directory must not become erasable by deleting its own row. Projects are NOT
+ * referenced at all — a cleanup's record has to outlive the project it ran in,
+ * and the plan already carries the project's id, path and name as they read at
+ * the moment of confirmation.
+ */
+const MIGRATION_043_WORKTREE_CLEANUP = `
+CREATE TABLE IF NOT EXISTS worktree_cleanup_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_facts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL CHECK (kind <> ''),
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_facts_command
+  ON worktree_cleanup_facts(command_id, created_at);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_receipts (
+  id          TEXT PRIMARY KEY,
+  command_id  TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  status      TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  code        TEXT,
+  detail      TEXT,
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
+  ON worktree_cleanup_receipts(command_id, recorded_at);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2077,6 +2130,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session event storage — compact native ids and interned provenance",
     sql: MIGRATION_042_SESSION_EVENT_STORAGE,
     apply: applyMigration042SessionEventStorage,
+  },
+  {
+    version: 43,
+    name: "worktree cleanup — command ledger, immutable per-item facts, acceptance receipts",
+    sql: MIGRATION_043_WORKTREE_CLEANUP,
   },
 ];
 
