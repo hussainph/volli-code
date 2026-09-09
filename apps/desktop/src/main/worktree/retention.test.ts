@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
@@ -14,7 +15,10 @@ import {
   getRetentionTtlDays,
   reclaimIfStale,
   setRetentionTtlDays,
+  trimFinishedWorktree,
 } from "./retention";
+import { runGitCapturing, runGitCapturingAsync } from "./git";
+import { setTrimSettings } from "./trim-settings";
 import { listTicketEvents } from "../db/events-repo";
 import { scriptedGit } from "./scripted-git";
 
@@ -381,5 +385,194 @@ describe("reclaimIfStale", () => {
     // The pointer is the only thing left to recreate from, so nothing clears it.
     expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
     expect(calls).toEqual([]);
+  });
+});
+
+// VC-340. The trim is the retention rule the FOOTPRINT earns, as distinct from
+// the reclaim above: it takes what a package manager rebuilds, so it may run the
+// moment a ticket finishes instead of waiting out the whole window.
+describe("trimFinishedWorktree", () => {
+  const NOW = 1_000_000_000_000;
+
+  /** A committed repo that ignores `node_modules/` and `.env`, with both present. */
+  function seedWorktree(): string {
+    const root = tempDir("trim-wt");
+    const run = (args: readonly string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Volli Test",
+          GIT_AUTHOR_EMAIL: "test@volli.local",
+          GIT_COMMITTER_NAME: "Volli Test",
+          GIT_COMMITTER_EMAIL: "test@volli.local",
+        },
+      });
+    run(["init", "-q", "-b", "main"]);
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n.env\n");
+    writeFileSync(join(root, "package.json"), "{}\n");
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "fixture"]);
+    mkdirSync(join(root, "node_modules", "left-pad"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
+    writeFileSync(join(root, ".env"), "TOKEN=secret\n");
+    return root;
+  }
+
+  /** A ticket in `status`, pointed at `worktreePath`. */
+  function seedTicket(
+    worktreePath: string,
+    status: "todo" | "doing" | "done",
+    opts: { keep?: boolean; archived?: boolean } = {},
+  ) {
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", status }));
+    updateTicketFields(
+      ctx.db,
+      "t1",
+      { worktreePath, branch: "volli/VC-1-x", baseBranch: "main" },
+      1,
+    );
+    if (opts.keep === true) {
+      ctx.db.prepare("UPDATE tickets SET retention_keep = 1 WHERE id = 't1'").run();
+    }
+    if (opts.archived === true) {
+      ctx.db.prepare("UPDATE tickets SET archived_at = 5 WHERE id = 't1'").run();
+    }
+  }
+
+  function trimDeps(busy: { directory: string; surface: "terminal" | "agent" }[] = []) {
+    return {
+      worktree: {
+        db: ctx.db,
+        git: runGitCapturing,
+        gitAsync: runGitCapturingAsync,
+        blobsRoot: "unused",
+      },
+      now: () => NOW,
+      busySites: async () => busy,
+    };
+  }
+
+  function trimEvents() {
+    return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_trimmed");
+  }
+
+  it("trims a Done ticket's worktree, keeps its .env, and accounts for both", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+
+    const outcome = await trimFinishedWorktree(trimDeps(), "t1");
+
+    expect(outcome.kind).toBe("trimmed");
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(existsSync(join(wt, ".env"))).toBe(true);
+    expect(existsSync(join(wt, "package.json"))).toBe(true);
+    // The checkout itself is untouched: this is not a reclaim.
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBe(wt);
+    expect(trimEvents()).toEqual([
+      expect.objectContaining({
+        actor: "automation",
+        payload: { kind: "worktree_trimmed", entries: 1, bytes: expect.any(Number), kept: 1 },
+      }),
+    ]);
+  });
+
+  it("trims an archived ticket's worktree — an archive keeps the folder", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "doing", { archived: true });
+
+    expect((await trimFinishedWorktree(trimDeps(), "t1")).kind).toBe("trimmed");
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+  });
+
+  it("trims on a merged PR wherever the card sits", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "doing");
+
+    expect((await trimFinishedWorktree(trimDeps(), "t1", { prMerged: true })).kind).toBe("trimmed");
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+  });
+
+  it("leaves an unfinished ticket alone", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "doing");
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1")).toEqual({
+      kind: "skipped",
+      reason: "not finished",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+  });
+
+  it("honours the Keep pin — someone standing in a finished checkout keeps it whole", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done", { keep: true });
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1")).toEqual({
+      kind: "skipped",
+      reason: "kept",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+  });
+
+  it("honours the opt-out setting", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+    setTrimSettings(ctx.db, { trimOnFinish: false }, 1);
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1")).toEqual({
+      kind: "skipped",
+      reason: "automatic trim is off",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+  });
+
+  it("refuses a worktree with a live Session, and says why", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+
+    expect(
+      await trimFinishedWorktree(trimDeps([{ directory: wt, surface: "agent" }]), "t1"),
+    ).toEqual({
+      kind: "skipped",
+      reason: "An agent is still running in this worktree. Stop it first.",
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+  });
+
+  it("writes no event when there was nothing left to trim", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+
+    await trimFinishedWorktree(trimDeps(), "t1");
+    const second = await trimFinishedWorktree(trimDeps(), "t1");
+
+    expect(second).toEqual({ kind: "skipped", reason: "nothing to trim" });
+    expect(trimEvents()).toHaveLength(1);
+  });
+
+  it("skips a ticket whose folder is already gone", async () => {
+    seedTicket(join(tmpdir(), "volli-trim-vanished-not-here"), "done");
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1")).toEqual({
+      kind: "skipped",
+      reason: "worktree already missing",
+    });
+  });
+
+  it("skips a ticket that has no worktree at all", async () => {
+    insertProject(ctx.db, testProject({ id: "p1", path: "/repo" }));
+    insertTicket(ctx.db, testTicket("p1", { id: "t1", status: "done" }));
+
+    expect(await trimFinishedWorktree(trimDeps(), "t1")).toEqual({
+      kind: "skipped",
+      reason: "no worktree",
+    });
+    expect(await trimFinishedWorktree(trimDeps(), "nope")).toEqual({
+      kind: "skipped",
+      reason: "unknown ticket",
+    });
   });
 });

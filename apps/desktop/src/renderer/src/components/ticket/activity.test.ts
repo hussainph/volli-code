@@ -171,6 +171,17 @@ describe("describeEvent", () => {
     ).toBe("removed the worktree folder after 14 days in Done (branch volli/VC-113-x kept)");
   });
 
+  it("accounts for a trimmed worktree, and for the config it kept", () => {
+    // VC-340: the kept count is the difference between this and `git clean -fdX`,
+    // so the line says it whenever there was one.
+    expect(
+      describeEvent({ kind: "worktree_trimmed", entries: 3, bytes: 1_610_612_736, kept: 2 }),
+    ).toBe("trimmed 3 ignored path(s) (1.5 GB) from the worktree, keeping 2");
+    expect(describeEvent({ kind: "worktree_trimmed", entries: 1, bytes: 2048, kept: 0 })).toBe(
+      "trimmed 1 ignored path(s) (2 KB) from the worktree",
+    );
+  });
+
   it("names both directions of a worktree scoping flip", () => {
     // VC-16: the flip is only settable before a worktree materializes, so the
     // feed is the only lasting record of which destination was chosen — both

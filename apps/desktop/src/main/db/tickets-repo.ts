@@ -351,6 +351,24 @@ export function listRetentionCandidates(db: Database.Database): TicketRow[] {
 }
 
 /**
+ * The trim set (VC-340): every ticket with a materialised worktree that is
+ * FINISHED — in Done, or archived. Archived rows are included here precisely
+ * because {@link listRetentionCandidates} excludes them: an archive keeps the
+ * checkout, so an archived ticket is the longest-standing carrier of a dead
+ * `node_modules` in the app, and the merge-watch has never had a reason to look
+ * at one. A ticket whose PR merged while it sits elsewhere on the board is not
+ * in this query — the poll knows that from its own observation and adds it.
+ */
+export function listTrimCandidates(db: Database.Database): TicketRow[] {
+  return prepared<[], TicketRow>(
+    db,
+    `SELECT * FROM tickets
+       WHERE worktree_path IS NOT NULL
+         AND (status = 'done' OR archived_at IS NOT NULL)`,
+  ).all();
+}
+
+/**
  * Sets (or clears) a ticket's retention "Keep" pin (migration 010); bumps
  * `row_version`/`updated_at`. A kept ticket is exempt from BOTH retention paths
  * (merge prompt and Done-TTL). Allowed on an archived ticket too (the pin is a

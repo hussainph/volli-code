@@ -151,9 +151,10 @@ export {
   setRetentionTtlDays,
   archiveAndClean,
   reclaimIfStale,
+  trimFinishedWorktree,
   DEFAULT_RETENTION_TTL_DAYS,
 } from "./retention";
-export type { ReclaimDeps, ReclaimOutcome } from "./retention";
+export type { ReclaimDeps, ReclaimOutcome, TrimFinishDeps, TrimFinishOutcome } from "./retention";
 
 // Trim (VC-340): the git-ignored artifacts a finished worktree keeps carrying,
 // removed without removing the checkout. Enumerated the way git defines

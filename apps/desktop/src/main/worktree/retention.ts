@@ -31,8 +31,12 @@ import { recordTicketEvent } from "../db/events-repo";
 import { prepared } from "../db/prepared";
 import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
+import type { WorktreeTrimReport } from "../../ipc/contract";
 import type { AgentSiteReleaseReport } from "./agent-sites";
+import { runGitCapturingAsync } from "./git";
 import { remove, type WorktreeRemoveOptions } from "./remove";
+import { trimIgnoredArtifacts, type BusyWorktreeSites } from "./trim";
+import { getTrimSettings } from "./trim-settings";
 import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
 
 /** The `app_state` key the retention settings JSON lives under. */
@@ -260,4 +264,84 @@ export async function reclaimIfStale(
     AUTOMATION_ACTOR,
   );
   return { kind: "reclaimed", branch: ticket.branch, daysInDone };
+}
+
+// ---- trim on finish (VC-340) -----------------------------------------------
+
+/** The seams {@link trimFinishedWorktree} needs beyond the worktree bundle. */
+export interface TrimFinishDeps {
+  worktree: WorktreeDeps;
+  now: () => number;
+  /** Where work is genuinely in flight; a busy worktree is never trimmed. */
+  busySites?: BusyWorktreeSites;
+}
+
+/** Why a finished ticket's worktree was or wasn't trimmed — the caller logs it. */
+export type TrimFinishOutcome =
+  | { kind: "trimmed"; report: WorktreeTrimReport }
+  | { kind: "skipped"; reason: string };
+
+const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", reason });
+
+/**
+ * The retention rule the ticket's own footprint earns (VC-340): once a ticket is
+ * FINISHED — Done, archived, or its PR merged — its worktree gives up everything
+ * git ignores and keeps everything else.
+ *
+ * This is a smaller act than {@link reclaimIfStale} and deliberately runs much
+ * sooner. The reclaim waits out the whole retention window because it takes the
+ * DIRECTORY, and a person coming back to a review needs the directory. A trim
+ * takes only what a package manager can rebuild, so waiting two weeks to stop
+ * paying for a hundred thousand indexed files buys nothing — and every recursive
+ * watcher, Spotlight pass, and tree walk in between pays for them.
+ *
+ * The Keep pin exempts a ticket here too. Someone who pinned a finished ticket's
+ * checkout is standing in it, and "your dependencies are gone" is not what that
+ * pin should mean. Every other refusal belongs to the trim primitive: a live
+ * agent, an open terminal, or a changed tracked file stops it there.
+ */
+export async function trimFinishedWorktree(
+  deps: TrimFinishDeps,
+  ticketId: string,
+  opts: { prMerged?: boolean } = {},
+): Promise<TrimFinishOutcome> {
+  const db = deps.worktree.db;
+  const ticket = getTicketRow(db, ticketId);
+  if (!ticket) return TRIM_SKIP("unknown ticket");
+  if (ticket.worktree_path === null) return TRIM_SKIP("no worktree");
+  if (!existsSync(ticket.worktree_path)) return TRIM_SKIP("worktree already missing");
+  if (ticket.retention_keep !== 0) return TRIM_SKIP("kept");
+
+  const finished =
+    ticket.status === "done" || ticket.archived_at !== null || opts.prMerged === true;
+  if (!finished) return TRIM_SKIP("not finished");
+
+  const settings = getTrimSettings(db);
+  // Opt-out, read at the moment of the act rather than cached: a person who
+  // turns it off mid-session has turned it off for the next Done move too.
+  if (!settings.trimOnFinish) return TRIM_SKIP("automatic trim is off");
+
+  const trimmed = await trimIgnoredArtifacts(deps.worktree.gitAsync ?? runGitCapturingAsync, {
+    worktreePath: ticket.worktree_path,
+    keepPatterns: settings.keepPatterns,
+    ...(deps.busySites === undefined ? {} : { busySites: deps.busySites }),
+  });
+  if (!trimmed.ok) return TRIM_SKIP(trimmed.error);
+  // Nothing removed is not an event: a worktree that was already trimmed (or
+  // never had artifacts) would otherwise write one of these on every poll.
+  if (trimmed.value.removed.length === 0) return TRIM_SKIP("nothing to trim");
+
+  recordTicketEvent(
+    db,
+    ticketId,
+    {
+      kind: "worktree_trimmed",
+      entries: trimmed.value.removed.length,
+      bytes: trimmed.value.totalBytes,
+      kept: trimmed.value.kept.length,
+    },
+    deps.now(),
+    AUTOMATION_ACTOR,
+  );
+  return { kind: "trimmed", report: trimmed.value };
 }

@@ -120,6 +120,10 @@ vi.mock("./worktree", async () => ({
   // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
+  // The trim-on-finish door (VC-340): fired beside the reply on a Done move and
+  // on an archive. Mocked because it walks a real filesystem; the composition
+  // itself is covered by `worktree/retention.test.ts`.
+  trimFinishedWorktree: vi.fn(async () => ({ kind: "skipped" as const, reason: "mocked" })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite.
   WorktreeChangeWatchManager: class {
@@ -147,6 +151,7 @@ import {
   listBranches,
   remove as removeWorktree,
   scanOrphans,
+  trimFinishedWorktree,
 } from "./worktree";
 import { orphanCleanupEngine } from "./worktree-runtime";
 import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
@@ -1315,6 +1320,35 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     move(projectId, ticket.id, "done");
 
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(ticket.id);
+  });
+
+  // VC-340: finishing a ticket is also when its checkout stops needing its
+  // dependency tree. The door fires here so the reclaim does not have to wait
+  // for the 60s poll; every refusal is the primitive's own.
+  it("trims the ticket's worktree on the move into Done, once", () => {
+    const trim = vi.mocked(trimFinishedWorktree);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    move(projectId, ticket.id, "needs_review");
+    trim.mockClear();
+
+    move(projectId, ticket.id, "done");
+    // A second move into the column it is already in is not a finish.
+    move(projectId, ticket.id, "done");
+
+    expect(trim).toHaveBeenCalledTimes(1);
+    expect(trim.mock.calls[0]?.[1]).toBe(ticket.id);
+  });
+
+  it("does not trim on a move that is not a finish", () => {
+    const trim = vi.mocked(trimFinishedWorktree);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    trim.mockClear();
+
+    move(projectId, ticket.id, "doing");
+
+    expect(trim).not.toHaveBeenCalled();
   });
 
   it("does not interrupt a doing→needs_review move (still an active column)", () => {

@@ -193,6 +193,7 @@ import {
   remove as removeWorktree,
   runNet,
   setRetentionTtlDays,
+  trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "./worktree";
 import { createCoalescer } from "./worktree/coalesce";
@@ -446,6 +447,38 @@ export function registerDataIpcHandlers(
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
+  /**
+   * Trims a just-finished ticket's worktree (VC-340), beside the reply rather
+   * than inside it: enumerating and removing an ignored tree is a filesystem
+   * walk, and a board move must not wait on one.
+   *
+   * Fire-and-forget is the right shape for it, and the reason is the repo's own
+   * rule about failed mutations: nobody asked for this and nothing is waiting on
+   * it, so a refusal (a live agent, a changed tracked file) has no recovery to
+   * offer and stays in the log. What it does NOT do quietly is succeed — a trim
+   * writes `worktree_trimmed` into the ticket's History and broadcasts, so the
+   * card it belongs to can account for the files that went.
+   */
+  const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
+    void trimFinishedWorktree(
+      {
+        worktree: worktreeDeps(db),
+        now: () => Date.now(),
+        ...(options.busyWorktreeSites === undefined
+          ? {}
+          : { busySites: options.busyWorktreeSites }),
+      },
+      ticketId,
+    )
+      .then((outcome) => {
+        if (outcome.kind !== "trimmed") return;
+        broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
+      })
+      .catch((error: unknown) => {
+        console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+      });
+  };
+
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
@@ -681,6 +714,17 @@ export function registerDataIpcHandlers(
       )();
 
       const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+
+      // VC-340: a ticket that just landed in Done gives up its worktree's
+      // git-ignored content NOW rather than whenever the 60s retention poll next
+      // runs. Same act, same refusals, same durable event — the poll remains the
+      // backfill for everything already finished before this door existed.
+      for (const ticketId of ticketIds) {
+        const moved = after.get(ticketId);
+        if (moved === undefined || moved.status !== "done") continue;
+        if (before.get(ticketId)?.status === "done") continue;
+        trimFinishedInBackground(ticketId, moved.project_id);
+      }
       // Main owns armed-column arrivals. A group drop is one deliberate move
       // per selected Ticket, so every real column change reports independently
       // with the same Option-drag choice.
@@ -819,9 +863,13 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
       const now = Date.now();
+      const ticket = getTicketRow(db, input.ticketId);
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      // An archive KEEPS the checkout, which makes an archived ticket the
+      // longest-lived carrier of a dead dependency tree in the app (VC-340).
+      trimFinishedInBackground(input.ticketId, ticket?.project_id);
       return { ok: true };
     },
 
