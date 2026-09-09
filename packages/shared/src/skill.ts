@@ -197,6 +197,18 @@ export function globalSkillsDir(homeDir: string): string {
 }
 
 /**
+ * Locale-independent Skill-name order, shared by every supply and consumer.
+ *
+ * Skill names contain ASCII alone, so JavaScript's code-unit comparison is an
+ * ordinal byte order. Do not use the host's default locale here: a locale may
+ * change which alphabetic tail the bounded index omits, making equal inputs
+ * produce different Cache Prefix bytes on two hosts.
+ */
+export function compareSkillNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
  * The two tiers merged into the one list every surface sees: a project skill
  * wins a slug the personal tier also defines.
  *
@@ -213,7 +225,7 @@ export function mergeSkills(input: {
   const byName = new Map<string, SkillReference>();
   for (const skill of input.global) byName.set(skill.name, skill);
   for (const skill of input.project) byName.set(skill.name, skill);
-  return [...byName.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  return [...byName.values()].toSorted((a, b) => compareSkillNames(a.name, b.name));
 }
 
 /**
@@ -579,12 +591,31 @@ export function readAuthorInvocationPolicy(
 }
 
 /**
+ * The deterministic aggregate ceiling for the skills index (VC-332).
+ *
+ * Characters, rather than estimated tokens, are the enforceable unit: prompt
+ * accounting uses the same stable four-characters-per-token estimate, making
+ * this at most ~512 estimated tokens before the RESOURCE delimiter. That keeps
+ * the current checkout's fresh Board package below its ~1,500-token goal. Every
+ * project, however many skills it installs, gets the same index bound.
+ */
+export const SKILLS_INDEX_MAX_CHARS = 2_048;
+
+/**
  * The Agent Skills spec's own ceiling for a description. An index entry is
  * clamped to it so one bloated frontmatter — or a derived description off a
  * malformed file — cannot turn the ~100-token metadata tier the spec promises
  * into a body-sized section that defeats progressive disclosure.
  */
 const INDEX_DESCRIPTION_LIMIT = 1024;
+
+/**
+ * Once the aggregate ceiling is crossed, keep each advertised description to
+ * one compact sentence-sized slice before withholding whole entries. This
+ * preserves more names and paths — the metadata needed for activation — while
+ * staying deterministic.
+ */
+const INDEX_OVERFLOW_DESCRIPTION_LIMIT = 160;
 
 const INDEX_PREAMBLE = [
   "The skills below are installed in this workspace. Each entry is a name, the",
@@ -595,6 +626,54 @@ const INDEX_PREAMBLE = [
   "still hold.",
 ].join("\n");
 
+interface SkillsIndexEntry {
+  readonly skill: SkillReference;
+  readonly description: string;
+  readonly descriptionShortened: boolean;
+}
+
+/** One sorted entry rendered in the index's stable line format. */
+function renderSkillsIndexEntry(entry: SkillsIndexEntry): string {
+  const location = `${entry.skill.root}/SKILL.md`;
+  return entry.description === ""
+    ? `- ${entry.skill.name} (${location})`
+    : `- ${entry.skill.name} (${location}): ${entry.description}`;
+}
+
+/** Keep ordinary under-limit rendering byte-identical when no notice is needed. */
+function renderSkillsIndex(entries: readonly SkillsIndexEntry[], notice: string | null): string {
+  return [
+    INDEX_PREAMBLE,
+    ...(entries.length === 0 ? [] : [entries.map(renderSkillsIndexEntry).join("\n")]),
+    ...(notice === null ? [] : [notice]),
+  ].join("\n\n");
+}
+
+/**
+ * A visible consequence of either clamp. It deliberately gives no skill names:
+ * a Manual or Off skill remains hidden, and an Auto skill omitted only for size
+ * keeps its configured explicit-invocation semantics outside this index.
+ */
+function skillsIndexLimitNotice(kind: "descriptions" | "entries" | "both"): string {
+  if (kind === "descriptions") {
+    return "Skills index limited: descriptions were shortened; permitted /skill invocation is unchanged.";
+  }
+  if (kind === "entries") {
+    return "Skills index limited: entries were omitted; permitted /skill invocation is unchanged.";
+  }
+  return "Skills index limited: entries were omitted and descriptions shortened; permitted /skill invocation is unchanged.";
+}
+
+/** One line at a deterministic limit. */
+function indexEntry(skill: SkillReference, limit: number): SkillsIndexEntry {
+  const oneLine = skill.description.replace(/\s+/g, " ").trim();
+  return {
+    skill,
+    description: oneLine.length > limit ? `${oneLine.slice(0, limit)}...` : oneLine,
+    descriptionShortened: oneLine.length > limit,
+  };
+}
+
 /**
  * The attach-time skills index: metadata disclosure, the first rung of the
  * Agent Skills ladder. Name, path and description per skill — never a body;
@@ -602,45 +681,57 @@ const INDEX_PREAMBLE = [
  * which lands in the transcript as an ordinary tool call, visible by
  * construction.
  *
- * Two kinds of skill are left out, and only two. A skill whose effective
- * policy is not `modelDiscoverable` is not advertised — its author's decision,
- * its project's, or both. Hidden ENTIRELY rather than listed and refused at
- * activation, which is the client guide's own rule: listing a skill the model
- * cannot load only buys a wasted turn. And `injectedNames` are removed because a
- * skill whose full body already rides this Session's promptResources has
- * nothing left to disclose; an index entry beside the body would tell the
- * model to go read what it was already handed. `null` when nothing remains,
- * so a Session with nothing to disclose composes the exact prompt it composed
- * before this index existed.
+ * Policy and injected-body filtering happen before budgeting. Manual and Off
+ * skills therefore remain hidden exactly as before, while an Auto row omitted
+ * only for size retains its effective policy and remains available to every
+ * permitted explicit invocation route. The sorted rows take a deterministic
+ * degradation path: the ordinary 1024-character description clamp, then a
+ * compact 160-character clamp after aggregate overflow, then removal from the
+ * locale-independent ordinal tail until the entire resource text is at most
+ * {@link SKILLS_INDEX_MAX_CHARS}. Every shortening or omission emits a concise
+ * notice inside that same ceiling.
+ *
+ * `null` still means no model-discoverable, non-injected skill exists at all;
+ * budget overflow never changes that semantic into a false absence.
  */
 export function skillsIndexResource(
   skills: readonly SkillReference[],
   injectedNames: readonly string[] = [],
 ): PromptResource | null {
   const injected = new Set(injectedNames);
-  const rows = skills
+  const sorted = skills
     .filter((skill) => skill.effectivePolicy.modelDiscoverable && !injected.has(skill.name))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
-  if (rows.length === 0) return null;
-  const entries = rows.map((skill) => {
-    const location = `${skill.root}/SKILL.md`;
-    const description = clampIndexDescription(skill.description);
-    return description === ""
-      ? `- ${skill.name} (${location})`
-      : `- ${skill.name} (${location}): ${description}`;
-  });
+    .toSorted((a, b) => compareSkillNames(a.name, b.name));
+  if (sorted.length === 0) return null;
+
+  const ordinaryEntries = sorted.map((skill) => indexEntry(skill, INDEX_DESCRIPTION_LIMIT));
+  const ordinaryNotice = ordinaryEntries.some((entry) => entry.descriptionShortened)
+    ? skillsIndexLimitNotice("descriptions")
+    : null;
+  const ordinaryText = renderSkillsIndex(ordinaryEntries, ordinaryNotice);
+  if (ordinaryText.length <= SKILLS_INDEX_MAX_CHARS) {
+    return { name: SKILLS_INDEX_RESOURCE_NAME, text: ordinaryText };
+  }
+
+  const boundedEntries = sorted.map((skill) => indexEntry(skill, INDEX_OVERFLOW_DESCRIPTION_LIMIT));
+  // Reserve the longest notice while removing rows; the exact notice selected
+  // afterward is never longer, so the final render remains inside the ceiling.
+  const conservativeNotice = skillsIndexLimitNotice("both");
+  while (
+    boundedEntries.length > 0 &&
+    renderSkillsIndex(boundedEntries, conservativeNotice).length > SKILLS_INDEX_MAX_CHARS
+  ) {
+    boundedEntries.pop();
+  }
+  const omitted = boundedEntries.length < sorted.length;
+  const shortened = boundedEntries.some((entry) => entry.descriptionShortened);
+  const notice = skillsIndexLimitNotice(
+    omitted && shortened ? "both" : omitted ? "entries" : "descriptions",
+  );
   return {
     name: SKILLS_INDEX_RESOURCE_NAME,
-    text: [INDEX_PREAMBLE, "", ...entries].join("\n"),
+    text: renderSkillsIndex(boundedEntries, notice),
   };
-}
-
-/** One line, spec-bounded — see {@link INDEX_DESCRIPTION_LIMIT}. */
-function clampIndexDescription(description: string): string {
-  const oneLine = description.replace(/\s+/g, " ").trim();
-  return oneLine.length > INDEX_DESCRIPTION_LIMIT
-    ? `${oneLine.slice(0, INDEX_DESCRIPTION_LIMIT)}...`
-    : oneLine;
 }
 
 /**
