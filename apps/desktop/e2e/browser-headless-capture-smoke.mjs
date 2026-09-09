@@ -5,9 +5,9 @@
  * The local fixture is intentionally deterministic. It builds a large initial
  * DOM, then starts one delayed dynamic-module request after `load`. The smoke
  * waits only until that request is in flight and immediately calls the real
- * Browser port's screenshot method. The module response lands six seconds
- * later, so a screenshot that returns inside five seconds was captured while
- * the page was still busy.
+ * Browser port's screenshot method. The module response lands twelve seconds
+ * later, so the bounded screenshot and click must both finish while the page is
+ * still busy.
  *
  * This is equivalent to the reported cold Vite/module-graph shape; it does not
  * claim to start the UI lab or drive `/lab/#chat-activity` itself.
@@ -42,7 +42,7 @@ const PROJECT = {
 
 const INITIAL_ROWS = 900;
 const CHUNK_ROWS = 600;
-const CHUNK_DELAY_MS = 6_000;
+const CHUNK_DELAY_MS = 12_000;
 const SCREENSHOT_BUDGET_MS = 5_000;
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>vc278 phase=boot clicked=0 nodes=0</title>
@@ -207,7 +207,7 @@ async function driveHeadlessTab(app, url, projectId) {
         const ref = /button[^\n]*\[ref=(e\d+)\]/.exec(snap.snapshotText)?.[1] ?? null;
         out.buttonRef = ref;
         if (ref !== null) {
-          out.clickedAt = Date.now();
+          out.clickRequestedAt = Date.now();
           const acted = await port.act({
             tabId: opened.tabId,
             generation: snap.generation,
@@ -215,6 +215,7 @@ async function driveHeadlessTab(app, url, projectId) {
             ref,
             signal,
           });
+          out.clickAnsweredAt = Date.now();
           out.titleAfterClick = acted.title;
         }
 
@@ -319,12 +320,16 @@ async function main() {
     const ok =
       result.error === undefined &&
       result.buttonRef !== null &&
+      clickedFacts.phase === "compiling" &&
       clickedFacts.clicked === "1" &&
-      result.clickedAt < fixture.timing.chunkRespondedAt &&
+      result.clickRequestedAt < fixture.timing.chunkRespondedAt &&
+      result.clickAnsweredAt < fixture.timing.chunkRespondedAt &&
       finalFacts.clicked === "1";
     return {
       ok,
-      detail: `ref=${result.buttonRef} phase=${clickedFacts.phase} clicked=${clickedFacts.clicked}`,
+      detail:
+        `ref=${result.buttonRef} phase=${clickedFacts.phase} clicked=${clickedFacts.clicked} ` +
+        `action answered ${fixture.timing.chunkRespondedAt - result.clickAnsweredAt}ms before the module`,
     };
   });
 
