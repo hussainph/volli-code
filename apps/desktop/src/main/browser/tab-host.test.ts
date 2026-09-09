@@ -17,6 +17,7 @@ import {
   BROWSER_TITLE_MAX_CHARS,
   BROWSER_URL_MAX_CHARS,
   BrowserSessionTabLimitError,
+  BrowserStageUnavailableError,
   BrowserTabHost,
   BrowserTabLimitError,
   browserRemoteWebPreferences,
@@ -56,6 +57,7 @@ class FakeWebContents {
   listeners = new Map<string, ((...args: unknown[]) => void)[]>();
   windowOpenHandler: ((details: { url: string }) => { action: "deny" | "allow" }) | null = null;
   loadURL = vi.fn(async (url: string) => {
+    nativeOrder.push(`load:${url}`);
     this.url = url;
   });
   close = vi.fn();
@@ -145,15 +147,50 @@ const fakeWindow = {
 /**
  * The off-screen stage (VC-278). Never shown, so a test that finds a view here
  * is finding a tab the person cannot see — which is the whole point of it.
+ *
+ * One instance per `createStageWindow` call, all of them kept in {@link stages}
+ * so a test can tell "one stage shared by every tab" from "a stage each", and
+ * can watch a destroyed stage be rebuilt.
  */
-const fakeStage = {
-  isDestroyed: () => false,
-  destroy: vi.fn(),
-  contentView: {
-    addChildView: vi.fn(),
+class FakeStage {
+  destroyed = false;
+  contentView = {
+    addChildView: vi.fn(() => {
+      nativeOrder.push("stage-add");
+    }),
     removeChildView: vi.fn(),
-  },
-};
+  };
+  destroy = vi.fn(() => {
+    this.destroyed = true;
+  });
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+
+/** How the next stage is built, so a test can model Electron failing to give one. */
+let stageBuilds: "ok" | "throws" | "born-destroyed";
+let stages: FakeStage[];
+
+function newStage(): BaseWindow {
+  if (stageBuilds === "throws") throw new Error("no window server");
+  const stage = new FakeStage();
+  if (stageBuilds === "born-destroyed") stage.destroyed = true;
+  stages.push(stage);
+  return stage as unknown as BaseWindow;
+}
+
+/** The stage built first, which is the one every tab shares. */
+const stage = (index = 0): FakeStage => stages[index]!;
+
+/**
+ * Native parenting and navigation in the order they happened, so a test can
+ * prove a tab was staged BEFORE its first load rather than merely staged at
+ * some point (VC-278): a view with no window when its first navigation commits
+ * never gets a compositor surface.
+ */
+let nativeOrder: string[];
 
 let views: FakeView[];
 let viewOptions: WebContentsViewConstructorOptions[];
@@ -172,6 +209,9 @@ beforeEach(() => {
   sessions = new Map();
   published = [];
   persisted = new Map();
+  stages = [];
+  stageBuilds = "ok";
+  nativeOrder = [];
   clock = 1_000;
   let nextId = 0;
   let nextPicture = 0;
@@ -207,7 +247,7 @@ beforeEach(() => {
       return isolated as unknown as Session;
     },
     getWindow: () => fakeWindow as unknown as BrowserWindow,
-    createStageWindow: () => fakeStage as unknown as BaseWindow,
+    createStageWindow: newStage,
     publishState: (event) => published.push(event),
     publishClosed: (tabId) => published.push({ closedTabId: tabId }),
   });
@@ -971,7 +1011,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => fakeWindow as unknown as BrowserWindow,
-      createStageWindow: () => fakeStage as unknown as BaseWindow,
+      createStageWindow: newStage,
       publishState: (event) => published.push(event),
       publishClosed: (tabId) => published.push({ closedTabId: tabId }),
       pictures,
@@ -1005,7 +1045,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => fakeWindow as unknown as BrowserWindow,
-      createStageWindow: () => fakeStage as unknown as BaseWindow,
+      createStageWindow: newStage,
       publishState: (event) => published.push(event),
       publishClosed: (tabId) => published.push({ closedTabId: tabId }),
       pictures,
@@ -1032,7 +1072,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
       createView: () => new FakeView() as unknown as WebContentsView,
       fromPartition: () => new FakeSession() as unknown as Session,
       getWindow: () => null,
-      createStageWindow: () => fakeStage as unknown as BaseWindow,
+      createStageWindow: newStage,
       publishState: () => undefined,
       publishClosed: () => undefined,
       pictures,
@@ -1302,7 +1342,7 @@ describe("BrowserTabHost plane, for the cursor overlay (VC-239)", () => {
     const headless = openTab();
 
     expect(() => host.show(headless)).toThrow(
-      "A headless Browser Tab has no plane until the person shows it",
+      "A Headless Browser Tab has no visible plane until the person shows it",
     );
     expect(host.attachedTabIds()).toEqual([]);
     expect(host.isOnScreen(headless)).toBe(false);
@@ -1530,70 +1570,6 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     );
   });
 
-  it("parks every new tab in the off-screen stage, before its first navigation", () => {
-    const tab = host.open({
-      url: "https://agent.example.com",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: "session-a",
-    });
-
-    // The surface has to exist before the load commits, or the compositor never
-    // allocates one and the tab is uncapturable and unclickable for life
-    // (VC-278). The view is in the stage and NOT in the app window.
-    expect(fakeStage.contentView.addChildView).toHaveBeenCalledWith(views[0]);
-    expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
-    // Staged is not shown: nothing about presentation moved.
-    expect(host.list({ projectId: "project-1" })[0]?.presentation).toBe("headless");
-    expect(host.isOnScreen(tab.tabId)).toBe(false);
-    expect(host.attachedTabIds()).toEqual([]);
-  });
-
-  it("moves a tab between the stage and the window, never leaving it in both", () => {
-    const tab = host.open({
-      url: "https://agent.example.com",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: "session-a",
-    });
-    host.setPresentation(tab.tabId, "preview");
-
-    host.show(tab.tabId);
-    // Out of the stage, into the window — a view has one parent, so showing has
-    // to take it back before the window can adopt it.
-    expect(fakeStage.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
-    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(views[0]);
-    expect(host.isOnScreen(tab.tabId)).toBe(true);
-
-    fakeStage.contentView.addChildView.mockClear();
-    host.hide(tab.tabId);
-    // Hiding returns it to the stage rather than to nowhere: off screen is a
-    // place. Otherwise every hidden tab would lose its surface again.
-    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
-    expect(fakeStage.contentView.addChildView).toHaveBeenCalledWith(views[0]);
-    expect(host.isOnScreen(tab.tabId)).toBe(false);
-  });
-
-  it("takes a closed tab out of the stage instead of leaving its view parented", () => {
-    const tab = host.open({
-      url: "https://agent.example.com",
-      projectId: "project-1",
-      ticketId: null,
-      createdBy: "session",
-      ownerSessionId: "session-a",
-    });
-
-    host.close(tab.tabId);
-
-    expect(fakeStage.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
-    // And the stage itself goes when the last window does, rather than outliving
-    // the app as an invisible window holding nothing.
-    host.closeAll();
-    expect(fakeStage.destroy).toHaveBeenCalled();
-  });
-
   it("refuses to attach a headless tab: revealing is the person's act, and main owns the fact", () => {
     const tab = host.open({
       url: "https://agent.example.com",
@@ -1606,7 +1582,7 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     // The renderer's plane controller has no business mounting a tab nothing
     // showed. If it tries, the host is the one that says no.
     expect(() => host.show(tab.tabId)).toThrow(
-      "A headless Browser Tab has no plane until the person shows it",
+      "A Headless Browser Tab has no visible plane until the person shows it",
     );
     expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
 
@@ -1629,6 +1605,226 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     host.setPresentation(tab.tabId, "headless");
 
     expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    // And back onto the stage, so the tab the person just hid can still be
+    // captured and clicked by the Session driving it (VC-278).
+    expect(stage().contentView.addChildView).toHaveBeenLastCalledWith(views[0]);
+  });
+});
+
+/**
+ * The off-screen stage (VC-278): the never-shown window every Browser Tab is
+ * parented to while nobody is looking at it. Without it a tab has no
+ * compositor surface at all — captures never answer, clicks reach nothing —
+ * while its accessibility tree reads perfectly, which is what hid the fault.
+ */
+describe("BrowserTabHost stage (VC-278)", () => {
+  const agentTab = (index = 0) =>
+    host.open({
+      url: `https://agent.example.com/${index}`,
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+
+  it("parks every new tab in the off-screen stage before its first navigation", () => {
+    const tab = agentTab();
+
+    // Order is the whole point: the first navigation is what allocates the
+    // surface, and a view with no window when it commits never gets one. Staged
+    // after `loadURL` would look identical to every other assertion here and
+    // still leave the tab uncapturable for life.
+    expect(nativeOrder).toEqual(["stage-add", "load:https://agent.example.com/0"]);
+    expect(stage().contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(fakeWindow.contentView.addChildView).not.toHaveBeenCalled();
+    // Staged is not shown: nothing about presentation moved.
+    expect(host.list({ projectId: "project-1" })[0]?.presentation).toBe("headless");
+    expect(host.isOnScreen(tab.tabId)).toBe(false);
+    expect(host.attachedTabIds()).toEqual([]);
+  });
+
+  it("shares one stage across every tab that needs one", () => {
+    agentTab(0);
+    agentTab(1);
+    agentTab(2);
+
+    // One never-shown window holding three views, not three windows: captures
+    // and input are per-WebContents, so stacking them costs nothing and a stage
+    // per tab would be three windows Electron counts for `window-all-closed`.
+    expect(stages).toHaveLength(1);
+    expect(stage().contentView.addChildView.mock.calls).toEqual([
+      [views[0]],
+      [views[1]],
+      [views[2]],
+    ]);
+  });
+
+  it("rebuilds a stage that was destroyed behind the host's back", () => {
+    agentTab(0);
+    // The host still holds the reference; Electron has already torn the window
+    // down. Reusing it would throw on the first `addChildView`, and skipping
+    // the staging would put the new tab back in the surfaceless state this
+    // ticket is about.
+    stage().destroy();
+
+    agentTab(1);
+
+    expect(stages).toHaveLength(2);
+    expect(stage(1).contentView.addChildView).toHaveBeenCalledWith(views[1]);
+    expect(stage(0).contentView.addChildView).not.toHaveBeenCalledWith(views[1]);
+    // And the live tab that follows uses the same replacement, not a third.
+    agentTab(2);
+    expect(stages).toHaveLength(2);
+    expect(stage(1).contentView.addChildView).toHaveBeenCalledWith(views[2]);
+  });
+
+  it("destroys the stage with the last window, and builds another for the next tab", () => {
+    agentTab(0);
+
+    // What closing the app window does: every tab goes, and the stage with it
+    // rather than outliving the app as an invisible window holding nothing.
+    host.closeAll();
+    expect(stage().destroy).toHaveBeenCalled();
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+
+    // Reopening the window is an ordinary thing to do on macOS, and the tab
+    // opened after it needs a stage as much as the first one did.
+    agentTab(1);
+    expect(stages).toHaveLength(2);
+    expect(stage(1).contentView.addChildView).toHaveBeenCalledWith(views[1]);
+  });
+
+  it("moves a tab between the stage and the window, never leaving it in both", () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+
+    host.show(tab.tabId);
+    // Out of the stage, into the window — a view has one parent, so showing has
+    // to take it back before the window can adopt it.
+    expect(stage().contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(host.isOnScreen(tab.tabId)).toBe(true);
+
+    stage().contentView.addChildView.mockClear();
+    host.hide(tab.tabId);
+    // Hiding returns it to the stage rather than to nowhere: off screen is a
+    // place. Otherwise every hidden tab would lose its surface again.
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(stage().contentView.addChildView).toHaveBeenCalledWith(views[0]);
+    expect(host.isOnScreen(tab.tabId)).toBe(false);
+
+    // Showing it again is one move, not two: the stage does not keep a copy.
+    stage().contentView.removeChildView.mockClear();
+    host.show(tab.tabId);
+    expect(stage().contentView.removeChildView.mock.calls).toEqual([[views[0]]]);
+  });
+
+  it("takes a closed tab out of the stage instead of leaving its view parented", () => {
+    const tab = agentTab();
+
+    host.close(tab.tabId);
+
+    expect(stage().contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    // And never back in: a view about to be destroyed is a child the stage
+    // would only have to drop again.
+    expect(stage().contentView.addChildView.mock.calls).toEqual([[views[0]]]);
+  });
+
+  it("refuses to open a tab it cannot stage, leaving nothing registered", () => {
+    stageBuilds = "throws";
+
+    // A tab with no stage would answer snapshots while its captures and clicks
+    // went nowhere, which is the silent failure VC-278 is about. The caller is
+    // told instead of being handed an id for a tab that will never work.
+    expect(() => agentTab()).toThrow(BrowserStageUnavailableError);
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    // Nothing was published for a tab that never existed, and its contents do
+    // not leak: the half-built view is closed on the way out.
+    expect(published).toEqual([]);
+    expect(views[0]?.webContents.close).toHaveBeenCalledWith({ waitForBeforeUnload: false });
+
+    // The next tab, once a stage can be built again, is ordinary.
+    stageBuilds = "ok";
+    const tab = agentTab(1);
+    expect(host.list({ projectId: "project-1" }).map((one) => one.tabId)).toEqual([tab.tabId]);
+    expect(stage().contentView.addChildView).toHaveBeenCalledWith(views[1]);
+  });
+
+  it("treats a stage that is born destroyed as no stage at all", () => {
+    stageBuilds = "born-destroyed";
+
+    expect(() => agentTab()).toThrow(BrowserStageUnavailableError);
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(stage().contentView.addChildView).not.toHaveBeenCalled();
+  });
+
+  it("tells the caller when hiding cannot return a tab to the stage", () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+    // The stage died while the tab was on screen, and no replacement can be
+    // built — the window server is gone.
+    stage().destroy();
+    stageBuilds = "throws";
+
+    expect(() => host.hide(tab.tabId)).toThrow(BrowserStageUnavailableError);
+
+    // The page did leave the window, which is what Hide asked for; what failed
+    // is the part that keeps it capturable, and that is worth saying out loud
+    // rather than leaving a tab that quietly stops answering.
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(host.isOnScreen(tab.tabId)).toBe(false);
+    expect(host.list({ projectId: "project-1" }).map((one) => one.tabId)).toEqual([tab.tabId]);
+  });
+
+  it("never returns a destroyed on-screen tab's view to the stage", () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+    const planes: string[][] = [];
+    host.onPlaneChange((ids) => planes.push([...ids]));
+    stage().contentView.addChildView.mockClear();
+
+    // Chromium tore the WebContents down under us: a crash, or a page that
+    // closed itself.
+    expect(() => views[0]!.webContents.emit("destroyed")).not.toThrow();
+
+    // Parking a dead view would add a child nothing will ever remove — and
+    // Electron may refuse the call outright, which would take main's uncaught
+    // handler with it since nothing awaits a WebContents event.
+    expect(stage().contentView.addChildView).not.toHaveBeenCalled();
+    expect(fakeWindow.contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(planes).toEqual([[]]);
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(published.at(-1)).toEqual({ closedTabId: tab.tabId });
+  });
+
+  it("takes an already-headless destroyed tab off the stage instead of leaving it parented", () => {
+    const tab = agentTab();
+    stage().contentView.addChildView.mockClear();
+
+    expect(() => views[0]!.webContents.emit("destroyed")).not.toThrow();
+
+    expect(stage().contentView.removeChildView).toHaveBeenCalledWith(views[0]);
+    expect(stage().contentView.addChildView).not.toHaveBeenCalled();
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(published.at(-1)).toEqual({ closedTabId: tab.tabId });
+  });
+
+  it("forgets a destroyed tab even when Electron refuses to unparent its dead view", () => {
+    const tab = agentTab();
+    stage().contentView.removeChildView.mockImplementation(() => {
+      throw new Error("Object has been destroyed");
+    });
+
+    // "Object has been destroyed" is the expected answer for a view Chromium
+    // has already torn down, and it must not leave a phantom tab in the
+    // registry that the model can still address.
+    expect(() => views[0]!.webContents.emit("destroyed")).not.toThrow();
+
+    expect(host.list({ projectId: "project-1" })).toEqual([]);
+    expect(published.at(-1)).toEqual({ closedTabId: tab.tabId });
+    expect(() => host.reload(tab.tabId)).toThrow("Unknown Browser Tab");
   });
 });
 
@@ -1771,7 +1967,14 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     views[0]!.webContents.captureBytes = "";
 
     expect(await host.capturePicture(tab.tabId)).toBeNull();
-    expect(persisted.size).toBe(0);
+
+    // A live capture is never persisted, so the disk says nothing about this
+    // either way: the store is what has to be untouched. No id was minted and
+    // none was burned — the next real capture is still `picture-1`.
+    expect(pictures.describe("picture-1")).toBeNull();
+    expect(pictures.dataUrl("picture-1")).toBeNull();
+    views[0]!.webContents.captureBytes = "real";
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
   });
 
   it("refuses to keep a screenshot with no pixels, at the store's door too", () => {

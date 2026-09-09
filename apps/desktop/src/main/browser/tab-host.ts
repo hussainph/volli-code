@@ -86,10 +86,12 @@ export interface BrowserTabHostDependencies {
   fromPartition: (partition: string) => Session;
   getWindow: () => BrowserWindow | null;
   /**
-   * Creates the window headless tabs are parked in — created once, never
-   * shown, never given to the person. See {@link BrowserTabHost.requireStage}
-   * for why a tab nobody looks at still needs a window to belong to, and why
-   * this is a {@link BaseWindow} rather than a BrowserWindow (VC-278).
+   * Creates the window headless tabs are parked in — never shown, never given
+   * to the person. Called on the first tab that needs a stage and again only
+   * if that stage is destroyed, so every tab alive at one time shares one. See
+   * {@link BrowserTabHost.requireStage} for why a tab nobody looks at still
+   * needs a window to belong to, and why this is a {@link BaseWindow} rather
+   * than a BrowserWindow (VC-278).
    */
   createStageWindow: () => BaseWindow;
   publishState: (event: BrowserTabState) => void;
@@ -108,23 +110,33 @@ export interface BrowserTabHostDependencies {
   sessionName?: (sessionId: string) => Promise<string | null>;
 }
 
+/**
+ * Where one tab's native view is parented right now. A view has exactly ONE
+ * parent, so this is one value rather than a window slot and a staged flag
+ * that could disagree (VC-278): "attached and staged" and "a stage flag with
+ * no stage" stop being states anything can write.
+ *
+ * Per entry rather than one host-wide slot (VC-238): a shown agent tab and the
+ * person's own browser pane are on screen together, and two panes of a split
+ * each hold a tab, so the host parents a SET of views keyed by tab.
+ *
+ * `detached` is the transient state BETWEEN parents — a view mid-move, or one
+ * whose tab is being forgotten. It is not where a live tab rests: every live
+ * tab is either on the window or on the stage, because a view with no parent
+ * has no compositor surface and cannot be captured or clicked ({@link
+ * BrowserTabHost.requireStage}).
+ */
+type BrowserTabParent =
+  | { kind: "window"; window: BrowserWindow }
+  | { kind: "stage" }
+  | { kind: "detached" };
+
 interface BrowserTabEntry {
   state: BrowserTabState;
   view: WebContentsView;
   bounds: Rectangle;
-  /**
-   * The window this tab's view is attached to, or null while detached. Per
-   * entry rather than one host-wide slot (VC-238): a shown agent tab and the
-   * person's own browser pane are on screen together, and two panes of a
-   * split each hold a tab, so the host attaches a SET of views keyed by tab.
-   */
-  attachedTo: BrowserWindow | null;
-  /**
-   * Whether this tab's view is parked in the off-screen stage rather than the
-   * app window. Mutually exclusive with {@link attachedTo}: a view has exactly
-   * one parent, and the stage holds every tab the app window does not (VC-278).
-   */
-  staged: boolean;
+  /** The one place this tab's view is parented; see {@link BrowserTabParent}. */
+  parent: BrowserTabParent;
   devToolsView: WebContentsView | null;
   devToolsOpen: boolean;
   devToolsAttached: boolean;
@@ -248,6 +260,27 @@ export class BrowserSessionTabLimitError extends Error {
   }
 }
 
+/**
+ * The off-screen stage could not be built or has died and would not rebuild
+ * (VC-278).
+ *
+ * This is a hard failure on purpose. A tab with no parent window has no
+ * compositor surface, and Chromium does not say so: captures return a 0x0
+ * image or never answer, clicks land nowhere, and the accessibility tree reads
+ * perfectly the whole time. Continuing without a stage is exactly the silent
+ * state this ticket exists to end, so every door that parks a tab raises this
+ * instead of leaving one surfaceless.
+ */
+export class BrowserStageUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super(
+      "The Browser Tab stage is unavailable, so the tab would have no surface to capture or click",
+      options,
+    );
+    this.name = "BrowserStageUnavailableError";
+  }
+}
+
 /** Keeps page-owned chrome facts bounded and on one renderer/model-owned line. */
 function boundedBrowserTitle(title: string): string {
   return title.replace(/\s+/g, " ").trim().slice(0, BROWSER_TITLE_MAX_CHARS);
@@ -321,13 +354,13 @@ export class BrowserTabHost {
   private readonly holdListeners = new Set<(event: BrowserHoldEvent) => void>();
   /**
    * Who watches which tabs are ON SCREEN and where their pages sit (VC-239):
-   * the cursor overlay, which draws only over a tab that is attached and must
-   * move with it. Told after every attach, detach and layout.
+   * the cursor overlay, which draws only over a tab attached to the app window
+   * and must move with it. Told after every attach, detach and layout.
    *
    * A SET of tab ids rather than one (VC-238): the host attaches a view per
    * entry, so a shown agent tab and the person's own pane are on screen
-   * together. A headless tab is attached to nothing and never appears here,
-   * which is what keeps the cursor from ever drawing over one.
+   * together. A Headless tab is parked in the never-shown stage and never
+   * appears here, which keeps the cursor from ever drawing over one.
    */
   private readonly planeListeners = new Set<(attachedTabIds: readonly string[]) => void>();
   /**
@@ -396,31 +429,58 @@ export class BrowserTabHost {
    * destroys it — the app window's own `closed` handler calls that, and the
    * order is right: the stage is gone before Electron asks whether every
    * window has closed.
+   *
+   * Built on the first tab that needs one and shared by every tab after it,
+   * and rebuilt if it was destroyed ({@link closeAll} on a window close, with
+   * the app then reopened). Never null: a stage that cannot be built raises
+   * {@link BrowserStageUnavailableError} rather than handing back an absence
+   * a caller could quietly skip over.
    */
-  private requireStage(): BaseWindow | null {
-    if (this.stageWindow === null || this.stageWindow.isDestroyed()) {
-      this.stageWindow = this.deps.createStageWindow();
+  private requireStage(): BaseWindow {
+    const live = this.stageWindow;
+    if (live !== null && !live.isDestroyed()) return live;
+    let created: BaseWindow;
+    try {
+      created = this.deps.createStageWindow();
+    } catch (cause) {
+      this.stageWindow = null;
+      throw new BrowserStageUnavailableError({ cause });
     }
-    return this.stageWindow.isDestroyed() ? null : this.stageWindow;
+    if (created.isDestroyed()) {
+      this.stageWindow = null;
+      throw new BrowserStageUnavailableError();
+    }
+    this.stageWindow = created;
+    return created;
+  }
+
+  /** The window this tab is on, or null while it is anywhere else. */
+  private windowOf(entry: BrowserTabEntry): BrowserWindow | null {
+    return entry.parent.kind === "window" ? entry.parent.window : null;
   }
 
   /**
    * Parks one tab's view in the stage, unless the app window already holds it.
-   * A view has one parent, so this is the other half of {@link detachEntry}:
-   * every tab is in exactly one of the two places for its whole life.
+   * A view has one parent, so this is the other half of
+   * {@link detachFromWindow}: every live tab is in exactly one of the two
+   * places for its whole life.
+   *
+   * Raises {@link BrowserStageUnavailableError} when there is no stage to park
+   * in. Every caller is a door that would otherwise leave a tab surfaceless —
+   * uncapturable and unclickable while reading as healthy — so the failure is
+   * loud rather than a tab that quietly stops answering (VC-278).
    */
-  private stageEntry(entry: BrowserTabEntry): void {
-    if (entry.staged || entry.attachedTo !== null) return;
+  private parkOnStage(entry: BrowserTabEntry): void {
+    if (entry.parent.kind !== "detached") return;
     const stage = this.requireStage();
-    if (stage === null) return;
     stage.contentView.addChildView(entry.view);
-    entry.staged = true;
+    entry.parent = { kind: "stage" };
   }
 
   /** Takes one tab's view out of the stage, so a real window may adopt it. */
-  private unstageEntry(entry: BrowserTabEntry): void {
-    if (!entry.staged) return;
-    entry.staged = false;
+  private takeOffStage(entry: BrowserTabEntry): void {
+    if (entry.parent.kind !== "stage") return;
+    entry.parent = { kind: "detached" };
     const stage = this.stageWindow;
     if (stage !== null && !stage.isDestroyed()) stage.contentView.removeChildView(entry.view);
   }
@@ -435,7 +495,7 @@ export class BrowserTabHost {
     const split = browserSurfaceBounds(entry.bounds, devToolsOpen && entry.devToolsView !== null);
     entry.view.setBounds(split.page);
     if (split.devTools !== null) entry.devToolsView?.setBounds(split.devTools);
-    if (entry.attachedTo !== null) this.emitPlane();
+    if (entry.parent.kind === "window") this.emitPlane();
   }
 
   private emitPlane(): void {
@@ -453,14 +513,15 @@ export class BrowserTabHost {
   attachedTabIds(): string[] {
     const onScreen: string[] = [];
     for (const entry of this.tabs.values()) {
-      if (entry.attachedTo !== null) onScreen.push(entry.state.tabId);
+      if (entry.parent.kind === "window") onScreen.push(entry.state.tabId);
     }
     return onScreen;
   }
 
   /** Whether this tab's page is on screen — the question the cursor overlay actually asks. */
   isOnScreen(tabId: string): boolean {
-    return this.tabs.get(tabId)?.attachedTo != null;
+    const entry = this.tabs.get(tabId);
+    return entry !== undefined && entry.parent.kind === "window";
   }
 
   /**
@@ -470,7 +531,7 @@ export class BrowserTabHost {
    */
   pageBoundsOf(tabId: string): Rectangle | null {
     const entry = this.tabs.get(tabId);
-    if (entry === undefined || entry.attachedTo === null) return null;
+    if (entry === undefined || entry.parent.kind !== "window") return null;
     return browserSurfaceBounds(entry.bounds, entry.devToolsOpen && entry.devToolsView !== null)
       .page;
   }
@@ -509,33 +570,44 @@ export class BrowserTabHost {
   }
 
   /**
-   * Takes the page and its DevTools off screen, and returns the page to the
-   * stage — off screen is a place, not an absence (VC-278). Quiet when the tab
-   * was not on screen to begin with.
+   * Takes the page and its DevTools off the app window, leaving the view with
+   * no parent. Quiet when the tab was not on screen to begin with.
    *
-   * `andStage` is false on exactly one path: {@link close}, where the view is
-   * about to be destroyed and re-parenting it would only add a child the stage
-   * has to drop again.
+   * Half a move on its own: every caller but teardown follows it with
+   * {@link parkOnStage}, because off screen is a place rather than an absence
+   * (VC-278). The pair is {@link goOffScreen}; teardown is the one path that
+   * stops here, since the view is about to be destroyed.
    */
-  private detachEntry(entry: BrowserTabEntry, andStage = true): void {
-    const window = entry.attachedTo;
-    if (window === null) {
-      if (andStage) this.stageEntry(entry);
-      return;
-    }
-    this.detachDevTools(entry, window);
-    if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
-    entry.attachedTo = null;
-    if (andStage) this.stageEntry(entry);
+  private detachFromWindow(entry: BrowserTabEntry): void {
+    const parent = entry.parent;
+    if (parent.kind !== "window") return;
+    this.detachDevTools(entry, parent.window);
+    entry.parent = { kind: "detached" };
+    if (!parent.window.isDestroyed()) parent.window.contentView.removeChildView(entry.view);
     // Every path that takes a page off screen — hide, close, a crash, going
     // headless — is a plane change the cursor overlay has to hear (VC-239).
     this.emitPlane();
   }
 
+  /**
+   * Takes one tab off screen and back to the stage, which is where a tab
+   * nobody is looking at lives (VC-278).
+   *
+   * Raises {@link BrowserStageUnavailableError} if the stage cannot be built:
+   * a tab that came off the window and could not be parked has lost its
+   * compositor surface, and the caller — Hide, or going headless — hears that
+   * rather than returning as if the tab were still whole.
+   */
+  private goOffScreen(entry: BrowserTabEntry): void {
+    this.detachFromWindow(entry);
+    this.parkOnStage(entry);
+  }
+
   private destroyDevTools(entry: BrowserTabEntry): void {
     const tools = entry.devToolsView;
     if (tools === null) return;
-    if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
+    const window = this.windowOf(entry);
+    if (window !== null) this.detachDevTools(entry, window);
     const inspected = entry.view.webContents;
     if (!inspected.isDestroyed() && entry.devToolsOpen) inspected.closeDevTools();
     if (!tools.webContents.isDestroyed()) tools.webContents.close({ waitForBeforeUnload: false });
@@ -884,8 +956,7 @@ export class BrowserTabHost {
       state,
       view,
       bounds: { ...BROWSER_DEFAULT_BOUNDS },
-      attachedTo: null,
-      staged: false,
+      parent: { kind: "detached" },
       devToolsView: null,
       devToolsOpen: false,
       devToolsAttached: false,
@@ -899,7 +970,23 @@ export class BrowserTabHost {
     // Before the load below, not after: the first navigation is what allocates
     // the surface the compositor then hands to captures and hit-testing, and a
     // view with no window when it commits never gets one (VC-278).
-    this.stageEntry(entry);
+    try {
+      this.parkOnStage(entry);
+    } catch (error) {
+      // A tab that cannot be staged would be born blind — answering snapshots
+      // while its captures and clicks go nowhere. Nothing has been published
+      // yet, so the half-built tab leaves no trace: it is unregistered, its
+      // contents are closed, and the caller is told why instead of holding an
+      // id for a tab that will never work.
+      this.tabs.delete(tabId);
+      try {
+        view.webContents.close({ waitForBeforeUnload: false });
+      } catch {
+        // Nothing to recover: the view never became a product tab, and the
+        // error the caller needs is the staging failure re-thrown below.
+      }
+      throw error;
+    }
     // Everything that means "the person is using this tab", stamped in one
     // place: `input-event` covers keys, clicks and the wheel, and `focus`
     // covers a tab entered by keyboard alone.
@@ -963,12 +1050,14 @@ export class BrowserTabHost {
     });
     view.webContents.on("devtools-opened", () => {
       entry.devToolsOpen = true;
-      if (entry.attachedTo !== null) this.attachDevTools(entry, entry.attachedTo);
+      const window = this.windowOf(entry);
+      if (window !== null) this.attachDevTools(entry, window);
       this.layout(entry);
     });
     view.webContents.on("devtools-closed", () => {
       entry.devToolsOpen = false;
-      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
+      const window = this.windowOf(entry);
+      if (window !== null) this.detachDevTools(entry, window);
       this.layout(entry);
     });
     view.webContents.on("render-process-gone", (_event, details) => {
@@ -991,11 +1080,7 @@ export class BrowserTabHost {
     });
     view.webContents.on("destroyed", () => {
       if (this.tabs.get(tabId) !== entry) return;
-      this.detachEntry(entry);
-      this.destroyDevTools(entry);
-      this.tabs.delete(tabId);
-      this.endHoldOnClose(tabId, entry);
-      this.deps.publishClosed(tabId);
+      this.forgetDestroyedEntry(tabId, entry);
     });
     this.deps.publishState({ ...state });
     void view.webContents.loadURL(input.url).catch(() => undefined);
@@ -1011,15 +1096,79 @@ export class BrowserTabHost {
     }
   }
 
-  /** Closes and forgets one product tab without allowing page unload code to veto it. */
-  close(tabId: string): void {
-    const entry = this.requireTab(tabId);
-    this.detachEntry(entry, false);
-    this.unstageEntry(entry);
-    this.destroyDevTools(entry);
+  /**
+   * Drops one tab from the registry and tells everyone watching. The native
+   * side is the caller's, because the two teardown paths differ on whether
+   * Chromium can still be asked anything about the view.
+   */
+  private forgetEntry(tabId: string, entry: BrowserTabEntry): void {
     this.tabs.delete(tabId);
     this.endHoldOnClose(tabId, entry);
     this.deps.publishClosed(tabId);
+  }
+
+  /**
+   * Chromium tore this tab's WebContents down under us — a crash, a page that
+   * closed itself, a renderer that exited (VC-278).
+   *
+   * Two rules the ordinary {@link close} path does not need. The view is NOT
+   * returned to the stage: parking a dead view would add a child nothing will
+   * ever remove, and Electron may refuse the call outright — off screen is a
+   * place for a live tab, and this tab is not one. And the registry loses the
+   * tab BEFORE any native call, so the product answer is the same whatever
+   * those calls do: a `destroyed` handler that threw would leave a phantom tab
+   * the model could still address, on top of reaching main's uncaught handler,
+   * since nothing awaits a WebContents event.
+   */
+  private forgetDestroyedEntry(tabId: string, entry: BrowserTabEntry): void {
+    const parent = entry.parent;
+    entry.parent = { kind: "detached" };
+    if (parent.kind === "window") this.emitPlane();
+    this.forgetEntry(tabId, entry);
+    // Every step below asks Electron about objects it has already destroyed,
+    // which is the one case where these calls raise. Nobody is waiting on the
+    // answer and there is nothing to retry: the tab is gone either way, and
+    // the alternative to swallowing here is crashing main over a view that no
+    // longer exists.
+    if (parent.kind === "window") {
+      const window = parent.window;
+      BrowserTabHost.ignoringDestroyed("detach DevTools", () => this.detachDevTools(entry, window));
+      BrowserTabHost.ignoringDestroyed("remove the page from its window", () => {
+        if (!window.isDestroyed()) window.contentView.removeChildView(entry.view);
+      });
+    } else if (parent.kind === "stage") {
+      const stage = this.stageWindow;
+      BrowserTabHost.ignoringDestroyed("remove the page from its stage", () => {
+        if (stage !== null && !stage.isDestroyed()) stage.contentView.removeChildView(entry.view);
+      });
+    }
+    BrowserTabHost.ignoringDestroyed("close DevTools", () => this.destroyDevTools(entry));
+  }
+
+  /** One native teardown step for a view Chromium has already destroyed; see {@link forgetDestroyedEntry}. */
+  private static ignoringDestroyed(label: string, step: () => void): void {
+    try {
+      step();
+    } catch (error) {
+      // "Object has been destroyed" is the expected answer here, and it is
+      // also the end state the step was asking for. Anything else is still a
+      // background teardown failure rather than a user operation, but it must
+      // remain visible in diagnostics instead of disappearing silently.
+      if (error instanceof Error && /object has been destroyed/i.test(error.message)) return;
+      console.error(`[volli] could not ${label} after Browser Tab destruction:`, error);
+    }
+  }
+
+  /** Closes and forgets one product tab without allowing page unload code to veto it. */
+  close(tabId: string): void {
+    const entry = this.requireTab(tabId);
+    // Off both parents and onto neither: the view is about to be destroyed, so
+    // returning it to the stage would only add a child the stage has to drop
+    // again (VC-278).
+    this.detachFromWindow(entry);
+    this.takeOffStage(entry);
+    this.destroyDevTools(entry);
+    this.forgetEntry(tabId, entry);
     entry.view.webContents.close({ waitForBeforeUnload: false });
   }
 
@@ -1070,10 +1219,11 @@ export class BrowserTabHost {
   toggleDevTools(tabId: string): void {
     const entry = this.requireTab(tabId);
     const contents = entry.view.webContents;
+    const onScreenIn = this.windowOf(entry);
     if (entry.devToolsOpen) {
       entry.devToolsOpen = false;
       contents.closeDevTools();
-      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
+      if (onScreenIn !== null) this.detachDevTools(entry, onScreenIn);
       this.layout(entry);
       return;
     }
@@ -1085,7 +1235,7 @@ export class BrowserTabHost {
       contents.setDevToolsWebContents(tools.webContents);
     }
     entry.devToolsOpen = true;
-    if (entry.attachedTo !== null) this.attachDevTools(entry, entry.attachedTo);
+    if (onScreenIn !== null) this.attachDevTools(entry, onScreenIn);
     this.layout(entry);
     try {
       // Electron still wants a mode even with custom DevTools contents. `detach`
@@ -1094,7 +1244,7 @@ export class BrowserTabHost {
       contents.openDevTools({ mode: "detach", activate: true });
     } catch (error) {
       entry.devToolsOpen = false;
-      if (entry.attachedTo !== null) this.detachDevTools(entry, entry.attachedTo);
+      if (onScreenIn !== null) this.detachDevTools(entry, onScreenIn);
       this.layout(entry);
       throw error;
     }
@@ -1130,11 +1280,14 @@ export class BrowserTabHost {
         }
       }
     }
-    // Detach before publishing: a tab going headless has no surface to draw
-    // on, and main is the one that knows it. The renderer's plane controller
-    // emits its own hide as the pane unmounts, but that arrives after the
-    // state push, and until it did the page would still be over the window.
-    if (presentation === "headless") this.detachEntry(entry);
+    // Off screen before publishing: a tab going headless is drawn nowhere a
+    // person can look, and main is the one that knows it. The renderer's plane
+    // controller emits its own hide as the pane unmounts, but that arrives
+    // after the state push, and until it did the page would still be over the
+    // window. Off screen is the stage, not nowhere — a headless tab is still
+    // captured and clicked (VC-278) — so this raises rather than returning a
+    // tab whose page has quietly stopped answering.
+    if (presentation === "headless") this.goOffScreen(entry);
     if (entry.state.presentation !== presentation) this.publish(entry, { presentation });
     return { ...entry.state };
   }
@@ -1209,9 +1362,8 @@ export class BrowserTabHost {
    * shown tab never focuses it, and focus leaves the moment they click Hide,
    * the chip, or another window — so an act arriving right after they typed
    * would photograph the filled field. Current focus still counts, for the
-   * tab entered before this host ever saw an event from it. A headless tab is
-   * attached to nothing and can be touched by nobody, so it always
-   * photographs.
+   * tab entered before this host ever saw an event from it. A Headless tab is
+   * on no surface a person can touch, so it always photographs.
    *
    * JPEG through the same `capturePage` door the overlay freeze uses, for the
    * same latency reason; the store bounds how many live frames are kept.
@@ -1280,22 +1432,22 @@ export class BrowserTabHost {
    */
   show(tabId: string): void {
     const entry = this.requireTab(tabId);
-    // Main owns presentation (§2): a headless tab is "never attached to the
-    // window until the person reveals it", and revealing is `setPresentation`,
+    // Main owns presentation (§2): a Headless tab is never attached to the app
+    // window until the person reveals it, and revealing is `setPresentation`,
     // not this. Without the guard the rule would rest on renderer discipline,
-    // and one stale pane mounting a headless tab would put an agent's page on
+    // and one stale pane mounting a Headless tab would put a Session's page on
     // screen with nothing in the UI claiming to have shown it.
     if (entry.state.presentation === "headless") {
-      throw new Error("A headless Browser Tab has no plane until the person shows it");
+      throw new Error("A Headless Browser Tab has no visible plane until the person shows it");
     }
-    if (entry.attachedTo !== null) return;
+    if (entry.parent.kind === "window") return;
     const window = this.deps.getWindow();
     if (window === null || window.isDestroyed()) throw new Error("Browser window is unavailable");
     // Out of the stage before into the window: a view has one parent, and
     // adding it to a second silently takes it from the first (VC-278).
-    this.unstageEntry(entry);
+    this.takeOffStage(entry);
     window.contentView.addChildView(entry.view);
-    entry.attachedTo = window;
+    entry.parent = { kind: "window", window };
     if (entry.devToolsOpen) this.attachDevTools(entry, window);
     this.layout(entry);
   }
@@ -1314,11 +1466,17 @@ export class BrowserTabHost {
    * other door still requires a live tab: `show`, `navigate`, and the rest
    * cannot do anything meaningful without one, so an unknown id is a real
    * fault.
+   *
+   * A LIVE tab is returned to the stage rather than left parentless, and that
+   * part can fail loudly: {@link BrowserStageUnavailableError} says the page is
+   * now surfaceless, which is a fault worth a toast rather than a tab that
+   * silently stops answering captures and clicks (VC-278). Tolerating an
+   * unknown id is about tabs that are gone, not about broken windows.
    */
   hide(tabId: string): void {
     const entry = this.tabs.get(tabId);
     if (entry === undefined) return;
-    this.detachEntry(entry);
+    this.goOffScreen(entry);
   }
 
   /**
@@ -1335,13 +1493,13 @@ export class BrowserTabHost {
    * Keeps one tab's engine at foreground pace while an agent drives it
    * (VC-252).
    *
-   * A hidden Browser Tab is a detached WebContentsView, and Chromium answers
-   * detachment with background throttling: timers near 1Hz, no animation
-   * frames, no compositor output. That is the right resource policy for a tab
-   * nobody is using — and exactly wrong for a tab a Session keeps driving
-   * after the person switches to another workspace, where it stalls loads and
-   * starves snapshots and screenshots of the frames they wait on until the
-   * tab is shown again.
+   * A Browser Tab outside the visible app window is eligible for Chromium's
+   * background throttling. That is the right resource policy for a tab nobody
+   * is using — and exactly wrong for a tab a Session keeps driving after the
+   * person switches to another workspace, where it can stall loads and starve
+   * snapshots of the frames they wait on. VC-278 now parks such a tab in the
+   * never-shown stage so it keeps a compositor surface; the wake hold remains
+   * the separate policy that keeps its timers and animation frames moving.
    *
    * Measured, not argued — `e2e/browser-throttle-bench.mjs`, Electron 44 /
    * Chromium 152 / macOS arm64, against the visible baseline of 100 timer
