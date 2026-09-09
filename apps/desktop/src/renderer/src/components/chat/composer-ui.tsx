@@ -39,7 +39,7 @@ import {
   DotsThreeIcon,
   PencilSimpleIcon,
   QueueIcon,
-  SquareIcon,
+  StopIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 
@@ -98,7 +98,6 @@ import {
   AttachmentStrip,
   AttachmentThumbRow,
 } from "@renderer/components/attachments/attachment-strip";
-import { ComposerAttachButton } from "@renderer/components/attachments/composer-attach-button";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import {
   activePickerRow,
@@ -106,11 +105,23 @@ import {
   composerPickerRows,
   composerPickerTarget,
   composerPickerToken,
+  insertPickerTrigger,
   movePickerActive,
   type ComposerPickerDismissal,
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
+import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
+import {
+  ComposerCaretContext,
+  useComposerCaretBinding,
+  type ComposerCaretBinding,
+} from "@renderer/components/chat/composer-caret";
+import {
+  COMPOSER_CONTROL_SIZE,
+  COMPOSER_GLYPH_WEIGHT,
+  COMPOSER_PRIMARY_SIZE,
+} from "@renderer/components/chat/composer-chrome";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
@@ -428,11 +439,14 @@ export const SessionComposer = React.memo(function SessionComposer({
     >
       <PromptInput
         className={cn(
-          // `group/composer` is what the footer's resting dim reads: the
-          // control row recedes while the composer is unfocused and comes up
-          // the moment the caret is in the box. Named, because the picker card
-          // and the queued rows are groups' worth of their own.
-          "group/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
+          // `group/composer` names the box for anything inside that reads
+          // its state; the picker card and the queued rows are groups' worth
+          // of their own. `@container/composer` is what the footer's controls
+          // measure themselves against (VC-335): the app's own narrowest chat
+          // pane is 265px and a split can be narrower, and a control that
+          // drops a word must drop it for the BOX's width, not the window's —
+          // the tab strip's own rule.
+          "group/composer @container/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
           COMPOSER_STACK_SHELL,
           className,
         )}
@@ -553,7 +567,11 @@ export const SessionComposer = React.memo(function SessionComposer({
           <AttachmentStrip
             attachments={attachments}
             {...(onRemoveAttachment === undefined ? {} : { onRemove: onRemoveAttachment })}
-            className="w-full px-3 pt-2"
+            // `px-4`: the tiles' left edge is the text's left edge, one inset
+            // for everything the message is made of. It was `px-3`, a value
+            // off the spacing ladder that put the first tile 4px left of the
+            // first letter.
+            className="w-full px-4 pt-2"
           />
           {/* Reads the caret bindings from the stack above rather than taking
               them as props: the picker card and this input are siblings, one
@@ -571,70 +589,38 @@ export const SessionComposer = React.memo(function SessionComposer({
           />
         </PromptInputBody>
 
-        {/* THE CHROME RESTS DIM. While the composer is not focused its controls
-            sit at 70% and the transcript above owns the eye; the caret landing
-            in the box brings them up. This is what earns a permanently visible
-            effort control its place in the row — present while you are typing,
-            recessive while you are reading — and it is claude.ai's own rule.
-            The queued header is deliberately outside it: those rows are the
-            reader's own words, not our furniture.
-
-            `has-[[data-state=open]]` is the half `:focus-within` cannot do. A
-            Radix popover portals its content out of this form, so opening the
-            model list moves focus off the composer entirely and the row would
-            dim under the hand that opened it. The trigger stays here and stays
-            marked open, which is the fact worth reading.
-
-            AND THE DIM IS THE DIVIDER. There was a `border-t border-border/70`
-            here and it is the line the composer is better without. Measured,
-            it sat at 47.1% of a 77.65px shell — within three points of dead
-            centre — which is a rule declaring two co-equal halves over a box
-            whose top half is one line of a message and whose bottom half is our
-            furniture. A divider's job is to separate things of DIFFERENT kinds,
-            and this pair already differs by the loudest channel a UI has: the
-            row below is at 70% ink while the row above is at 100%. Drawing a
-            hairline as well says the same thing twice and asserts the wrong
-            thing once. ChatGPT and claude.ai both draw no line here.
-
-            Its padding went with it, and not by accident: `[.border-t]:pt-2`
-            existed to clear the rule, so removing the class removes the 8px lid
-            in the same stroke and the footer falls back to the 4px one
-            {@link PromptInputFooter} settles. The seam is 12px of air now — the
-            body's own 8px floor plus that 4px — against 8px at the card's outer
-            edges, so the widest space in the box is the one between the two
-            bands. That is what a lineless composer needs to be true. */}
-        <PromptInputFooter
-          className={cn(
-            "opacity-70 transition-opacity duration-200 ease-out",
-            "group-focus-within/composer:opacity-100 has-[[data-state=open]]:opacity-100",
-            "motion-reduce:transition-none!",
-          )}
-        >
+        {/* THE CHROME STANDS AT FULL INK, AND THE DIM IS GONE (VC-335). This
+            row used to rest at 70% and come up under focus, on claude.ai's
+            rule. Measured on the app's own canvases, 70% × muted ink × 20px
+            controls was a footer nobody could read: a disabled composer and a
+            resting one were the same picture, and the send button — 50%
+            disabled under a 70% row — drew at a third of its ink. The field
+            does not do this: T3 Code, OpenCode, ChatGPT and Cursor keep the
+            chrome at one ink and let the muted tier say "chrome" on its own,
+            which is what the row does now. What separates the two bands is
+            still not a line — the message is full ink and the row is muted —
+            and the seam is still the widest air in the box (see
+            {@link PromptInputFooter}). ChatGPT and claude.ai draw no rule
+            here either. */}
+        <PromptInputFooter>
           {/* `flex-1`, so the control cluster is the row's elastic half and
               the submit cluster beside it never has to move. Inside it, the
               model NAME is the one thing that gives: it is the long value and
               the only one with anything to lose, where an effort word is three
-              to ten characters and truncating it would leave "Extra hi…". Two
-              pills where there was one is what made this matter — the row
-              stopped having 400px of slack the moment effort joined it.
+              to ten characters and truncating it would leave "Extra hi…".
 
-              EVERY CONTROL IN THIS ROW IS THE LADDER'S 20px RUNG, one step
-              below the 24px it used to wear, and one row's worth of comments
-              is where that decision belongs rather than at each of the four
-              call sites. It is the other half of the answer to a footer that
-              outweighed its own subject. Both bands carried 16px of padding,
-              so the CONTENT decided which one won: a 24px control row came to
-              40.54px against a 20px message line's 36px, and the chrome ended
-              up 12.6% taller than the thing it serves and 52% of a 77.65px
-              shell. At 20px the band is 32px, the message is the taller object
-              by 4px, and the composer collapses to 69px.
-
-              A rung, not a shrink. `xs` is the bottom of the app's own four
-              rung pill ladder (20/24/28/32) and it is what the queued rows
-              already wear; the composer's resting chrome has no business
-              standing taller than the sentence being written into it. What
-              does NOT step down is the hierarchy inside the row — submit is
-              still the only filled object in it, and fill outranks 4px. */}
+              EVERY CONTROL IN THIS ROW IS ONE RUNG, AND IT IS
+              {@link COMPOSER_CONTROL_SIZE} — 24px, the ladder's own "toolbar
+              buttons, footer actions" — with the primary one step above it at
+              {@link COMPOSER_PRIMARY_SIZE}. The row wore 20px, the rung for
+              inline row actions and hover affordances, on an argument that
+              chrome must stand shorter than one line of the message. The
+              field runs the other way (T3 Code 28/32, OpenCode 28, claude.ai
+              32/32, Claude Code Desktop 28) and so does this app's every other
+              toolbar; a composer whose controls were the smallest things in
+              the window read as furniture, not as controls. The hierarchy
+              inside the row is unchanged: submit is the only filled object in
+              it, and fill plus one rung is what outranks the rest. */}
           {/* AND IT WRAPS ONCE, AT A POINT THE MODEL PILL CHOOSES. The chat
               pane is genuinely narrow in the app's own default layout — 940px
               window minimum, less the 60px workspace rail, the sidebar panel,
@@ -655,12 +641,16 @@ export const SessionComposer = React.memo(function SessionComposer({
               move at all — which is the whole reason the row was built with the
               cluster as the fixed half. */}
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
-            {onAttachFiles === undefined ? null : (
-              <ComposerAttachButton
-                onFiles={onAttachFiles}
-                imagesUnsupported={imagesUnsupported === true}
-              />
-            )}
+            {/* `+`, not a paperclip (VC-335): the one mark the field agrees
+                on for "add to this prompt", and a menu because there are
+                three things to add — files, a `/` command, an `@` file — two
+                of which had no visible door until now. Reads the caret binding
+                from the stack, the same way the textarea does; nothing about
+                it is a prop of this hook-free composer. */}
+            <ComposerAddMenu
+              {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
+              imagesUnsupported={imagesUnsupported === true}
+            />
             <ModelPill
               models={models}
               tiers={tiers}
@@ -693,44 +683,64 @@ export const SessionComposer = React.memo(function SessionComposer({
                 turn but before them: it is read, not pressed, most of its life.
                 Absent — not zero — until a first reply has been metered. */}
             {contextUsage ? <ContextUsagePill usage={contextUsage} /> : null}
+            {/* THE TURN'S TWO CONTROLS, AND BOTH ARE OBJECTS. Stop was a 20px
+                ghost with a 12px square in it, beside a 20px filled Queue —
+                the one control that ends a run drew like a hover affordance.
+                It is `outline` at the primary's own rung: a real button with
+                an edge, plainly the other of a pair, and plainly not the one
+                that sends. Outline rather than the muted fill because on the
+                dark canvases `--muted` is two steps off `--card` and a muted
+                disc on the card simply vanished; the hairline is what holds it
+                as a shape. Not destructive red, though T3 Code draws it so —
+                ending a turn is an outcome the person chose, not an error, and
+                this app keeps red for the latter. */}
             {working ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label="Stop turn"
-                onClick={onStop}
-              >
-                {/* One of the few glyphs that keeps its fill: a stop square MEANS
-                  solid the way a play triangle does, and hollow it reads as a
-                  checkbox. It is also the exception rather than the category —
-                  it only exists while a turn is running. */}
-                <SquareIcon className="size-3" weight="fill" />
-              </Button>
+              <ComposerHint label="Stop turn">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size={COMPOSER_PRIMARY_SIZE}
+                  aria-label="Stop turn"
+                  onClick={onStop}
+                >
+                  {/* One of the few glyphs that keeps its fill: a stop square
+                      MEANS solid the way a play triangle does, and hollow it
+                      reads as a checkbox. It is also the exception rather than
+                      the category — it only exists while a turn is running. */}
+                  <StopIcon weight="fill" />
+                </Button>
+              </ComposerHint>
             ) : null}
             {/* Two words for one control, and the turn decides which. This box
                 sends messages and nothing else: a question standing above it is
                 answered on its own card, through its own control (VC-289), so
                 there is no third state in which this press means something else
-                to something else. */}
-            <PromptInputSubmit
-              status="ready"
-              size="icon-xs"
-              disabled={!canSubmit}
-              aria-label={working ? "Queue" : "Send"}
-            >
-              {/* 12px, and therefore both `bold`. The house rule is that
-                  `bold`'s flat 1.50x is the small-size tier — at ≤12px regular
-                  draws lighter than the label beside it — and coverage is
-                  scale-invariant, so nothing about a smaller button can be
-                  answered by a bigger glyph. Queue was outline at 14px and had
-                  no reason to change until the button did. */}
-              {working ? (
-                <QueueIcon className="size-3" weight="bold" />
-              ) : (
-                <ArrowUpIcon className="size-3" weight="bold" />
-              )}
-            </PromptInputSubmit>
+                to something else.
+
+                THE CHORDS LIVE ON THE HOVER. ⏎ sends, ⇧⏎ breaks a line, and
+                while a turn is live ⏎ queues and ⌘⏎ steers — four keystrokes
+                nothing on this surface named. A persistent hint line under the
+                box is the field's other answer (omp-desktop) and it is copy
+                under a control, which this app does not do; a tooltip on the
+                control the chord replaces is the menus' own idiom for the same
+                fact. */}
+            <ComposerHint label={working ? "Queue ⏎ · Steer ⌘⏎" : "Send ⏎ · New line ⇧⏎"}>
+              <PromptInputSubmit
+                status="ready"
+                size={COMPOSER_PRIMARY_SIZE}
+                disabled={!canSubmit}
+                aria-label={working ? "Queue" : "Send"}
+              >
+                {/* `bold`, both: at 16px a regular arrow is a hairline on a
+                    filled disc, and coverage is scale-invariant, so the weight
+                    step is the only thing that fixes it. */}
+                {working ? (
+                  <QueueIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                ) : (
+                  <ArrowUpIcon weight={COMPOSER_GLYPH_WEIGHT} />
+                )}
+              </PromptInputSubmit>
+            </ComposerHint>
           </div>
         </PromptInputFooter>
       </PromptInput>
@@ -738,40 +748,37 @@ export const SessionComposer = React.memo(function SessionComposer({
   );
 });
 
+/**
+ * A chord on hover, for the two controls whose keystroke nothing else names.
+ *
+ * `span` wrapper rather than the button itself, for the reason the New-ticket
+ * footer's pair spells out: a disabled `Button` dispatches no pointer events,
+ * and Send is disabled exactly while a first-timer is reading the row with
+ * nothing typed yet. Its own provider, because this composer is drawn by the
+ * fixture gallery and the lab outside the app shell that mounts the app-wide
+ * one, and a Radix tooltip with none above it throws rather than degrading.
+ */
+function ComposerHint({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">{children}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /* ------------------------------------------------------------------ picker */
 
-/** The caret bindings the stack owns and the textarea below it consumes. */
-export interface ComposerCaretBinding {
-  ref: React.RefCallback<HTMLTextAreaElement>;
-  /** Consumes the picker's keys. `true` means the composer must not act on it. */
-  handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean;
-  trackCaret(element: HTMLTextAreaElement): void;
-}
-
 /**
- * Inert by default, so a textarea rendered outside a stack is a plain textarea
- * rather than a crash. Nothing in the app does that; the Lab could.
+ * Re-exported for the surfaces that learned the binding here (the Automation
+ * editor); the contract itself lives in `composer-caret.ts` so the composer's
+ * chrome can read it without importing this module.
  */
-const ComposerCaretContext = React.createContext<ComposerCaretBinding>({
-  ref: () => undefined,
-  handleKeyDown: () => false,
-  trackCaret: () => undefined,
-});
-
-/**
- * The stack's caret binding, for a textarea that is not the chat's own.
- *
- * The Automation editor (VC-126) renders its Instructions box inside a
- * {@link ComposerPickerStack} so `/` and `@` resolve identically to the chat
- * composer — same picker, same insertion, same grammar — without inheriting
- * the chat textarea's queue and steer semantics. Any consumer must wire all
- * three members exactly as {@link ComposerTextarea} does: `ref`, then
- * `handleKeyDown` first in its own keydown, then `trackCaret` on
- * change/select/keyup.
- */
-export function useComposerCaretBinding(): ComposerCaretBinding {
-  return React.useContext(ComposerCaretContext);
-}
+export { useComposerCaretBinding, type ComposerCaretBinding };
 
 /**
  * The picker card, the composer under it, and the one piece of state they
@@ -889,25 +896,28 @@ function ComposerTextarea({
       // and a draft typed here is never taken for one.
       aria-label="Message"
       placeholder="Ask, plan, or implement…"
-      // FOUR LINES AT REST: 8 + (4 × 20) + 8 = 96px, which is `min-h-24`
-      // against `text-sm`'s 20px leading and the `py-2` below.
+      // TWO LINES AT REST: 8 + (2 × 20) + 8 = 56px, which is `min-h-14`
+      // against `text-sm`'s 20px leading and the `py-2` below — and with the
+      // 40px control band under it, a 96px box, which is OpenCode's own
+      // resting height to the pixel.
       //
-      // This floor was 36px — one line — on the reasoning that
-      // `field-sizing-content` grows the box from the first keystroke, so
-      // reserving lines nobody had typed was space spent on nothing. True
-      // about the pixels and wrong about the box. An input's resting size is
-      // the sentence it says it wants, and one line asks for one line: it
-      // reads as a search field, and it makes the first thought you have here
-      // scroll before the second one arrives. What gets typed into this is a
-      // paragraph — ask, plan, or implement — so the floor is the paragraph,
-      // and growth past four lines is the exception the auto-grow is for.
+      // This floor has been 36px and 96px. One line reads as a search field,
+      // which is the argument that took it to four; four lines is a form
+      // field waiting to be filled in, which is what it looked like on every
+      // canvas once the chrome under it was drawn at a size anyone could see
+      // (VC-335). Nobody in the field rests above two: claude.ai and ChatGPT
+      // rest at one, Cursor, Claude Code Desktop and OpenCode at two, T3 Code
+      // collapses to one on scroll. Two is the paragraph's first two lines —
+      // enough to say "this takes a paragraph" without reserving three lines
+      // of nothing above the transcript it sits on — and `field-sizing-content`
+      // grows it from the third line, which is the exception the auto-grow is
+      // for.
       //
-      // `py-2` STAYS, and now for its own reason rather than as the pair of a
-      // 36px floor: the vendored `py-4` is sized for a box whose whole height
-      // is padding plus one line, and at four lines that lid and floor are
-      // simply a wide margin above and below a block of text. 8px keeps the
-      // first line clear of the top edge without framing the paragraph.
-      className="min-h-24 py-2 text-sm"
+      // `py-2` STAYS: the vendored `py-4` is sized for a box whose whole height
+      // is padding plus one line, and here it would be a wide margin above and
+      // below a block of text. 8px keeps the first line clear of the top edge
+      // without framing the paragraph.
+      className="min-h-14 py-2 text-sm"
       onChange={(event) => {
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
@@ -1100,6 +1110,26 @@ function useComposerPicker(input: {
     onValueChange(applied.text);
   };
 
+  // The `+` menu's two picker rows (VC-335): type the trigger where the caret
+  // is, and let the same token grammar open the same list. The DOM's own
+  // selection is read rather than the tracked `caret`, because the menu was
+  // opened by a pointer and the tracked value can be a keystroke behind a
+  // click-placed selection; the tracked one is then brought up to date so the
+  // target is computed on this commit. `pendingCaret` parks the caret after
+  // the trigger and focuses the box in the layout effect above, exactly as a
+  // pick does — which matters, because the menu's own close would otherwise
+  // hand focus back to the `+`.
+  const insert = (trigger: "/" | "@"): void => {
+    const node = nodeRef.current;
+    const start = node?.selectionStart ?? caret;
+    const end = node?.selectionEnd ?? start;
+    const applied = insertPickerTrigger({ text: value, from: start, to: end, trigger });
+    pendingCaret.current = applied.caret;
+    setCaret(applied.caret);
+    setDismissed(null);
+    onValueChange(applied.text);
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (state === null) return false;
     if (event.key === "Escape") {
@@ -1151,9 +1181,9 @@ function useComposerPicker(input: {
    * this correct under concurrent rendering: a render React discards must not
    * leave its handler behind, and both of these run after a commit.
    */
-  const latest = React.useRef({ handleKeyDown, select });
+  const latest = React.useRef({ handleKeyDown, select, insert });
   React.useLayoutEffect(() => {
-    latest.current = { handleKeyDown, select };
+    latest.current = { handleKeyDown, select, insert };
   });
   const forwardKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean =>
@@ -1163,12 +1193,24 @@ function useComposerPicker(input: {
   const forwardSelect = React.useCallback((row: ComposerPickerRow): void => {
     latest.current.select(row);
   }, []);
+  const forwardInsert = React.useCallback((trigger: "/" | "@"): void => {
+    latest.current.insert(trigger);
+  }, []);
   const trackCaret = React.useCallback((element: HTMLTextAreaElement): void => {
     setCaret(element.selectionStart ?? 0);
   }, []);
+  const focus = React.useCallback((): void => {
+    nodeRef.current?.focus();
+  }, []);
   const binding = React.useMemo<ComposerCaretBinding>(
-    () => ({ ref: textareaRef, handleKeyDown: forwardKeyDown, trackCaret }),
-    [forwardKeyDown, textareaRef, trackCaret],
+    () => ({
+      ref: textareaRef,
+      handleKeyDown: forwardKeyDown,
+      trackCaret,
+      insert: forwardInsert,
+      focus,
+    }),
+    [focus, forwardInsert, forwardKeyDown, textareaRef, trackCaret],
   );
 
   return { state, rows, active: activeValue, setActive, select: forwardSelect, binding };
@@ -1496,9 +1538,9 @@ const TIER_STATE_LABEL: Record<Exclude<ComposerTierState, "ready">, string> = {
  * with `basis-auto` this pill kept its full natural width and the effort chip
  * dropped to a second line the moment the two no longer fitted side by side at
  * full size, which measured as a 24px-taller composer at 420px while there was
- * still room to simply truncate. `basis-27` is the 108px floor (a 56px label,
- * the 14px mark and its 4px gap, plus this button's own 32px of caret and
- * padding), so the line only breaks once the NAME has already given everything
+ * still room to simply truncate. `basis-29` is the 116px floor (a 56px label,
+ * the 14px mark and its 6px gap, plus this button's own 40px of caret, gap
+ * and padding at the `sm` rung), so the line only breaks once the NAME has already given everything
  * it has; `grow` then spends whatever is left on the label, and `max-w-max`
  * stops it spending more than the name is wide — a ghost button stretched to
  * the full row is a hover target the size of the footer.
@@ -1507,7 +1549,7 @@ const TIER_STATE_LABEL: Record<Exclude<ComposerTierState, "ready">, string> = {
  * reveal — and a row whose give depended on which one is up would re-lay the
  * composer every time a turn started.
  */
-const MODEL_PILL_GIVE = "min-w-0 max-w-max shrink grow basis-27";
+const MODEL_PILL_GIVE = "min-w-0 max-w-max shrink grow basis-29";
 
 /**
  * What the pill DRAWS, in either state: the mark, the name that gives, and the
@@ -1573,7 +1615,7 @@ function ModelPillFace({
         ) : null}
         {modelPillLabel(models, selection, selectionProviderLabel)}
       </span>
-      <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
+      <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
     </>
   );
 }
@@ -1658,7 +1700,7 @@ export function ModelPill({
           <TooltipTrigger asChild>
             <Button
               type="button"
-              size="xs"
+              size={COMPOSER_CONTROL_SIZE}
               variant="ghost"
               data-testid="model-pill"
               aria-disabled
@@ -1689,7 +1731,7 @@ export function ModelPill({
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="xs"
+          size={COMPOSER_CONTROL_SIZE}
           variant="ghost"
           data-testid="model-pill"
           // THE NAME IS THE WHOLE FACT, EVEN WHERE THE DRAWING IS EIGHT

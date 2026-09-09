@@ -684,7 +684,15 @@ export const PromptInputFooter = ({ className, ...props }: PromptInputFooterProp
     // bare override is emitted and never applied — and a bordered footer would
     // silently take the variant's 16px lid. Matching the variant puts both in
     // one `cn()` group instead, where the later one simply replaces it.
-    className={cn("justify-between gap-1 pt-1 pb-2 [.border-t]:pt-2", className)}
+    //
+    // `px-2`, NOT THE ADDON'S `px-4` (VC-335): the row's controls are ghost
+    // buttons carrying their own 8–10px inset, so at 16px the first glyph
+    // stood 24px in from the edge while the text above it started at 16 —
+    // an 8px stagger between a message and the `+` under it, visible on
+    // every canvas. At 8px the glyph lands within 3px of the text's edge,
+    // which is the alignment OpenCode and claude.ai both draw: the row's
+    // inset is the button's, and the band's is only what the button lacks.
+    className={cn("justify-between gap-1 px-2 pt-1 pb-2 [.border-t]:pt-2", className)}
     {...props}
   />
 );

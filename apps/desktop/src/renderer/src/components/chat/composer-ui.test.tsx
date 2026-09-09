@@ -27,6 +27,7 @@ interface InspectableProps {
   children?: React.ReactNode;
   className?: string;
   disabled?: boolean;
+  label?: string;
   levels?: readonly string[];
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
@@ -342,6 +343,21 @@ function renderFooter(overrides: Partial<SessionComposerProps> = {}): string {
   return renderToStaticMarkup(<SessionComposer {...footerProps(overrides)} />);
 }
 
+/** Every hover label in the footer, in row order — the chords the primaries name. */
+function hintLabels(props: SessionComposerProps): string[] {
+  const labels: string[] = [];
+  const walk = (node: React.ReactNode): void => {
+    for (const child of React.Children.toArray(node)) {
+      if (!React.isValidElement(child)) continue;
+      const own = child.props as InspectableProps;
+      if (typeof own.label === "string") labels.push(own.label);
+      walk(own.children);
+    }
+  };
+  walk(composerTree(props));
+  return labels;
+}
+
 /** The effort chip as an ELEMENT, so its props can be read rather than parsed. */
 function effortPill(
   overrides: Partial<SessionComposerProps> = {},
@@ -427,15 +443,49 @@ describe("the effort control's place in the footer", () => {
     expect(effortPill()?.props.levels).toEqual(["low", "medium", "xhigh"]);
   });
 
-  it("rests its chrome dim, and comes up for focus AND for an open menu", () => {
+  it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
+    // The row rested at 70% and came up under focus. On the app's own
+    // canvases that made a resting composer and a disabled one the same
+    // picture, and the field (T3 Code, OpenCode, ChatGPT, Cursor) draws the
+    // chrome at one ink and lets the muted tier say "chrome" by itself.
     const html = renderFooter();
 
-    expect(html).toContain("opacity-70");
-    expect(html).toContain("group-focus-within/composer:opacity-100");
-    // The half `:focus-within` cannot do: a Radix popover portals its content
-    // out of this form, so opening the model list moves focus off the composer
-    // and the row would dim under the hand that opened it.
-    expect(html).toContain("has-[[data-state=open]]:opacity-100");
+    expect(html).not.toContain("opacity-70");
+    expect(html).not.toContain("group-focus-within/composer:opacity-100");
+  });
+
+  it("draws every control on the shared rung, and the primary one above it (VC-335)", () => {
+    const html = renderFooter();
+
+    // The model and effort pills are `sm`; Send is `icon`, filled — the one
+    // rung up and the one fill in the row. Nothing in the row is `xs` any
+    // more: that rung is for inline row actions, and the queued rows (absent
+    // here) are the only place the composer still wears it.
+    expect(html).toMatch(/data-variant="ghost" data-size="sm"[^>]*data-testid="model-pill"/);
+    expect(html).toMatch(
+      /data-variant="ghost" data-size="sm"[^>]*aria-label="Reasoning effort: Medium"/,
+    );
+    expect(html).toMatch(/data-variant="default" data-size="icon"[^>]*aria-label="Send"/);
+    expect(html).not.toContain('data-size="xs"');
+    expect(html).not.toContain('data-size="icon-xs"');
+  });
+
+  it("names the chord on the primary's hover, and both of them while a turn is live", () => {
+    // ⏎ / ⇧⏎ idle, ⏎ / ⌘⏎ live — the keystrokes nothing on the surface said.
+    // Read off the element tree: a Radix tooltip's content is not in the
+    // static markup until it opens, and its label is a prop of the hint.
+    expect(hintLabels(footerProps({ working: false }))).toEqual(["Send ⏎ · New line ⇧⏎"]);
+    expect(hintLabels(footerProps({ working: true }))).toEqual(["Stop turn", "Queue ⏎ · Steer ⌘⏎"]);
+  });
+
+  it("opens everything a message can take under one `+` (VC-335)", () => {
+    const html = renderFooter({ onAttachFiles: () => undefined });
+
+    expect(html).toContain('aria-label="Add to message"');
+    // A menu, not a bare paperclip: the `/` and `@` rows are what teach the
+    // two triggers nothing else on the surface names.
+    expect(html).toContain('data-slot="dropdown-menu-trigger"');
+    expect(html).not.toContain('aria-label="Attach files"');
   });
 });
 

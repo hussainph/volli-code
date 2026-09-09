@@ -17,6 +17,7 @@ import {
   composerPickerRows,
   composerPickerTarget,
   composerPickerToken,
+  insertPickerTrigger,
   movePickerActive,
   rankSlashCompletions,
   rankVerbCompletions,
@@ -744,5 +745,54 @@ describe("activePickerRow", () => {
 
   it("is null when there are no rows at all", () => {
     expect(activePickerRow([], "anything")).toBeNull();
+  });
+});
+
+describe("insertPickerTrigger", () => {
+  it("writes the trigger where the caret is and parks the caret after it", () => {
+    expect(insertPickerTrigger({ text: "", from: 0, to: 0, trigger: "/" })).toEqual({
+      text: "/",
+      caret: 1,
+    });
+    expect(insertPickerTrigger({ text: "look at ", from: 8, to: 8, trigger: "@" })).toEqual({
+      text: "look at @",
+      caret: 9,
+    });
+  });
+
+  it("opens a word boundary first, so the picker the trigger is for actually opens", () => {
+    // `composerPickerToken` wants whitespace (or `(`) before a trigger; a
+    // menu row that wrote `@` glued to a word would insert a character the
+    // picker then ignores.
+    expect(insertPickerTrigger({ text: "look at", from: 7, to: 7, trigger: "@" })).toEqual({
+      text: "look at @",
+      caret: 9,
+    });
+    expect(insertPickerTrigger({ text: "see (", from: 5, to: 5, trigger: "@" })).toEqual({
+      text: "see (@",
+      caret: 6,
+    });
+    const inserted = insertPickerTrigger({ text: "look at", from: 7, to: 7, trigger: "@" });
+    expect(composerPickerToken({ text: inserted.text, caret: inserted.caret })?.mode).toBe("file");
+  });
+
+  it("replaces a selection, as typing over one would", () => {
+    expect(insertPickerTrigger({ text: "fix the bug", from: 4, to: 7, trigger: "/" })).toEqual({
+      text: "fix / bug",
+      caret: 5,
+    });
+  });
+
+  it("clamps a caret the text no longer holds", () => {
+    // A stale caret past the end — the draft was replaced under it — writes
+    // at the end rather than throwing or writing nowhere.
+    expect(insertPickerTrigger({ text: "ab", from: 9, to: 12, trigger: "/" })).toEqual({
+      text: "ab /",
+      caret: 4,
+    });
+    expect(insertPickerTrigger({ text: "ab", from: -3, to: -1, trigger: "/" })).toEqual({
+      text: "/ab",
+      caret: 1,
+    });
   });
 });

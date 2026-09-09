@@ -97,7 +97,7 @@ the surrounding "L", whose color and contrast come from the active theme.
 
 The Session composer and anything parked on it (ask-user questions; later, plans and subagent
 activity) share one shell: `rounded-container`, hairline `border-border`, `bg-card`,
-`shadow-raised` (`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the
+`shadow-raised` (`COMPOSER_STACK_SHELL` in `@volli/session-presentation`). Overlays stack **above** the
 composer and never replace it — the input stays so a follow-up can be typed while a question or a
 run is live.
 
@@ -114,6 +114,39 @@ chosen action. Model and effort appear only for chat kickoff; an Automation uses
 its saved Runtime. `⌘/Ctrl+Enter` performs the selected action, while
 `⇧⌘/Ctrl+Enter` explicitly starts chat. Launch mode is per-open and resets when
 retargeting projects; the ticket draft itself still survives closing.
+
+### Prompt chrome — one rung, one `+`, one shell (VC-335)
+
+Every surface a prompt is written into — the Session composer, the New-ticket footer, the
+Automation Instructions box — draws its chrome from `chat/composer-chrome.ts`, so the three read as
+one family and cannot drift a rung at a time. Measured against the field (T3 Code, OpenCode,
+claude.ai, ChatGPT, Claude Code Desktop, Cursor 2), a composer's control row sits at 24–32px with
+its primary one step above, filled; the app's ladder already had both words for that:
+
+| Piece | Rung | Says |
+|---|---|---|
+| Control row (`+`, model, effort, context) | `sm` / `icon-sm` — 24px, ghost, muted ink | facts about the turn |
+| Primary (Send / Queue, Stop) | `icon` — 28px; Send filled, Stop `outline` | the one act on the turn |
+| Text box at rest | two lines (`min-h-14`, `py-2`), grown by content | "this takes a paragraph" |
+| Footer band | `px-2 pt-1 pb-2` | the glyph lands on the text's left edge |
+
+**The chrome stands at one ink.** The row used to rest at 70% and come up under focus; on the
+app's own canvases that made a resting composer and a disabled one the same picture. The muted
+tier already says "chrome" against a full-ink message, and no rule is drawn between the bands.
+
+**`+` is the one door.** A menu, not a paperclip: Attach files… · Commands `/` · Mention a
+file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary. The two
+picker rows write the trigger at the caret through the picker stack's own binding, so the list
+opens exactly as if typed. A surface that takes no files has no attach row; one with no picker has
+no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
+one-press attach. The ticket Files rail keeps a paperclip — it is about files, not prompts.
+
+**Chords live on hover.** Send says `⏎ · ⇧⏎`, Queue says `⏎ · ⌘⏎ steer`, in tooltips on the
+control the chord replaces; never as a hint line under the box.
+
+**Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
+context pill drops its percent and keeps the ring, then the model name truncates to its 56px
+floor, then the effort chip takes the next line. The primary cluster never moves.
 
 ## Elevation — three tiers
 

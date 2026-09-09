@@ -44,7 +44,7 @@ import {
   type TicketStatus,
   type ValidAutomationRuntime,
 } from "@volli/shared";
-import { reclampEffort } from "@volli/session-presentation";
+import { COMPOSER_STACK_SHELL, reclampEffort } from "@volli/session-presentation";
 
 import {
   ComposerPickerStack,
@@ -53,6 +53,7 @@ import {
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
+import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
 import { ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -702,7 +703,7 @@ export function AutomationEditorPanel({
                 <InstructionsTextarea
                   value={instructions}
                   onValueChange={setInstructions}
-                  className="min-h-48 rounded-xl bg-card px-4 py-4 shadow-raised"
+                  className="min-h-48"
                 />
               </ComposerPickerStack>
             </section>
@@ -859,6 +860,21 @@ export function AutomationEditorPanel({
  * The Instructions box with the shared composer's caret binding. Exported for
  * Run once, whose unbound Instructions use the same grammar without becoming
  * another Automation authoring surface.
+ *
+ * IT WEARS THE COMPOSER'S SHELL (VC-335), and the composer's `+`. This is a
+ * prompt — the same `/` and `@` grammar, the same picker card over it — and it
+ * was drawn as a bare form field with a browser resize grip in its corner, so
+ * the two surfaces a person writes prompts into looked like two different
+ * kinds of thing. Now it is `COMPOSER_STACK_SHELL` around the same textarea
+ * insets, with the same control band under the text; the band holds the `+`
+ * (Commands and Mention a file — no attach row, because Instructions take no
+ * files) and nothing else, because nothing else is decided here. The runtime
+ * lives in the aside on the editor and under the box on Run once, where it
+ * already was.
+ *
+ * `className` reaches the textarea, because the two call sites disagree on
+ * how tall a resting box should be (a page's instructions, a dialog's) and
+ * that is the only thing they disagree on.
  */
 export function InstructionsTextarea({
   value,
@@ -871,26 +887,39 @@ export function InstructionsTextarea({
 }) {
   const caret = useComposerCaretBinding();
   return (
-    <textarea
-      ref={caret.ref}
-      value={value}
-      aria-label="Instructions"
-      placeholder={INSTRUCTIONS_PLACEHOLDER}
-      className={cn(
-        "min-h-32 w-full resize-y rounded-lg border border-border bg-transparent px-4 py-2",
-        "text-sm text-foreground outline-none placeholder:text-muted-foreground",
-        "focus-visible:border-ring",
-        className,
-      )}
-      onChange={(event) => {
-        caret.trackCaret(event.currentTarget);
-        onValueChange(event.currentTarget.value);
-      }}
-      onSelect={(event) => caret.trackCaret(event.currentTarget)}
-      onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
-      onKeyDown={(event) => {
-        if (caret.handleKeyDown(event)) return;
-      }}
-    />
+    <div
+      data-slot="instructions-box"
+      className={cn("flex min-w-0 flex-col overflow-hidden", COMPOSER_STACK_SHELL)}
+    >
+      <textarea
+        ref={caret.ref}
+        value={value}
+        aria-label="Instructions"
+        placeholder={INSTRUCTIONS_PLACEHOLDER}
+        className={cn(
+          // The chat composer's own text box: the same inset, the same size,
+          // grown by content to a ceiling and scrolled inside itself past it.
+          // No resize grip — `field-sizing-content` is the growth, and the
+          // grip drew a form field where a prompt box should be.
+          "field-sizing-content min-h-32 max-h-96 w-full resize-none bg-transparent px-4 py-2",
+          "text-sm text-foreground outline-none placeholder:text-muted-foreground",
+          className,
+        )}
+        onChange={(event) => {
+          caret.trackCaret(event.currentTarget);
+          onValueChange(event.currentTarget.value);
+        }}
+        onSelect={(event) => caret.trackCaret(event.currentTarget)}
+        onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
+        onKeyDown={(event) => {
+          if (caret.handleKeyDown(event)) return;
+        }}
+      />
+      {/* The chat footer's own geometry (`PromptInputFooter`): 8px at the
+          edge, a 4px lid, an 8px floor. */}
+      <div className="flex items-center gap-1 px-2 pt-1 pb-2">
+        <ComposerAddMenu />
+      </div>
+    </div>
   );
 }
