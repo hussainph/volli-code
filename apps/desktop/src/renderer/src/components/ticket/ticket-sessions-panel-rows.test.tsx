@@ -84,6 +84,17 @@ const fixture = vi.hoisted(() => {
     waitingOn: null,
     outcome: null,
   };
+  // VC-324: `interrupted` is durable — a relaunch does not end the fact that
+  // the last turn died, so a History row for one must keep saying so.
+  const interrupted: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-interrupted",
+    title: "Died mid-run",
+    live: false,
+    activity: "interrupted",
+    waitingOn: null,
+    outcome: "interrupted",
+  };
   // A terminal that exited and had its tab closed: no live tab, so History is
   // where it lives and its saved record is all there is of it (VC-290).
   const closedTerminal: SessionRecord = {
@@ -118,6 +129,7 @@ const fixture = vi.hoisted(() => {
     { kind: "terminal", record: recoveringTerminal, usage: unmetered, provenance: personStarted },
     { kind: "chat", record, usage: unmetered, provenance: personStarted },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
+    { kind: "chat", record: interrupted, usage: unmetered, provenance: personStarted },
     {
       kind: "chat",
       record: byRun,
@@ -135,7 +147,7 @@ const fixture = vi.hoisted(() => {
       },
     },
   ];
-  return { record, ended, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
+  return { record, ended, interrupted, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
 });
 
 vi.mock("@renderer/stores/ticket-session-records", async () => {
@@ -265,6 +277,17 @@ describe("TicketSessionsPanel rows", () => {
 
     expect(html).toContain("Stopped");
     expect(html).toContain('data-state="stopped"');
+  });
+
+  it("keeps an interrupted chat visibly interrupted in History, after a relaunch (VC-324)", () => {
+    const html = panel();
+    const at = html.indexOf(fixture.interrupted.title);
+
+    expect(at).toBeGreaterThan(-1);
+    // The row says the word, in the destructive state `ui/status-dot.tsx`
+    // gives it — not collapsed into generic ended history.
+    expect(html.slice(at)).toContain("Interrupted · ");
+    expect(html).toContain('data-state="interrupted"');
   });
 
   it("insets History with the column instead of a hardcoded edge", () => {

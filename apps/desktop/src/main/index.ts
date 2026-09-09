@@ -1,5 +1,6 @@
 import {
   app,
+  BaseWindow,
   BrowserWindow,
   WebContentsView,
   dialog,
@@ -224,16 +225,18 @@ import { createAgentToolDoor } from "./agent-tool-door";
 import { createDelegations } from "./session-runtime/delegate-session";
 import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
+import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
-import { startOrphanSweep } from "./orphan-sweep";
+import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
+  reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
 } from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -300,7 +303,7 @@ import { prepareTurnAttachments } from "./turn-attachments";
 import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
-import { BrowserTabHost } from "./browser/tab-host";
+import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -837,9 +840,19 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
-  const sessionActivityWatch =
+  // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
+  // watch: a write returns from the engine, the bus fans the committed event
+  // out to whichever `session_await` is parked on it, and only then does the
+  // watch mark the row dirty. Same construction-site rule as the watch — this
+  // is the only place the engine is made, so no caller can hold an unwatched
+  // one. See `session-wake.ts`.
+  const sessionWakeBus =
     watchedDb !== null
-      ? watchSessionActivity(createDesktopSessionEngine(watchedDb), {
+      ? createSessionWakeBus(createDesktopSessionEngine(watchedDb), { db: watchedDb })
+      : null;
+  const sessionActivityWatch =
+    watchedDb !== null && sessionWakeBus !== null
+      ? watchSessionActivity(sessionWakeBus.engine, {
           publish: broadcastSessionActivity,
           // Read on the push path as well as the fetch path, so a Run's bolt
           // survives its Session's first turn (VC-131): the renderer upserts
@@ -1842,6 +1855,11 @@ app.whenReady().then(async () => {
           // post-commit wake bus until a planner fact matches.
           authorityPolicy: (projectId) => getProjectAuthorityPolicy(sessionDb, projectId),
           subscribeTicketWake,
+          // `session.await`'s wake bus (VC-324 item 3): the Session-side twin,
+          // read through a closure because the bus and the door are composed
+          // under different null-guards in this same function.
+          subscribeSessionWake: (listener) =>
+            sessionWakeBus === null ? () => undefined : sessionWakeBus.subscribe(listener),
           // The supervision operations (VC-86): stop and send act through the
           // same engine and runtime the app itself does — no parallel door.
           supervise: () =>
@@ -1948,12 +1966,17 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
-  // Boot recovery: no PTY and no OpenCode binding survives a relaunch. The
-  // durable Session itself intentionally remains open; only the binding ends.
+  // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
+  // structured attachment stays reattachable, but a turn left active by the
+  // prior process is reconciled now so `session list` cannot call it idle.
   if (dbHandle.ok && sessionEngine !== null) {
     try {
       await closeStaleAttachments({
         engine: sessionEngine,
+        reconcile: (input) =>
+          sessionRuntime === null
+            ? Promise.reject(new Error("The Session runtime is unavailable during boot recovery."))
+            : sessionRuntime.reconcile(input),
         projectIds: listProjects(dbHandle.db).map((project) => project.id),
         newId: randomUUID,
         now: Date.now,
@@ -2598,6 +2621,24 @@ app.whenReady().then(async () => {
     createView: (options) => new WebContentsView(options),
     fromPartition: (partition) => session.fromPartition(partition),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // The off-screen stage every tab waits in until a person shows it (VC-278).
+    // A tab nobody has revealed still needs a window to hold its compositor
+    // surface, or its clicks land nowhere and its screenshots never answer.
+    //
+    // A BaseWindow, deliberately: it holds views but has no webContents, so it
+    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
+    // picks the app window out of, and that `activate` counts before
+    // re-creating one. `show: false` is load-bearing and must stay: showing
+    // this would put an agent's page on screen with nothing in the UI claiming
+    // to have shown it.
+    createStageWindow: () =>
+      new BaseWindow({
+        show: false,
+        width: BROWSER_DEFAULT_BOUNDS.width,
+        height: BROWSER_DEFAULT_BOUNDS.height,
+        skipTaskbar: true,
+        focusable: false,
+      }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
     // The pictures a transcript card shows (VC-238): live captures bounded in
@@ -2775,25 +2816,48 @@ app.whenReady().then(async () => {
     });
   });
 
-  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs that THIS database owns and that
-  // nothing has touched for the retention window (branches retained — VC-113
-  // scoped both the ownership and the timing); dirty orphans are
-  // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
-  // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
-  // volli:worktree-orphans handler. Deferred to did-finish-load so it never
-  // competes with first paint; a sweep failure is logged, not thrown.
+  // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching
+  // the app pruned git metadata and deleted every clean orphan past the
+  // retention window, with no confirmation and nothing on screen that had asked.
+  // Starting an app is not consent to delete, so a launch now only LOOKS — the
+  // report it produces is what Settings → Storage lists, and removing anything
+  // takes an explicit, confirmed cleanup through volli:worktree-orphan-cleanup.
+  // Deferred to did-finish-load so it never competes with first paint; a scan
+  // failure is logged, not thrown.
+  //
+  // The reconcile beside it closes the other half: a cleanup the app did not
+  // live long enough to finish is stamped interrupted here, so Storage can show
+  // what completed and what was never attempted instead of re-offering both.
   if (dbHandle.ok) {
     const db = dbHandle.db;
     mainWindow.webContents.once("did-finish-load", () => {
-      startOrphanSweep(worktreeDeps(db))
+      // Each announced-but-unsettled item is asked of git and disk before the
+      // run is stamped, so an already-removed folder is recorded as removed
+      // rather than described as work nobody attempted (review C3). Read-only,
+      // and never fatal to a launch.
+      void reconcileInterruptedCleanups({
+        worktree: worktreeDeps(db),
+        engine: orphanCleanupEngine(db),
+      })
+        .then((runs) => {
+          for (const run of runs) {
+            const done = run.items.filter((item) => item.state === "completed").length;
+            console.log(
+              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+        });
+      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
-            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
+            `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
           );
         })
         .catch((error) => {
-          console.error("[worktree] sweep failed:", errorMessage(error));
+          console.error("[worktree] scan failed:", errorMessage(error));
         });
     });
 

@@ -66,7 +66,7 @@ describe("Configure → Worktrees", () => {
 
     expect(html).toContain("Copied files");
     expect(html).toContain(".worktreeinclude");
-    // `sweepOrphans` walks every project in the db and reports directories git
+    // `scanOrphans` walks every project in the db and reports directories git
     // attributes to none of them, so its list — and its permanent deletes —
     // cannot be scoped here. Settings → Storage owns it.
     expect(html).not.toContain("Orphaned worktrees");

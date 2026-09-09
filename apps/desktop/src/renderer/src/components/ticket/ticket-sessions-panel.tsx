@@ -52,6 +52,7 @@ import {
   type SessionRailRow,
   type TicketSessionStatus,
 } from "@renderer/components/ticket/session-history";
+import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
@@ -71,15 +72,9 @@ import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
  *  (and re-renders the panel) on unrelated store updates while the cache is cold. */
 const NO_ROWS: SessionListingRow[] = [];
 
-const STATUS_LABEL: Record<TicketSessionStatus, string> = {
-  working: "Working",
-  waiting: "Waiting for you",
-  idle: "Idle",
-  parked: "Parked",
-  exited: "Exited",
-  stopped: "Stopped",
-  setup: "Setup",
-};
+function sessionStatusLabel(status: TicketSessionStatus): string {
+  return status === "setup" ? "Setup" : SESSION_ACTIVITY_LABEL[status];
+}
 
 /** Sessions and History are the same block twice — one shape, one inset, no seam. */
 const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
@@ -303,12 +298,21 @@ function SessionList({
               // that deliberate state alongside its stamp.
               trailing={
                 variant === "current" ? (
-                  <RowStatus state={record.activity}>{STATUS_LABEL[record.activity]}</RowStatus>
+                  <RowStatus state={record.activity}>
+                    {sessionStatusLabel(record.activity)}
+                  </RowStatus>
+                ) : record.activity === "stopped" || record.activity === "interrupted" ? (
+                  // VC-324: `interrupted` is durable, so a History row keeps
+                  // saying the last turn died after a relaunch exactly as long
+                  // as a `stopped` one keeps saying it was ended on purpose —
+                  // collapsing either into generic history is the drift.
+                  <RowStatus state={record.activity}>
+                    {sessionStatusLabel(record.activity)} ·{" "}
+                    {relativeTime(sessionRailRowStampAt(entry), now)}
+                  </RowStatus>
                 ) : (
-                  <RowStatus state={record.activity === "stopped" ? "stopped" : "exited"}>
-                    {record.activity === "stopped"
-                      ? `Stopped · ${relativeTime(sessionRailRowStampAt(entry), now)}`
-                      : relativeTime(sessionRailRowStampAt(entry), now)}
+                  <RowStatus state="exited">
+                    {relativeTime(sessionRailRowStampAt(entry), now)}
                   </RowStatus>
                 )
               }
@@ -342,7 +346,7 @@ function SessionList({
             provenance={sessionProvenanceOf(provenance, record.id)}
             trailing={
               variant === "current" ? (
-                <RowStatus state={status}>{STATUS_LABEL[status]}</RowStatus>
+                <RowStatus state={status}>{sessionStatusLabel(status)}</RowStatus>
               ) : (
                 <RowStatus state="exited">
                   {relativeTime(sessionRailRowStampAt(entry), now)}

@@ -122,6 +122,20 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-6",
+    build: "VC-324",
+    added: [
+      "session_await, the named Agent Tool Surface tool that parks a Session until a watched Session finishes a turn (for: turn), signals done or blocked (verdict), or is stopped (stopped); any is the union. It takes one or many short session ids, the same timeoutSeconds, and the same opaque cursor discipline as ticket_await: begin with the cursor returned by session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed. A Board Session may await any Session in its project; a ticket Session only itself and the subagents it delegated. It replaces polling session list.",
+      "A turn that ended by interruption wakes as interrupted, never as ended: the two are distinct Session Events, and a fleet that read idle in a listing while four of its members had been cut off is the failure this tool was built for.",
+    ],
+    changed: [
+      "session list and session peek now say interrupted, with why, for a chat Session whose latest turn ended by interruption and nothing has started since. It sits below working and above idle: stopped still outranks it, and a Session that resumed reads working again.",
+      "session_send returns once the target's Command is durable and its turn has opened, and says whether it opened a new turn or joined a running one. It no longer waits for the target's whole turn to end, so several sends in one turn no longer queue behind the slowest target, and a send whose own turn is withdrawn refuses by name instead of orphaning the call.",
+    ],
+    fixed: [],
+    removed: [],
+  },
+  {
     baseline: "VC-185",
     build: "VC-6",
     added: [

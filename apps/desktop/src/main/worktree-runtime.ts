@@ -7,14 +7,20 @@
  * matter which entrypoint moved them.
  */
 import { app, BrowserWindow } from "electron";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { VolliIpcEvent, WorktreePhaseEvent } from "../ipc/contract";
 
 import { blobsRoot } from "./blob-store";
-import { runGitCapturing, runGitCapturingAsync } from "./worktree";
-import type { WorktreeDeps, WorktreePhase } from "./worktree";
+import {
+  createOrphanCleanupEngine,
+  runGitCapturing,
+  runGitCapturingAsync,
+  SqliteOrphanCleanupLedger,
+} from "./worktree";
+import type { OrphanCleanupEngine, WorktreeDeps, WorktreePhase } from "./worktree";
 
 /** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
 function broadcastPhase(ticketId: string, phase: WorktreePhase): void {
@@ -63,6 +69,30 @@ export function worktreeDeps(db: Database.Database): WorktreeDeps {
     onPhase: broadcastPhase,
     blobsRoot: blobsRoot(app.getPath("userData")),
   };
+}
+
+/**
+ * The orphan-cleanup command core, one per database handle (VC-284 review S1).
+ *
+ * Memoized on the handle rather than rebuilt per call, because the SQLite
+ * ledger serializes its transactions through an instance-local promise tail: a
+ * second engine over the same file would be a second writer with no idea the
+ * first exists. A WeakMap key means a test's throwaway handle gets its own core
+ * and is collected with it.
+ */
+const cleanupEngines = new WeakMap<Database.Database, OrphanCleanupEngine>();
+
+export function orphanCleanupEngine(db: Database.Database): OrphanCleanupEngine {
+  let engine = cleanupEngines.get(db);
+  if (engine === undefined) {
+    engine = createOrphanCleanupEngine({
+      ledger: new SqliteOrphanCleanupLedger(db),
+      now: () => Date.now(),
+      nextId: randomUUID,
+    });
+    cleanupEngines.set(db, engine);
+  }
+  return engine;
 }
 
 /**
