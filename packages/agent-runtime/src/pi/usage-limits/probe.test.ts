@@ -339,7 +339,9 @@ describe("probeUsageLimits", () => {
       },
     ]);
     const limits = (outcome as { limits: UsageLimits }).limits;
-    expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([["weekly", 75]]);
+    expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+      ["weekly", 75],
+    ]);
   });
 
   it("reports an xAI API key unsupported: it is invoiced, not metered in a window", async () => {
@@ -471,9 +473,7 @@ describe("probeUsageLimits", () => {
     // there a moment ago, so this is one attempt that failed rather than a
     // provider with nothing to show, and the last good read stands.
     const { fetch, calls } = scripted(() => json(ANTHROPIC_BODY));
-    const outcome = await probeUsageLimits(
-      input({ models: models(oauth, undefined), fetch }),
-    );
+    const outcome = await probeUsageLimits(input({ models: models(oauth, undefined), fetch }));
     expect(outcome).toEqual({
       kind: "verdict",
       limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },

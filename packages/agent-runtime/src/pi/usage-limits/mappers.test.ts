@@ -534,7 +534,13 @@ describe("kimiUsageFromEndpoint", () => {
       NOW,
     );
     expect(inDays.windows).toEqual([
-      { id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 10, windowDurationMins: 10_080 },
+      {
+        id: "weekly",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 10,
+        windowDurationMins: 10_080,
+      },
       {
         id: "window_720m",
         kind: "other",
