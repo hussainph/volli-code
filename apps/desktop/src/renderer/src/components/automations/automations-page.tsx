@@ -65,6 +65,7 @@ import {
   triggerLabel,
 } from "./automations-page-model";
 import { AutomationEditorPanel } from "./automation-editor";
+import { clearEditorDraft, loadEditorDraft } from "./editor-draft";
 import { AutomationLanes } from "./automation-lanes";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import {
@@ -188,6 +189,8 @@ function AutomationsSurface({
   const refreshSkips = useAutomationsStore((state) => state.refreshSkips);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const [view, setView] = React.useState<AutomationPageView>("details");
+  const [initialDraft] = React.useState(() => loadEditorDraft(projectId) !== null);
+  const resumeOnArrival = React.useRef(initialDraft);
   const [choosingTicket, setChoosingTicket] = React.useState<Automation | null>(null);
   const [confirmingDelete, setConfirmingDelete] = React.useState<Automation | null>(null);
 
@@ -215,6 +218,11 @@ function AutomationsSurface({
   // The rail always has one selected record once the list lands. A create is a
   // deliberate null record and is never replaced by this defaulting effect.
   React.useEffect(() => {
+    if (resumeOnArrival.current) {
+      resumeOnArrival.current = false;
+      openEditor(projectId);
+      return;
+    }
     if (automations.length === 0) return;
     if (editor?.projectId === projectId && editor.automation === null) return;
     const selectedId = editor?.projectId === projectId ? editor.automation?.id : undefined;
@@ -225,7 +233,7 @@ function AutomationsSurface({
       return;
     }
     editAutomation(projectId, automations[0]!);
-  }, [automations, editAutomation, editor, projectId]);
+  }, [automations, editAutomation, editor, openEditor, projectId]);
 
   const target = editor?.projectId === projectId ? editor : null;
   const selectedAutomation =
@@ -343,7 +351,9 @@ function AutomationsSurface({
         </div>
         <Button size="sm" onClick={createAutomation}>
           <PlusIcon />
-          New Automation
+          {target?.automation !== null && loadEditorDraft(projectId) !== null
+            ? "Resume draft"
+            : "New Automation"}
         </Button>
       </header>
 
@@ -367,7 +377,7 @@ function AutomationsSurface({
           </div>
         ) : target !== null ? (
           <AutomationEditorPanel
-            key={`${target.automation?.id ?? "new"}:${target.automation?.updatedAt ?? 0}`}
+            key={`${selectedAutomation?.id ?? "new"}:${selectedAutomation?.updatedAt ?? 0}`}
             projectId={projectId}
             automation={selectedAutomation}
             actions={editorActions}
@@ -423,7 +433,18 @@ function AutomationsSurface({
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                if (confirmingDelete !== null) void remove(projectId, confirmingDelete);
+                if (confirmingDelete !== null) {
+                  const deletedId = confirmingDelete.id;
+                  void remove(projectId, confirmingDelete).then(() => {
+                    const records = useAutomationsStore.getState().byProject[projectId];
+                    if (
+                      records !== undefined &&
+                      !records.some((record) => record.id === deletedId)
+                    ) {
+                      clearEditorDraft(projectId, undefined, deletedId);
+                    }
+                  });
+                }
                 setConfirmingDelete(null);
               }}
             >

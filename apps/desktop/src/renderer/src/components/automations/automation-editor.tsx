@@ -73,6 +73,12 @@ import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 import { INSTRUCTIONS_PLACEHOLDER, MANUAL_TRIGGER_LABEL } from "./automations-page-model";
+import {
+  clearEditorDraft,
+  loadEditorDraft,
+  saveEditorDraft,
+  type AutomationEditorDraft,
+} from "./editor-draft";
 import { TimeZonePicker } from "./time-zone-picker";
 
 const NO_MODELS: readonly ComposerModel[] = [];
@@ -429,24 +435,37 @@ export function AutomationEditorPanel({
   const save = useAutomationsStore((state) => state.save);
   const update = useAutomationsStore((state) => state.update);
   const commandId = React.useRef(crypto.randomUUID());
-  const [name, setName] = React.useState(automation?.name ?? "");
-  const [instructions, setInstructions] = React.useState(automation?.instructions ?? "");
+  const automationId = automation?.id ?? null;
+  // Edits and new drafts both survive navigation. A refreshed saved record
+  // never replaces unsaved words; its updatedAt key remounts from this cache.
+  const [restored] = React.useState<AutomationEditorDraft | null>(() =>
+    loadEditorDraft(projectId, undefined, automationId),
+  );
+  const [resumed, setResumed] = React.useState(restored !== null);
+  const [name, setName] = React.useState(restored?.name ?? automation?.name ?? "");
+  const [instructions, setInstructions] = React.useState(
+    restored?.instructions ?? automation?.instructions ?? "",
+  );
   const [ownership, setOwnership] = React.useState<OwnershipChoice>(
-    automation === null || automation.projectId !== null ? "project" : "global",
+    restored?.ownership ??
+      (automation === null || automation.projectId !== null ? "project" : "global"),
   );
-  // The record's Runtime whole, so reopening an Automation that names a tier
-  // does not silently rewrite it to inherit on the next save. Only the invalid
-  // row is dropped — it is the one shape a save may not carry.
   const [runtime, setRuntime] = React.useState<ValidAutomationRuntime>(
-    automation !== null && isValidAutomationRuntime(automation.runtime) ? automation.runtime : null,
+    restored !== null
+      ? restored.runtime
+      : automation !== null && isValidAutomationRuntime(automation.runtime)
+        ? automation.runtime
+        : null,
   );
-  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(() =>
-    automation === null || automation.trigger.kind === "none" ? "none" : automation.trigger.kind,
+  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(
+    restored?.triggerChoice ?? automation?.trigger.kind ?? "none",
   );
-  const [columns, setColumns] = React.useState<readonly TicketStatus[]>(() =>
-    automation === null ? [] : automationTriggerColumns(automation.trigger),
+  const [columns, setColumns] = React.useState<readonly TicketStatus[]>(
+    restored?.columns ?? (automation === null ? [] : automationTriggerColumns(automation.trigger)),
   );
-  const storedSchedule = automation === null ? null : automationTriggerSchedule(automation.trigger);
+  const storedSchedule =
+    restored?.schedule ??
+    (automation === null ? null : automationTriggerSchedule(automation.trigger));
   const [preset, setPreset] = React.useState<AutomationSchedulePreset>(
     storedSchedule?.preset ?? "daily",
   );
@@ -486,12 +505,17 @@ export function AutomationEditorPanel({
     };
   }, [inspect, hiddenModels]);
 
-  const schedule: AutomationSchedule =
-    preset === "hourly"
-      ? { preset, minute, timeZone }
-      : preset === "weekly"
-        ? { preset, weekday, hour, minute, timeZone }
-        : { preset, hour, minute, timeZone };
+  // Memoized so the draft-save effect below can depend on the schedule without
+  // re-firing on every render — the fields it is composed from are its real deps.
+  const schedule: AutomationSchedule = React.useMemo(
+    () =>
+      preset === "hourly"
+        ? { preset, minute, timeZone }
+        : preset === "weekly"
+          ? { preset, weekday, hour, minute, timeZone }
+          : { preset, hour, minute, timeZone },
+    [preset, weekday, hour, minute, timeZone],
+  );
   const trigger: AutomationTrigger =
     triggerChoice === "schedule"
       ? { kind: "schedule", schedule }
@@ -508,9 +532,65 @@ export function AutomationEditorPanel({
     (triggerChoice === "columns" && columns.length === 0) ||
     scheduleProblem !== null;
 
+  const draft = React.useMemo<AutomationEditorDraft>(
+    () => ({
+      name,
+      instructions,
+      ownership: ownershipChoice,
+      triggerChoice,
+      columns,
+      schedule,
+      runtime,
+    }),
+    [name, instructions, ownershipChoice, triggerChoice, columns, schedule, runtime],
+  );
+  const dirty =
+    automation === null
+      ? name.trim() !== "" || instructions.trim() !== ""
+      : name !== automation.name ||
+        instructions !== automation.instructions ||
+        JSON.stringify(trigger) !== JSON.stringify(automation.trigger) ||
+        JSON.stringify(runtime) !== JSON.stringify(automation.runtime);
+
+  React.useEffect(() => {
+    if (dirty) saveEditorDraft(projectId, draft, undefined, automationId);
+    else clearEditorDraft(projectId, undefined, automationId);
+  }, [automationId, projectId, draft, dirty]);
+
+  /** Discard restores the saved record; only a new record becomes blank. */
+  function discardDraft(): void {
+    clearEditorDraft(projectId, undefined, automationId);
+    setName(automation?.name ?? "");
+    setInstructions(automation?.instructions ?? "");
+    setOwnership(automation === null || automation.projectId !== null ? "project" : "global");
+    setRuntime(
+      automation !== null && isValidAutomationRuntime(automation.runtime)
+        ? automation.runtime
+        : null,
+    );
+    setTriggerChoice(automation?.trigger.kind ?? "none");
+    setColumns(automation === null ? [] : automationTriggerColumns(automation.trigger));
+    const savedSchedule =
+      automation === null ? null : automationTriggerSchedule(automation.trigger);
+    setPreset(savedSchedule?.preset ?? "daily");
+    setWeekday(
+      savedSchedule?.preset === "weekly" ? savedSchedule.weekday : DEFAULT_SCHEDULE_WEEKDAY,
+    );
+    setHour(
+      savedSchedule !== null && savedSchedule.preset !== "hourly"
+        ? savedSchedule.hour
+        : DEFAULT_SCHEDULE_HOUR,
+    );
+    setMinute(savedSchedule?.minute ?? 0);
+    setTimeZone(savedSchedule?.timeZone ?? hostTimeZone());
+    setResumed(false);
+    setProblem(null);
+  }
+
   async function submit(): Promise<void> {
     if (incomplete || saving) return;
     setSaving(true);
+    const submittedDraft = JSON.stringify(draft);
     try {
       const refusal =
         automation === null
@@ -533,6 +613,13 @@ export function AutomationEditorPanel({
       if (refusal === null) {
         commandId.current = crypto.randomUUID();
         setProblem(null);
+        // Never clear newer typing that happened while this save was in flight.
+        if (
+          JSON.stringify(loadEditorDraft(projectId, undefined, automationId)) === submittedDraft
+        ) {
+          clearEditorDraft(projectId, undefined, automationId);
+          setResumed(false);
+        }
       } else {
         setProblem(refusal);
       }
@@ -563,6 +650,20 @@ export function AutomationEditorPanel({
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
+            {dirty ? (
+              <div
+                role="status"
+                data-slot={resumed ? "draft-resumed" : "draft-saved"}
+                className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-2 py-2 text-ui text-foreground"
+              >
+                <span className="min-w-0 flex-1 text-muted-foreground">
+                  {resumed ? "Draft restored" : "Draft saved"}
+                </span>
+                <Button variant="ghost" size="sm" onClick={discardDraft}>
+                  Discard draft
+                </Button>
+              </div>
+            ) : null}
             <section className="flex min-h-0 flex-col gap-2">
               <SectionLabel>Instructions</SectionLabel>
               <ComposerPickerStack

@@ -16,6 +16,7 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
+import { clearEditorDraft, loadEditorDraft } from "./editor-draft";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
@@ -230,6 +231,8 @@ async function openLanes(): Promise<void> {
 }
 
 beforeEach(() => {
+  clearEditorDraft("p1");
+  clearEditorDraft("p1", undefined, "automation-1");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // The lane view reads it (dnd-kit's sortable transition is dropped under
   // reduced motion); jsdom does not implement it.
@@ -339,7 +342,8 @@ describe("enable and disable", () => {
 
     expect(document.querySelector('[aria-label="Manual only"]')).not.toBeNull();
     expect(
-      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset
+        .state,
     ).toBe("unchecked");
   });
 
@@ -348,7 +352,8 @@ describe("enable and disable", () => {
 
     expect(document.querySelector('[aria-label="Automatic triggers"]')).not.toBeNull();
     expect(
-      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset.state,
+      (button("Automatic triggers on this machine: Review sweep") as HTMLButtonElement).dataset
+        .state,
     ).toBe("checked");
   });
 
@@ -657,6 +662,9 @@ describe("the lane view", () => {
     const label = "Doing is armed with Standards sweep — automatic triggers off";
     const bolt = button(label);
     expect(bolt.getAttribute("data-arming-state")).toBe("switched-off");
+    // VC-329 item 1: the bolt is filled whenever the column is ARMED — the
+    // machine-local switch is a separate fact, carried by the muted ink and
+    // the tooltip's own words.
     expect(bolt.querySelector('[data-arming-mark="filled"]')).not.toBeNull();
     expect((await showTooltip(bolt)).textContent).toBe(label);
 
@@ -776,6 +784,58 @@ describe("schedules (VC-130)", () => {
     expect(text()).toContain("Skipped");
     expect(text()).toContain("Choose a model.");
   });
+});
+
+describe("editor navigation keeps drafts", () => {
+  it("resumes a new draft after leaving the page, even when saved records exist", async () => {
+    await mount({ automations: [automation()] });
+    const newButton = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "New Automation",
+    )!;
+    await act(async () => newButton.click());
+    await act(async () =>
+      setInputValue(
+        document.querySelector('[aria-label="Name"]') as HTMLInputElement,
+        "Keep my idea",
+      ),
+    );
+    await act(async () => root?.unmount());
+    container?.remove();
+    await mount({ automations: [automation()] });
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Keep my idea",
+    );
+    expect(document.querySelector('[data-slot="draft-resumed"]')?.textContent).toContain(
+      "Draft restored",
+    );
+    clearEditorDraft("p1");
+  });
+
+  it("keeps unsaved existing edits across Lanes and record switches", async () => {
+    const records = [automation(), automation({ id: "second", name: "Other" })];
+    await mount({ automations: records });
+    await act(async () =>
+      setInputValue(
+        document.querySelector('[aria-label="Name"]') as HTMLInputElement,
+        "Unsaved name",
+      ),
+    );
+    await openLanes();
+    await act(async () =>
+      (document.querySelector('[data-automation-rail-row="second"]') as HTMLButtonElement).click(),
+    );
+    await act(async () =>
+      (
+        document.querySelector('[data-automation-rail-row="automation-1"]') as HTMLButtonElement
+      ).click(),
+    );
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Unsaved name",
+    );
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.name).toBe("Unsaved name");
+    clearEditorDraft("p1", undefined, "automation-1");
+  });
+
 });
 
 describe("column arming trigger control", () => {
