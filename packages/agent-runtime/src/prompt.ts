@@ -219,9 +219,28 @@ const WORKSPACE_DOUBT: Record<RuntimeSessionRole, string> = {
  * Named where the tools are named, because how a command runs is a fact about
  * the tool the Session was actually handed. Stated only when `execute` is in
  * the bundle: a Session with no shell should not be told how its shell behaves.
+ *
+ * The second line is the concurrency budget (VC-339). Volli sets that budget in
+ * the environment, in the variables `cargo`, `make`, `cmake`, `go`, `pytest`,
+ * gradle and vitest already read, so most tools self-limit with no cooperation
+ * from the model at all. This line exists for the remainder — Jest reads no
+ * environment variable, and neither does an ad-hoc `xargs -P` — where the only
+ * way to spend the budget is to put it on the command line.
+ *
+ * It names the VARIABLE and not a number, deliberately. How many Sessions are
+ * working is a per-Session, per-moment fact, and this layer is Cache Prefix
+ * bytes: writing the count here would give two Sessions of the same Role
+ * different prompts, and would be stale for the rest of a Session's life
+ * anyway. The environment carries the live answer, and the agent can read it.
  */
 function executionLayer(): readonly string[] {
-  return ["Commands run directly on the user's machine, and the network is reachable."];
+  return [
+    "Commands run directly on the user's machine, and the network is reachable.",
+    "That machine is shared with other Sessions: `VOLLI_CONCURRENCY_HINT` in your",
+    "environment is this Session's parallelism budget, and most toolchains already",
+    "read it. Pass it yourself \u2014 `-j`, `--jobs`, `--workers`, `--maxWorkers` for",
+    "Jest \u2014 to any tool that does not.",
+  ];
 }
 
 /**
