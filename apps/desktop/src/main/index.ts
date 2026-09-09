@@ -132,6 +132,7 @@ import {
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
+  repackLegacyTranscriptArtifacts,
   sessionTranscriptsRoot,
 } from "./session-runtime";
 import { createSessionTokenRegistry } from "./session-tokens";
@@ -141,6 +142,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import { dbOpenFailureLogLine, describeDbOpenFailure } from "./db-open-failure";
 import { registerModelAccessIpcHandlers } from "./model-access/ipc";
 import { ModelAccessSignInService } from "./model-access/sign-in-service";
+import { registerPiSessionOrphanIpcHandlers } from "./pi-session-orphans-ipc";
 import { registerWebAccessIpcHandlers } from "./web/ipc";
 import { registerAgentObservabilityIpcHandlers } from "./observability/ipc";
 import { AgentObservability } from "./observability/settings";
@@ -224,15 +226,16 @@ import type { Delegations } from "./session-runtime/delegate-session";
 import type { AgentToolDoor } from "./agent-tool-door";
 import { createSessionWakeBus } from "./session-wake";
 import { subscribeTicketWake } from "./ticket-wake";
-import { startOrphanSweep } from "./orphan-sweep";
+import { startOrphanScan } from "./orphan-scan";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import {
   agentTurnOpenWithin,
   countOpenAgentTurns,
+  reconcileInterruptedCleanups,
   releaseAgentSites as releaseWorktreeAgentSites,
 } from "./worktree";
 import type { AgentSiteReleaseReport } from "./worktree";
-import { worktreeDeps } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps } from "./worktree-runtime";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
   composeProjectBrief,
@@ -1126,13 +1129,14 @@ app.whenReady().then(async () => {
   });
 
   let agentToolDoor: AgentToolDoor | null = null;
+  const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
       ? createPiRuntimeHost({
-          sessionDataDir: join(app.getPath("userData"), "pi-sessions"),
+          sessionDataDir: piSessionsDirectory,
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -2196,6 +2200,10 @@ app.whenReady().then(async () => {
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
   });
+  // Pi sidecar cleanup is a separate, explicit surface: registration performs
+  // no scan and no deletion. The read-only inventory must run before its
+  // confirmed reclaim can name any main-owned item ids.
+  registerPiSessionOrphanIpcHandlers(dbHandle, piSessionsDirectory);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
@@ -2736,7 +2744,42 @@ app.whenReady().then(async () => {
     return window;
   };
   const mainWindow = createOwnedWindow();
+  const transcriptRepackAbort = new AbortController();
+  app.on("before-quit", () => transcriptRepackAbort.abort());
   mainWindow.webContents.once("did-finish-load", () => {
+    // Transcript repack is migration-by-sibling rather than an in-place
+    // rewrite. Give first paint five seconds of quiet, then process only small
+    // batches with a pause between them. Every individual failure is kept for
+    // the next launch, with its legacy bytes untouched.
+    const repackDelay = setTimeout(() => {
+      void repackLegacyTranscriptArtifacts(transcriptArtifacts, {
+        batchSize: 25,
+        signal: transcriptRepackAbort.signal,
+        shouldBackOff: async () => {
+          if (sessionRuntime === null) return false;
+          const sessionIds = new Set(
+            sessionRuntime.openNativeBindings().map((binding) => binding.sessionId),
+          );
+          for (const sessionId of sessionIds) {
+            if ((await sessionRuntime.projection({ sessionId })).projection.turnActive) return true;
+          }
+          return false;
+        },
+        onError: (name, error) => {
+          console.error(`[transcript-repack] kept ${name}:`, errorMessage(error));
+        },
+      })
+        .then((report) => {
+          console.info(
+            `[transcript-repack] scanned=${report.scanned} repacked=${report.repacked} skipped=${report.skipped}`,
+          );
+        })
+        .catch((error) => {
+          console.error("[transcript-repack] scan failed:", errorMessage(error));
+        });
+    }, 5_000);
+    repackDelay.unref();
+
     // The probe converts shell failure to a kept outcome. Keep an explicit
     // rejection handler here too so an unexpected mutation/logging failure
     // can never become an unhandled rejection from this fire-and-forget path.
@@ -2754,25 +2797,48 @@ app.whenReady().then(async () => {
     });
   });
 
-  // Startup orphan sweep (worktree-support §7): prunes stale git metadata and
-  // removes clean orphaned worktree dirs that THIS database owns and that
-  // nothing has touched for the retention window (branches retained — VC-113
-  // scoped both the ownership and the timing); dirty orphans are
-  // left for Settings → Worktrees. DESTRUCTIVE, so it runs exactly ONCE per
-  // launch — cached in orphan-sweep.ts and read back (never re-swept) by the
-  // volli:worktree-orphans handler. Deferred to did-finish-load so it never
-  // competes with first paint; a sweep failure is logged, not thrown.
+  // Startup orphan SCAN (VC-284). This used to be a destructive sweep: launching
+  // the app pruned git metadata and deleted every clean orphan past the
+  // retention window, with no confirmation and nothing on screen that had asked.
+  // Starting an app is not consent to delete, so a launch now only LOOKS — the
+  // report it produces is what Settings → Storage lists, and removing anything
+  // takes an explicit, confirmed cleanup through volli:worktree-orphan-cleanup.
+  // Deferred to did-finish-load so it never competes with first paint; a scan
+  // failure is logged, not thrown.
+  //
+  // The reconcile beside it closes the other half: a cleanup the app did not
+  // live long enough to finish is stamped interrupted here, so Storage can show
+  // what completed and what was never attempted instead of re-offering both.
   if (dbHandle.ok) {
     const db = dbHandle.db;
     mainWindow.webContents.once("did-finish-load", () => {
-      startOrphanSweep(worktreeDeps(db))
+      // Each announced-but-unsettled item is asked of git and disk before the
+      // run is stamped, so an already-removed folder is recorded as removed
+      // rather than described as work nobody attempted (review C3). Read-only,
+      // and never fatal to a launch.
+      void reconcileInterruptedCleanups({
+        worktree: worktreeDeps(db),
+        engine: orphanCleanupEngine(db),
+      })
+        .then((runs) => {
+          for (const run of runs) {
+            const done = run.items.filter((item) => item.state === "completed").length;
+            console.log(
+              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+        });
+      startOrphanScan(worktreeDeps(db), { busyWorktreeSites })
         .then((report) => {
           console.log(
-            `[worktree] sweep: pruned=${report.pruned.length} removedClean=${report.removedClean.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
+            `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
           );
         })
         .catch((error) => {
-          console.error("[worktree] sweep failed:", errorMessage(error));
+          console.error("[worktree] scan failed:", errorMessage(error));
         });
     });
 

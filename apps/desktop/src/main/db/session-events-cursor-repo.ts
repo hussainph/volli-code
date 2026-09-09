@@ -15,7 +15,7 @@
  * assigns that number per Session, so it orders one Session's history and says
  * nothing about the order two Sessions' facts were committed in. A wait over a
  * fleet asks exactly the question that ordering cannot answer — "the first
- * matching event after this point, across these handles" — so migration 042
+ * matching event after this point, across these handles" — so migration 044
  * adds an AUTOINCREMENT side table filled by an `AFTER INSERT` trigger, and
  * this module is the only reader of it.
  *
@@ -126,8 +126,8 @@ export function cursorBeforeSessionCommand(
 }
 
 const SEQUENCED_COLUMNS = `e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
-         e.provenance, e.attachment_id, e.command_id, e.payload,
-         ordered.sequence AS ordered_sequence`;
+         (SELECT provenance FROM session_provenances WHERE id = e.provenance_id) AS provenance,
+         e.attachment_id, e.command_id, e.payload, ordered.sequence AS ordered_sequence`;
 
 /**
  * Every Session Event committed after a numeric mark, in ledger order.

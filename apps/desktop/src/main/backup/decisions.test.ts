@@ -77,6 +77,17 @@ describe("table decisions", () => {
     }
   });
 
+  it("excludes source-machine orphan-cleanup history from a restored machine", () => {
+    for (const table of [
+      "worktree_cleanup_commands",
+      "worktree_cleanup_facts",
+      "worktree_cleanup_receipts",
+    ]) {
+      expect(tableBackupDecision(table)?.decision).toBe("exclude");
+      expect(BACKUP_INCLUDED_TABLES).not.toContain(table);
+    }
+  });
+
   it("rebuilds the two usage projections rather than including or dropping them", () => {
     expect(tableBackupDecision("session_usage")?.decision).toBe("rebuild");
     expect(tableBackupDecision("session_usage_coverage")?.decision).toBe("rebuild");
@@ -172,7 +183,7 @@ describe("column redactions", () => {
     expect(keyed).toContain("tickets.worktree_path");
     expect(keyed).toContain("session_attachments.native_id");
     expect(keyed).toContain("session_attachments.native_detail");
-    expect(keyed).toContain("session_events.provenance");
+    expect(keyed).toContain("session_provenances.provenance");
     expect(keyed).toContain("session_events.payload");
   });
 

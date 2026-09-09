@@ -33,7 +33,7 @@
  * the four Phase-1 wake facts ride exactly that method, so a bus built on
  * return values would silently never wake on a verdict or a stop.
  *
- * So the drain reads migration 042's trigger-backed sequence table instead:
+ * So the drain reads migration 044's trigger-backed sequence table instead:
  * after each mutating call returns — which is after `db.transaction(...)`
  * committed — everything above the bus's high-water mark is fanned out in
  * ledger order. This is still PUSHED, not polled: every drain is caused by a

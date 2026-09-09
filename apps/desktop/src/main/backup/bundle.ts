@@ -23,10 +23,13 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type Database from "better-sqlite3";
 
 import { blobFilePath } from "../blob-store";
+import {
+  createFileTranscriptArtifactStore,
+  transcriptReferenceForId,
+} from "../session-runtime/transcript-artifacts";
 import { ArchiveError, isSafeArchivePath, packArchive, unpackArchive } from "./archive";
 import type { ArchiveEntry } from "./archive";
 import {
@@ -84,8 +87,8 @@ export interface BackupManifest {
 }
 
 export class BackupBundleError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "BackupBundleError";
   }
 }
@@ -163,16 +166,22 @@ export function createBackupBundle(options: CreateBackupBundleOptions): CreatedB
     });
   }
 
+  const transcripts = createFileTranscriptArtifactStore(options.transcriptsRoot);
   for (const reference of collectTranscriptReferences(document)) {
-    const path = join(options.transcriptsRoot, `${reference.slice("sha256:".length)}.json`);
-    if (!existsSync(path)) {
-      throw new BackupBundleError(`Transcript ${reference} is missing from the transcript store.`);
+    let bytes: Buffer;
+    try {
+      bytes = transcripts.readCanonicalBytesSync(transcriptReferenceForId(reference));
+    } catch (error) {
+      if (isMissing(error)) {
+        throw new BackupBundleError(
+          `Transcript ${reference} is missing from the transcript store.`,
+        );
+      }
+      throw new BackupBundleError(`Transcript ${reference} no longer matches its own digest.`, {
+        cause: error,
+      });
     }
-    const bytes = readFileSync(path);
     const digest = sha256(bytes);
-    if (`sha256:${digest}` !== reference) {
-      throw new BackupBundleError(`Transcript ${reference} no longer matches its own digest.`);
-    }
     entries.push({ path: transcriptArtifactPath(reference), bytes });
     manifestEntries.push({
       path: transcriptArtifactPath(reference),
@@ -210,6 +219,14 @@ export interface ReadBackupBundle {
 export type ReadBackupBundleResult =
   | { ok: true; bundle: ReadBackupBundle }
   | { ok: false; problems: BackupProblem[] };
+
+function isMissing(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -7,6 +7,7 @@ import type {
 } from "@volli/session-engine";
 import type { SessionEvent, SessionInput } from "@volli/shared";
 
+import { internSessionEventProvenance } from "./db/session-event-provenance";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
@@ -33,7 +34,7 @@ const unusedRead = (): never => {
  * Every return value is a stub, and that is the point being tested: the bus
  * reads NOTHING a mutating method returns, because `submit` does not return
  * the `session.signaled` / `session.stopped` event it appends. What it reads
- * is migration 042's sidecar, after the call settles.
+ * is migration 044's sidecar, after the call settles.
  */
 function writingEngine(db: TestDb["db"]): {
   engine: SessionEngine;
@@ -52,9 +53,15 @@ function writingEngine(db: TestDb["db"]): {
           .get(sessionId) as { sequence: number }
       ).sequence ?? 0) + 1;
     db.prepare(
-      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
        VALUES (?, ?, ?, 1, 1, ?, NULL, NULL, ?)`,
-    ).run(`e-${appended}`, sessionId, sequence, PROVENANCE, JSON.stringify(payload));
+    ).run(
+      `e-${appended}`,
+      sessionId,
+      sequence,
+      internSessionEventProvenance(db, PROVENANCE),
+      JSON.stringify(payload),
+    );
   };
   // One distinguishable durable fact per mutating method. Which fact is
   // arbitrary — what is being pinned is that each METHOD announces — so they

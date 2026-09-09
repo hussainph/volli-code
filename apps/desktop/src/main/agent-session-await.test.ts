@@ -2,7 +2,7 @@
  * `session.await` host-side (VC-324 item 3): the wait parks, the right Session
  * fact wakes it, Role and policy judge it, the cursor replays it, and the
  * abort withdraws it. The bus is the real `session-wake` module over the real
- * migration-042 sidecar, because the integration IS the subject — a fake bus
+ * migration-044 sidecar, because the integration IS the subject — a fake bus
  * would prove a contract nothing ships. Only the Session listing is a double:
  * handle resolution reads projections, and the shape of a projection is not
  * what is under test here.
@@ -26,6 +26,7 @@ import type { SessionEngine } from "@volli/session-engine";
 
 import { awaitSessionTool, type AwaitSessionPorts } from "./agent-session-await";
 import { insertProject, listProjects } from "./db/projects-repo";
+import { internSessionEventProvenance } from "./db/session-event-provenance";
 import {
   currentSessionEventCursor,
   encodeSessionEventCursor,
@@ -181,7 +182,7 @@ function harness(
       )
       .get(sessionId) as { sequence: number };
     db.prepare(
-      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
     ).run(
       `e-${appended}`,
@@ -189,7 +190,7 @@ function harness(
       row.sequence + 1,
       1000 + appended,
       1000 + appended,
-      PROVENANCE,
+      internSessionEventProvenance(db, PROVENANCE),
       JSON.stringify(payload),
     );
   };

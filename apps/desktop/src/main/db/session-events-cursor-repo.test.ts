@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { internSessionEventProvenance } from "./session-event-provenance";
 import { insertProject } from "./projects-repo";
 import {
   currentSessionEventCursor,
@@ -58,10 +59,18 @@ function append(sessionId: string, payload: Record<string, unknown>, occurredAt 
   const id = `${sessionId}-e${sequence}`;
   db()
     .prepare(
-      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
     )
-    .run(id, sessionId, sequence, occurredAt, occurredAt, PROVENANCE, JSON.stringify(payload));
+    .run(
+      id,
+      sessionId,
+      sequence,
+      occurredAt,
+      occurredAt,
+      internSessionEventProvenance(db(), PROVENANCE),
+      JSON.stringify(payload),
+    );
   return id;
 }
 
@@ -139,10 +148,13 @@ describe("dispatch cursors", () => {
       .run(JSON.stringify({ kind: "session.archive" }));
     db()
       .prepare(
-        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('command-event', 's-one', 1, 1, 1, ?, NULL, 'c-1', ?)`,
       )
-      .run(PROVENANCE, JSON.stringify({ kind: "session.archived" }));
+      .run(
+        internSessionEventProvenance(db(), PROVENANCE),
+        JSON.stringify({ kind: "session.archived" }),
+      );
     nextSequence.set("s-one", 1);
     append("s-one", { kind: "turn.completed", attachmentId: "a", turnId: "t1" });
 
@@ -225,11 +237,11 @@ describe("firstMatchingSessionEventAfter", () => {
     setup(["s-one"]);
     db()
       .prepare(
-        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('e-1', 's-one', 1, 700, 800, ?, NULL, NULL, ?)`,
       )
       .run(
-        PROVENANCE,
+        internSessionEventProvenance(db(), PROVENANCE),
         JSON.stringify({ kind: "session.stopped", reason: "outage", by: { kind: "user" } }),
       );
 
@@ -285,10 +297,13 @@ describe("listSessionEventsAfter", () => {
       .run(JSON.stringify({ kind: "session.archive" }));
     db()
       .prepare(
-        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+        `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('e-1', 's-one', 1, 1, 1, ?, NULL, 'c-1', ?)`,
       )
-      .run(PROVENANCE, JSON.stringify({ kind: "session.archived" }));
+      .run(
+        internSessionEventProvenance(db(), PROVENANCE),
+        JSON.stringify({ kind: "session.archived" }),
+      );
 
     const [only] = listSessionEventsAfter(db(), 0);
     expect(only?.event.commandId).toBe("c-1");

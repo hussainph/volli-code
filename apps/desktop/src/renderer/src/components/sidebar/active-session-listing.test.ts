@@ -107,8 +107,10 @@ function chatSession(
     outcome: null,
     lastActivityAt: overrides.lastActivityAt ?? 1,
     bornTicketless: overrides.bornTicketless ?? overrides.ticketId === null,
-    role: (overrides.bornTicketless ?? overrides.ticketId === null) ? "project" : "ticket",
-    parentSessionId: null,
+    role:
+      overrides.role ??
+      ((overrides.bornTicketless ?? overrides.ticketId === null) ? "project" : "ticket"),
+    parentSessionId: overrides.parentSessionId ?? null,
   };
 }
 
@@ -890,6 +892,248 @@ describe("buildActiveSessionListing — chat Sessions", () => {
         },
       },
     ]);
+  });
+
+  it("never bands a Subagent Session, whichever band its state would have earned", () => {
+    const now = 5_000_000;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "parent",
+          ticketId: "t1",
+          title: "The chat that delegated",
+          activity: "working",
+          lastActivityAt: now - 1_000,
+        }),
+        // Loud enough for Active — an attention row is pinned there whatever
+        // its age — and still not a row.
+        chatSession({
+          sessionId: "child-live",
+          ticketId: "t1",
+          title: "Find the auth refresh",
+          role: "subagent",
+          parentSessionId: "parent",
+          activity: "waiting",
+          lastActivityAt: now - 1_000,
+        }),
+        // And quiet enough for Previous, which is the band a hidden row would
+        // otherwise pile up in unbounded.
+        chatSession({
+          sessionId: "child-done",
+          ticketId: "t1",
+          title: "Summarise the diff",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: false,
+          lastActivityAt: now - ACTIVE_QUIET_WINDOW_MS - 1,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now,
+    });
+
+    expect(titles(result.active)).toEqual(["The chat that delegated"]);
+    expect(titles(result.previous)).toEqual([]);
+  });
+
+  it("hides a Subagent Session from Cleaned up too — it is not a row anyone lost", () => {
+    // Old enough for rule (d), so cleanup genuinely claims it: `showCleaned`
+    // is the switch that brings concluded business BACK, and a child that was
+    // merely quiet would prove nothing about the row cleanup itself holds.
+    // The parent beside it is the control — same ticket, same age, same
+    // switch — so the assertion below is about the Role and not about the
+    // whole band having been swept.
+    const now = 8 * 24 * 60 * 60_000;
+    const longAgo = now - PREVIOUS_MAX_AGE_MS - 1;
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        chatSession({
+          sessionId: "parent",
+          ticketId: "t1",
+          title: "The chat that delegated",
+          live: false,
+          lastActivityAt: longAgo,
+        }),
+        chatSession({
+          sessionId: "child",
+          ticketId: "t1",
+          title: "Read the migration",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: false,
+          lastActivityAt: longAgo,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      filter: { kinds: null, scopes: null, showCleaned: true },
+      now,
+    });
+
+    expect(result.active).toEqual([]);
+    expect(result.previous.map((row) => ({ title: row.title, cleaned: row.cleaned }))).toEqual([
+      { title: "The chat that delegated", cleaned: true },
+    ]);
+  });
+
+  // Dropping the rows must not drop the work: a parent that delegated and
+  // ended its own turn is `idle`, its children have no row, and the board
+  // lights the same Ticket `working`. A band that went quiet here would
+  // disagree with the board and then clean the parent away on a clock its own
+  // work should have been resetting.
+  describe("a parent that is only busy through its children", () => {
+    const listing = (children: readonly Partial<ChatSessionRecord>[], now = 5_000_000) =>
+      buildActiveSessionListing({
+        tickets: [ticket({ id: "t1", status: "doing" })],
+        containers: {},
+        signalsByTicket: {},
+        records: [],
+        chatSessions: [
+          chatSession({
+            sessionId: "parent",
+            ticketId: "t1",
+            title: "The chat that delegated",
+            activity: "idle",
+            // Long past the quiet window on its own account.
+            lastActivityAt: now - ACTIVE_QUIET_WINDOW_MS - 60_000,
+          }),
+          ...children.map((child, index) =>
+            chatSession({
+              sessionId: `child-${index}`,
+              ticketId: "t1",
+              title: `Helper ${index}`,
+              role: "subagent",
+              parentSessionId: "parent",
+              ...child,
+            }),
+          ),
+        ],
+        lastOutputAt: {},
+        parkState: {},
+        harness: {},
+        now,
+      });
+
+    it("stays in Active, and says working, while a child works", () => {
+      const result = listing([{ activity: "working", lastActivityAt: 4_999_000 }]);
+      expect(titles(result.active)).toEqual(["The chat that delegated"]);
+      expect(result.active[0]?.activity).toBe("working");
+      // Reported, not inferred: a child's `working` is main's word about the
+      // child exactly as the parent's own word is main's about the parent.
+      expect(result.active[0]?.activitySource).toBe("reported");
+      expect(result.previous).toEqual([]);
+    });
+
+    it("ages by the freshest fact in the delegation, not by when the parent last spoke", () => {
+      // The parent's own stamp is an hour old and the child's is a minute old;
+      // the row must sort and age by the minute.
+      const result = listing([{ activity: "working", lastActivityAt: 4_940_000 }]);
+      expect(result.active[0]?.lastActivityAt).toBe(4_940_000);
+      expect(result.nextBoundaryAt).toBe(4_940_000 + ACTIVE_QUIET_WINDOW_MS);
+    });
+
+    it("counts a child stopped on a person as busy — the delegation is unfinished", () => {
+      // Its wait is answered in the parent's Activity Island, so the row does
+      // not say `waiting`; what it must not do is go quiet.
+      const result = listing([{ activity: "waiting", lastActivityAt: 4_999_000 }]);
+      expect(titles(result.active)).toEqual(["The chat that delegated"]);
+      expect(result.active[0]?.activity).toBe("working");
+      expect(result.active[0]?.attention).toBeNull();
+    });
+
+    it("lets the parent go quiet once every child has finished", () => {
+      // Both children ended, and long enough ago that the delegation's own
+      // freshest stamp is outside the window too.
+      const endedAt = 5_000_000 - ACTIVE_QUIET_WINDOW_MS - 30_000;
+      const result = listing([
+        { activity: "idle", outcome: "completed", lastActivityAt: endedAt },
+        { activity: "stopped", lastActivityAt: endedAt - 5_000 },
+      ]);
+      expect(result.active).toEqual([]);
+      expect(result.previous.map((row) => row.title)).toEqual(["The chat that delegated"]);
+      // Still dated by the delegation: the last thing that happened in this
+      // Session was a child ending, not the parent's own last word.
+      expect(result.previous[0]?.endedOrQuietAt).toBe(endedAt);
+    });
+
+    it("never lets a child outrank the parent's own question", () => {
+      const result = buildActiveSessionListing({
+        tickets: [ticket({ id: "t1", status: "doing" })],
+        containers: {},
+        signalsByTicket: {},
+        records: [],
+        chatSessions: [
+          chatSession({
+            sessionId: "parent",
+            ticketId: "t1",
+            title: "The chat that delegated",
+            activity: "waiting",
+            waitingOn: "question",
+            lastActivityAt: 4_999_000,
+          }),
+          chatSession({
+            sessionId: "child",
+            ticketId: "t1",
+            role: "subagent",
+            parentSessionId: "parent",
+            activity: "working",
+            lastActivityAt: 4_999_500,
+          }),
+        ],
+        lastOutputAt: {},
+        parkState: {},
+        harness: {},
+        now: 5_000_000,
+      });
+      expect(result.active[0]?.activity).toBe("waiting");
+      expect(result.active[0]?.attention).toEqual({ signal: "waiting", reason: null });
+    });
+
+    it("gives a `session_start` peer's activity to nobody — only a subagent's counts", () => {
+      // A peer keeps its own row, so its work is already visible as itself;
+      // reading it into the parent as well would double-count one Session.
+      const result = listing([{ role: "ticket", activity: "working", lastActivityAt: 4_999_000 }]);
+      expect(titles(result.active)).toEqual(["Helper 0"]);
+      expect(result.previous.map((row) => row.title)).toEqual(["The chat that delegated"]);
+    });
+  });
+
+  it("leaves a `session_start` child listed — a peer Session is not a subagent", () => {
+    const result = buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      chatSessions: [
+        // `parentSessionId` alone is set for a Session another Session STARTED
+        // (VC-183). That one is a full peer with its own ticket work, so the
+        // Role is what the rule reads and this row stays.
+        chatSession({
+          sessionId: "peer",
+          ticketId: "t1",
+          title: "Started by another Session",
+          parentSessionId: "parent",
+          lastActivityAt: 4_999_000,
+        }),
+      ],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 5_000_000,
+    });
+
+    expect(titles(result.active)).toEqual(["Started by another Session"]);
   });
 });
 

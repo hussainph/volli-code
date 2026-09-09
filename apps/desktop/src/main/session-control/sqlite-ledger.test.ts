@@ -3,6 +3,7 @@ import { createSessionEngine } from "@volli/session-engine";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
@@ -39,6 +40,10 @@ const provenance = {
   source: { kind: "system" as const, id: "desktop", detail: null },
   venue: { id: "local", kind: "local" as const },
 };
+
+function provenanceId(): number {
+  return internSessionEventProvenance(ctx.db, JSON.stringify(provenance));
+}
 
 describe("SqliteSessionLedger", () => {
   it("stores and reads back the Role and the parent link as Session columns (VC-9)", async () => {
@@ -694,12 +699,12 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('invalid-signal', ?, 4, 104, 104, ?, NULL, NULL, ?)`,
       )
       .run(
         created.session.id,
-        JSON.stringify(provenance),
+        provenanceId(),
         JSON.stringify({ kind: "session.signaled", signal: "unexpected", reason: "Corrupt row" }),
       );
 
@@ -745,10 +750,40 @@ describe("SqliteSessionLedger", () => {
     ).toEqual({ created_sequence: 5, observed_kind: "opened" });
 
     ctx.db.pragma("ignore_check_constraints = ON");
-    ctx.db.prepare("UPDATE session_events SET provenance = '{' WHERE id = ?").run(created.event.id);
+    ctx.db
+      .prepare(
+        `UPDATE session_provenances
+            SET provenance = '{'
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
     ctx.db.pragma("ignore_check_constraints = OFF");
     await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
       "contains invalid JSON",
+    );
+  });
+
+  it("fails loudly instead of dropping events whose provenance row is missing", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-missing-provenance",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Missing provenance",
+      provenance,
+    });
+    ctx.db.pragma("foreign_keys = OFF");
+    ctx.db
+      .prepare(
+        `DELETE FROM session_provenances
+          WHERE id = (SELECT provenance_id FROM session_events WHERE id = ?)`,
+      )
+      .run(created.event.id);
+
+    await expect(control.listEvents({ sessionId: created.session.id })).rejects.toThrow(
+      /missing.*provenance/i,
     );
   });
 
@@ -1276,14 +1311,10 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('retired-kind-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
       )
-      .run(
-        created.session.id,
-        JSON.stringify(provenance),
-        JSON.stringify({ kind: "capabilities.retired" }),
-      );
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
     await ledger.transaction((transaction) => {
       transaction.appendEvent({
         id: "after-retired-kind-event",
@@ -1325,7 +1356,7 @@ describe("SqliteSessionLedger", () => {
       ctx.db
         .prepare(
           `INSERT INTO session_events
-             (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+             (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
         )
         .run(
@@ -1334,7 +1365,7 @@ describe("SqliteSessionLedger", () => {
           sequence,
           sequence * 100,
           sequence * 100,
-          JSON.stringify(provenance),
+          provenanceId(),
           JSON.stringify({ kind: "capabilities.retired" }),
         );
     }
@@ -1372,14 +1403,10 @@ describe("SqliteSessionLedger", () => {
     ctx.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES ('retired-kind-get-event', ?, 4, 400, 400, ?, NULL, NULL, ?)`,
       )
-      .run(
-        created.session.id,
-        JSON.stringify(provenance),
-        JSON.stringify({ kind: "capabilities.retired" }),
-      );
+      .run(created.session.id, provenanceId(), JSON.stringify({ kind: "capabilities.retired" }));
 
     const event = await ledger.transaction((transaction) =>
       transaction.getEvent("retired-kind-get-event"),

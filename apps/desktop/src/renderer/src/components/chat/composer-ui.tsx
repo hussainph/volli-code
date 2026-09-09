@@ -88,7 +88,6 @@ import {
   reclampEffort,
   takeQueued,
   unqueueLast,
-  type AuthorityChipView,
   type ComposerIntent,
   type QueuedMessage,
   type SessionContextUsage,
@@ -112,7 +111,6 @@ import {
   type ComposerPickerRow,
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
-import { AuthorityChip } from "@renderer/components/chat/authority-chip-ui";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
@@ -203,16 +201,6 @@ export interface SessionComposerProps {
    * durable transcript, so it cannot switch the memo boundary off.
    */
   contextUsage?: SessionContextUsage | null;
-  /**
-   * What the live attachment is governed by (VC-285), or null while nothing is
-   * attached — in which case no chip is drawn at all.
-   *
-   * A view, not the policy: the parent projects the saved Snapshot through
-   * `authorityChip` so this box holds no opinion about what a posture means.
-   * It is a standing fact like the model, and unlike the model it is not
-   * settable here — authority is app-owned state, editable only in Configure.
-   */
-  authority?: AuthorityChipView | null;
   /**
    * Files attached to the message being written (VC-50). Owned by the parent,
    * because they outlive this box: a queued message releases with exactly what
@@ -364,7 +352,6 @@ export const SessionComposer = React.memo(function SessionComposer({
   onFilePickerOpen,
   interactionOpen = false,
   contextUsage = null,
-  authority = null,
   attachments = NO_ATTACHMENTS,
   onAttachFiles,
   onRemoveAttachment,
@@ -700,14 +687,6 @@ export const SessionComposer = React.memo(function SessionComposer({
                 onChange={(reasoningLevel) => onSelectionChange({ ...selection, reasoningLevel })}
               />
             ) : null}
-            {/* In THIS row rather than the cluster on the right, and that is
-                the row's own rule rather than a preference: the right-hand
-                cluster is `shrink-0`, so a sentence parked there would take
-                its width out of the model name at exactly the narrow widths
-                the pill already gives ground at. Here it is the third
-                standing fact beside model and effort, and it takes its own
-                line when the box is narrow instead of crushing either one. */}
-            <AuthorityChip chip={authority} />
           </PromptInputTools>
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {/* The Session's standing fact, beside the controls that act on the

@@ -155,6 +155,22 @@ describe("homeSessionRows", () => {
   it("draws nothing for a project that has run nothing", () => {
     expect(homeSessionRows([], [], [], [])).toEqual([]);
   });
+
+  it("leaves a Subagent Session out — it is reached from the chat that delegated it", () => {
+    const rows = homeSessionRows(
+      [
+        chat({ sessionId: "parent" }),
+        chat({ sessionId: "child", role: "subagent", parentSessionId: "parent" }),
+      ],
+      [],
+      // Promoted to a tab and still not a row: the page lists the project's own
+      // Sessions, and a child belongs to one turn of one of them.
+      ["child"],
+      [],
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["parent"]);
+  });
 });
 
 describe("venuePathTail", () => {

@@ -171,6 +171,64 @@ describe("buildBoardSessionActivity", () => {
     expect(build({ chatSessions: [chat({ ticketId: null })] }).byTicket).toEqual({});
   });
 
+  // VC-279: a subagent has no row in any listing, so a card that said "waiting"
+  // for one would send a reader to a ticket with nothing to answer. The wait is
+  // readdressed rather than dropped — `sessionWaitAudience` sends it to the
+  // parent's Activity Island, which draws and announces it — and this board
+  // shows the only thing it can honestly show about a busy child: work.
+  describe("a Subagent Session", () => {
+    const child = (overrides: Partial<ChatSessionRecord> = {}) =>
+      chat({ sessionId: "child", role: "subagent", parentSessionId: "parent", ...overrides });
+
+    it("still lights its ticket while it works — that is work happening here", () => {
+      // The parent may have ended its own turn and gone idle; the ticket is
+      // busy all the same.
+      expect(
+        build({
+          chatSessions: [
+            chat({ sessionId: "parent", activity: "idle" }),
+            child({ activity: "working" }),
+          ],
+        }).byTicket,
+      ).toEqual({ t1: "working" });
+    });
+
+    it("reads its wait as working rather than asking for a person", () => {
+      expect(build({ chatSessions: [child({ activity: "waiting" })] }).byTicket).toEqual({
+        t1: "working",
+      });
+    });
+
+    it("folds by the Role and not by having a parent — a peer's wait still asks", () => {
+      // `parentSessionId` alone is a Session another Session STARTED (VC-183).
+      // That one keeps its listing row, so its question has a row to be
+      // answered at and must still light the ring.
+      expect(
+        build({
+          chatSessions: [
+            chat({ sessionId: "peer", parentSessionId: "parent", activity: "waiting" }),
+          ],
+        }).byTicket,
+      ).toEqual({ t1: "waiting" });
+    });
+
+    it("cannot outrank a real question its parent is asking", () => {
+      expect(
+        build({
+          chatSessions: [
+            child({ activity: "waiting" }),
+            chat({ sessionId: "parent", activity: "waiting" }),
+          ],
+        }).byTicket,
+      ).toEqual({ t1: "waiting" });
+    });
+
+    it("leaves its quiet states alone — only the wait is folded", () => {
+      expect(build({ chatSessions: [child({ activity: "idle" })] }).byTicket).toEqual({});
+      expect(build({ chatSessions: [child({ activity: "stopped" })] }).byTicket).toEqual({});
+    });
+  });
+
   it("ignores a container for a ticket this board does not show", () => {
     expect(
       build({

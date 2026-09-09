@@ -25,6 +25,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 
+import { configureGroups } from "../configure-groups";
 import { AuthorityPane } from "./authority-pane";
 
 function project(authorityPolicy: Project["authorityPolicy"] = null): Project {
@@ -49,6 +50,38 @@ function render(policy: Project["authorityPolicy"] = null): string {
       <AuthorityPane project={project(policy)} />
     </TooltipProvider>,
   );
+}
+
+/** The rail terms that lead to this pane: the category's own label and its keywords. */
+function authorityKeywords(): readonly string[] {
+  for (const group of configureGroups(project())) {
+    for (const category of group.categories) {
+      if (category.key === "authority") return [category.label, ...(category.keywords ?? [])];
+    }
+  }
+  throw new Error("no Configure category `authority`");
+}
+
+const ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#x27;": "'",
+  "&rsquo;": "\u2019",
+};
+
+/**
+ * Static markup escapes the few entities a label can carry; search compares the
+ * words.
+ *
+ * ONE PASS, not a chain of replacements. Decoding `&amp;` before the others
+ * turns `&amp;lt;` into `<` — a label written to show an entity would be read
+ * as the character it names, and the check would then hold the rail to words
+ * the pane never drew.
+ */
+function decodeEntities(text: string): string {
+  return text.replace(/&(?:amp|lt|gt|quot|#x27|rsquo);/g, (entity) => ENTITIES[entity] ?? entity);
 }
 
 describe("Configure → Authority", () => {
@@ -227,6 +260,33 @@ describe("Configure → Authority", () => {
     expect(render({ judgmentMode: "auto" })).toContain(
       "Reset Decision mode to the app-wide value, Ask me",
     );
+  });
+
+  /**
+   * The rail's search index against the pane it indexes — the same rule
+   * `settings-search-smoke.mjs` states in minutes, stated here in
+   * milliseconds, because a row someone can SEE and cannot FIND is a setting
+   * that may as well not be there.
+   *
+   * It is renaming that breaks this, not adding: VC-285 renamed "Who judges
+   * the rest" to "Decision mode — not active yet" and the keyword stayed
+   * behind, pointing at words nobody could see any more. Only labels are
+   * checked, because the shell matches a stored term against the whole typed
+   * string and a label is what a person types.
+   */
+  it("leaves every row label findable from the rail's search", () => {
+    const labels = [...render(null).matchAll(/data-slot="pref-row-label"[^>]*>([^<]+)</g)].map(
+      (match) => decodeEntities(match[1] ?? "").trim(),
+    );
+    const terms = authorityKeywords().map((term) => term.toLowerCase());
+
+    expect(labels.length).toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `"${label}" is drawn in Configure → Authority and nothing in the rail finds it`,
+      ).toBe(true);
+    }
   });
 
   it("names the unauthenticated caller as its own kind, not a borrowed one", () => {

@@ -19,12 +19,17 @@
  *      (`data-preview="false"`) — the navigator's double click, re-asked for a
  *      list that closes on the first Enter.
  *   4. ⌘Enter opens straight into a PINNED tab, without the preview step.
- *   5. SCOPE FOLLOWS THE SURFACE: the same chord inside a Ticket workspace
+ *   5. RANKING, END TO END (VC-299): with the audit's worked example in the
+ *      index — root `README.md` plus a forced-in artifact whose path merely
+ *      contains r-e-a-d-m-e — `README` puts the README first and Enter opens
+ *      THAT file. Through the `@` picker's scorer the artifact led 1030 to 46,
+ *      so this is the check that the two surfaces really do rank apart.
+ *   6. SCOPE FOLLOWS THE SURFACE: the same chord inside a Ticket workspace
  *      indexes THAT TICKET'S WORKTREE — a file written only into the worktree
  *      is offered, a file written only into Main is not.
- *   6. A pick lands in the surface it was invoked from: Enter previews into the
+ *   7. A pick lands in the surface it was invoked from: Enter previews into the
  *      TICKET's own tab strip, not Home's.
- *   7. ⌘Enter on a ticket file that is already open BUT NOT IN FRONT brings it
+ *   8. ⌘Enter on a ticket file that is already open BUT NOT IN FRONT brings it
  *      to the front. The regression this check exists for: a bare `pinFile` is
  *      identity for an already-pinned tab and leaves `activeRelPath` alone for
  *      an already-open one, so quick-open pinning through `pinTicketFile` used
@@ -95,6 +100,12 @@ const ALPHA_TS = "src/alpha-widget.ts";
 const BETA_TS = "src/beta-widget.ts";
 const GAMMA_MD = "docs/gamma-notes.md";
 const MAIN_FILE = "main-checkout-file.ts";
+// The audit's worked example (VC-299 / A13), verbatim. The artifact is NOT a
+// basename match for `README` — its path is, scattered across
+// a-r-t-i-f-a-c-t-s / d-e-s-i-g-n / a-u-d-i-t — which is exactly the shape the
+// +1000 artifact bonus used to promote over an exact name.
+const ROOT_README = "README.md";
+const AUDIT_ARTIFACT = ".volli/artifacts/design-audit/audit-motion-perf.md";
 const MAIN_ONLY = "main-untracked-only.ts";
 const WORKTREE_ONLY = "worktree-only-file.ts";
 const WORKTREE_SECOND = "second-worktree-file.ts";
@@ -188,8 +199,13 @@ async function main() {
     await fs.writeFile(join(projectPath, BETA_TS), "export const b = 1;\n");
     await fs.writeFile(join(projectPath, GAMMA_MD), "# gamma\n");
     await fs.writeFile(join(projectPath, MAIN_FILE), "export const m = 1;\n");
+    await fs.writeFile(join(projectPath, ROOT_README), "# Quick Open Project\n");
     await git(projectPath, ["add", "-A"]);
     await git(projectPath, ["commit", "-q", "-m", "seed files"]);
+    // Force-included by `buildFileIndex` (never committed, `.volli` is ignored):
+    // it reaches the index the same way a real design-audit artifact does.
+    await fs.mkdir(join(projectPath, ".volli/artifacts/design-audit"), { recursive: true });
+    await fs.writeFile(join(projectPath, AUDIT_ARTIFACT), "# audit: motion perf\n");
 
     await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
     const { byName } = await readSeededProjects(page);
@@ -251,6 +267,29 @@ async function main() {
       };
     });
 
+    // ---- 5. The worked example, ranked in a running app ---------------------
+    await attempt(5, "`README` offers the root README.md first, and Enter opens IT", async () => {
+      await openQuickOpen(page, "README");
+      const rows = await quickOpenRows(page);
+      // Both are in the index; only the order is under test. A row reads
+      // "<basename><its folder>", so the root README's is bare.
+      const offersArtifact = rows.some((r) => r.includes("audit-motion-perf.md"));
+      await page.keyboard.press("Enter");
+      await waitUntil("README File tab in front", async () =>
+        (await readHomeTabs(page)).some((t) => t.relPath === ROOT_README && t.active),
+      );
+      const tabs = await readHomeTabs(page);
+      const readme = tabs.find((tab) => tab.relPath === ROOT_README);
+      return {
+        ok:
+          rows[0]?.startsWith("README.md") === true &&
+          offersArtifact &&
+          readme?.preview === "true" &&
+          readme.active === true,
+        detail: `rows=${JSON.stringify(rows.slice(0, 3))} tabs=${JSON.stringify(tabs)}`,
+      };
+    });
+
     // ---- A real ticket worktree ---------------------------------------------
     const { ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
       status: "todo",
@@ -306,8 +345,8 @@ async function main() {
     await card.dblclick();
     await waitUntil("ticket detail", async () => (await page.getByRole("tablist").count()) >= 1);
 
-    // ---- 5. Scope follows the surface ---------------------------------------
-    await attempt(5, "in the Ticket workspace ⌘P indexes THAT WORKTREE, not Main", async () => {
+    // ---- 6. Scope follows the surface ---------------------------------------
+    await attempt(6, "in the Ticket workspace ⌘P indexes THAT WORKTREE, not Main", async () => {
       await openQuickOpen(page);
       const rows = await quickOpenRows(page);
       const offersWorktreeFile = rows.some((r) => r.includes(WORKTREE_ONLY));
@@ -319,8 +358,8 @@ async function main() {
       };
     });
 
-    // ---- 6. The pick lands in the surface it was invoked from ----------------
-    await attempt(6, "Enter previews into the TICKET's own tab strip", async () => {
+    // ---- 7. The pick lands in the surface it was invoked from ----------------
+    await attempt(7, "Enter previews into the TICKET's own tab strip", async () => {
       await openQuickOpen(page, "worktreeonly");
       await page.keyboard.press("Enter");
       await waitUntil(
@@ -332,9 +371,9 @@ async function main() {
       return { ok: tab?.preview === "true" && tab.active, detail: JSON.stringify(tabs) };
     });
 
-    // ---- 7. ⌘⏎ on an open-but-behind ticket file brings it to the front ------
+    // ---- 8. ⌘⏎ on an open-but-behind ticket file brings it to the front ------
     await attempt(
-      7,
+      8,
       "⌘⏎ on a ticket file already open BUT BEHIND brings it to the front",
       async () => {
         await openQuickOpen(page, "worktreeonly");

@@ -45,7 +45,7 @@
  *
  * A wake is an in-memory event, but every event a wake reports is ALSO a
  * durable Session Event. An opaque, total-order cursor closes the gap between
- * the two: subscribe first, then ask migration 042's sequence for the first
+ * the two: subscribe first, then ask migration 044's sequence for the first
  * match after the cursor, and only park when that bounded query comes back
  * empty. Every wake and timeout returns a cursor, so chaining calls holds a
  * continuous window even when two events share a millisecond or a timeout

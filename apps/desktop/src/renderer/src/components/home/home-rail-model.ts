@@ -13,7 +13,7 @@
  * what each one's liveness is and how they order are decisions, and a decision
  * inside a `.tsx` is a decision no test can reach.
  */
-import type { ChatSessionRecord, SessionRecord } from "@volli/shared";
+import { isListableSession, type ChatSessionRecord, type SessionRecord } from "@volli/shared";
 
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
@@ -80,6 +80,11 @@ export interface HomeSessionRow {
  * user started on the project itself — and splitting by execution surface would
  * ask the reader to know which kind a Session was before they could find it.
  * The leading dot and the title carry the difference.
+ *
+ * "Work the user started" is also what keeps Subagent Sessions out of it
+ * (VC-279): a delegated child is work an agent started inside one turn, and it
+ * is reached from that turn's chat. Dropped here rather than by the page, so
+ * the rule sits where the row shape does and a test can reach it.
  */
 export function homeSessionRows(
   chats: readonly ChatSessionRecord[],
@@ -88,16 +93,18 @@ export function homeSessionRows(
   openTerminalIds: readonly string[],
 ): readonly HomeSessionRow[] {
   const rows: HomeSessionRow[] = [
-    ...chats.map((row) => ({
-      id: row.sessionId,
-      kind: "chat" as const,
-      title: row.title,
-      state: chatState(row),
-      at: row.lastActivityAt,
-      open: openChatIds.includes(row.sessionId),
-      // Durable history, so a closed one is a door like any other.
-      reopenable: true,
-    })),
+    ...chats
+      .filter((row) => isListableSession(row))
+      .map((row) => ({
+        id: row.sessionId,
+        kind: "chat" as const,
+        title: row.title,
+        state: chatState(row),
+        at: row.lastActivityAt,
+        open: openChatIds.includes(row.sessionId),
+        // Durable history, so a closed one is a door like any other.
+        reopenable: true,
+      })),
     ...terminals.map((row) => {
       // A PTY dies with the app, so a durable terminal row is live exactly
       // while a tab is holding it AND it has not ended. This listing carries a

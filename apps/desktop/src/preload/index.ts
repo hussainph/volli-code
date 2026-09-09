@@ -144,6 +144,9 @@ import type {
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
   PickFolderResult,
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanReclaimResult,
+  PiSessionOrphanScanResult,
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
@@ -222,6 +225,8 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
   WorktreeOrphansResult,
@@ -388,6 +393,12 @@ const api = {
   /** Reads the database size or runs one main-owned action without exposing its path. */
   database: (action?: DatabaseAction): Promise<DatabaseResult> =>
     action === undefined ? invoke("volli:database") : invoke("volli:database", action),
+  /** Read-only Pi sidecar inventory and its separately confirmed cleanup. */
+  piSessions: {
+    scanOrphans: (): Promise<PiSessionOrphanScanResult> => invoke("volli:pi-session-orphans-scan"),
+    reclaimOrphans: (input: PiSessionOrphanReclaimInput): Promise<PiSessionOrphanReclaimResult> =>
+      invoke("volli:pi-session-orphans-reclaim", input),
+  },
   /**
    * The Browser Tab door: chrome commands in, chrome snapshots out. Every
    * operation names Volli's opaque tab id — no Chromium index, partition,
@@ -1078,12 +1089,21 @@ const api = {
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**
-     * The launch's cached orphan report — the destructive sweep runs once per
-     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
-     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     * The launch's cached orphan SCAN — read-only in every shape (VC-284), so
+     * calling it costs a walk and never a deletion. Pass `{ refresh: true }`
+     * for the Storage pane's Scan, which asks git again.
      */
     orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
       invoke("volli:worktree-orphans", opts ?? {}),
+    /**
+     * The confirmed cleanup, as a command: the caller's UUID, the revision of
+     * the scan whose proposal was confirmed, and the ids of the items selected
+     * out of it. Main owns the paths — a client cannot name a directory no scan
+     * offered — re-checks every target immediately before it acts, and answers
+     * with the acceptance receipt plus the durable run.
+     */
+    cleanupOrphans: (input: WorktreeOrphanCleanupInput): Promise<WorktreeOrphanCleanupResult> =>
+      invoke("volli:worktree-orphan-cleanup", input),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       invoke("volli:worktree-orphan-delete", { path }),

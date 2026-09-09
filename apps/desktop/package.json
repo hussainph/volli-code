@@ -1,6 +1,6 @@
 {
   "name": "@volli/desktop",
-  "version": "0.2.0-canary.4",
+  "version": "0.2.0-canary.7",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -9,6 +9,7 @@
     "check:theme-css": "node scripts/generate-theme-css.mjs --check",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
+    "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "start": "node scripts/start-electron.mjs",

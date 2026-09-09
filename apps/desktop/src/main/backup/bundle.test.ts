@@ -8,7 +8,7 @@
  * touch anything.
  */
 import { createHash } from "node:crypto";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -99,6 +99,30 @@ describe("createBackupBundle", () => {
     expect(paths).toContain(blobArtifactPath(profile.blobHashes.session));
     expect(paths).toContain(transcriptArtifactPath(profile.transcriptIds.prompt));
     expect(paths).toContain(transcriptArtifactPath(profile.transcriptIds.reply));
+  });
+
+  it("exports a compressed transcript as canonical version-1 bytes with the canonical hash", () => {
+    profile = createFixtureProfile();
+    const id = profile.transcriptIds.prompt;
+    const digest = id.slice("sha256:".length);
+    const plainPath = `${profile.transcriptsRoot}/${digest}.json`;
+    const canonical = readFileSync(plainPath);
+    writeFileSync(`${plainPath}.gz`, gzipSync(canonical));
+    rmSync(plainPath);
+
+    const bundle = build();
+    const archivePath = transcriptArtifactPath(id);
+    const archived = unpackArchive(bundle.bytes).find((entry) => entry.path === archivePath)?.bytes;
+    const manifestEntry = bundle.manifest.entries.find((entry) => entry.path === archivePath);
+
+    expect(archived).toEqual(canonical);
+    expect(manifestEntry).toMatchObject({
+      kind: "transcript",
+      sizeBytes: canonical.length,
+      sha256: digest,
+    });
+    expect(readBackupBundle(bundle.bytes)).toMatchObject({ ok: true });
+    expect(bundle.manifest.bundleVersion).toBe(1);
   });
 
   it("carries no credential, no harness trust, and no channel health", () => {

@@ -415,6 +415,40 @@ describe("buildTicketChatSessionRows", () => {
   it("is empty for a ticket with no chat Sessions", () => {
     expect(buildTicketChatSessionRows([])).toEqual([]);
   });
+
+  // A subagent inherits its parent's Ticket, so the ticket's own listing hands
+  // one over; the roster is where it stops (VC-279). Both lifecycle halves,
+  // because the rail splits these rows into Sessions and History and a child
+  // must reach neither.
+  it("drops a Subagent Session, live or finished", () => {
+    expect(
+      buildTicketChatSessionRows([
+        chatRecord({ sessionId: "parent", title: "The chat that delegated" }),
+        chatRecord({
+          sessionId: "child-live",
+          title: "Find the auth refresh",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: true,
+        }),
+        chatRecord({
+          sessionId: "child-done",
+          title: "Summarise the diff",
+          role: "subagent",
+          parentSessionId: "parent",
+          live: false,
+        }),
+      ]).map((chatRow) => chatRow.record.sessionId),
+    ).toEqual(["parent"]);
+  });
+
+  it("keeps a Session another Session STARTED — a peer is not a subagent", () => {
+    expect(
+      buildTicketChatSessionRows([
+        chatRecord({ sessionId: "peer", parentSessionId: "parent" }),
+      ]).map((chatRow) => chatRow.record.sessionId),
+    ).toEqual(["peer"]);
+  });
 });
 
 describe("filterChatSessionHistory", () => {

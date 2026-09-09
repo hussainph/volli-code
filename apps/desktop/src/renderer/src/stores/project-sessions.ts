@@ -34,6 +34,7 @@
 import { create } from "zustand";
 import {
   errorMessage,
+  isListableSession,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionProvenance,
@@ -71,6 +72,34 @@ export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
 
 /** Whether a project's baseline listing is still in flight, usable, or failed. */
 export type ProjectSessionListingState = "loading" | "loaded" | "failed";
+
+/**
+ * The chat rows a surface may DRAW as a listing (VC-279) — every one except a
+ * Subagent Session, which is reached from the chat that delegated it.
+ *
+ * ── THE ROWS ARE COMPLETE, THE LISTINGS ARE NOT ───────────────────────────
+ * This cache holds every child on purpose, and most of its consumers want them.
+ * A new surface reading `rows.chat` is choosing between two questions, so here
+ * is what each existing one chose and why:
+ *
+ *  - DRAWS ROWS, so it narrows: Home's Sessions page (`home-rail.tsx`).
+ *  - DRAWS ROWS but takes them WHOLE: the sidebar's bands
+ *    (`active-sessions.tsx`). It narrows inside `buildActiveSessionListing`,
+ *    because it first reads the children to keep a parent that is only busy
+ *    through them out of the quiet band — a listing that was handed the
+ *    filtered rows could not see the work it is describing.
+ *  - NEEDS THE CHILDREN: the board's rings (a working child lights its
+ *    Ticket), the island's own feed (`use-island-agents.ts`), the usage count
+ *    (a child spent real money), Home's tab restore (a promoted child is a tab
+ *    that must survive a relaunch), and `childSessionIds` below.
+ *
+ * A model that already applies the rule keeps applying it — ⌘K and the ticket
+ * rail read their rows from elsewhere entirely, so the guarantee cannot live
+ * at this door alone. This is the door, not the only lock.
+ */
+export function listableChats(rows: ProjectSessionRows | undefined): readonly ChatSessionRecord[] {
+  return (rows?.chat ?? []).filter((record) => isListableSession(record));
+}
 
 /**
  * The Sessions one Session started (VC-183's `session_start`, VC-9's
