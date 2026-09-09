@@ -270,7 +270,36 @@ describe("WorktreeChangeWatchManager", () => {
     expect(webContents.send).toHaveBeenCalledTimes(1);
   });
 
-  it("unwatchTicket drops every window's watch on that ticket", async () => {
+  it("shares one watcher across windows and closes it after the last subscriber", async () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const windowA = makeWebContents(1);
+    const windowB = makeWebContents(2);
+
+    await manager.watch(windowA as never, "t1", "/wt/t1");
+    await manager.watch(windowB as never, "t1", "/wt/t1");
+    expect(watchCalls).toHaveLength(1);
+
+    watchCalls[0]!.cb("change", "src/shared.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+    expect(windowB.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+
+    manager.unwatch(windowA as never, "t1");
+    expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
+
+    windowA.send.mockClear();
+    windowB.send.mockClear();
+    watchCalls[0]!.cb("change", "src/still-shared.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(windowA.send).not.toHaveBeenCalled();
+    expect(windowB.send).toHaveBeenCalledTimes(1);
+
+    manager.unwatch(windowB as never, "t1");
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("unwatchTicket drops every window subscription on that ticket", async () => {
     vi.useFakeTimers();
     manager = makeManager();
     const windowA = makeWebContents(1);
@@ -279,20 +308,19 @@ describe("WorktreeChangeWatchManager", () => {
     await manager.watch(windowA as never, "t1", "/wt/t1");
     await manager.watch(windowB as never, "t1", "/wt/t1");
     await manager.watch(windowA as never, "t2", "/wt/t2");
+    expect(watchCalls).toHaveLength(2);
 
     manager.unwatchTicket("t1");
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalled();
-    expect(watchCalls[1]!.watcher.close).toHaveBeenCalled();
-    expect(watchCalls[2]!.watcher.close).not.toHaveBeenCalled();
+    expect(watchCalls[1]!.watcher.close).not.toHaveBeenCalled();
 
     watchCalls[0]!.cb("change", "gone.ts");
-    watchCalls[1]!.cb("change", "gone.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     expect(windowA.send).not.toHaveBeenCalled();
     expect(windowB.send).not.toHaveBeenCalled();
 
     // The untouched ticket keeps working.
-    watchCalls[2]!.cb("change", "still-here.ts");
+    watchCalls[1]!.cb("change", "still-here.ts");
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
     expect(windowA.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t2" });
   });

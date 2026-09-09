@@ -2,8 +2,9 @@
  * Debounced worktree filesystem watch for Change Set refresh (CONCEPT #47):
  * while a ticket workspace is live, main emits `volli:worktree-changed`
  * so the renderer can refetch the snapshot. Follows volli-fs's
- * {@link WATCH_DEBOUNCE_MS} cadence and window-scoped subscription lifecycle
- * (teardown on unwatch / `destroyed` — never leaks across tickets).
+ * {@link WATCH_DEBOUNCE_MS} cadence. One refcounted recursive watcher is shared
+ * by every window subscribed to the same worktree and closes with its last
+ * subscriber (unwatch / `destroyed` — never leaks across tickets).
  */
 import { execFile } from "node:child_process";
 import { existsSync, statSync, watch as fsWatch } from "node:fs";
@@ -49,11 +50,18 @@ export type WorktreeWatchFn = (
   listener: (eventType: string, filename: string | null) => void,
 ) => WorktreeWatchHandle;
 
-interface WorktreeWatchSubscription {
+interface WorktreeWatchSubscriber {
   webContents: WebContents;
   ticketId: string;
+  root: SharedWorktreeWatch;
+  onDestroyed: () => void;
+}
+
+interface SharedWorktreeWatch {
   worktreePath: string;
+  subscribers: Map<string, WorktreeWatchSubscriber>;
   watcher: WorktreeWatchHandle | null;
+  armPromise: Promise<Result> | null;
   debounceTimer: NodeJS.Timeout | null;
   /** Deadline for the current burst; null when no burst is pending. */
   maxWaitAt: number | null;
@@ -68,7 +76,6 @@ interface WorktreeWatchSubscription {
   ignoreRefreshNeedsBroadcast: boolean;
   /** True when `.git` is a real directory here — see {@link isSelfFedGitEvent}. */
   skipGitEvents: boolean;
-  onDestroyed: () => void;
 }
 
 /** Injectable stdin-based git seam for lazily classifying newly-created directories. */
@@ -205,11 +212,13 @@ function isSelfFedGitEvent(filename: string | null): boolean {
 }
 
 /**
- * One recursive watch per `(webContents, ticketId)`. Broadcasts are scoped to
- * the subscribing window only (same stance as PtyManager / FileWatchManager).
+ * One recursive watch per worktree path, shared across window/ticket
+ * subscribers. Events remain scoped: each subscriber receives its own ticket
+ * payload in its own window, while the expensive FSEvents handle is refcounted.
  */
 export class WorktreeChangeWatchManager {
-  private readonly subs = new Map<string, WorktreeWatchSubscription>();
+  private readonly subs = new Map<string, WorktreeWatchSubscriber>();
+  private readonly roots = new Map<string, SharedWorktreeWatch>();
   private readonly watchFn: WorktreeWatchFn;
   private readonly debounceMs: number;
   private readonly maxWaitMs: number;
@@ -242,20 +251,18 @@ export class WorktreeChangeWatchManager {
    * else keeps its own message: mapping unknown faults would teach the UI to
    * misdiagnose every watcher hiccup as a deleted checkout.
    */
-  private watchErrorMessage(sub: WorktreeWatchSubscription, error: unknown): string {
+  private watchErrorMessage(root: SharedWorktreeWatch, error: unknown): string {
     if (!(error instanceof Error)) return String(error);
-    if ("code" in error && error.code === "ENOENT" && !existsSync(sub.worktreePath)) {
+    if ("code" in error && error.code === "ENOENT" && !existsSync(root.worktreePath)) {
       return WORKTREE_MISSING_ON_DISK;
     }
     return error.message;
   }
 
   /**
-   * Idempotent: watching an already-watched ticket for this window is a no-op —
-   * UNLESS the ticket's worktree has moved. A ticket can be removed and re-ensured
-   * at a fresh path within one window's lifetime, and the old subscription would
-   * then be watching a directory that no longer belongs to it, so a differing
-   * path restarts the watch rather than silently keeping the stale one.
+   * Idempotent for one window/ticket subscriber. A moved worktree transfers
+   * that subscriber to the new root; the old recursive watcher survives only
+   * when another subscriber still references it.
    */
   async watch(
     webContents: WebContents,
@@ -265,183 +272,205 @@ export class WorktreeChangeWatchManager {
     const key = this.keyFor(webContents, ticketId);
     const existing = this.subs.get(key);
     if (existing) {
-      if (existing.worktreePath === worktreePath) return { ok: true };
-      this.teardown(key);
+      if (existing.root.worktreePath === worktreePath) return { ok: true };
+      this.teardownSubscriber(key);
     }
-    // A destroyed window can neither hold a watch nor receive its events, so
-    // reporting success would tell the caller it is subscribed when it is not.
     if (webContents.isDestroyed()) {
       return { ok: false, error: "This window is closing, so its worktree watch was not started." };
     }
 
-    const sub: WorktreeWatchSubscription = {
+    let root = this.roots.get(worktreePath);
+    if (root === undefined) {
+      root = {
+        worktreePath,
+        subscribers: new Map(),
+        watcher: null,
+        armPromise: null,
+        debounceTimer: null,
+        maxWaitAt: null,
+        ignoredPaths: new Set(),
+        checkedDirectories: new Set(),
+        pendingDirectoryEvents: new Set(),
+        directoryCheckQueued: false,
+        ignoreRefreshTimer: null,
+        ignoreRefreshNeedsBroadcast: false,
+        skipGitEvents: this.gitPathIsDirectory(worktreePath),
+      };
+      this.roots.set(worktreePath, root);
+      root.armPromise = this.armRoot(root);
+    }
+
+    const sub: WorktreeWatchSubscriber = {
       webContents,
       ticketId,
-      worktreePath,
-      watcher: null,
-      debounceTimer: null,
-      maxWaitAt: null,
-      ignoredPaths: new Set(),
-      checkedDirectories: new Set(),
-      pendingDirectoryEvents: new Set(),
-      directoryCheckQueued: false,
-      ignoreRefreshTimer: null,
-      ignoreRefreshNeedsBroadcast: false,
-      skipGitEvents: this.gitPathIsDirectory(worktreePath),
-      onDestroyed: () => this.teardown(key),
+      root,
+      onDestroyed: () => this.teardownSubscriber(key),
     };
     this.subs.set(key, sub);
+    root.subscribers.set(key, sub);
     webContents.once("destroyed", sub.onDestroyed);
+
+    const armPromise = root.armPromise;
+    if (armPromise === null) {
+      this.teardownSubscriber(key);
+      return { ok: false, error: "The worktree watch could not be started." };
+    }
+    return armPromise;
+  }
+
+  private async armRoot(root: SharedWorktreeWatch): Promise<Result> {
     try {
       const ignoredOutput = await this.git(
         ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
-        worktreePath,
+        root.worktreePath,
       );
-      if (!this.isLive(sub)) return { ok: true };
-      sub.ignoredPaths = ignoredPathSet(ignoredOutput);
+      if (!this.isRootLive(root)) return { ok: true };
+      root.ignoredPaths = ignoredPathSet(ignoredOutput);
     } catch (error) {
-      this.teardown(key);
+      this.teardownRoot(root);
       return { ok: false, error: stderrOf(error) };
     }
 
     try {
-      const watcher = this.watchFn(worktreePath, { recursive: true }, (eventType, filename) => {
-        this.handleFsEvent(sub, eventType, filename);
-      });
-      sub.watcher = watcher;
+      const watcher = this.watchFn(
+        root.worktreePath,
+        { recursive: true },
+        (eventType, filename) => {
+          this.handleFsEvent(root, eventType, filename);
+        },
+      );
+      root.watcher = watcher;
       watcher.on("error", (error: Error) => {
-        // An async watch fault must never crash main — but it must not vanish
-        // either: once we drop the subscription no further `worktree-changed`
-        // arrives, and a frozen Change Set is indistinguishable from a quiet
-        // worktree. Tell the renderer first, then tear down.
-        this.emitWatchError(sub, this.watchErrorMessage(sub, error));
-        this.teardown(key);
+        if (!this.isRootLive(root)) return;
+        // Every subscriber is frozen by a shared-handle fault. Tell each
+        // renderer first, then release the root and all of its references.
+        this.emitWatchError(root, this.watchErrorMessage(root, error));
+        this.teardownRoot(root);
       });
       return { ok: true };
     } catch (error) {
-      const message = this.watchErrorMessage(sub, error);
-      this.teardown(key);
+      const message = this.watchErrorMessage(root, error);
+      this.teardownRoot(root);
       return { ok: false, error: message };
     }
   }
 
-  /** Tears down the watch; safe if never watched. */
+  /** Releases one subscriber and closes its root only when the refcount hits zero. */
   unwatch(webContents: WebContents, ticketId: string): void {
-    this.teardown(this.keyFor(webContents, ticketId));
+    this.teardownSubscriber(this.keyFor(webContents, ticketId));
   }
 
   /**
-   * Tears down EVERY window's watch on a ticket. The remove/archive paths call
-   * this: a recursive `fs.watch` keeps a handle on a directory that is about to
-   * be deleted, and the renderer has no reason to unwatch — from its side
-   * nothing happened, the ticket simply stopped having a worktree.
+   * Tears down EVERY window's subscription on a ticket. The remove/archive
+   * paths call this before deleting the checkout. Any unrelated subscribers to
+   * the same root retain the shared handle until their own teardown.
    */
   unwatchTicket(ticketId: string): void {
     const keys: string[] = [];
     for (const [key, sub] of this.subs) {
       if (sub.ticketId === ticketId) keys.push(key);
     }
-    for (const key of keys) this.teardown(key);
+    for (const key of keys) this.teardownSubscriber(key);
   }
 
-  private isLive(sub: WorktreeWatchSubscription): boolean {
-    return this.subs.get(this.keyFor(sub.webContents, sub.ticketId)) === sub;
+  private isRootLive(root: SharedWorktreeWatch): boolean {
+    return this.roots.get(root.worktreePath) === root;
   }
 
   private handleFsEvent(
-    sub: WorktreeWatchSubscription,
+    root: SharedWorktreeWatch,
     eventType: string,
     filename: string | null,
   ): void {
-    if (!this.isLive(sub)) return;
+    if (!this.isRootLive(root)) return;
     const path = filename === null ? null : normalizeRepoPath(filename);
 
     // `.git/info/exclude` is the one meaningful `.git` event: refresh the
     // filter, but retain the existing self-fed exclusion for every other git
     // bookkeeping write.
-    if (sub.skipGitEvents && isSelfFedGitEvent(filename)) {
-      if (path === ".git/info/exclude") this.queueIgnoredPathRefresh(sub, false);
+    if (root.skipGitEvents && isSelfFedGitEvent(filename)) {
+      if (path === ".git/info/exclude") this.queueIgnoredPathRefresh(root, false);
       return;
     }
-    if (path !== null && isIgnoredPath(sub.ignoredPaths, path)) return;
+    if (path !== null && isIgnoredPath(root.ignoredPaths, path)) return;
     if (path !== null && isIgnoreRulesEvent(path)) {
-      this.queueIgnoredPathRefresh(sub, true);
+      this.queueIgnoredPathRefresh(root, true);
       return;
     }
     if (path === null) {
-      this.scheduleBroadcast(sub);
+      this.scheduleBroadcast(root);
       return;
     }
 
     // `ls-files --directory` cannot list an ignored directory that did not
     // exist at watch start. A newly-created directory therefore gets one lazy
     // check before its event is allowed to schedule a Change Set snapshot.
-    if (eventType === "rename" && !sub.checkedDirectories.has(path)) {
+    if (eventType === "rename" && !root.checkedDirectories.has(path)) {
       let directory = false;
       try {
-        directory = this.pathIsDirectory(sub.worktreePath, path);
+        directory = this.pathIsDirectory(root.worktreePath, path);
       } catch {
         // A probe racing deletion is simply not a newly-created directory.
       }
       if (directory) {
-        this.queueDirectoryCheck(sub, path);
+        this.queueDirectoryCheck(root, path);
         return;
       }
     }
-    for (const pending of sub.pendingDirectoryEvents) {
+    for (const pending of root.pendingDirectoryEvents) {
       if (path === pending || path.startsWith(`${pending}/`)) return;
     }
-    this.scheduleBroadcast(sub);
+    this.scheduleBroadcast(root);
   }
 
   private queueIgnoredPathRefresh(
-    sub: WorktreeWatchSubscription,
+    root: SharedWorktreeWatch,
     broadcastAfterRefresh: boolean,
   ): void {
-    sub.ignoreRefreshNeedsBroadcast ||= broadcastAfterRefresh;
-    if (sub.ignoreRefreshTimer !== null) clearTimeout(sub.ignoreRefreshTimer);
-    sub.ignoreRefreshTimer = setTimeout(() => {
-      sub.ignoreRefreshTimer = null;
-      void this.refreshIgnoredPaths(sub);
+    root.ignoreRefreshNeedsBroadcast ||= broadcastAfterRefresh;
+    if (root.ignoreRefreshTimer !== null) clearTimeout(root.ignoreRefreshTimer);
+    root.ignoreRefreshTimer = setTimeout(() => {
+      root.ignoreRefreshTimer = null;
+      void this.refreshIgnoredPaths(root);
     }, this.debounceMs);
   }
 
-  private async refreshIgnoredPaths(sub: WorktreeWatchSubscription): Promise<void> {
+  private async refreshIgnoredPaths(root: SharedWorktreeWatch): Promise<void> {
     try {
       const output = await this.git(
         ["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"],
-        sub.worktreePath,
+        root.worktreePath,
       );
-      if (!this.isLive(sub)) return;
-      sub.ignoredPaths = ignoredPathSet(output);
-      sub.checkedDirectories.clear();
+      if (!this.isRootLive(root)) return;
+      root.ignoredPaths = ignoredPathSet(output);
+      root.checkedDirectories.clear();
     } catch {
       // Fail open: an ignore refresh must not freeze an otherwise healthy
       // Change Set watch. The previous cache remains valid for older rules.
     }
-    if (!this.isLive(sub)) return;
-    const broadcast = sub.ignoreRefreshNeedsBroadcast;
-    sub.ignoreRefreshNeedsBroadcast = false;
-    if (broadcast) this.scheduleBroadcast(sub);
+    if (!this.isRootLive(root)) return;
+    const broadcast = root.ignoreRefreshNeedsBroadcast;
+    root.ignoreRefreshNeedsBroadcast = false;
+    if (broadcast) this.scheduleBroadcast(root);
   }
 
-  private queueDirectoryCheck(sub: WorktreeWatchSubscription, path: string): void {
-    sub.pendingDirectoryEvents.add(path);
-    if (sub.directoryCheckQueued) return;
-    sub.directoryCheckQueued = true;
+  private queueDirectoryCheck(root: SharedWorktreeWatch, path: string): void {
+    root.pendingDirectoryEvents.add(path);
+    if (root.directoryCheckQueued) return;
+    root.directoryCheckQueued = true;
     queueMicrotask(() => {
-      sub.directoryCheckQueued = false;
-      void this.flushDirectoryChecks(sub);
+      root.directoryCheckQueued = false;
+      void this.flushDirectoryChecks(root);
     });
   }
 
-  private async flushDirectoryChecks(sub: WorktreeWatchSubscription): Promise<void> {
-    if (!this.isLive(sub)) return;
-    const candidates = [...sub.pendingDirectoryEvents];
-    sub.pendingDirectoryEvents.clear();
+  private async flushDirectoryChecks(root: SharedWorktreeWatch): Promise<void> {
+    if (!this.isRootLive(root)) return;
+    const candidates = [...root.pendingDirectoryEvents];
+    root.pendingDirectoryEvents.clear();
     let ignored = new Set<string>();
     try {
-      const outputPaths = await this.checkIgnoredPaths(sub.worktreePath, candidates);
+      const outputPaths = await this.checkIgnoredPaths(root.worktreePath, candidates);
       ignored = new Set(
         outputPaths
           .map((path) => normalizeRepoPath(path))
@@ -451,64 +480,78 @@ export class WorktreeChangeWatchManager {
       // Fail open like a full refresh: one failed optimization probe must not
       // suppress a real source change forever.
     }
-    if (!this.isLive(sub)) return;
+    if (!this.isRootLive(root)) return;
     let shouldBroadcast = false;
     for (const path of candidates) {
-      sub.checkedDirectories.add(path);
+      root.checkedDirectories.add(path);
       if (ignored.has(path)) {
-        sub.ignoredPaths.add(`${path}/`);
+        root.ignoredPaths.add(`${path}/`);
       } else {
         shouldBroadcast = true;
       }
     }
-    if (shouldBroadcast) this.scheduleBroadcast(sub);
+    if (shouldBroadcast) this.scheduleBroadcast(root);
   }
 
-  /**
-   * Trailing debounce with a {@link WATCH_MAX_WAIT_MS} ceiling: each event
-   * pushes the timer out by `debounceMs`, but never past the deadline the
-   * burst's first event set.
-   */
-  private scheduleBroadcast(sub: WorktreeWatchSubscription): void {
+  /** Trailing debounce with a max-wait ceiling, shared by the whole root. */
+  private scheduleBroadcast(root: SharedWorktreeWatch): void {
     const now = this.now();
-    if (sub.maxWaitAt === null) sub.maxWaitAt = now + this.maxWaitMs;
-    if (sub.debounceTimer !== null) clearTimeout(sub.debounceTimer);
-    const delay = Math.max(0, Math.min(this.debounceMs, sub.maxWaitAt - now));
-    sub.debounceTimer = setTimeout(() => {
-      sub.debounceTimer = null;
-      sub.maxWaitAt = null;
-      if (sub.webContents.isDestroyed()) return;
-      // Only fire if this subscription is still the live one for its key.
-      if (this.subs.get(this.keyFor(sub.webContents, sub.ticketId)) !== sub) return;
-      const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
-      sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
+    if (root.maxWaitAt === null) root.maxWaitAt = now + this.maxWaitMs;
+    if (root.debounceTimer !== null) clearTimeout(root.debounceTimer);
+    const delay = Math.max(0, Math.min(this.debounceMs, root.maxWaitAt - now));
+    root.debounceTimer = setTimeout(() => {
+      root.debounceTimer = null;
+      root.maxWaitAt = null;
+      if (!this.isRootLive(root)) return;
+      for (const [key, sub] of root.subscribers) {
+        if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
+        const payload: WorktreeChangedEvent = { ticketId: sub.ticketId };
+        sub.webContents.send("volli:worktree-changed" satisfies VolliIpcEvent, payload);
+      }
     }, delay);
   }
 
-  private emitWatchError(sub: WorktreeWatchSubscription, message: string): void {
-    if (sub.webContents.isDestroyed()) return;
-    const payload: WorktreeWatchErrorEvent = { ticketId: sub.ticketId, error: message };
-    sub.webContents.send("volli:worktree-watch-error" satisfies VolliIpcEvent, payload);
+  private emitWatchError(root: SharedWorktreeWatch, message: string): void {
+    for (const [key, sub] of root.subscribers) {
+      if (this.subs.get(key) !== sub || sub.webContents.isDestroyed()) continue;
+      const payload: WorktreeWatchErrorEvent = { ticketId: sub.ticketId, error: message };
+      sub.webContents.send("volli:worktree-watch-error" satisfies VolliIpcEvent, payload);
+    }
   }
 
-  private teardown(key: string): void {
+  private teardownSubscriber(key: string): void {
     const sub = this.subs.get(key);
     if (!sub) return;
     this.subs.delete(key);
-    if (sub.debounceTimer !== null) {
-      clearTimeout(sub.debounceTimer);
-      sub.debounceTimer = null;
-    }
-    if (sub.ignoreRefreshTimer !== null) {
-      clearTimeout(sub.ignoreRefreshTimer);
-      sub.ignoreRefreshTimer = null;
-    }
-    sub.maxWaitAt = null;
-    sub.pendingDirectoryEvents.clear();
-    sub.watcher?.close();
-    sub.watcher = null;
+    sub.root.subscribers.delete(key);
     if (!sub.webContents.isDestroyed()) {
       sub.webContents.removeListener("destroyed", sub.onDestroyed);
     }
+    if (sub.root.subscribers.size === 0) this.teardownRoot(sub.root);
+  }
+
+  private teardownRoot(root: SharedWorktreeWatch): void {
+    if (!this.isRootLive(root)) return;
+    this.roots.delete(root.worktreePath);
+    if (root.debounceTimer !== null) {
+      clearTimeout(root.debounceTimer);
+      root.debounceTimer = null;
+    }
+    if (root.ignoreRefreshTimer !== null) {
+      clearTimeout(root.ignoreRefreshTimer);
+      root.ignoreRefreshTimer = null;
+    }
+    root.maxWaitAt = null;
+    root.pendingDirectoryEvents.clear();
+    root.watcher?.close();
+    root.watcher = null;
+
+    for (const [key, sub] of root.subscribers) {
+      this.subs.delete(key);
+      if (!sub.webContents.isDestroyed()) {
+        sub.webContents.removeListener("destroyed", sub.onDestroyed);
+      }
+    }
+    root.subscribers.clear();
   }
 }
