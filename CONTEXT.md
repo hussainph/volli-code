@@ -186,7 +186,11 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: one app-wide
+and each one is a Session Event. A fourth reason exists on the FAILED arm only:
+a provider-native checkpoint the Session can no longer use, whose history is
+restored in its place. It is a reason a person sees rather than a silent
+recovery, because their context just grew back and the next turn may compact
+again for a threshold they did not watch fill. Only the threshold is policy: one app-wide
 switch decides whether a Session compacts before it is asked to. Nobody
 configures a reserve: per-model reserve budgets were retired with the policy
 that carried them (VC-155) and there is no setting to bring them back. The

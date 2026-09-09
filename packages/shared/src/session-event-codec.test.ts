@@ -360,6 +360,14 @@ describe("decodeSessionEventPayload round-trips every durable kind", () => {
       detail: "Summarization failed: the model refused.",
     },
     {
+      // The fourth reason, and the only one with no producer on the compacted
+      // arm: a provider-native checkpoint this Session can no longer use.
+      kind: "context.compaction_failed",
+      attachmentId: "attachment-1",
+      reason: "checkpoint",
+      detail: "A provider-native compaction checkpoint could not be read.",
+    },
+    {
       kind: "context.reasoning_dropped",
       attachmentId: "attachment-1",
       turnId: "turn-1",
@@ -818,6 +826,22 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.tokensBefore must be an integer");
+
+    // `checkpoint` says nothing was compacted, so a stored compacted event
+    // claiming it is as malformed as a fractional count.
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "context.compacted",
+          attachmentId: "attachment-1",
+          reason: "checkpoint",
+          entryId: "pi-entry-9",
+          tokensBefore: 190_000,
+          tokensAfter: 12_000,
+        },
+        "payload",
+      ),
+    ).toThrow("payload.reason has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         {

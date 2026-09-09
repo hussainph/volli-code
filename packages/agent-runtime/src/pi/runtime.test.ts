@@ -6326,30 +6326,35 @@ describe("provider-native context persistence", () => {
       // No second native call was needed to get there: the rebuild is a read
       // of history already on disk, not a fresh compaction bought to replace it.
       expect(fetch).toHaveBeenCalledTimes(2);
-      // The recovery is recorded once, sanitized, so a Session whose context
-      // grew back is legible afterwards.
-      const markers = entryRecords(recovery.sessionFilePath).filter(
-        (entry) =>
-          entry["type"] === "custom" &&
-          (entry["data"] as Record<string, unknown> | undefined)?.["kind"] ===
-            "native-checkpoint-discarded",
+      // The recovery is SAID, once and sanitized: the person's context just
+      // grew back to what it was before a compaction they watched happen, and
+      // the next turn may compact again for a threshold they did not see fill.
+      const replay = await second.reconcile(null);
+      const notices = [...replay.observations].filter(
+        (observation) =>
+          observation.kind === "compaction" &&
+          observation.state === "failed" &&
+          observation.reason === "checkpoint",
       );
-      expect(markers).toHaveLength(1);
-      const marker = markers[0]!["data"] as Record<string, unknown>;
-      expect(String(marker["reason"])).toContain("original history");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({
+        message: expect.stringContaining("original history") as unknown as string,
+      });
       await second.close();
 
-      // A third attach does not record it again.
+      // A third attach finds the same damaged entry and says nothing: the fact
+      // recurs on every attach, the notice is about one event.
       const third = await runtimeFor(attachment, models).startSession({ ...spec, recovery });
-      await third.close();
+      const thirdReplay = await third.reconcile(null);
       expect(
-        entryRecords(recovery.sessionFilePath).filter(
-          (entry) =>
-            entry["type"] === "custom" &&
-            (entry["data"] as Record<string, unknown> | undefined)?.["kind"] ===
-              "native-checkpoint-discarded",
+        [...thirdReplay.observations].filter(
+          (observation) =>
+            observation.kind === "compaction" &&
+            observation.state === "failed" &&
+            observation.reason === "checkpoint",
         ),
       ).toHaveLength(1);
+      await third.close();
     } finally {
       vi.unstubAllGlobals();
     }

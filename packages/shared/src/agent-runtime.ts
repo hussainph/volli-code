@@ -1483,19 +1483,39 @@ export interface TurnObservation {
 }
 
 /**
- * Why a context was compacted, in the executor's own three words.
+ * Why a Session's context and its transcript stopped agreeing.
  *
- * Spelled out rather than imported: this package depends on nothing, and Pi
- * names these same three reasons in its own `CompactionReason`. The two are
- * held in step by the one place that can see both — `pi/runtime.ts` checks this
- * list against Pi's type — rather than by an import this package may not have.
+ * Three of these are reasons a context was COMPACTED, and Pi names the same
+ * three in its own inline union. They are spelled out here rather than
+ * imported — this package depends on nothing — and held in step by the one
+ * place that can see both: `pi/runtime.ts` checks Pi's three against this list.
  *
- * All three have producers: the reserve threshold, the overflow a provider
- * refused, and the `/compact` verb a person typed.
+ * - `threshold` — the reserve filled and the Session made room unasked.
+ * - `overflow` — a provider refused the turn outright.
+ * - `manual` — a person typed `/compact`.
+ * - `checkpoint` — the fourth, and the only one Pi has no producer for: a
+ *   provider-native compaction checkpoint that this Session can no longer use.
+ *   Opaque provider state is bound to the model and route that minted it and
+ *   can stop being readable without anything else going wrong — a durable entry
+ *   damaged by a partial write, most of all. It appears only on the failed arm,
+ *   because nothing was compacted: the Session went the other way and restored
+ *   the history the checkpoint had replaced. It is a reason a person can see
+ *   rather than a silent recovery, because their context just grew back and the
+ *   next turn may compact again for a threshold they did not watch fill
+ *   (VC-331).
  */
-export const COMPACTION_REASONS = ["threshold", "overflow", "manual"] as const;
+export const COMPACTION_REASONS = ["threshold", "overflow", "manual", "checkpoint"] as const;
 
 export type CompactionReason = (typeof COMPACTION_REASONS)[number];
+
+/**
+ * The three that describe work the executor did. `checkpoint` is not one of
+ * them: nothing was summarized, so there is no before, no after and no entry
+ * to address.
+ */
+export const COMPACTION_WORK_REASONS = ["threshold", "overflow", "manual"] as const;
+
+export type CompactionWorkReason = (typeof COMPACTION_WORK_REASONS)[number];
 
 /**
  * The executor is currently preparing a context summary.
@@ -1508,7 +1528,7 @@ export type CompactionReason = (typeof COMPACTION_REASONS)[number];
 export interface CompactionProgressObservation {
   kind: "compaction-progress";
   state: "started" | "finished";
-  reason: CompactionReason;
+  reason: CompactionWorkReason;
   occurredAt?: number;
 }
 
@@ -1533,7 +1553,7 @@ export type CompactionObservation =
   | {
       kind: "compaction";
       state: "compacted";
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
       /** The durable compaction entry in the executor's own history. */
       entryId: string;
       /**

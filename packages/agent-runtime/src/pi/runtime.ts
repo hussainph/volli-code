@@ -49,7 +49,7 @@ import {
   type AuthoritySnapshot,
   type CompactionObservation,
   type CompactionPolicy,
-  type CompactionReason,
+  type CompactionWorkReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type ObservabilitySink,
@@ -160,9 +160,20 @@ export function autoRetryDelayMs(attempt: number): number {
  * has to be recovered from one of those rather than imported by name. Doing it
  * this way rather than restating the union keeps the check honest: it still
  * fails to compile if Pi ever drops or renames one of the three.
+ *
+ * The check is one-directional now, and deliberately. Volli names a fourth
+ * reason — `checkpoint`, a provider-native checkpoint this Session can no
+ * longer use — that Pi has no producer for and no word for, so the assertion
+ * is that each of PI's reasons is still one of VOLLI's rather than that the
+ * two lists are equal.
  */
 type PiCompactionReason = Extract<HarnessEvent, { type: "compaction_start" }>["reason"];
-const COMPACTION_REASON_VALUES = COMPACTION_REASONS satisfies readonly PiCompactionReason[];
+const PI_COMPACTION_REASONS = [
+  "manual",
+  "threshold",
+  "overflow",
+] as const satisfies readonly PiCompactionReason[];
+const COMPACTION_WORK_REASON_VALUES: readonly CompactionWorkReason[] = PI_COMPACTION_REASONS;
 
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
@@ -552,13 +563,6 @@ const VOLLI_OBSERVATION_MARKER = "volli.observation.v1";
  * refused on its first turn, every time; or, for the withheld reply, strip
  * everything again on every attach and throw away reasoning that was validly
  * bound to the stripped replay.
- *
- * The second kind is `native-checkpoint-discarded`: a provider-native
- * compaction checkpoint that could not be read, recorded with the sanitized
- * reason it could not. It is a diagnostic rather than a replay instruction —
- * the replay already rebuilt itself from the original history the checkpoint
- * replaced — and it is durable so that a support read can see a Session whose
- * context grew back, instead of a Session that silently did (VC-331).
  */
 const VOLLI_CONTEXT_MARKER = "volli.context.v1";
 
@@ -611,27 +615,12 @@ interface ReasoningElisionMarker {
   kind: "reasoning-dropped";
 }
 
-interface DiscardedCheckpointMarker {
-  kind: "native-checkpoint-discarded";
-  /** Sanitized; the same diagnostic discipline as `RuntimeFailure`. */
-  reason: string;
-}
-
 function isReasoningElisionMarker(entry: Entry): boolean {
   return (
     entry.type === "custom" &&
     entry.customType === VOLLI_CONTEXT_MARKER &&
     isRecord(entry.data) &&
     entry.data["kind"] === "reasoning-dropped"
-  );
-}
-
-function isDiscardedCheckpointMarker(entry: Entry): boolean {
-  return (
-    entry.type === "custom" &&
-    entry.customType === VOLLI_CONTEXT_MARKER &&
-    isRecord(entry.data) &&
-    entry.data["kind"] === "native-checkpoint-discarded"
   );
 }
 
@@ -797,15 +786,19 @@ function isRecoverableObservation(value: unknown): boolean {
         isSessionUsage(value["usage"])
       );
     case "compaction":
-      if (!isOneOf(value["reason"], COMPACTION_REASON_VALUES)) return false;
       // Whole numbers, because the durable ledger reads them as integers and a
       // marker this accepted but the ledger refused would be a Session that
-      // recovers and then cannot be read.
+      // recovers and then cannot be read. The two arms take different reason
+      // lists for the same reason: `checkpoint` says nothing was compacted, so
+      // a compacted marker carrying it is one the ledger would refuse.
       return value["state"] === "compacted"
-        ? typeof value["entryId"] === "string" &&
+        ? isOneOf(value["reason"], COMPACTION_WORK_REASON_VALUES) &&
+            typeof value["entryId"] === "string" &&
             wholeNumber(value["tokensBefore"]) &&
             wholeNumber(value["tokensAfter"])
-        : value["state"] === "failed" && typeof value["message"] === "string";
+        : value["state"] === "failed" &&
+            isOneOf(value["reason"], COMPACTION_REASONS) &&
+            typeof value["message"] === "string";
     case "activity":
       return (
         typeof value["turnId"] === "string" &&
@@ -1529,18 +1522,28 @@ async function attachSession(
     }
     // An unreadable checkpoint is a recovered Session, not an unattachable one:
     // the history it replaced is still on disk and is what {@link contextMessages}
-    // just rebuilt from. Recorded once so a Session that quietly grew its
-    // context back is legible afterwards, and not again on the next attach.
-    if (replayable.discarded.length > 0 && !recoveredEntries.some(isDiscardedCheckpointMarker)) {
+    // just rebuilt from. Said out loud rather than recovered in silence: the
+    // person's context just grew back to what it was before a compaction they
+    // watched happen, and the next turn may compact again for a threshold they
+    // did not see fill. Said ONCE — the fact recurs on every attach because the
+    // damaged entry is still on disk, and a notice that reappeared on every
+    // restart would be noise about one event.
+    if (
+      replayable.discarded.length > 0 &&
+      !recoveredObservations.some(
+        (observation) =>
+          observation.kind === "compaction" &&
+          observation.state === "failed" &&
+          observation.reason === "checkpoint",
+      )
+    ) {
       for (const reason of new Set(replayable.discarded)) {
-        await mainBranch.appendCustomEntry(
-          VOLLI_CONTEXT_MARKER,
-          {
-            kind: "native-checkpoint-discarded",
-            reason: sanitizeDiagnostic(reason),
-          } satisfies DiscardedCheckpointMarker,
-          piContext(),
-        );
+        await persistObservation({
+          kind: "compaction",
+          state: "failed",
+          reason: "checkpoint",
+          message: sanitizeDiagnostic(reason),
+        });
       }
     }
     // No preflight before the tools are built. There is no boundary left to
@@ -2129,7 +2132,9 @@ async function attachSession(
     };
 
     const compactContext = async (input: {
-      reason: CompactionReason;
+      // Only the three reasons a compaction is ATTEMPTED for; `checkpoint`
+      // reports a compaction that stopped being usable and runs no work.
+      reason: CompactionWorkReason;
       path: readonly Entry[];
       signal: AbortSignal | undefined;
       /** What to keep, in the requester's words. Only a person supplies these. */
