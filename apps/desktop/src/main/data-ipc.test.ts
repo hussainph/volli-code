@@ -7,6 +7,7 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectUpdateResult,
   Result,
   RetentionTtlResult,
   SessionRenameResult,
@@ -407,6 +408,28 @@ describe("volli:project-update — pinned base branch", () => {
         project: expect.objectContaining({ setupCommand: null }),
       }),
     );
+  });
+});
+
+describe("volli:project-session-defaults — Chat model", () => {
+  it("updates the Chat model without changing the retired harness column", () => {
+    const projectId = createProject();
+    ctx.db.prepare("UPDATE projects SET session_harness = 'codex' WHERE id = ?").run(projectId);
+    const model = {
+      providerId: "anthropic",
+      modelId: "claude-opus-4-6",
+      reasoningLevel: "high" as const,
+    };
+
+    const result = invoke<ProjectUpdateResult>("volli:project-session-defaults", {
+      id: projectId,
+      model,
+    });
+
+    expect(result).toMatchObject({ ok: true, project: { id: projectId, sessionModel: model } });
+    expect(
+      ctx.db.prepare("SELECT session_harness FROM projects WHERE id = ?").get(projectId),
+    ).toEqual({ session_harness: "codex" });
   });
 });
 

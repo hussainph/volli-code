@@ -474,7 +474,7 @@ const api = {
     /** Replaces this project's per-skill rules wholesale — the Configure Skills table (VC-111). */
     setSkillModes: (input: ProjectSkillModesInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-skill-modes", input),
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
     /**

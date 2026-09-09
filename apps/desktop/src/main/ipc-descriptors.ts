@@ -419,8 +419,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input) || typeof input["id"] !== "string") return false;
-      const harness = input["harness"];
-      if (harness !== null && typeof harness !== "string") return false;
       const model = input["model"];
       if (model === null) return true;
       return (

@@ -605,13 +605,12 @@ export function registerDataIpcHandlers(
       return { ok: true, project };
     },
 
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     "volli:project-session-defaults": (input: ProjectSessionDefaultsInput): ProjectUpdateResult => {
-      const harness = input.harness === null ? null : input.harness.trim();
       const project = updateProjectSessionDefaults(
         db,
         input.id,
-        { harness: harness === "" ? null : harness, model: input.model },
+        { model: input.model },
         Date.now(),
       );
       if (!project) return { ok: false, error: "Unknown project" };

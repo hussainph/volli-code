@@ -159,14 +159,9 @@ export type ProjectAuthorityPolicyResult =
   | { ok: true; project: Project }
   | { ok: false; error: string; errors?: readonly string[] };
 
-/**
- * One project's defaults for new Sessions (VC-111, migration 023). Both fields
- * every time, `null` meaning inherit — see `updateProjectSessionDefaults` for
- * why these two travel together where the theme pair does not.
- */
+/** One project's Chat model default; `null` means inherit (VC-111, migration 023). */
 export interface ProjectSessionDefaultsInput {
   id: string;
-  harness: string | null;
   model: ModelSelection | null;
 }
 
@@ -599,7 +594,7 @@ export interface VolliDataIpcContract {
     args: [input: ProjectSkillModesInput];
     result: ProjectUpdateResult;
   };
-  /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+  /** Replaces this project's Chat model default (VC-111). */
   "volli:project-session-defaults": {
     args: [input: ProjectSessionDefaultsInput];
     result: ProjectUpdateResult;
