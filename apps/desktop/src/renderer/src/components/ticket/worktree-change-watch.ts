@@ -18,10 +18,39 @@ import type {
 /** The `window.api.worktree` subset a subscription needs — injected so tests drive it. */
 export interface WorktreeChangeWatchApi {
   watchChangeSet(ticketId: string): Promise<Result>;
+  pauseChangeSet(ticketId: string): Promise<Result>;
+  resumeChangeSet(ticketId: string): Promise<Result>;
   unwatchChangeSet(ticketId: string): Promise<Result>;
   onChanged(callback: (event: WorktreeChangedEvent) => void): () => void;
   onWatchError(callback: (event: WorktreeWatchErrorEvent) => void): () => void;
 }
+
+/** Injectable window-focus seam; the renderer test project has no DOM. */
+export interface WorktreeChangeWatchFocus {
+  isFocused(): boolean;
+  subscribe(callback: (focused: boolean) => void): () => void;
+}
+
+function browserWindowIsFocused(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+const browserFocus: WorktreeChangeWatchFocus = {
+  isFocused: browserWindowIsFocused,
+  subscribe(callback) {
+    if (typeof window === "undefined" || typeof document === "undefined") return () => {};
+    const notify = () => callback(browserWindowIsFocused());
+    window.addEventListener("focus", notify);
+    window.addEventListener("blur", notify);
+    document.addEventListener("visibilitychange", notify);
+    return () => {
+      window.removeEventListener("focus", notify);
+      window.removeEventListener("blur", notify);
+      document.removeEventListener("visibilitychange", notify);
+    };
+  },
+};
 
 export interface WorktreeChangeWatchHandlers {
   /** A debounced filesystem change landed for this ticket. Refresh only — never open a tab. */
@@ -47,13 +76,63 @@ export function subscribeWorktreeChanges(
   api: WorktreeChangeWatchApi,
   ticketId: string,
   handlers: WorktreeChangeWatchHandlers,
+  focus: WorktreeChangeWatchFocus = browserFocus,
 ): () => void {
   let cancelled = false;
+  let watchReady = false;
+  let desiredActive = focus.isFocused();
+  // Main starts a new subscription active. Reconcile changes that arrived
+  // while its async git-ignore snapshot was still loading after watch resolves.
+  let appliedActive = true;
+  let reconciling = false;
+
+  const reconcileFocus = async (): Promise<void> => {
+    if (reconciling || cancelled || !watchReady) return;
+    reconciling = true;
+    let failedTarget: boolean | null = null;
+    try {
+      while (desiredActive !== appliedActive) {
+        const nextActive = desiredActive;
+        let result: Result;
+        try {
+          result = await (nextActive
+            ? api.resumeChangeSet(ticketId)
+            : api.pauseChangeSet(ticketId));
+        } catch (error: unknown) {
+          failedTarget = nextActive;
+          if (!cancelled) handlers.onWatchError(errorMessage(error));
+          return;
+        }
+        if (cancelled) return;
+        if (!result.ok) {
+          failedTarget = nextActive;
+          handlers.onWatchError(result.error);
+          return;
+        }
+        appliedActive = nextActive;
+      }
+    } finally {
+      reconciling = false;
+      if (
+        !cancelled &&
+        watchReady &&
+        desiredActive !== appliedActive &&
+        desiredActive !== failedTarget
+      ) {
+        void reconcileFocus();
+      }
+    }
+  };
 
   api.watchChangeSet(ticketId).then(
     (result) => {
       if (cancelled) return;
-      if (!result.ok) handlers.onWatchError(result.error);
+      if (!result.ok) {
+        handlers.onWatchError(result.error);
+        return;
+      }
+      watchReady = true;
+      void reconcileFocus();
     },
     (error: unknown) => {
       if (cancelled) return;
@@ -61,8 +140,14 @@ export function subscribeWorktreeChanges(
     },
   );
 
+  const unsubscribeFocus = focus.subscribe((focused) => {
+    if (cancelled || desiredActive === focused) return;
+    desiredActive = focused;
+    void reconcileFocus();
+  });
+
   const unsubscribeChanged = api.onChanged((event) => {
-    if (event.ticketId !== ticketId) return;
+    if (event.ticketId !== ticketId || !desiredActive) return;
     handlers.onChanged();
   });
 
@@ -75,6 +160,7 @@ export function subscribeWorktreeChanges(
 
   return () => {
     cancelled = true;
+    unsubscribeFocus();
     unsubscribeChanged();
     unsubscribeError();
     void api.unwatchChangeSet(ticketId);

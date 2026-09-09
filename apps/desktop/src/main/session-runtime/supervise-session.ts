@@ -40,8 +40,31 @@
  * a mid-turn model reads the direction now rather than after it finishes. The
  * message text carries an explicit supervision marker naming the sending
  * Session — the receiving model must never mistake steering for its own user.
- * The command is awaited through its delivery receipt: an operation may not
- * tell a supervisor that steering landed until the target runtime accepted it.
+ *
+ * **What the send awaits, and what it does not (VC-324).** It awaits the
+ * durable Command — `#submitMessage` persists intent before any dispatch — and
+ * the target's turn OPENING: the runtime answers a `settle: "opened"` submit
+ * once the `{kind:"turn", state:"started"}` observation is committed and the
+ * Command is marked accepted. It does not await the target's RUN. It used to,
+ * and that was one promise carrying two facts: a supervisor steering an idle
+ * Session paid its own whole turn to learn something it never asked about, and
+ * every later call in its batch waited behind that one. The target's run ends
+ * where it always did — in the target's own ledger — and a supervisor reads it
+ * with `volli session peek`.
+ *
+ * This is not fire-and-forget: a Command that never became durable, a runtime
+ * that refused it, and a run that failed on its way to opening a turn are all
+ * still refusals here, worded for the caller.
+ *
+ * **Receipt honesty.** The status is unchanged: `accepted` — the same status
+ * this path has always written, because `#recordDelivery` maps an adapter's
+ * accepted delivery onto the ledger's `accepted`. It stays the honest one
+ * under `settle: "opened"`: the Receipt records that the runtime ACCEPTED the
+ * Command, which is exactly what has been observed when the turn opens, and it
+ * never claimed the turn had finished (the engine writes no second receipt at
+ * run end, and did not before either). `turnOpened` rides the in-memory
+ * command result, not the durable receipt, because how a delivery landed is
+ * transport detail and the ledger's own turn events already carry the rest.
  */
 
 import { shortSessionId } from "@volli/shared";
@@ -322,8 +345,14 @@ export interface SendSessionOutcome {
   sessionId: string;
   handle: string;
   title: string | null;
-  /** Whether the target had a turn open when the steer was submitted. */
-  midTurn: boolean;
+  /**
+   * Whether the runtime delivered the message into a turn already in flight.
+   * `null` means the adapter did not report how delivery landed; the caller
+   * must not replace that absence with a projection sampled before dispatch.
+   */
+  midTurn: boolean | null;
+  /** Whether this send opened the target's turn, from the runtime's own answer. */
+  turnOpened: boolean;
 }
 
 /**
@@ -365,6 +394,9 @@ export async function sendSessionMessageOperation(
     command: {
       kind: "message.submit",
       delivery: "steer",
+      // The one caller that settles on the turn opening rather than on its
+      // end. See "What a send is" above.
+      settle: "opened",
       message: {
         id: `${input.operationId}:message`,
         role: "user",
@@ -382,7 +414,13 @@ export async function sendSessionMessageOperation(
     sessionId: target.session.id,
     handle: shortSessionId(target.session.id),
     title: target.session.title,
-    midTurn: target.turnActive,
+    // Delivery is an adapter fact. The target projection was read before the
+    // Command and can race with another caller opening a turn in between.
+    midTurn:
+      delivered.delivery === undefined
+        ? null
+        : delivered.delivery === "steer" || delivered.delivery === "queue",
+    turnOpened: delivered.turnOpened ?? false,
   };
 }
 

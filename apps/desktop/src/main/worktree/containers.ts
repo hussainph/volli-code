@@ -19,7 +19,7 @@
  * So ownership gets a name. A container is ours when it is the container OUR
  * project rows compute; anything else under the root belongs to somebody else's
  * database and is not ours to remove, report, or offer for deletion — exactly
- * the stance {@link import("./sweep").sweepOrphans} already took toward a
+ * the stance {@link import("./scan").scanOrphans} already takes toward a
  * worktree outside the root entirely.
  */
 import { basename, join } from "node:path";

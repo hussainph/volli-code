@@ -293,6 +293,12 @@ export default defineConfig(({ mode }) => ({
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
+        // What Storage says about an orphaned worktree, before and after a
+        // destructive act (VC-284). Enrolled for the same reason as the row
+        // above: these are sentences about deletions, and the bug they answer
+        // was a label — every removed row read "Removed at launch", including
+        // the ones a person had just asked for by hand.
+        "src/components/settings/panes/storage-orphans-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).

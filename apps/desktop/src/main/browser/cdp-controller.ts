@@ -105,6 +105,21 @@ const MAX_WAIT_MS = 5_000;
  */
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 
+type TimeoutOperation = "readiness" | "snapshot" | "screenshot" | "action";
+
+function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string {
+  switch (operation) {
+    case "readiness":
+      return `The Browser Tab did not become ready within ${timeoutMs}ms. Try the Browser Tab command again.`;
+    case "snapshot":
+      return `The Browser Tab did not finish taking a snapshot within ${timeoutMs}ms. Wait for the page to settle, then try the snapshot again.`;
+    case "screenshot":
+      return `The Browser Tab did not finish taking a screenshot within ${timeoutMs}ms. The page may still be busy or too heavy to capture in time. Take a snapshot to check its current state, then try the screenshot again.`;
+    case "action":
+      return `The Browser Tab did not finish the requested action within ${timeoutMs}ms. The action may or may not have reached the page; check its current state before trying again.`;
+  }
+}
+
 function narrowedLimit(requested: number | undefined, maximum: number): number {
   return Math.min(Math.max(requested ?? maximum, 0), maximum);
 }
@@ -194,12 +209,12 @@ export class BrowserTabController {
     // leave one attached behind it.
     signal?.throwIfAborted();
     if (this.#ensureReady !== undefined) {
-      await this.#bounded(this.#ensureReady(), "its CDP attachment", signal);
+      await this.#bounded(this.#ensureReady(), "readiness", signal);
       return;
     }
-    await this.#command("Accessibility.enable", undefined, signal);
-    await this.#command("DOM.enable", undefined, signal);
-    await this.#command("Page.enable", undefined, signal);
+    await this.#command("Accessibility.enable", undefined, signal, "readiness");
+    await this.#command("DOM.enable", undefined, signal, "readiness");
+    await this.#command("Page.enable", undefined, signal, "readiness");
   }
 
   /**
@@ -208,7 +223,11 @@ export class BrowserTabController {
    * promise stays harmlessly attached — a late answer settles a promise
    * nobody reads, never a session.
    */
-  async #bounded<T>(answer: Promise<T>, what: string, signal?: AbortSignal): Promise<T> {
+  async #bounded<T>(
+    answer: Promise<T>,
+    operation: TimeoutOperation,
+    signal?: AbortSignal,
+  ): Promise<T> {
     // An already-aborted signal never dispatches `abort` to a listener added
     // after the fact, so the race below would wait out the whole clock for a
     // turn that is already gone. Answer it here instead.
@@ -226,13 +245,7 @@ export class BrowserTabController {
         finish(() => reject(signal?.reason ?? new Error("Browser action cancelled")));
       };
       const timer = setTimeout(() => {
-        finish(() =>
-          reject(
-            new Error(
-              `The Browser Tab's engine did not answer ${what} within ${this.#limits.maxCommandMs}ms.`,
-            ),
-          ),
-        );
+        finish(() => reject(new Error(timeoutMessage(operation, this.#limits.maxCommandMs))));
       }, this.#limits.maxCommandMs);
       signal?.addEventListener("abort", abort, { once: true });
       answer.then(
@@ -243,9 +256,14 @@ export class BrowserTabController {
   }
 
   /** Every CDP command this controller speaks goes through the bounded wire. */
-  async #command(method: string, params?: object, signal?: AbortSignal): Promise<unknown> {
+  async #command(
+    method: string,
+    params?: object,
+    signal?: AbortSignal,
+    operation: TimeoutOperation = "action",
+  ): Promise<unknown> {
     signal?.throwIfAborted();
-    return await this.#bounded(this.#send(method, params), method, signal);
+    return await this.#bounded(this.#send(method, params), operation, signal);
   }
 
   /**
@@ -264,7 +282,7 @@ export class BrowserTabController {
    */
   async #releaseHalf(method: string, params: object): Promise<void> {
     try {
-      await this.#bounded(this.#send(method, params), method);
+      await this.#bounded(this.#send(method, params), "action");
     } catch {
       // Nothing left to try. The engine is gone, wedged, or tearing down —
       // all three end the same way, and the caller already has the real fault.
@@ -298,7 +316,12 @@ export class BrowserTabController {
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
     signal?.throwIfAborted();
-    const answer = (await this.#command("Accessibility.getFullAXTree", undefined, signal)) as {
+    const answer = (await this.#command(
+      "Accessibility.getFullAXTree",
+      undefined,
+      signal,
+      "snapshot",
+    )) as {
       nodes?: AXNodeLike[];
     };
     signal?.throwIfAborted();
@@ -433,13 +456,23 @@ export class BrowserTabController {
     signal?: AbortSignal,
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
-    const captured = (await this.#command("Page.captureScreenshot", { format: "png" }, signal)) as {
+    const captured = (await this.#command(
+      "Page.captureScreenshot",
+      { format: "png" },
+      signal,
+      "screenshot",
+    )) as {
       data?: string;
     };
     if (typeof captured.data !== "string" || captured.data.length === 0) {
-      throw new Error("Chromium returned no Browser Tab screenshot data");
+      throw new Error("The Browser Tab's page produced no screenshot pixels to return");
     }
-    const metrics = (await this.#command("Page.getLayoutMetrics", undefined, signal)) as {
+    const metrics = (await this.#command(
+      "Page.getLayoutMetrics",
+      undefined,
+      signal,
+      "screenshot",
+    )) as {
       cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
     };
     return {

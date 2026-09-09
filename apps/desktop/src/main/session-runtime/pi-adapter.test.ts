@@ -116,6 +116,8 @@ class FakeRuntime implements AgentRuntime {
   readonly submissions: string[] = [];
   readonly submissionResources: Array<readonly PromptResource[]> = [];
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
+  /** What each submit was asked to settle on (VC-324). */
+  readonly settles: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[5]> = [];
   readonly submissionCommandIds: Array<
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
   > = [];
@@ -172,10 +174,12 @@ class FakeRuntime implements AgentRuntime {
         commandId,
         _images,
         resources = [],
+        settle,
       ): Promise<DeliveryOutcome> => {
         this.submissions.push(text);
         this.submissionResources.push(resources);
         this.deliveries.push(delivery);
+        this.settles.push(settle);
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "prompt" };
@@ -1416,6 +1420,7 @@ describe("Pi native adapter dispatch", () => {
       status: "accepted",
       acceptedAt: 1000,
       native: binding.native,
+      delivery: "prompt",
     });
   });
 
@@ -1526,6 +1531,45 @@ describe("Pi native adapter dispatch", () => {
     });
 
     expect(runtime.deliveries).toEqual(["queue", "steer"]);
+  });
+
+  it("asks the runtime to settle where the command said, and reports the turn it opened", async () => {
+    const { binding, runtime } = await attached();
+
+    const plain = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-default",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("as ever"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    // Absent on the command is `"turn"`. Delivery remains a transient adapter
+    // answer while the receipt claims no turn is still open.
+    expect(runtime.settles).toEqual(["turn"]);
+    expect(plain).toMatchObject({ delivery: "prompt" });
+    expect(plain).not.toHaveProperty("turnOpened");
+
+    runtime.outcomes.push({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    const opened = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-opened",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("read this now"),
+      delivery: "steer",
+      settle: "opened",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(runtime.settles).toEqual(["turn", "opened"]);
+    expect(opened).toMatchObject({ status: "accepted", delivery: "prompt", turnOpened: true });
   });
 
   it("rejects a message with nothing in it to send", async () => {

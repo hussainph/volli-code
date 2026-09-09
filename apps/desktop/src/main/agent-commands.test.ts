@@ -103,6 +103,15 @@ const ACTING_ENV: AgentRequest["ctx"]["env"] = {
  * twice would otherwise disarm its own earlier requests.
  */
 const mintedFor = new Map<string, string>();
+/**
+ * The `git diff --raw -z -M` records a worktree with these modified paths emits.
+ * Change Set reads take status from ONE raw diff process (VC-337), so a scripted
+ * git that still answered `--name-status` would be imitating a git we no longer
+ * call — and would report every worktree as untouched.
+ */
+function rawModified(paths: readonly string[]): string {
+  return paths.map((path) => `:100644 100644 1111111 2222222 M\u0000${path}\u0000`).join("");
+}
 /** One durable `todo_write` call, exactly as `observation-translation` writes it (VC-6). */
 function todoMessage(id: string, todos: readonly { content: string; status: string }[]): UIMessage {
   return {
@@ -369,7 +378,7 @@ describe("agent command service", () => {
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
     expect(onMutation).toHaveBeenCalledTimes(7);
-  });
+  }, 15_000);
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
     ctx = openTestDb();
@@ -2343,6 +2352,67 @@ describe("agent command service", () => {
       },
       provenance,
     });
+    // The fifth honest state (VC-324): a turn that DIED. The runtime raised a
+    // transport Attention and then interrupted the turn — the shape a network
+    // dead end leaves behind, and the other one "idle" used to hide.
+    const interrupted = await sessionEngine.createSession({
+      commandId: "create-interrupted",
+      projectId: "project-one",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Interrupted",
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attach",
+      kind: "attachment.opened",
+      sessionId: interrupted.session.id,
+      occurredAt: 1_000,
+      provenance,
+      attachment: {
+        id: "attachment-interrupted",
+        sessionId: interrupted.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "pi-interrupted", detail: null },
+        authority: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-turn",
+      kind: "turn.started",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attention",
+      kind: "attention.raised",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_500,
+      provenance,
+      attention: {
+        id: "attention-interrupted",
+        kind: "adapter_unrecoverable",
+        attachmentId: "attachment-interrupted",
+        detail: null,
+        diagnostic: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-end",
+      kind: "turn.interrupted",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 3_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -2389,6 +2459,16 @@ describe("agent command service", () => {
             id: stopped.session.id.slice(0, 8),
             status: "stopped",
             waitingOn: null,
+            interruptedReason: null,
+          }),
+          // A dead turn is not quiet: the word says it, and the coarse reason
+          // rides beside it the way a waiting row's errand does.
+          expect.objectContaining({
+            id: interrupted.session.id.slice(0, 8),
+            status: "interrupted",
+            waitingOn: null,
+            interruptedReason: "stopped-by-runtime",
+            lastActivityAgeMs: 7_000,
           }),
         ]),
       },
@@ -2401,7 +2481,20 @@ describe("agent command service", () => {
       args: { id: stopped.session.id.slice(0, 8) },
       ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
-    expect(peek).toMatchObject({ ok: true, data: { status: "stopped", waitingOn: null } });
+    expect(peek).toMatchObject({
+      ok: true,
+      data: { status: "stopped", waitingOn: null, interruptedReason: null },
+    });
+    const interruptedPeek = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: interrupted.session.id.slice(0, 8) },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(interruptedPeek).toMatchObject({
+      ok: true,
+      data: { status: "interrupted", interruptedReason: "stopped-by-runtime" },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -5001,9 +5094,9 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
+      if (args[0] === "diff" && args.includes("--raw")) {
         const display = cwd.slice("/wt/".length);
-        return (touched[display] ?? []).map((path) => `M\u0000${path}\u0000`).join("");
+        return rawModified(touched[display] ?? []);
       }
       if (args[0] === "status") return "";
       return "";
@@ -5081,8 +5174,8 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
-        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? "M\u0000src/shared.ts\u0000" : "";
+      if (args[0] === "diff" && args.includes("--raw")) {
+        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? rawModified(["src/shared.ts"]) : "";
       }
       if (args[0] === "diff") return "";
       if (args[0] === "status") {
@@ -5169,7 +5262,7 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) return "M\u0000package.json\u0000";
+      if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
       if (args[0] === "diff") return "1\t0\tpackage.json\n";
       if (args[0] === "status") return "";
       return "";

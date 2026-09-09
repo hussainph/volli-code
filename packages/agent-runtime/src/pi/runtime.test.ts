@@ -4986,6 +4986,209 @@ describe("startSession", () => {
   });
 });
 
+describe("settling a submit on the turn opening (VC-324)", () => {
+  it("answers an idle target once its turn has started, without waiting for the run", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const running = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit) => {
+            running.resolve();
+            await release.promise;
+            emit.text("done at last");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    const delivered = await handle.submitUserMessage(
+      "steer this in",
+      "steer",
+      "command-opened",
+      [],
+      [],
+      "opened",
+    );
+
+    expect(delivered).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    // The run is still going: the answer came back on `turn:started` alone.
+    await running.promise;
+    expect(kinds(observations)).toEqual(["attachment:started", "turn:started"]);
+    // And the Command is durably accepted by the time the caller is released.
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "command-opened",
+    ]);
+
+    release.resolve();
+    await handle.close();
+    expect(kinds(observations)).toContain("turn:completed");
+  });
+
+  it("reports an observer failure from the turn-opening boundary to that caller", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    spec.observer = async (observation) => {
+      observations.push(observation);
+      if (observation.kind === "turn" && observation.state === "started") {
+        throw new Error("turn store unavailable");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("opened anyway")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(
+      handle.submitUserMessage("go", "steer", "command-opening-failed", [], [], "opened"),
+    ).rejects.toThrow("turn store unavailable");
+    await handle.close();
+  });
+
+  it("raises the same Attention when the detached run fails", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const raised = Promise.withResolvers<void>();
+    spec.observer = async (observation) => {
+      observations.push(observation);
+      if (observation.kind === "attention") raised.resolve();
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail("malformed provider payload")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(
+      handle.submitUserMessage("go", "steer", "command-doomed", [], [], "opened"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+
+    await raised.promise;
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ reason: "runtime-failure", message: "malformed provider payload" }),
+    ]);
+    await handle.close();
+  });
+
+  it("does not charge a detached run failure to the next command", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const detachedFailed = Promise.withResolvers<void>();
+    const runEnded = Promise.withResolvers<void>();
+    spec.observer = async (observation) => {
+      observations.push(observation);
+      if (observation.kind === "turn" && observation.state === "interrupted") {
+        runEnded.resolve();
+      }
+      if (observation.kind === "attention" && observation.state === "raised") {
+        detachedFailed.resolve();
+        throw new Error("attention store unavailable");
+      }
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => emit.fail("malformed provider payload"),
+          settles("the next command still runs"),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(
+      handle.submitUserMessage("first", "steer", "command-detached", [], [], "opened"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    await detachedFailed.promise;
+    await runEnded.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(handle.submitUserMessage("second")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+    await handle.close();
+  });
+
+  it("reports no opened turn when the message joined one already running", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const streaming = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit) => {
+            streaming.resolve();
+            await release.promise;
+            emit.text("first done");
+            emit.finish();
+          },
+          settles("steered done"),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    const first = handle.submitUserMessage("first", "queue", "command-first");
+    await streaming.promise;
+    const delivered = await handle.submitUserMessage(
+      "read this now",
+      "steer",
+      "command-mid-turn",
+      [],
+      [],
+      "opened",
+    );
+
+    // Absent, not true: a supervisor tells "joined a running turn" from
+    // "opened a new one" by this field alone.
+    expect(delivered).toEqual({ kind: "delivered", delivery: "steer" });
+    release.resolve();
+    await first;
+    await handle.close();
+  });
+
+  it("keeps the default submit waiting for the whole run", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const running = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit) => {
+            running.resolve();
+            await release.promise;
+            emit.text("done at last");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    let settled = false;
+    const delivery = handle.submitUserMessage("go").then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+    await running.promise;
+    expect(settled).toBe(false);
+
+    release.resolve();
+    // No `turnOpened` on the default answer: by the time it comes back, the
+    // turn it opened has already ended.
+    await expect(delivery).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
+    await handle.close();
+  });
+});
+
 describe("auto-retrying a dropped transport", () => {
   it("resumes the same turn in place when the socket drops mid-stream", async () => {
     const { spec, observations, sessionDataDir } = fixture();

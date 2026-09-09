@@ -28,6 +28,7 @@ import {
   type ShellOutputUpdate,
   type ShellOutputView,
 } from "@earendil-works/pi-agent-core/node";
+import { refuseDaemonizingExecute } from "../shell/refusal";
 import { scopedEnvironment } from "./execution-env";
 
 const KILL_GRACE_MS = 250;
@@ -745,6 +746,9 @@ export class ScopedExecutionEnv implements ExecutionEnv {
     if (!prepared.ok) return prepared;
     if (abortSignal?.aborted) return executionError("aborted", "Command aborted before launch.");
 
+    const refusal = refuseDaemonizingExecute(command);
+    if (refusal) return executionError("spawn_error", refusal.message, refusal);
+
     const commandCwd = await this.#commandCwd(options.cwd);
     if (!commandCwd.ok) return commandCwd;
 
@@ -775,6 +779,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       let settled = false;
       let closeObserved = false;
       let killEscalated = false;
+      let completedGroupTerminationStarted = false;
       let timeout: NodeJS.Timeout | undefined;
       let killEscalation: NodeJS.Timeout | undefined;
       let terminationResult: Result<ShellExecResult, ExecutionError> | undefined;
@@ -816,6 +821,19 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         terminationResult = result;
         terminate();
         terminationDeadline = setTimeout(() => finish(result), KILL_GRACE_MS * 2);
+      };
+      const terminateCompletedGroup = () => {
+        if (completedGroupTerminationStarted) return;
+        completedGroupTerminationStarted = true;
+        this.#signalChildGroup(launchedChild, "SIGTERM");
+        setTimeout(() => {
+          // A descendant that double-forks or calls setsid out of this group
+          // escapes by design. VC-341's spawn ledger and cwd sweep own that
+          // wider lifecycle; execute only owns the group it started.
+          this.#signalChildGroup(launchedChild, "SIGKILL");
+        }, KILL_GRACE_MS);
+        // Cleanup is deliberately fire-and-forget: a completed command's result
+        // must not wait out the grace period.
       };
       const abort = () => requestTermination(executionError("aborted", "Command aborted."));
 
@@ -930,6 +948,13 @@ export class ScopedExecutionEnv implements ExecutionEnv {
         absorb(stderrDecoder.write(Buffer.isBuffer(data) ? data : Buffer.from(data)));
       });
       child.once("error", (error) => finish(executionError("spawn_error", error.message, error)));
+      child.once("exit", () => {
+        // A background child can inherit the pipes and keep `close` from ever
+        // arriving after its shell leader exits. Start the same successful-close
+        // cleanup here so close can be observed; the close handler below is the
+        // fallback for hosts and test doubles that report only that event.
+        if (terminationResult === undefined) terminateCompletedGroup();
+      });
       child.once("close", (exitCode) => {
         absorb(stdoutDecoder.end());
         absorb(stderrDecoder.end());
@@ -938,6 +963,7 @@ export class ScopedExecutionEnv implements ExecutionEnv {
           finishTerminationIfReady();
           return;
         }
+        terminateCompletedGroup();
         void (async () => {
           // The spool has to be complete before the exit code is reported:
           // the metadata names a path, and a caller that reads it immediately
