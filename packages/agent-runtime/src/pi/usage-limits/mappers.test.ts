@@ -12,6 +12,7 @@ import {
   finiteNumber,
   isoTimestamp,
   percentOf,
+  recordOf,
   secondsFromNowToIso,
   windowShapeForMinutes,
 } from "./windows";
@@ -488,13 +489,14 @@ describe("kimiUsageFromEndpoint", () => {
           windowDurationMins: 300,
         },
         {
-          id: "weekly",
-          kind: "weekly",
-          label: "Weekly",
+          // The top-level key is the only identity this response states. Its
+          // reset alone does not prove a seven-day duration.
+          id: "usage",
+          kind: "other",
+          label: "Plan",
           // 1000 − 380 of 1000.
           usedPercent: 62,
           resetsAt: "2026-03-05T09:30:00.416Z",
-          windowDurationMins: 10_080,
         },
       ],
     });
@@ -507,12 +509,11 @@ describe("kimiUsageFromEndpoint", () => {
     );
     expect(limits.windows).toEqual([
       {
-        id: "weekly",
-        kind: "weekly",
-        label: "Weekly",
+        id: "usage",
+        kind: "other",
+        label: "Plan",
         usedPercent: 25,
         resetsAt: iso(RESET_7D),
-        windowDurationMins: 10_080,
       },
     ]);
   });
@@ -612,7 +613,7 @@ describe("kimiUsageFromEndpoint", () => {
       },
       NOW,
     );
-    expect(limits.windows.map((window) => window.id)).toEqual(["weekly"]);
+    expect(limits.windows.map((window) => window.id)).toEqual(["usage"]);
   });
 
   it("holds an overspent window at a full bar", () => {
@@ -722,7 +723,7 @@ describe("githubCopilotUsageFromEndpoint", () => {
     ]);
   });
 
-  it("reports a failed probe when no class is both present and metered", () => {
+  it("reports a failed probe when no known class is readable", () => {
     const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
     expect(githubCopilotUsageFromEndpoint(undefined, NOW)).toEqual(failed);
     expect(githubCopilotUsageFromEndpoint([], NOW)).toEqual(failed);
@@ -732,8 +733,7 @@ describe("githubCopilotUsageFromEndpoint", () => {
     expect(
       githubCopilotUsageFromEndpoint({ quota_snapshots: { premium_interactions: null } }, NOW),
     ).toEqual(failed);
-    // Every class unlimited: a seat with nothing to meter, not a failed read
-    // of one — but there is no window to draw either way.
+    // Every known class unlimited is a valid read with no Usage Window.
     expect(
       githubCopilotUsageFromEndpoint(
         {
@@ -744,7 +744,7 @@ describe("githubCopilotUsageFromEndpoint", () => {
         },
         NOW,
       ),
-    ).toEqual(failed);
+    ).toEqual({ checkedAt: NOW, windows: [] });
     // A class with no percentage at all.
     expect(
       githubCopilotUsageFromEndpoint(
@@ -902,6 +902,14 @@ describe("headerUsageUpdate", () => {
 });
 
 describe("value readers", () => {
+  it("narrows JSON-style objects without accepting arrays or null", () => {
+    const record = { value: 1 };
+    expect(recordOf(record)).toBe(record);
+    expect(recordOf([])).toBeUndefined();
+    expect(recordOf(null)).toBeUndefined();
+    expect(recordOf("value")).toBeUndefined();
+  });
+
   it("reads a finite number from a number, a numeric string, and nothing else", () => {
     expect(finiteNumber(37)).toBe(37);
     expect(finiteNumber(" 0.5 ")).toBe(0.5);

@@ -25,13 +25,6 @@
  * The panel closes, the snapshot reloads, and the row says what it now finds —
  * a wrong key surfaces on first use, and any "Connected" here would be a
  * guess dressed as a receipt.
- *
- * **Subscription windows are not drawn here** (VC-271). They were, under each
- * row, and it put a live measurement four clicks deep in a settings tree: the
- * question "how much have I got left" arrives mid-run, not while configuring
- * accounts. They live in the chrome band's usage-limits popover now
- * (`components/usage-limits/`), which every page in the app can reach. This
- * page is where an account is CHANGED; that one is where it is watched.
  */
 
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
@@ -58,6 +51,7 @@ import {
   type DeepLinkedAction,
   type SignInView,
 } from "@renderer/components/pages/model-access-accounts-model";
+import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage";
 import { Empty, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@renderer/components/ui/input-group";
 import { Button } from "@renderer/components/ui/button";
@@ -352,6 +346,9 @@ function ProviderAccount({
           </>
         )}
       </PrefRow>
+      {provider.usageLimits === undefined ? null : (
+        <ModelAccessUsage limits={provider.usageLimits} testId={`usage-${provider.id}`} />
+      )}
       {session !== null || view.failure !== null ? (
         <SignInPanel
           view={view}

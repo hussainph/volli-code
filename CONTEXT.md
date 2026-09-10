@@ -468,23 +468,14 @@ _Avoid_: usage table (understates that it is derived), cost cache, running total
 One metered allowance a provider's SUBSCRIPTION grants an account, and how much
 of it is gone: a share used, when the window resets, and how long the window
 runs. Claude Pro/Max meters a five-hour session window and a seven-day one;
-Codex a session and a weekly one; OpenCode Go a rolling, weekly and monthly one;
-Kimi Code a five-hour one and a plan-wide one; xAI one shared period; GitHub
-Copilot a monthly one per class of interaction. A window is named by WHAT ITS
-SOURCE STATES — the key the source gives it, or its length — and never by the
-slot a provider happened to put it in: Codex has been seen putting a weekly
-window in `primary`, so length names that one, while Anthropic and Copilot state
-keys (`five_hour`, `premium_interactions`) that are the only spelling a reader
-can look up. Both sources for one provider use the same window id so a reading
-taken mid-turn lands on the row an on-demand read drew. Windows are read two
-ways: the rate-limit headers a Metered operation's response carries, and one
-on-demand GET of the provider's own usage endpoint. A reader also decides which
-of an account's credentials its endpoint takes — usually the one the turns use,
-but Copilot's account endpoint is on a different host and knows only the GitHub
-token the request token was minted from. Neither source is durable. A window is a
-live measurement of someone else's meter, so it is held in memory by the Agent
-Runtime, read through Model Access, surfaced in the chrome band's usage-limits
-popover, and never written to the Session ledger.
+Codex a session and a weekly one; OpenCode Go a rolling, weekly and monthly one.
+A window is named by its LENGTH, never by the slot a provider happened to put it
+in, and both sources for one provider use the same window id so a reading taken
+mid-turn lands on the row an on-demand read drew. Windows are read two ways: the
+rate-limit headers a Metered operation's response carries, and one on-demand GET
+of the provider's own usage endpoint. Neither is durable. A window is a live
+measurement of someone else's meter, so it is held in memory by the Agent
+Runtime, read through Model Access, and never written to the Session ledger.
 _Avoid_: quota (says nothing about the window), rate limit (that is the refusal,
 not the allowance), usage (that word is already spent — see **Usage projection**,
 which is Volli's own cost accounting and an unrelated fact)

@@ -36,7 +36,7 @@
 
 import { usageLimitsProbeFailed, clampPercent, type UsageLimits } from "@volli/shared";
 
-import { finiteNumber, isoTimestamp, windowShapeForMinutes } from "./windows";
+import { finiteNumber, isoTimestamp, recordOf, windowShapeForMinutes } from "./windows";
 
 /**
  * The window the credits endpoint answered with.
@@ -46,15 +46,11 @@ import { finiteNumber, isoTimestamp, windowShapeForMinutes } from "./windows";
  * subscription, so a body without one is not this account's usage.
  */
 export function xaiUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
-  const config = (body as { config?: unknown }).config;
-  if (typeof config !== "object" || config === null) return usageLimitsProbeFailed(checkedAt);
-  const fields = config as { currentPeriod?: unknown; creditUsagePercent?: unknown };
-  const period = fields.currentPeriod;
-  if (typeof period !== "object" || period === null) return usageLimitsProbeFailed(checkedAt);
-  const { start, end } = period as { start?: unknown; end?: unknown };
+  const config = recordOf(recordOf(body)?.config);
+  if (config === undefined) return usageLimitsProbeFailed(checkedAt);
+  const period = recordOf(config.currentPeriod);
+  if (period === undefined) return usageLimitsProbeFailed(checkedAt);
+  const { start, end } = period;
   const startsAt = isoTimestamp(start);
   const resetsAt = isoTimestamp(end);
   if (startsAt === undefined || resetsAt === undefined) return usageLimitsProbeFailed(checkedAt);
@@ -65,7 +61,7 @@ export function xaiUsageFromEndpoint(body: unknown, checkedAt: number): UsageLim
     windows: [
       {
         ...windowShapeForMinutes(minutes),
-        usedPercent: clampPercent(finiteNumber(fields.creditUsagePercent) ?? 0),
+        usedPercent: clampPercent(finiteNumber(config.creditUsagePercent) ?? 0),
         resetsAt,
         windowDurationMins: minutes,
       },

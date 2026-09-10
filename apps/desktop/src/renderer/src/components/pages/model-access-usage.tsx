@@ -1,12 +1,5 @@
 /**
- * One account's subscription windows, drawn (VC-263).
- *
- * The rows themselves, with no opinion about what surrounds them: they were
- * under a provider row in Model Access, and they are now inside the chrome
- * band's popover (VC-271), because a person wanting to know what is left is
- * almost never already in Settings. Nothing here knows which of those it is
- * in — that is why moving the surface cost this file its name and not a line
- * of its drawing.
+ * One account's subscription windows, under its provider row (VC-263).
  *
  * The drawing is notation: a **remaining** bar (the part a long Session can
  * still spend), a hairline at where even spending would have left the bar's
@@ -37,11 +30,11 @@
  *
  * No prose. The label is the window's own name, `N% left` is the number, and
  * the only sentence on the surface is the reset — the same rule the rest of
- * the app's settings surfaces obey. There is no "checked N ago" line: the
- * numbers are refreshed whenever the surface is opened or Refreshed, and a
- * caption about their age would be the surface apologising for itself. The one
- * line an account with nothing to show earns is a state, not an explanation,
- * and the failed one names its retry: the host's Refresh.
+ * Model Access already obeys. There is no "checked N ago" line: the numbers
+ * are refreshed whenever the page is opened or Refreshed, and a caption about
+ * their age would be the surface apologising for itself. The one line an
+ * account with nothing to show earns is a state, not an explanation, and the
+ * failed one names its retry: the page's Refresh.
  */
 import * as React from "react";
 import {
@@ -56,7 +49,7 @@ import {
 
 import { cn } from "@renderer/lib/utils";
 
-export function AccountUsage({
+export function ModelAccessUsage({
   limits,
   now,
   testId,
@@ -95,9 +88,9 @@ function UsageWindows({
   // Taken once, before anything draws, and held for this snapshot's life.
   const [at] = React.useState(() => now ?? Date.now());
   return (
+    // Tucked under its PrefRow's bottom padding, and the last account's block
+    // ends the section flush the way a lone PrefRow's `last:pb-0` would have.
     // Every step is on the spacing ladder (docs/DESIGN.md): 2 up, 4 below.
-    // The negative top margin tucks the block under whatever row named the
-    // account, which is what makes the two read as one unit in either host.
     <div data-testid={testId} className="-mt-2 mb-4 flex flex-col gap-2 last:mb-0">
       {limits.windows.map((window) => (
         <UsageWindowRow key={window.id} window={window} now={at} />

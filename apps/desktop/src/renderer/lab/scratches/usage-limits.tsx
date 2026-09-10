@@ -1,9 +1,9 @@
 /**
- * VC-263's usage windows and VC-271's popover, at every state they survive.
+ * VC-263's usage windows, including VC-271's three new readers, at every state the row has to survive.
  *
  * The question this scratch answers is not "is it pretty" but "does the
- * notation still say the right thing when the numbers get awkward". Things a
- * still frame cannot check by existing:
+ * notation still say the right thing when the numbers get awkward". Three
+ * things a still frame cannot check by existing:
  *
  *   • THE HAIRLINE VERSUS THE EDGE. Pace is drawn, not written — when spending
  *     is on pace the hairline sits ON the bar's edge, ahead leaves a gap
@@ -26,32 +26,19 @@
  *   • LIGHT IS A DIFFERENT COLOUR. Toggle Light/Dark. The three fills are
  *     solved per appearance, so amber must stay a legible amber-brown on
  *     light, not mud, and the hairline must still read on every fill.
- *   • THE POPOVER IS THE REAL SURFACE (VC-271). The last panel mounts the
- *     actual chrome-band control over a fixture snapshot: open it, and check
- *     that the CLOSED rows already answer "am I about to run out" — the
- *     account nearest the wall on top and open, its binding number in its own
- *     tone. Then check the accordion's height animation against a three-window
- *     account (OpenCode Go) and a one-window account (xAI): the surface
- *     resizing IS the effect, so it must not feel like a jump.
  *
  * Every fixture is pinned to one fixed `now`, the way the real component
  * anchors a snapshot — a scratch that ticked would be judging a liveness the
  * feature does not have.
  */
 import * as React from "react";
-import type {
-  ModelAccessProvider as CatalogProvider,
-  ModelAccessSnapshot,
-  UsageLimits,
-} from "@volli/shared";
+import type { UsageLimits } from "@volli/shared";
 
-import { AccountUsage } from "@renderer/components/usage-limits/account-usage";
-import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
-import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
+import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage";
 
 export const title = "Usage limits (VC-263 · VC-271)";
 export const note =
-  "Remaining bar, elapsed hairline, tone by colour — and the chrome popover that now hosts them";
+  "Remaining bar, elapsed hairline, tone by colour — including Copilot, Kimi Code, and xAI";
 
 /** One moment, so every countdown and pace reading is exact. */
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -218,19 +205,13 @@ const CODEX: UsageLimits = {
   ],
 };
 
-/**
- * GitHub Copilot (VC-271): a MONTHLY window measured in premium requests, and
- * the only account whose window is a month long — `resets in 30d` beside a
- * hairline barely off the left edge is the shape to judge. A Pro seat draws
- * exactly one row because chat and completions come back `unlimited`.
- */
+/** A paid Copilot seat: unlimited classes are absent, leaving its monthly meter. */
 const GITHUB_COPILOT: UsageLimits = {
   checkedAt: NOW - 3 * 60_000,
   windows: [
     {
       id: "premium_interactions",
       kind: "monthly",
-      // The longest label the three classes produce.
       label: "Premium requests",
       usedPercent: 68.83,
       resetsAt: iso(NOW + 30 * DAY + 12 * HOUR),
@@ -239,12 +220,7 @@ const GITHUB_COPILOT: UsageLimits = {
   ],
 };
 
-/**
- * Kimi Code (VC-271): counts rather than percentages upstream, so the numbers
- * land on awkward fractions — check that `37% left` never renders fourteen
- * decimal places, and that a five-hour window beside a seven-day one reads as
- * the same control at very different countdowns.
- */
+/** Kimi states a five-hour span and a plan counter whose duration is not on the wire. */
 const KIMI: UsageLimits = {
   checkedAt: NOW - 30_000,
   windows: [
@@ -257,21 +233,16 @@ const KIMI: UsageLimits = {
       windowDurationMins: 300,
     },
     {
-      id: "weekly",
-      kind: "weekly",
-      label: "Weekly",
+      id: "usage",
+      kind: "other",
+      label: "Plan",
       usedPercent: 12,
       resetsAt: iso(NOW + 4 * DAY + 2 * HOUR),
-      windowDurationMins: 10_080,
     },
   ],
 };
 
-/**
- * xAI (VC-271): ONE window, and the account with the least left. A single row
- * has no sibling to line up with, so it is the one that shows whether the
- * block still reads as a control rather than as a stray bar.
- */
+/** xAI states one shared seven-day period across its products. */
 const XAI: UsageLimits = {
   checkedAt: NOW - 90_000,
   windows: [
@@ -286,100 +257,50 @@ const XAI: UsageLimits = {
   ],
 };
 
-/** The provider rows a snapshot carries, as the popover reads them. */
-function account(id: string, label: string, usageLimits?: UsageLimits): CatalogProvider {
-  return {
-    id,
-    label,
-    state: "available",
-    accountLabel: null,
-    billingSource: "subscription",
-    recovery: null,
-    signIn: [],
-    hasStoredCredential: true,
-    ...(usageLimits === undefined ? {} : { usageLimits }),
-  };
-}
-
-const SNAPSHOT: ModelAccessSnapshot = {
-  observedAt: NOW,
-  models: [],
-  providers: [
-    account("anthropic", "Anthropic", HEALTHY),
-    account("openai-codex", "OpenAI Codex", CODEX),
-    account("github-copilot", "GitHub Copilot", GITHUB_COPILOT),
-    account("kimi-coding", "Kimi For Coding", KIMI),
-    account("xai", "xAI", XAI),
-    account("opencode-go", "OpenCode Go", OPENCODE_GO),
-    // Signed in, read, and not metered in windows: must not appear at all.
-    account("mistral", "Mistral", UNSUPPORTED),
-    // Read failed: appears last, with its retry line inside.
-    account("zai", "Z.ai", PROBE_FAILED),
-    // No reader: never probed, never listed.
-    account("groq", "Groq"),
-  ],
-};
-
-/**
- * Enough of a client for the popover: it inspects and nothing else. A Refresh
- * takes the same path, so the spinner and the disabled control are real here.
- */
-const CLIENT: ModelAccessClient = {
-  inspect: async () => {
-    await new Promise((resolve) => setTimeout(resolve, 220));
-    return SNAPSHOT;
-  },
-  defaults: () => Promise.reject(new Error("not part of this scratch")),
-  setDefault: () => Promise.reject(new Error("not part of this scratch")),
-  hiddenModels: () => Promise.reject(new Error("not part of this scratch")),
-  setHiddenModels: () => Promise.reject(new Error("not part of this scratch")),
-  compactionPolicy: () => Promise.reject(new Error("not part of this scratch")),
-  setCompactionPolicy: () => Promise.reject(new Error("not part of this scratch")),
-  pickerView: () => Promise.reject(new Error("not part of this scratch")),
-  setPickerView: () => Promise.reject(new Error("not part of this scratch")),
-  beginSignIn: () => Promise.reject(new Error("not part of this scratch")),
-  signOut: () => Promise.reject(new Error("not part of this scratch")),
-};
-
 export default function UsageLimitsScratch() {
   return (
     <div className="grid gap-6 md:grid-cols-2">
-      <Frame label="The popover, as the chrome band mounts it">
-        {/* On a band of its own so the trigger is judged at the size and on
-            the material it really wears, not against the stage's card. */}
-        <div className="flex h-9 items-center justify-center rounded-md bg-background/40">
-          <ModelAccessProvider client={CLIENT}>
-            <UsageLimitsPopover />
-          </ModelAccessProvider>
-        </div>
-      </Frame>
       <Frame label="Healthy · Anthropic">
-        <AccountUsage limits={HEALTHY} now={NOW} />
+        <ModelAccessUsage limits={HEALTHY} now={NOW} />
       </Frame>
       <Frame label="Ahead of pace · long Session">
-        <AccountUsage limits={AHEAD} now={NOW} />
+        <ModelAccessUsage limits={AHEAD} now={NOW} />
       </Frame>
       <Frame label="Healthy · Codex">
-        <AccountUsage limits={CODEX} now={NOW} />
+        <ModelAccessUsage limits={CODEX} now={NOW} />
       </Frame>
-      <Frame label="One monthly window · GitHub Copilot">
-        <AccountUsage limits={GITHUB_COPILOT} now={NOW} />
+      <Frame label="Monthly meter · GitHub Copilot">
+        <ModelAccessUsage limits={GITHUB_COPILOT} now={NOW} />
       </Frame>
       <Frame label="Counts, not percents · Kimi Code">
-        <AccountUsage limits={KIMI} now={NOW} />
+        <ModelAccessUsage limits={KIMI} now={NOW} />
       </Frame>
-      <Frame label="A single window, nearly spent · xAI">
-        <AccountUsage limits={XAI} now={NOW} />
+      <Frame label="Single shared period · xAI">
+        <ModelAccessUsage limits={XAI} now={NOW} />
       </Frame>
       <Frame label="Three windows · OpenCode Go">
-        <AccountUsage limits={OPENCODE_GO} now={NOW} />
+        <ModelAccessUsage limits={OPENCODE_GO} now={NOW} />
       </Frame>
       <Frame label="Spent · reset passed">
-        <AccountUsage limits={EDGES} now={NOW} />
+        <ModelAccessUsage limits={EDGES} now={NOW} />
       </Frame>
       <Frame label="Unsupported / couldn't read">
-        <AccountUsage limits={UNSUPPORTED} now={NOW} />
-        <AccountUsage limits={PROBE_FAILED} now={NOW} />
+        <ModelAccessUsage limits={UNSUPPORTED} now={NOW} />
+        <ModelAccessUsage limits={PROBE_FAILED} now={NOW} />
+      </Frame>
+      <Frame label="In a row, as the page draws it">
+        <div className="flex flex-col">
+          <div className="flex items-center justify-between border-t border-border/50 py-4 first:border-t-0">
+            <span className="text-sm font-medium">Anthropic</span>
+            <span className="text-ui text-muted-foreground">Subscription</span>
+          </div>
+          <ModelAccessUsage limits={HEALTHY} now={NOW} />
+          <div className="flex items-center justify-between border-t border-border/50 py-4">
+            <span className="text-sm font-medium">OpenAI Codex</span>
+            <span className="text-ui text-muted-foreground">Subscription</span>
+          </div>
+          <ModelAccessUsage limits={CODEX} now={NOW} />
+        </div>
       </Frame>
     </div>
   );

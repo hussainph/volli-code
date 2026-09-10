@@ -33,7 +33,9 @@
  * A FREE SEAT IS NOT MAPPED. It answers a different shape entirely
  * (`limited_user_quotas` / `monthly_quotas` / `limited_user_reset_date`, all
  * raw counts and no percentages) and it is not the subscription this ticket
- * meters. Such a body names no window here, which reads as a failed probe.
+ * meters. Such a body names no window here, which reads as a failed probe. A
+ * valid `quota_snapshots` body whose known classes are all unlimited is instead
+ * a successful empty read: there is no Usage Window, but the probe did work.
  *
  * There is no passive half. The `x-quota-snapshot-*` headers the Copilot
  * gateway puts on turn responses carry the same three classes in a
@@ -51,7 +53,7 @@ import {
   type UsageWindow,
 } from "@volli/shared";
 
-import { isoTimestamp, percentOf } from "./windows";
+import { isoTimestamp, percentOf, recordOf } from "./windows";
 
 /** The classes a seat is metered in, in the order the rows are drawn. */
 const CLASSES = [
@@ -63,25 +65,25 @@ const CLASSES = [
 /**
  * The windows the account endpoint answered with.
  *
- * A failed probe rather than an empty success when no class is both present
- * and metered: a paid seat always meters premium requests, so a body without
- * one is not this account's subscription.
+ * A failed probe when no known class is readable. Known classes that all say
+ * `unlimited` are a successful empty result because each explicitly says its
+ * Usage Window does not exist.
  */
 export function githubCopilotUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
-  const fields = body as { quota_snapshots?: unknown; quota_reset_date?: unknown };
-  const snapshots = fields.quota_snapshots;
-  if (typeof snapshots !== "object" || snapshots === null) return usageLimitsProbeFailed(checkedAt);
+  const fields = recordOf(body);
+  const snapshots = recordOf(fields?.quota_snapshots);
+  if (fields === undefined || snapshots === undefined) return usageLimitsProbeFailed(checkedAt);
   const resetsAt = isoTimestamp(fields.quota_reset_date);
   const windowDurationMins = monthEndingAt(resetsAt);
   const windows: UsageWindow[] = [];
+  let sawUnlimitedClass = false;
   for (const shape of CLASSES) {
-    const entry = (snapshots as Record<string, unknown>)[shape.key];
-    if (typeof entry !== "object" || entry === null) continue;
-    const snapshot = entry as { percent_remaining?: unknown; unlimited?: unknown };
-    if (snapshot.unlimited === true) continue;
+    const snapshot = recordOf(snapshots[shape.key]);
+    if (snapshot === undefined) continue;
+    if (snapshot.unlimited === true) {
+      sawUnlimitedClass = true;
+      continue;
+    }
     const remaining = percentOf(snapshot.percent_remaining);
     if (remaining === undefined) continue;
     windows.push({
@@ -93,7 +95,7 @@ export function githubCopilotUsageFromEndpoint(body: unknown, checkedAt: number)
       ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
     });
   }
-  if (windows.length === 0) return usageLimitsProbeFailed(checkedAt);
+  if (windows.length === 0 && !sawUnlimitedClass) return usageLimitsProbeFailed(checkedAt);
   return { checkedAt, windows };
 }
 

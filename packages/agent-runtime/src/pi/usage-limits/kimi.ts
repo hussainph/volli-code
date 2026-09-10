@@ -21,14 +21,11 @@
  *   same function Codex's two sources go through, which is why 300 minutes
  *   lands on the `session` row here too. Kimi's own membership guide names
  *   this one: "about 300–1,200 requests every 5 hours".
- * - The top-level `usage` states a reset and nothing else. Its length is not
- *   on the wire, and this is the one window id in the file that is not read
- *   off the body: it is pinned to seven days on a live before/after pair
- *   captured a week apart on one account (the `quotas` crate's two fixtures,
- *   whose `resetTime` advanced by exactly 7d across a reset). MEASURED, not
- *   stated — if Kimi ever meters the plan over some other span, this constant
- *   is the one line that has to move, and the count and countdown stay right
- *   either way because only the pace hairline reads the length.
+ * - The top-level `usage` states only its key and reset. It is therefore the
+ *   `usage` window, with no invented length. Published captures show its reset
+ *   advancing by seven days, but that observation is not part of either
+ *   response. Calling it weekly would violate the rule that a window is named
+ *   only by a key or length the source itself states.
  *
  * `totalQuota` IS DELIBERATELY NOT MAPPED. It is the monthly membership cap,
  * and it does not carry a usable share: its `remaining` is sticky (99 both
@@ -50,7 +47,7 @@ import {
   type UsageWindow,
 } from "@volli/shared";
 
-import { finiteNumber, isoTimestamp, WEEKLY_WINDOW_MINS, windowShapeForMinutes } from "./windows";
+import { finiteNumber, isoTimestamp, recordOf, windowShapeForMinutes } from "./windows";
 
 /**
  * How long one `TIME_UNIT_*` is, in minutes.
@@ -81,32 +78,43 @@ function resetOf(entry: Record<string, unknown>): string | undefined {
  * without one is not this account's usage.
  */
 export function kimiUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
-  const fields = body as { usage?: unknown; limits?: unknown };
+  const fields = recordOf(body);
+  if (fields === undefined) return usageLimitsProbeFailed(checkedAt);
   const windows = new Map<string, UsageWindow>();
 
-  for (const entry of Array.isArray(fields.limits) ? fields.limits : []) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const { window, detail } = entry as { window?: unknown; detail?: unknown };
-    if (typeof window !== "object" || window === null) continue;
-    if (typeof detail !== "object" || detail === null) continue;
-    const minutes = windowMinutes(window as Record<string, unknown>);
+  for (const value of Array.isArray(fields.limits) ? fields.limits : []) {
+    const entry = recordOf(value);
+    if (entry === undefined) continue;
+    const window = recordOf(entry.window);
+    const detail = recordOf(entry.detail);
+    if (window === undefined || detail === undefined) continue;
+    const minutes = windowMinutes(window);
     if (minutes === undefined) continue;
-    keepBinding(windows, minutes, detail as Record<string, unknown>);
+    keepBinding(windows, minutes, detail);
   }
 
-  if (typeof fields.usage === "object" && fields.usage !== null) {
-    keepBinding(windows, WEEKLY_WINDOW_MINS, fields.usage as Record<string, unknown>);
-  }
+  const usage = recordOf(fields.usage);
+  if (usage !== undefined) keepPlanBinding(windows, usage);
 
   if (windows.size === 0) return usageLimitsProbeFailed(checkedAt);
   return { checkedAt, windows: [...windows.values()] };
 }
 
+/** Adds the top-level window under the key the source states. */
+function keepPlanBinding(windows: Map<string, UsageWindow>, detail: Record<string, unknown>): void {
+  const built = countedWindow(detail);
+  if (built === undefined) return;
+  windows.set("usage", {
+    id: "usage",
+    kind: "other",
+    label: "Plan",
+    usedPercent: built.usedPercent,
+    ...(built.resetsAt === undefined ? {} : { resetsAt: built.resetsAt }),
+  });
+}
+
 /**
- * Adds one window, or keeps whichever of two readings of the same span binds
+ * Adds one duration-named window, or keeps whichever of two readings of the same span binds
  * first.
  *
  * Standard and HighSpeed are two tiers of one membership, so the endpoint can

@@ -33,6 +33,7 @@ import {
   headerReader,
   isoTimestamp,
   percentOf,
+  recordOf,
   SESSION_WINDOW_MINS,
   WEEKLY_WINDOW_MINS,
   type HeaderMap,
@@ -87,15 +88,14 @@ export function anthropicHeadersToUpdate(
  * that changed, and the honest thing to show is the last good read.
  */
 export function anthropicUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
+  const fields = recordOf(body);
+  if (fields === undefined) return usageLimitsProbeFailed(checkedAt);
   const windows: UsageWindow[] = [];
-  for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(fields)) {
     const match = ENDPOINT_KEY_PATTERN.exec(key);
     if (match === null) continue;
-    if (typeof value !== "object" || value === null) continue;
-    const entry = value as { utilization?: unknown; resets_at?: unknown };
+    const entry = recordOf(value);
+    if (entry === undefined) continue;
     const percent = percentOf(entry.utilization);
     if (percent === undefined) continue;
     const span = match[1] === "five_hour" ? "5h" : "7d";

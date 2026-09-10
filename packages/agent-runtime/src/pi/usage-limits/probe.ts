@@ -1,11 +1,11 @@
 /**
- * The on-demand read: one GET per subscribed provider, no model call.
+ * The on-demand read: one bounded read per subscribed provider, no model call.
  *
  * Six providers have an endpoint that answers "how much of my subscription is
  * left" without spending any of it — Anthropic's `/api/oauth/usage`, Codex's
  * `/backend-api/wham/usage`, OpenCode Go's `/zen/go/v1/usage`, Kimi Code's
  * `/coding/v1/usages`, xAI's `/v1/billing?format=credits`, and Copilot's
- * `/copilot_internal/user`. Five take the same credential the turns use, so
+ * `/copilot_internal/user`. Most take the same credential the turns use, so
  * the probe asks Pi for it through `Models.getAuth`, which runs Pi's own
  * refresh under Pi's own lock; nothing here mints a token.
  *
@@ -19,10 +19,11 @@
  *   Go reads the console's 403 ("OpenCode Go subscription required": a
  *   Zen-only key) as the same final `unsupported`, because no later read of
  *   that key will grow windows. WHICH SECRET: Copilot's endpoint is not on the
- *   host its turns talk to, and knows only the GitHub OAuth token the request
- *   token was minted from, so that reader names the stored credential instead
- *   (`credential: "oauth-refresh"`) — the one case where this file reads the
- *   credential store, and it reads it, never writes it.
+ *   host its turns talk to. An OAuth account therefore uses the stored GitHub
+ *   token that minted the request token, while `COPILOT_GITHUB_TOKEN` already
+ *   is the GitHub token. An Enterprise OAuth credential is not sent anywhere:
+ *   its usage host is not verified, and defaulting it to public github.com
+ *   would disclose it across origins.
  * - **The usage endpoint has its own rate limit**, independent of chat. A 429
  *   is honoured for `Retry-After` when stated and five minutes otherwise, and
  *   the attempt reports `probeFailed` — which the fold reads as "keep the last
@@ -43,7 +44,9 @@
  *
  * `fetch` is injected so no test reaches the network, and every request is
  * bounded by the caller's signal — `inspectPiModelAccess` runs each probe
- * under the same `PROBE_TIMEOUT_MS` the provider probes get.
+ * under the same `PROBE_TIMEOUT_MS` the provider probes get. xAI's one read is
+ * two sequential GETs because its billing route requires the account id from
+ * its authenticated identity route.
  */
 
 import type { CredentialStore, ModelAuth, Models } from "@earendil-works/pi-ai";
@@ -85,7 +88,12 @@ export type UsageProbeCredentials = Pick<CredentialStore, "read">;
 /** Injected so tests never reach the network; production passes `globalThis.fetch`. */
 export type UsageProbeFetch = (
   url: string,
-  init: { method: "GET"; headers: Record<string, string>; signal: AbortSignal },
+  init: {
+    method: "GET";
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    redirect: "error";
+  },
 ) => Promise<Response>;
 
 /**
@@ -192,17 +200,10 @@ interface UsageReader {
    *
    * `request` — the default and the ordinary case — is the credential the
    * turns use, resolved through `Models.getAuth` so Pi's own refresh and lock
-   * govern it.
-   *
-   * `oauth-refresh` is for an endpoint that is not the one the turns talk to.
-   * Copilot is the case: a turn presents a short-lived proxy token to
-   * `api.individual.githubcopilot.com`, and that token means nothing to
-   * `api.github.com`, which knows only the GitHub OAuth token the proxy token
-   * was minted FROM — the one Pi stores as `refresh` and re-presents on every
-   * refresh of the other. Reading it here sends the same secret to the same
-   * host Pi already sends it to, for the account it already belongs to.
+   * govern it. `copilot-github` selects the GitHub token: the resolved API key,
+   * or an OAuth credential's stored refresh token after ruling out Enterprise.
    */
-  credential?: "request" | "oauth-refresh";
+  credential?: "request" | "copilot-github";
   /**
    * The `authorization` scheme, when the endpoint wants something other than
    * `Bearer`. GitHub's internal endpoints take `token`.
@@ -216,17 +217,24 @@ interface UsageReader {
   noSubscriptionStatus?: number;
   /** Headers beyond `authorization`, which every reader sends. */
   headers(accessToken: string): Record<string, string>;
+  /** A multi-step wire read; absent readers make the ordinary one GET. */
+  request?(accessToken: string, input: UsageProbeInput): Promise<Response>;
   parse(body: unknown, checkedAt: number): UsageLimits;
 }
+
+const XAI_USER_URL = "https://cli-chat-proxy.grok.com/v1/user";
+const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+/** The Grok Build contract revision this request shape was verified against. */
+const XAI_GROK_BUILD_PROTOCOL_VERSION = "0.1.220-alpha.4";
 
 const READERS: Readonly<Record<string, UsageReader>> = {
   "github-copilot": {
     url: "https://api.github.com/copilot_internal/user",
-    // A `COPILOT_GITHUB_TOKEN` in the environment is the same GitHub token by
-    // another door — but it arrives as an api-key credential, and this reader
-    // takes the OAuth one it can name with certainty.
-    acceptsApiKey: false,
-    credential: "oauth-refresh",
+    // A `COPILOT_GITHUB_TOKEN` arrives as an API-key credential but is already
+    // the GitHub token. OAuth stores that token as `refresh` beside the proxy
+    // token turns use.
+    acceptsApiKey: true,
+    credential: "copilot-github",
     scheme: "token",
     // The API version GitHub's own Copilot clients pin on this surface. No
     // editor identity rides with it: pi-ai states one on the requests it makes
@@ -265,14 +273,32 @@ const READERS: Readonly<Record<string, UsageReader>> = {
   xai: {
     // The shared-period meter, not `/v1/billing`'s dollar allowance: the query
     // is the difference between a window and a credit balance.
-    url: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+    url: XAI_BILLING_URL,
     // A SuperGrok or X Premium subscription signs in; an `XAI_API_KEY` is the
     // pay-as-you-go platform account, which is invoiced rather than windowed.
     acceptsApiKey: false,
-    // Which client is asking. No version rides with it: this is not the Grok
-    // Build client, and a version string invented here would be a claim about
-    // a build that does not exist.
-    headers: () => ({ "x-grok-client-surface": "grok-build" }),
+    headers: () => ({}),
+    // Grok Build requires the authenticated account id on billing reads. Read
+    // it from the bounded `/user` response, use it once, and retain neither the
+    // identity body nor its id. Both requests carry the same reviewed auth,
+    // version and headless-client contract.
+    request: async (accessToken, input) => {
+      const identity = await input.fetch(XAI_USER_URL, {
+        method: "GET",
+        headers: xaiHeaders(accessToken),
+        signal: input.signal,
+        redirect: "error",
+      });
+      if (!identity.ok) return identity;
+      const userId = xaiUserId(await readJson(identity));
+      if (userId === undefined) throw new Error("xAI user response has no safe id");
+      return input.fetch(XAI_BILLING_URL, {
+        method: "GET",
+        headers: xaiHeaders(accessToken, userId),
+        signal: input.signal,
+        redirect: "error",
+      });
+    },
     parse: xaiUsageFromEndpoint,
   },
   "opencode-go": {
@@ -318,19 +344,23 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
     // inspections is the traffic worth stopping, and a broken endpoint is the
     // case where stopping it matters most.
     input.schedule.markAsked(input.providerId, input.now() + USAGE_PROBE_FRESH_MS);
-    const accessToken = await readerCredential(reader, input);
+    const accessToken = await readerCredential(reader, input, check.type);
     if (accessToken === undefined) {
       return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
     }
-    const response = await input.fetch(reader.url, {
-      method: "GET",
-      headers: {
-        authorization: `${reader.scheme ?? "Bearer"} ${accessToken}`,
-        accept: "application/json",
-        ...reader.headers(accessToken),
-      },
-      signal: input.signal,
-    });
+    const response =
+      reader.request === undefined
+        ? await input.fetch(reader.url, {
+            method: "GET",
+            headers: {
+              authorization: `${reader.scheme ?? "Bearer"} ${accessToken}`,
+              accept: "application/json",
+              ...reader.headers(accessToken),
+            },
+            signal: input.signal,
+            redirect: "error",
+          })
+        : await reader.request(accessToken, input);
     if (response.status === 429) {
       const retryAfterMs = retryAfterMillis(response.headers.get("retry-after"), input.now());
       input.schedule.holdOff(
@@ -354,13 +384,22 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
 async function readerCredential(
   reader: UsageReader,
   input: UsageProbeInput,
+  authType: "api_key" | "oauth",
 ): Promise<string | undefined> {
-  if (reader.credential === "oauth-refresh") {
-    const stored = await input.credentials?.read(input.providerId, { signal: input.signal });
-    return stored?.type === "oauth" && stored.refresh.length > 0 ? stored.refresh : undefined;
+  if (reader.credential !== "copilot-github" || authType === "api_key") {
+    const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
+    return resolved === undefined ? undefined : bearerOf(resolved.auth);
   }
-  const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
-  return resolved === undefined ? undefined : bearerOf(resolved.auth);
+  const stored = await input.credentials?.read(input.providerId, { signal: input.signal });
+  if (stored?.type !== "oauth" || stored.refresh.length === 0) return undefined;
+  const enterpriseUrl = stored.enterpriseUrl;
+  if (
+    enterpriseUrl !== undefined &&
+    (typeof enterpriseUrl !== "string" || enterpriseUrl.trim().length > 0)
+  ) {
+    return undefined;
+  }
+  return stored.refresh;
 }
 
 /**
@@ -376,7 +415,7 @@ async function readerCredential(
  * not know how to present, and guessing at one would send a secret in a shape
  * the endpoint never asked for.
  */
-export function bearerOf(auth: ModelAuth): string | undefined {
+function bearerOf(auth: ModelAuth): string | undefined {
   if (auth.apiKey !== undefined && auth.apiKey.length > 0) return auth.apiKey;
   const header = auth.headers?.Authorization ?? auth.headers?.authorization;
   if (typeof header !== "string") return undefined;
@@ -406,6 +445,25 @@ export function retryAfterMillis(header: string | null, now: number): number | u
   }
   if (!(ms > 0)) return undefined;
   return Math.min(ms, MAX_RETRY_AFTER_MS);
+}
+
+/** The reviewed headers shared by xAI's identity and billing reads. */
+function xaiHeaders(accessToken: string, userId?: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${accessToken}`,
+    accept: "application/json",
+    "x-xai-token-auth": "xai-grok-cli",
+    "x-grok-client-version": XAI_GROK_BUILD_PROTOCOL_VERSION,
+    "x-grok-client-mode": "headless",
+    ...(userId === undefined ? {} : { "x-userid": userId }),
+  };
+}
+
+/** A bounded visible-ASCII id that is safe to put back into an HTTP header. */
+function xaiUserId(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+  const userId = (body as Record<string, unknown>).userId;
+  return typeof userId === "string" && /^[\x21-\x7e]{1,256}$/.test(userId) ? userId : undefined;
 }
 
 /**

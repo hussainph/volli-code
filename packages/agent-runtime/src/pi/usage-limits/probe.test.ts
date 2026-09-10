@@ -90,6 +90,7 @@ const COPILOT_BODY = {
     premium_interactions: { entitlement: 300, percent_remaining: 31.17, unlimited: false },
   },
 };
+const XAI_USER = { userId: "user_42" };
 const XAI_BODY = {
   config: {
     currentPeriod: {
@@ -244,7 +245,7 @@ describe("probeUsageLimits", () => {
       },
     ]);
     const limits = (outcome as { limits: UsageLimits }).limits;
-    expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly"]);
+    expect(limits.windows.map((window) => window.id)).toEqual(["session", "usage"]);
   });
 
   it("reads Copilot's account endpoint with the GitHub token, not the proxy token turns use", async () => {
@@ -283,6 +284,45 @@ describe("probeUsageLimits", () => {
     expect(limits.windows.map((window) => window.id)).toEqual(["premium_interactions"]);
   });
 
+  it("also reads a configured COPILOT_GITHUB_TOKEN", async () => {
+    const { fetch, calls } = scripted(() => json(COPILOT_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "github-copilot",
+        models: models(
+          { type: "api_key", source: "COPILOT_GITHUB_TOKEN" },
+          { auth: { apiKey: "ghu_configured_token" }, source: "COPILOT_GITHUB_TOKEN" },
+        ),
+        fetch,
+      }),
+    );
+    expect(calls[0]?.headers.authorization).toBe("token ghu_configured_token");
+    expect((outcome as { limits: UsageLimits }).limits.windows).toHaveLength(1);
+  });
+
+  it("never sends an Enterprise Copilot credential to public github.com", async () => {
+    const { fetch, calls } = scripted(() => json(COPILOT_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "github-copilot",
+        models: models(oauth, { auth: { apiKey: "enterprise-proxy-token" }, source: "OAuth" }),
+        credentials: store({
+          type: "oauth",
+          access: "enterprise-proxy-token",
+          refresh: "enterprise-github-token",
+          expires: NOW + 60_000,
+          enterpriseUrl: "github.example.com",
+        }),
+        fetch,
+      }),
+    );
+    expect(outcome).toEqual({
+      kind: "verdict",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+    });
+    expect(calls).toEqual([]);
+  });
+
   it("reports a failed probe when the stored Copilot credential carries no GitHub token", async () => {
     const { fetch, calls } = scripted(() => json(COPILOT_BODY));
     const failed = {
@@ -317,8 +357,32 @@ describe("probeUsageLimits", () => {
     expect(calls).toEqual([]);
   });
 
-  it("reads xAI's credits meter, and never the dollar allowance beside it", async () => {
-    const { fetch, calls } = scripted(() => json(XAI_BODY));
+  it("reads xAI identity before its credits meter with the deployed Grok Build contract", async () => {
+    // This fixture refuses incomplete requests instead of handing every call an
+    // unconditional 200. Billing only succeeds after the authenticated user
+    // id has been read and carried under the reviewed proxy headers.
+    const { fetch, calls } = scripted((call) => {
+      const common = {
+        authorization: "Bearer xai-oat-token",
+        accept: "application/json",
+        "x-xai-token-auth": "xai-grok-cli",
+        "x-grok-client-version": "0.1.220-alpha.4",
+        "x-grok-client-mode": "headless",
+      };
+      if (
+        call.url === "https://cli-chat-proxy.grok.com/v1/user" &&
+        JSON.stringify(call.headers) === JSON.stringify(common)
+      ) {
+        return json(XAI_USER);
+      }
+      if (
+        call.url === "https://cli-chat-proxy.grok.com/v1/billing?format=credits" &&
+        JSON.stringify(call.headers) === JSON.stringify({ ...common, "x-userid": "user_42" })
+      ) {
+        return json(XAI_BODY);
+      }
+      return new Response("request contract rejected", { status: 412 });
+    });
     const outcome = await probeUsageLimits(
       input({
         providerId: "xai",
@@ -328,13 +392,26 @@ describe("probeUsageLimits", () => {
     );
     expect(calls).toEqual([
       {
+        url: "https://cli-chat-proxy.grok.com/v1/user",
+        headers: {
+          authorization: "Bearer xai-oat-token",
+          accept: "application/json",
+          "x-xai-token-auth": "xai-grok-cli",
+          "x-grok-client-version": "0.1.220-alpha.4",
+          "x-grok-client-mode": "headless",
+        },
+      },
+      {
         // `?format=credits` is the whole difference between a window and a
         // dollar balance, so it is pinned here rather than left to the mapper.
         url: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         headers: {
           authorization: "Bearer xai-oat-token",
           accept: "application/json",
-          "x-grok-client-surface": "grok-build",
+          "x-xai-token-auth": "xai-grok-cli",
+          "x-grok-client-version": "0.1.220-alpha.4",
+          "x-grok-client-mode": "headless",
+          "x-userid": "user_42",
         },
       },
     ]);
@@ -342,6 +419,22 @@ describe("probeUsageLimits", () => {
     expect(limits.windows.map((window) => [window.id, window.usedPercent])).toEqual([
       ["weekly", 75],
     ]);
+  });
+
+  it("does not request xAI billing when account identity is not header-safe", async () => {
+    const { fetch, calls } = scripted(() => json({ userId: "user_42\r\ninjected: true" }));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "xai",
+        models: models(oauth, { auth: { apiKey: "xai-oat-token" }, source: "OAuth" }),
+        fetch,
+      }),
+    );
+    expect(outcome).toEqual({
+      kind: "verdict",
+      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+    });
+    expect(calls.map((call) => call.url)).toEqual(["https://cli-chat-proxy.grok.com/v1/user"]);
   });
 
   it("reports an xAI API key unsupported: it is invoiced, not metered in a window", async () => {
