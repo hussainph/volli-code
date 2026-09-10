@@ -172,8 +172,11 @@ describe("promptBaseline", () => {
     );
     expect(measured.brief.chars).toBe(334);
     expect(measured.toolSurface.chars).toBe(685);
-    expect(measured.system).toEqual({ chars: 4_888, tokens: 1_222 });
-    expect(measured.total).toEqual({ chars: 5_907, tokens: 1_478 });
+    // +78 chars over main's measurement: the execution layer's concurrency-budget
+    // line (VC-339), which is one line precisely because of the ceiling this test
+    // guards — 1,498 of the 1,500 estimated tokens are now spent.
+    expect(measured.system).toEqual({ chars: 4_966, tokens: 1_242 });
+    expect(measured.total).toEqual({ chars: 5_985, tokens: 1_498 });
   });
 });
 

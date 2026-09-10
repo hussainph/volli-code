@@ -256,14 +256,19 @@ const WORKSPACE_DOUBT: Record<RuntimeSessionRole, string> = {
  * bytes: writing the count here would give two Sessions of the same Role
  * different prompts, and would be stale for the rest of a Session's life
  * anyway. The environment carries the live answer, and the agent can read it.
+ *
+ * ONE line, and a terse one, because these bytes are rationed: a fresh Board
+ * package at the skills-index ceiling is held below 1,500 estimated tokens
+ * (`prompt-baseline.test.ts`), and four lines of this spent a quarter of the
+ * remaining headroom to say what the variable's own name says. The full
+ * statement of the contract — which variables Volli fills, the no-clobber rule,
+ * the flag for every tool that reads none — lives in `AGENTS.md`, which a
+ * Session reads on demand rather than paying for on every request.
  */
 function executionLayer(): readonly string[] {
   return [
     "Commands run directly on the user's machine, and the network is reachable.",
-    "That machine is shared with other Sessions: `VOLLI_CONCURRENCY_HINT` in your",
-    "environment is this Session's parallelism budget, and most toolchains already",
-    "read it. Pass it yourself \u2014 `-j`, `--jobs`, `--workers`, `--maxWorkers` for",
-    "Jest \u2014 to any tool that does not.",
+    "The machine is shared: pass `$VOLLI_CONCURRENCY_HINT` to `-j`/`--maxWorkers`.",
   ];
 }
 
