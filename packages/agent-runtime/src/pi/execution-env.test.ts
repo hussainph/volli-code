@@ -119,6 +119,21 @@ describe("piExecutionEnv", () => {
     }
   });
 
+  // VC-339: a structured Session's commands self-limit the same way a PTY's
+  // do — the budget is in the environment `execute` hands every command.
+  it("tells a command its share of the machine", async () => {
+    const env = await piExecutionEnv(workspace(), {
+      environment: { VOLLI_CONCURRENCY_HINT: "2", CARGO_BUILD_JOBS: "2" },
+    });
+    try {
+      await expect(
+        ran(env, "printenv VOLLI_CONCURRENCY_HINT; printenv CARGO_BUILD_JOBS"),
+      ).resolves.toEqual({ output: "2\n2\n", exitCode: 0 });
+    } finally {
+      await env.cleanup(BACKGROUND_CONTEXT);
+    }
+  });
+
   // VC-163: a structured Session's shell authenticates like a PTY's does. The
   // token is what makes `volli ticket comment` from inside a turn a Session
   // write rather than an unauthenticated one that may only read.
@@ -410,6 +425,25 @@ describe("sessionCommandEnvironment", () => {
 
   it("builds a bare record from nothing: no prefixes, no identity, no PATH", () => {
     expect(sessionCommandEnvironment({}, {})).toEqual({ PATH: "" });
+  });
+
+  // VC-339: the host's facts about the machine — this Session's concurrency
+  // budget — ride the same record, over the sanitized set and under the
+  // identity, which is what stops a machine fact from ever posing as one.
+  it("carries the host's supplied variables, with the identity still above them", () => {
+    const record = sessionCommandEnvironment(
+      { PATH: "/usr/bin", MAKEFLAGS: "-j16" },
+      {
+        identity: { sessionId: "session-uuid-1", ticketDisplayId: null },
+        environment: { VOLLI_CONCURRENCY_HINT: "2", MAKEFLAGS: "-j2", VOLLI_SESSION: "spoofed" },
+      },
+    );
+    expect(record).toEqual({
+      PATH: "/usr/bin",
+      VOLLI_CONCURRENCY_HINT: "2",
+      MAKEFLAGS: "-j2",
+      VOLLI_SESSION: "session-uuid-1",
+    });
   });
 
   it("lets a caller's own variables win over the sanitized set, identity included", () => {

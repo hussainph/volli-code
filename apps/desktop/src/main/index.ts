@@ -88,6 +88,7 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { readSessionConcurrencyEnv } from "./session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -1138,6 +1139,30 @@ app.whenReady().then(async () => {
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
   });
 
+  /**
+   * One structured Session's share of the machine (VC-339), in the variables
+   * `cargo`, `make`, `cmake`, `go`, `pytest`, gradle and vitest already read —
+   * the same budget a spawned PTY gets in `pty/manager.ts`, so a Session's
+   * builds self-limit whichever door they run through.
+   *
+   * `process.env` is the no-clobber reference: a value the user exported in
+   * their own shell is never overwritten. Answers `{}` when there is no
+   * database to count the fleet with, which leaves every toolchain on its own
+   * default rather than blocking the Session.
+   */
+  const sessionConcurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {
+    if (!dbHandle.ok || sessionEngine === null) return {};
+    const db = dbHandle.db;
+    const engine = sessionEngine;
+    return readSessionConcurrencyEnv(
+      {
+        listProjectIds: () => listProjects(db).map((project) => project.id),
+        listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
+      },
+      { excludeSessionId: sessionId, environment: process.env },
+    );
+  };
+
   let agentToolDoor: AgentToolDoor | null = null;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
   const piRuntimeHost =
@@ -1187,6 +1212,10 @@ app.whenReady().then(async () => {
             return piExecutionEnv(workspacePath, {
               pathPrefixes: [runtimePaths.binDir],
               identity: attachmentIdentities.resolve(identity),
+              // This Session's concurrency budget (VC-339), computed at attach
+              // from the Sessions working now — under the identity above, which
+              // is what keeps a machine fact from ever posing as who is running.
+              environment: await sessionConcurrencyEnvFor(identity.sessionId),
               // The execution environment is owned by this attachment and its
               // cleanup runs on every close path. Revoke there so a copied
               // token cannot outlive the structured attachment that held it.
@@ -1208,6 +1237,11 @@ app.whenReady().then(async () => {
                 ticketId: scope.ticketId,
               }),
               pathPrefixes: [runtimePaths.binDir],
+              // Asked for at each start rather than captured at attach: a
+              // background shell IS the long-running heavy thing on the
+              // machine, so it self-limits by the budget that is true when it
+              // starts (VC-339).
+              concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
             }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in

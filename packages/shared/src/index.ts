@@ -8,6 +8,7 @@ export * from "./board";
 export * from "./ticket";
 export * from "./doctor";
 export * from "./session-env";
+export * from "./concurrency-budget";
 export * from "./harness-command";
 export * from "./harness";
 export * from "./verb-registry";

@@ -8,6 +8,7 @@ import { defineConfig } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -113,6 +114,10 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
   },
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339). Stated
+    // once at the top level rather than per project: the worker pool is global
+    // to the invocation, and both projects below draw from it.
+    ...SHARED_MACHINE_TEST_WORKERS,
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
@@ -121,7 +126,19 @@ export default defineConfig(({ mode }) => ({
       // inheriting root src/renderer. @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
-        test: { name: "main", environment: "node", include: ["src/main/**/*.test.ts"] },
+        test: {
+          name: "main",
+          environment: "node",
+          include: ["src/main/**/*.test.ts"],
+          // Stated again here, and it is not redundant: `renderer` above
+          // INHERITS this cap through `extends: true` while this project
+          // inherits nothing, and vitest refuses a run whose projects disagree
+          // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
+          // exactly what a `--maxWorkers` flag on the command line produced
+          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // governs the pool they share.
+          ...SHARED_MACHINE_TEST_WORKERS,
+        },
       },
     ],
     coverage: {
@@ -507,6 +524,12 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        // The Session concurrency budget (VC-339). In the gate because every
+        // branch of it is a rule about a machine nobody watches: a miscount
+        // hands one Session the whole box while three others build, and a
+        // missed no-clobber branch overwrites what a person put in their own
+        // login shell. Neither is visible anywhere until the laptop swaps.
+        "**/src/main/session-concurrency.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",

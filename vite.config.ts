@@ -1,6 +1,8 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { SHARED_MACHINE_TEST_WORKERS } from "./vitest.workers";
+
 // Root workspace config for the vite-plus quality stack (test / fmt / lint /
 // staged). App- and package-level `resolve`/build config lives in each
 // package's own vite.config.ts — the root only owns cross-cutting tooling.
@@ -22,6 +24,10 @@ export default defineConfig({
   test: {
     environment: "node",
     exclude: ["**/node_modules/**", "**/dist/**", "**/dist-electron/**"],
+    // The shared-machine worker cap (VC-339). Spread here for a run started
+    // from the repository root; every package spreads the same constant into
+    // its own config, because a package config inherits nothing from this one.
+    ...SHARED_MACHINE_TEST_WORKERS,
   },
   fmt: {
     ignorePatterns: toolingIgnorePatterns,
