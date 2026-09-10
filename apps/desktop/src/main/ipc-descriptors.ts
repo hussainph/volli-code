@@ -925,6 +925,36 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid orphan path",
   },
+  "volli:worktree-trim-scan": {
+    guard: (args): args is IpcArgs<"volli:worktree-trim-scan"> => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:worktree-trim": {
+    // Nothing at all: an action that removes files takes no caller-supplied
+    // input, so there is no shape to get wrong.
+    guard: (args): args is IpcArgs<"volli:worktree-trim"> => args.length === 0,
+    invalidError: "Invalid trim request",
+  },
+  "volli:worktree-trim-settings-get": {
+    guard: (args): args is IpcArgs<"volli:worktree-trim-settings-get"> => args.length === 0,
+    invalidError: "Invalid request",
+  },
+  "volli:worktree-trim-settings-set": {
+    guard: (args): args is IpcArgs<"volli:worktree-trim-settings-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      const trimOnFinish = input["trimOnFinish"];
+      const keepPatterns = input["keepPatterns"];
+      if (trimOnFinish !== undefined && typeof trimOnFinish !== "boolean") return false;
+      if (keepPatterns !== undefined) {
+        if (!Array.isArray(keepPatterns)) return false;
+        if (keepPatterns.some((pattern) => typeof pattern !== "string")) return false;
+      }
+      return trimOnFinish !== undefined || keepPatterns !== undefined;
+    },
+    invalidError: "Invalid trim settings",
+  },
 
   "volli:worktree-status": {
     guard: (args): args is IpcArgs<"volli:worktree-status"> =>

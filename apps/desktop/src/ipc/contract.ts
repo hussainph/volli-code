@@ -790,6 +790,26 @@ export interface VolliDataIpcContract {
     args: [input: WorktreeOrphanDeleteInput];
     result: WorktreeOrphanDeleteResult;
   };
+  /**
+   * The build-artifact read (VC-340): every worktree this database owns, how many
+   * git-ignored paths a trim would take from it, and whether it is off limits.
+   * Removes nothing and measures no sizes — sizing the whole set is the walk that
+   * stalled for thirty seconds in the audit behind this ticket.
+   */
+  "volli:worktree-trim-scan": { args: []; result: WorktreeTrimScanResult };
+  /**
+   * The trim itself, across every non-active owned worktree. Takes no argument:
+   * the only thing a caller could vary is the dry run, and no surface offers one,
+   * so a destructive channel keeps the smallest input it can. Git metadata is
+   * untouched — pruning is the confirmed orphan cleanup's act, not this one's.
+   */
+  "volli:worktree-trim": { args: []; result: WorktreeTrimResult };
+  /** The preserved-configuration allowlist and the automatic-trim opt-out. */
+  "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
+  "volli:worktree-trim-settings-set": {
+    args: [input: WorktreeTrimSettingsInput];
+    result: WorktreeTrimSettingsResult;
+  };
 
   // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
   // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
@@ -3354,6 +3374,97 @@ export type WorktreeOrphanCleanupResult =
  * lives inside a container this database owns before touching anything.
  */
 export type WorktreeOrphanDeleteResult = Result;
+
+// ---- worktree trim (VC-340) ------------------------------------------------
+
+/**
+ * One ignored path a trim removed, with the apparent bytes it held. Sizes are
+ * summed from the walk the removal needed anyway; for a pnpm tree they overstate
+ * what the filesystem gets back (the files are hardlinks into the store), which
+ * is honest for what this reclaims — files nothing has to walk any more.
+ */
+export interface WorktreeTrimRemoval {
+  path: string;
+  bytes: number;
+}
+
+/**
+ * One ignored path a trim KEPT, and why. Ignored is not the same as disposable:
+ * `.env`, `.envrc`, `*.local`, keys and certificates are ignored precisely
+ * because they are local configuration, so the report states what survived as
+ * plainly as what did not.
+ */
+export interface WorktreeTrimKeep {
+  path: string;
+  reason: string;
+}
+
+/** What one worktree's trim did — paths are relative to `worktreePath`. */
+export interface WorktreeTrimReport {
+  worktreePath: string;
+  /** Largest first, so "the top offenders" is the head of the list. */
+  removed: WorktreeTrimRemoval[];
+  kept: WorktreeTrimKeep[];
+  totalBytes: number;
+  /** A measured preview that deleted nothing. */
+  dryRun: boolean;
+}
+
+/** One worktree in the Settings table, with the artifact footprint it carries. */
+export interface WorktreeTrimScanEntry {
+  path: string;
+  projectId: string;
+  /** The ticket that owns the checkout, or `null` for an orphan git still registers. */
+  ticketId: string | null;
+  branch: string | null;
+  /** How many ignored paths a trim would take. `0` reads as "nothing to trim". */
+  artifactCount: number;
+  /** Why this worktree is off limits right now (live work, dirty tracked files), else `null`. */
+  activeReason: string | null;
+}
+
+/** The scan behind Settings → Storage → Build artifacts. Reads only; never removes. */
+export type WorktreeTrimScanResult = Result<{ worktrees: WorktreeTrimScanEntry[] }>;
+
+/**
+ * What a manual trim across every non-active worktree did: the per-worktree
+ * reports and the worktrees it refused, with the reason.
+ *
+ * No metadata pruning here on purpose — `git worktree prune` drops every stale
+ * record in a repository, so it belongs to the confirmed orphan cleanup that
+ * reviews a set before taking it (VC-284), never to a second action running it
+ * blind.
+ */
+export interface WorktreeTrimSweepReport {
+  worktrees: WorktreeTrimReport[];
+  skipped: { path: string; reason: string }[];
+  totalBytes: number;
+  removedCount: number;
+  dryRun: boolean;
+}
+
+/** Ack for `volli:worktree-trim` — the sweep report the Settings action renders. */
+export type WorktreeTrimResult = Result<{ report: WorktreeTrimSweepReport }>;
+
+/**
+ * The trim settings: the preserved-configuration allowlist and whether a ticket
+ * reaching Done/Archived trims its own worktree. Both are user-owned — the
+ * automatic trim is opt-out, and the allowlist ships with defaults rather than
+ * empty.
+ */
+export interface WorktreeTrimSettings {
+  keepPatterns: string[];
+  trimOnFinish: boolean;
+}
+
+/** The trim settings — returned by `volli:worktree-trim-settings-get`/`-set`. */
+export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings }>;
+
+/** `{ trimOnFinish?, keepPatterns? }` — a partial update of the trim settings. */
+export interface WorktreeTrimSettingsInput {
+  trimOnFinish?: boolean;
+  keepPatterns?: string[];
+}
 
 /** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */
 export interface PiSessionOrphanCandidate {

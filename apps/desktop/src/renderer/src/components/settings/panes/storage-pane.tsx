@@ -20,6 +20,7 @@
  */
 import * as React from "react";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
+import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
@@ -32,7 +33,12 @@ import {
   DATA_EXPORT_CONTENTS,
   DATA_EXPORT_LIMITS,
 } from "../../../../../data-export-copy";
-import type { DirtyWorktreeOrphan, PiSessionOrphanInventory } from "../../../../../ipc/contract";
+import type {
+  DirtyWorktreeOrphan,
+  PiSessionOrphanInventory,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+} from "../../../../../ipc/contract";
 import {
   cleanupOutcome,
   cleanupRejectionMessage,
@@ -77,7 +83,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { Switch } from "@renderer/components/ui/switch";
 import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
@@ -103,6 +111,10 @@ export function StoragePane() {
           costing memory right now, while an orphaned folder is costing disk
           nobody is waiting on (VC-341). */}
       <RunningProcessesSection />
+      {/* Then the artifacts a finished worktree is still carrying (VC-340):
+          bigger than the orphan list and cheaper to act on, since a trim keeps
+          every checkout where it is. */}
+      <BuildArtifactsSection />
       <PiSessionLogsSection />
       <OrphansSection retentionDays={retentionDays} />
       <DatabaseSection />
@@ -198,6 +210,308 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
         <span className="text-ui text-muted-foreground">days</span>
       </PrefRow>
     </PrefSection>
+  );
+}
+
+/**
+ * Build artifacts (VC-340): what the checkouts are carrying, and the one action
+ * that puts it down.
+ *
+ * A scan on demand rather than on mount, for the same reason the orphan sweep is
+ * cached per launch: the read spawns a `git ls-files` per worktree, and this pane
+ * governs 143 of them on the machine that opened the ticket. Sizes are
+ * deliberately absent from the table — measuring them means walking every tree,
+ * which is the thirty-second stall that started this. The trim measures what it
+ * takes and reports it afterwards, which is when the number is worth having.
+ */
+function BuildArtifactsSection() {
+  const [state, setState] = React.useState<AsyncState<WorktreeTrimScanEntry[] | null>>({
+    status: "ready",
+    data: null,
+  });
+  const [report, setReport] = React.useState<WorktreeTrimSweepReport | null>(null);
+  const [trimOnFinish, setTrimOnFinish] = React.useState<boolean | null>(null);
+  const [scanning, setScanning] = React.useState(false);
+  const [trimming, setTrimming] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const fetcher = useLatestAsync();
+  const worktrees = state.status === "ready" ? state.data : null;
+  const carrying = (worktrees ?? []).filter((entry) => entry.artifactCount > 0);
+  const trimmable = carrying.filter((entry) => entry.activeReason === null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void window.api.worktree
+      .trimSettings()
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) setTrimOnFinish(result.settings.trimOnFinish);
+        else toastError(`Couldn't load the trim setting: ${result.error}`);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toastError(`Couldn't load the trim setting: ${errorMessage(error)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => () => fetcher.invalidate(), [fetcher]);
+
+  const scan = React.useCallback(async (): Promise<void> => {
+    const token = fetcher.claim();
+    setScanning(true);
+    setState({ status: "loading" });
+    try {
+      const result = await window.api.worktree.trimScan();
+      if (!fetcher.isCurrent(token)) return;
+      if (!result.ok) {
+        setState({ status: "error", message: result.error, onRetry: () => void scan() });
+        return;
+      }
+      setState({ status: "ready", data: result.worktrees });
+    } catch (error) {
+      if (fetcher.isCurrent(token)) {
+        setState({ status: "error", message: errorMessage(error), onRetry: () => void scan() });
+      }
+    } finally {
+      if (fetcher.isCurrent(token)) setScanning(false);
+    }
+  }, [fetcher]);
+
+  async function saveTrimOnFinish(next: boolean): Promise<void> {
+    setTrimOnFinish(next);
+    try {
+      const result = await window.api.worktree.setTrimSettings({ trimOnFinish: next });
+      if (result.ok) {
+        setTrimOnFinish(result.settings.trimOnFinish);
+        return;
+      }
+      setTrimOnFinish(!next);
+      toastError(`Couldn't save the trim setting: ${result.error}`);
+    } catch (error) {
+      setTrimOnFinish(!next);
+      toastError(`Couldn't save the trim setting: ${errorMessage(error)}`);
+    }
+  }
+
+  async function trim(): Promise<void> {
+    if (trimming) return;
+    setTrimming(true);
+    try {
+      const result = await window.api.worktree.trim();
+      if (!result.ok) {
+        toastError(`Couldn't trim build artifacts: ${result.error}`);
+        return;
+      }
+      setReport(result.report);
+      setConfirmOpen(false);
+      // The table it was based on is now wrong about every row it trimmed.
+      await scan();
+    } catch (error) {
+      toastError(`Couldn't trim build artifacts: ${errorMessage(error)}`);
+    } finally {
+      setTrimming(false);
+    }
+  }
+
+  const summary =
+    state.status === "loading"
+      ? "Scanning…"
+      : worktrees === null
+        ? "Not scanned"
+        : carrying.length === 0
+          ? "Nothing to trim"
+          : `${carrying.length} of ${worktrees.length} worktree(s)`;
+
+  return (
+    <>
+      <AsyncSection
+        title="Build artifacts"
+        icon={BroomIcon}
+        hint={
+          <>
+            A trim removes what git ignores — dependencies, build output, caches — and keeps .env,
+            keys, and other local configuration. Keeping a file keeps the folders around it, so a
+            folder that held one can stay behind part-emptied. One install puts a worktree back.
+          </>
+        }
+        action={
+          <SectionIconAction
+            // "Scan", never "Rescan": VC-284 found that word on a button that
+            // pruned metadata and deleted directories, and the label a person
+            // reads before pressing is part of that fix. This one only reads.
+            label="Scan for build artifacts"
+            icon={ArrowsClockwiseIcon}
+            busy={scanning}
+            onAct={() => void scan()}
+          />
+        }
+        before={
+          <>
+            <PrefRow label="Trim when a ticket is done" htmlFor="trim-on-finish">
+              <Switch
+                id="trim-on-finish"
+                checked={trimOnFinish ?? true}
+                disabled={trimOnFinish === null}
+                onCheckedChange={(next) => void saveTrimOnFinish(next)}
+              />
+            </PrefRow>
+            <PrefRow label="Carrying artifacts">
+              <span className="text-ui text-muted-foreground">{summary}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={trimmable.length === 0 || scanning || trimming}
+                onClick={() => setConfirmOpen(true)}
+              >
+                <BroomIcon />
+                Trim…
+              </Button>
+            </PrefRow>
+            {report === null ? null : <TrimReportRows report={report} />}
+          </>
+        }
+        state={state}
+        isEmpty={(entries) => entries !== null && entries.length === 0}
+        empty="No worktrees to trim."
+      >
+        {(entries) =>
+          entries === null
+            ? null
+            : entries.map((entry) => (
+                <ItemRow
+                  key={entry.path}
+                  name={truncateMiddle(entry.path)}
+                  meta={
+                    entry.activeReason ??
+                    (entry.artifactCount === 0
+                      ? "No ignored files."
+                      : `${entry.artifactCount} ignored path(s).`)
+                  }
+                  badges={
+                    entry.artifactCount > 0 ? <Badge variant="outline">Artifacts</Badge> : null
+                  }
+                  testId="trim-row"
+                >
+                  <RowAction
+                    label={`Reveal ${entry.path} in Finder`}
+                    hint="Reveal in Finder"
+                    icon={FolderOpenIcon}
+                    onAct={() => void reveal(entry.path)}
+                  />
+                </ItemRow>
+              ))
+        }
+      </AsyncSection>
+
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (!trimming) setConfirmOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Trim build artifacts?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block">
+                Removes the git-ignored files in {trimmable.length} worktree(s) — dependencies,
+                build output, caches. Tracked files, uncommitted work, .env files, and keys stay,
+                and so do the folders around anything kept, so a folder holding one can remain
+                part-emptied. Volli re-checks every worktree before touching it and skips any with a
+                running agent, an open terminal, or uncommitted changes.
+              </span>
+              <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
+                {trimmable.map((entry) => entry.path).join("\n")}
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={trimming}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={trimming}
+              onClick={(event) => {
+                event.preventDefault();
+                void trim();
+              }}
+            >
+              {trimming ? "Trimming…" : "Trim"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/** How many entries of a finished trim are worth listing before it becomes a log. */
+const TRIM_REPORT_ROWS = 5;
+
+/**
+ * What the trim did, where the action was: the total, the biggest things it took,
+ * the configuration it kept, and what it refused. A destructive action that
+ * reports only "done" is the failure `removedClean` was added to the orphan list
+ * to end — and a kept COUNT with no names is the same failure at one remove: a
+ * person reading "kept 3" cannot tell whether their `.env` is one of the three.
+ * So the kept paths are listed with the pattern that spared each, bounded the
+ * same way the offenders are.
+ */
+function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
+  const offenders = report.worktrees
+    .flatMap((worktree) =>
+      worktree.removed.map((removal) => ({
+        path: `${truncateMiddle(worktree.worktreePath, 32)}/${removal.path}`,
+        bytes: removal.bytes,
+      })),
+    )
+    .toSorted((a, b) => b.bytes - a.bytes)
+    .slice(0, TRIM_REPORT_ROWS);
+  const allKept = report.worktrees.flatMap((worktree) =>
+    worktree.kept.map((keep) => ({
+      path: `${truncateMiddle(worktree.worktreePath, 32)}/${keep.path}`,
+      reason: keep.reason,
+    })),
+  );
+  const kept = allKept.slice(0, TRIM_REPORT_ROWS);
+  const keptCount = allKept.length;
+
+  return (
+    <>
+      <PrefRow label="Freed">
+        <span className="text-ui text-muted-foreground">
+          {formatFileSize(report.totalBytes)} · {report.removedCount} path(s) in{" "}
+          {report.worktrees.length} worktree(s)
+          {keptCount > 0 ? ` · kept ${keptCount}` : ""}
+        </span>
+      </PrefRow>
+      {offenders.map((offender) => (
+        <ItemRow
+          key={offender.path}
+          name={offender.path}
+          meta={`Removed · ${formatFileSize(offender.bytes)}`}
+        />
+      ))}
+      {/* The preserved configuration, by name: this is the difference between a
+          trim and a blind `git clean -fdX`, so it is the part that must be
+          readable rather than counted. */}
+      {kept.map((entry) => (
+        <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
+      ))}
+      {keptCount > kept.length ? (
+        <ItemRow
+          name={`… and ${keptCount - kept.length} more kept`}
+          meta="Ignored, but preserved as configuration."
+        />
+      ) : null}
+      {report.skipped.map((skipped) => (
+        <ItemRow
+          key={`skipped:${skipped.path}`}
+          name={truncateMiddle(skipped.path)}
+          meta={`Skipped — ${skipped.reason}`}
+        />
+      ))}
+    </>
   );
 }
 

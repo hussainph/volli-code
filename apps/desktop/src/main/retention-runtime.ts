@@ -14,7 +14,13 @@ import type Database from "better-sqlite3";
 
 import { broadcastDataChanged } from "./broadcast";
 import { deliverNotification } from "./notifications/runtime";
-import { RetentionWatcher, retentionConfigFromEnv, runNet, type ReclaimDeps } from "./worktree";
+import {
+  RetentionWatcher,
+  retentionConfigFromEnv,
+  runNet,
+  type ReclaimDeps,
+  type TrimFinishDeps,
+} from "./worktree";
 import { worktreeDeps } from "./worktree-runtime";
 
 let watcher: RetentionWatcher | null = null;
@@ -29,6 +35,21 @@ let watcher: RetentionWatcher | null = null;
  * still appear, nothing is ever deleted.
  */
 export type RetentionReclaimSeams = Pick<ReclaimDeps, "releaseAgentSites" | "busyWorktreeSites">;
+
+/**
+ * The trim-on-finish pass (VC-340) shares the reclaim's busy question and needs
+ * nothing else: it removes only what git ignores, so there is no binding to
+ * release and no identity to clear. Reusing the ONE busy seam is the point — an
+ * automatic trim must refuse everything an automatic removal would.
+ */
+function trimSeams(
+  db: Database.Database,
+  reclaimSeams: RetentionReclaimSeams,
+): TrimFinishDeps | undefined {
+  const busy = reclaimSeams.busyWorktreeSites;
+  if (busy === undefined) return undefined;
+  return { worktree: worktreeDeps(db), now: () => Date.now(), busySites: busy };
+}
 
 /**
  * The retention watch singleton, built lazily against `db`. The first caller
@@ -57,6 +78,9 @@ export function getRetentionWatcher(
         reclaimSeams === undefined
           ? undefined
           : { worktree: worktreeDeps(db), now: () => Date.now(), ...reclaimSeams },
+      // Same rule as the reclaim, one step smaller: an app that cannot ask
+      // whether a directory is busy has no business deleting anything in one.
+      trim: reclaimSeams === undefined ? undefined : trimSeams(db, reclaimSeams),
     },
     retentionConfigFromEnv(process.env),
   );

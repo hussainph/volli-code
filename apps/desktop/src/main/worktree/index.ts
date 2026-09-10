@@ -151,9 +151,36 @@ export {
   setRetentionTtlDays,
   archiveAndClean,
   reclaimIfStale,
+  trimFinishedWorktree,
   DEFAULT_RETENTION_TTL_DAYS,
 } from "./retention";
-export type { ReclaimDeps, ReclaimOutcome } from "./retention";
+export type { ReclaimDeps, ReclaimOutcome, TrimFinishDeps, TrimFinishOutcome } from "./retention";
+
+// Trim (VC-340): the git-ignored artifacts a finished worktree keeps carrying,
+// removed without removing the checkout. Enumerated the way git defines
+// "ignored", minus a preserved-configuration allowlist that is a user setting.
+export {
+  countIgnoredArtifacts,
+  DEFAULT_TRIM_KEEP_PATTERNS,
+  keepReasonFor,
+  listIgnoredPaths,
+  trimIgnoredArtifacts,
+} from "./trim";
+export type { TrimInput, WorktreeTrimKeep, WorktreeTrimRemoval, WorktreeTrimReport } from "./trim";
+export {
+  defaultTrimSettings,
+  getTrimSettings,
+  setTrimSettings,
+  TRIM_SETTINGS_KEY,
+} from "./trim-settings";
+// The manual pass over every owned worktree — the Settings surface for what is
+// already on disk. It removes ignored CONTENT only and never prunes git
+// metadata: `git worktree prune` takes no path argument, so it acts on the whole
+// repository, and VC-284 earned the right to run it with a synchronous gate that
+// re-lists the prunable set and refuses unless it is exactly the set the user
+// confirmed (`cleanup.ts`). Running it blind from here would hand that back.
+export { scanTrimTargets, trimAllWorktrees } from "./trim-sweep";
+export type { TrimSweepDeps } from "./trim-sweep";
 // Worktree OWNERSHIP (VC-113): which containers under the shared
 // `~/.volli/worktrees` root belong to THIS database, and therefore which paths
 // any destructive route may touch.

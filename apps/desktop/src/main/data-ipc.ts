@@ -121,6 +121,10 @@ import type {
   WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsInput,
+  WorktreeTrimSettingsResult,
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
@@ -178,6 +182,7 @@ import {
   busyRefusal,
   busySiteWithin,
   type BusyWorktreeSite,
+  type BusyWorktreeSites,
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
@@ -190,9 +195,14 @@ import {
   readVenue,
   readWorktreeDiff,
   readWorktreeStatus,
+  getTrimSettings,
   remove as removeWorktree,
   runNet,
+  scanTrimTargets,
   setRetentionTtlDays,
+  setTrimSettings,
+  trimAllWorktrees,
+  trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "./worktree";
 import { createCoalescer } from "./worktree/coalesce";
@@ -446,6 +456,41 @@ export function registerDataIpcHandlers(
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
+  /**
+   * Trims a just-finished ticket's worktree (VC-340), beside the reply rather
+   * than inside it: enumerating and removing an ignored tree is a filesystem
+   * walk, and a board move must not wait on one.
+   *
+   * Fire-and-forget is the right shape for it, and the reason is the repo's own
+   * rule about failed mutations: nobody asked for this and nothing is waiting on
+   * it, so a refusal (a live agent, a changed tracked file) has no recovery to
+   * offer and stays in the log. What it does NOT do quietly is succeed — a trim
+   * writes `worktree_trimmed` into the ticket's History and broadcasts, so the
+   * card it belongs to can account for the files that went.
+   */
+  /**
+   * The sweep's deps: the worktree bundle plus the ONE busy question every
+   * destructive worktree route asks. Built per call, like `worktreeDeps(db)`
+   * everywhere else here, so nothing caches a stale db handle.
+   */
+  const busySeam = (): { busySites?: BusyWorktreeSites } =>
+    options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
+  const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
+
+  const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
+    void trimFinishedWorktree(
+      { worktree: worktreeDeps(db), now: () => Date.now(), ...busySeam() },
+      ticketId,
+    )
+      .then((outcome) => {
+        if (outcome.kind !== "trimmed") return;
+        broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
+      })
+      .catch((error: unknown) => {
+        console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+      });
+  };
+
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
@@ -681,6 +726,17 @@ export function registerDataIpcHandlers(
       )();
 
       const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+
+      // VC-340: a ticket that just landed in Done gives up its worktree's
+      // git-ignored content NOW rather than whenever the 60s retention poll next
+      // runs. Same act, same refusals, same durable event — the poll remains the
+      // backfill for everything already finished before this door existed.
+      for (const ticketId of ticketIds) {
+        const moved = after.get(ticketId);
+        if (moved === undefined || moved.status !== "done") continue;
+        if (before.get(ticketId)?.status === "done") continue;
+        trimFinishedInBackground(ticketId, moved.project_id);
+      }
       // Main owns armed-column arrivals. A group drop is one deliberate move
       // per selected Ticket, so every real column change reports independently
       // with the same Option-drag choice.
@@ -819,9 +875,13 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
       const now = Date.now();
+      const ticket = getTicketRow(db, input.ticketId);
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      // An archive KEEPS the checkout, which makes an archived ticket the
+      // longest-lived carrier of a dead dependency tree in the app (VC-340).
+      trimFinishedInBackground(input.ticketId, ticket?.project_id);
       return { ok: true };
     },
 
@@ -1391,6 +1451,33 @@ export function registerDataIpcHandlers(
       // target — untargeted (everyone re-hydrates).
       broadcastDataChanged({ kind: "worktree" });
       return { ok: true };
+    },
+
+    // ---- build artifacts (VC-340) ------------------------------------------
+
+    "volli:worktree-trim-scan": async (): Promise<WorktreeTrimScanResult> => {
+      const scan = await scanTrimTargets(trimSweepDeps());
+      return { ok: true, worktrees: scan.worktrees };
+    },
+
+    "volli:worktree-trim": async (): Promise<WorktreeTrimResult> => {
+      const report = await trimAllWorktrees(trimSweepDeps());
+      // Nothing about any ticket's identity moved — the checkouts are all still
+      // there, on the same branches, and git's own records are untouched — but
+      // the Settings table and any surface reading worktree state should re-read
+      // what is now on disk.
+      if (!report.dryRun && report.removedCount > 0) broadcastDataChanged({ kind: "worktree" });
+      return { ok: true, report };
+    },
+
+    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: getTrimSettings(db) };
+    },
+
+    "volli:worktree-trim-settings-set": (
+      input: WorktreeTrimSettingsInput,
+    ): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
     // ---- Done flow (docs/plans/done-flow.md) --------------------------------
