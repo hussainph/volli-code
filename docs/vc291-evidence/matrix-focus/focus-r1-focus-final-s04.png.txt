@@ -1,0 +1,60 @@
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-I
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-c2-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c2-in
+54 169
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-f ocu
+s-return-2,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/V
+C-291-investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-prob
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-2
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-c3-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c3-in
+54 169
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-f ocu
+s-return-3,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/V
+C-291-investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-prob
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-3
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-c4-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c4-in
+54 169
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-f ocu
+s-return-4,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/V
+C-291-investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-prob
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-4
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-c5-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c5-in
+54 169
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-f ocu
+s-return-5,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/V
+C-291-investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-prob
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-5
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-c6-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c6-in

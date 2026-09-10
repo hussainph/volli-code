@@ -1,0 +1,5899 @@
+{
+  "meta": {
+    "ticket": "VC-291 reflow matrix",
+    "startedAt": "2026-09-10T11:17:27.574Z",
+    "commit": "596a76cfa6c001c4c797301ef378f87c3b833135",
+    "commitShort": "596a76cf",
+    "branch": "volli/VC-291-investigate-terminal-reflow-line-loss-and-access",
+    "treeDirty": true,
+    "appVersion": "0.2.0-canary.4",
+    "electron": "^44.0.0",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "hardware": "Apple M1",
+    "displays": [
+      {
+        "name": "Color LCD",
+        "resolution": "1440 x 900 @ 60.00Hz",
+        "main": true,
+        "connection": "spdisplays_internal",
+        "virtual": false
+      },
+      {
+        "name": "DELL E2422HS",
+        "resolution": "1920 x 1080 @ 60.00Hz",
+        "main": false,
+        "connection": null,
+        "virtual": false
+      }
+    ],
+    "displayCount": 2,
+    "externalMonitorAttached": true,
+    "node": "v24.18.0",
+    "cases": [
+      "vsplit"
+    ],
+    "runsPerCase": 3,
+    "surface": "ticket",
+    "panesPerRun": 0,
+    "expectBackend": "webgpu",
+    "minLiveTerminals": 0,
+    "forcedBackend": "auto (production default)",
+    "fontWorkaround": "queryLocalFonts stubbed with real /System/Library/Fonts/SFNSMono.ttf bytes (VC-347)",
+    "window": {
+      "x": 20,
+      "y": 31,
+      "width": 1280,
+      "height": 811,
+      "scaleFactor": 2,
+      "displayId": 1,
+      "displaySize": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "backend": {
+      "webgpu": true,
+      "webgl2": false,
+      "navigatorGpu": true,
+      "contexts": 7
+    },
+    "paneShell": "/bin/zsh\n/bin/zsh\nsh=/bin/sh",
+    "consoleByLevel": {
+      "warning": 12
+    },
+    "contextMessages": [],
+    "consoleErrors": [],
+    "consoleAll": [
+      {
+        "t": 1789039077951,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039077951,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789039086277,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039086278,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789039183895,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039183896,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789039192262,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039192262,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789039286349,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039286349,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789039294627,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789039294627,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      }
+    ],
+    "finishedAt": "2026-09-10T11:23:10.633Z"
+  },
+  "runs": [
+    {
+      "case": "vsplit",
+      "run": 1,
+      "surface": "ticket",
+      "startedAt": "2026-09-10T11:18:00.899Z",
+      "events": [
+        {
+          "t": "seedpost",
+          "role": "seed",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 1554,
+            "max": 1554,
+            "height": 2270,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-seedpost-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2753
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-EN",
+                "tailTruncatedByOcr": true
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "short30": 1554,
+              "pwd": 1554,
+              "end": 1554
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2916
+              },
+              {
+                "file": "vsplit-r1-seedpost-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2853
+              },
+              {
+                "file": "vsplit-r1-seedpost-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2784
+              },
+              {
+                "file": "vsplit-r1-seedpost-s03.png",
+                "requestedTop": 1554,
+                "actualTop": 1554,
+                "ocrChars": 2753
+              }
+            ],
+            "scrollMax": 1554,
+            "restored": {
+              "wanted": 1554,
+              "got": 1554
+            }
+          },
+          "at": 1789039085926
+        },
+        {
+          "t": "split-created",
+          "role": "note",
+          "canvases": 2,
+          "newPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039088496
+        },
+        {
+          "t": "drag-c1-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 5978,
+            "max": 5978,
+            "height": 6694,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c1-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1020
+          },
+          "shots": {
+            "steps": 11,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 3038,
+              "short30": 5474,
+              "pwd": 5978,
+              "end": 5978
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c1-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1011
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1048
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c1-25-s10.png",
+                "requestedTop": 5978,
+                "actualTop": 5978,
+                "ocrChars": 1020
+              }
+            ],
+            "scrollMax": 5978,
+            "restored": {
+              "wanted": 5978,
+              "got": 5978
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039096877
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 3178,
+            "max": 3178,
+            "height": 3894,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1830
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s06.png",
+                "requestedTop": 3178,
+                "actualTop": 3178,
+                "ocrChars": 1830
+              }
+            ],
+            "scrollMax": 3178,
+            "restored": {
+              "wanted": 3178,
+              "got": 3178
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039103380
+        },
+        {
+          "t": "drag-c1-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 2254,
+            "max": 2254,
+            "height": 2970,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c1-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2499
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 2254,
+              "pwd": 2254,
+              "end": 2254
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c1-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2400
+              },
+              {
+                "file": "vsplit-r1-drag-c1-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r1-drag-c1-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c1-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c1-75-s04.png",
+                "requestedTop": 2254,
+                "actualTop": 2254,
+                "ocrChars": 2499
+              }
+            ],
+            "scrollMax": 2254,
+            "restored": {
+              "wanted": 2254,
+              "got": 2254
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039109471
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 3430,
+            "max": 3430,
+            "height": 4146,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1874
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c1-50-s06.png",
+                "requestedTop": 3430,
+                "actualTop": 3430,
+                "ocrChars": 1874
+              }
+            ],
+            "scrollMax": 3430,
+            "restored": {
+              "wanted": 3430,
+              "got": 3430
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039115926
+        },
+        {
+          "t": "drag-c2-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 6972,
+            "max": 6972,
+            "height": 7688,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c2-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 974
+          },
+          "shots": {
+            "steps": 13,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 3038,
+              "short30": 5474,
+              "pwd": 6076,
+              "end": 6076
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c2-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1011
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1048
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1025
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 993
+              },
+              {
+                "file": "vsplit-r1-drag-c2-25-s12.png",
+                "requestedTop": 6972,
+                "actualTop": 6972,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 6972,
+            "restored": {
+              "wanted": 6972,
+              "got": 6972
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039125345
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 3682,
+            "max": 3682,
+            "height": 4398,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1870
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1898
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s07.png",
+                "requestedTop": 3682,
+                "actualTop": 3682,
+                "ocrChars": 1870
+              }
+            ],
+            "scrollMax": 3682,
+            "restored": {
+              "wanted": 3682,
+              "got": 3682
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039132763
+        },
+        {
+          "t": "drag-c2-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 2632,
+            "max": 2632,
+            "height": 3348,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c2-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2586
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 2436,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c2-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2400
+              },
+              {
+                "file": "vsplit-r1-drag-c2-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r1-drag-c2-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c2-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c2-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2515
+              },
+              {
+                "file": "vsplit-r1-drag-c2-75-s05.png",
+                "requestedTop": 2632,
+                "actualTop": 2632,
+                "ocrChars": 2586
+              }
+            ],
+            "scrollMax": 2632,
+            "restored": {
+              "wanted": 2632,
+              "got": 2632
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 1092,
+              "max": 1092,
+              "height": 1808,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039139431
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 3934,
+            "max": 3934,
+            "height": 4650,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1898
+              },
+              {
+                "file": "vsplit-r1-drag-c2-50-s07.png",
+                "requestedTop": 3934,
+                "actualTop": 3934,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 3934,
+            "restored": {
+              "wanted": 3934,
+              "got": 3934
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039146314
+        },
+        {
+          "t": "drag-c3-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 7966,
+            "max": 7966,
+            "height": 8682,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c3-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 974
+          },
+          "shots": {
+            "steps": 15,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 3038,
+              "short30": 5474,
+              "pwd": 6076,
+              "end": 6076
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c3-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1011
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1048
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1025
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 993
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s12.png",
+                "requestedTop": 7296,
+                "actualTop": 7294,
+                "ocrChars": 1003
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s13.png",
+                "requestedTop": 7904,
+                "actualTop": 7910,
+                "ocrChars": 977
+              },
+              {
+                "file": "vsplit-r1-drag-c3-25-s14.png",
+                "requestedTop": 7966,
+                "actualTop": 7966,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 7966,
+            "restored": {
+              "wanted": 7966,
+              "got": 7966
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039156488
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 4186,
+            "max": 4186,
+            "height": 4902,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1875
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1898
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s07.png",
+                "requestedTop": 4186,
+                "actualTop": 4186,
+                "ocrChars": 1875
+              }
+            ],
+            "scrollMax": 4186,
+            "restored": {
+              "wanted": 4186,
+              "got": 4186
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039163461
+        },
+        {
+          "t": "drag-c3-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 2982,
+            "max": 2982,
+            "height": 3698,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c3-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 2616
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 2436,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c3-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2400
+              },
+              {
+                "file": "vsplit-r1-drag-c3-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r1-drag-c3-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c3-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r1-drag-c3-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2515
+              },
+              {
+                "file": "vsplit-r1-drag-c3-75-s05.png",
+                "requestedTop": 2982,
+                "actualTop": 2982,
+                "ocrChars": 2616
+              }
+            ],
+            "scrollMax": 2982,
+            "restored": {
+              "wanted": 2982,
+              "got": 2982
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 2086,
+              "max": 2086,
+              "height": 2802,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039169867
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 4438,
+            "max": 4438,
+            "height": 5154,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "ringActivePaneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1898
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1953
+              },
+              {
+                "file": "vsplit-r1-drag-c3-50-s08.png",
+                "requestedTop": 4438,
+                "actualTop": 4438,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 4438,
+            "restored": {
+              "wanted": 4438,
+              "got": 4438
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "e653bbbe-ecd6-4d72-821d-184d23bfaed5",
+              "top": 826,
+              "max": 826,
+              "height": 1542,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039177290
+        },
+        {
+          "t": "split-final",
+          "role": "final",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "top": 4564,
+            "max": 4564,
+            "height": 5280,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+          "ringActivePaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r1-split-final-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1848
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r1-split-final-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r1-split-final-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r1-split-final-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-split-final-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r1-split-final-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r1-split-final-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1776
+              },
+              {
+                "file": "vsplit-r1-split-final-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1898
+              },
+              {
+                "file": "vsplit-r1-split-final-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1953
+              },
+              {
+                "file": "vsplit-r1-split-final-s08.png",
+                "requestedTop": 4564,
+                "actualTop": 4564,
+                "ocrChars": 1845
+              }
+            ],
+            "scrollMax": 4564,
+            "restored": {
+              "wanted": 4564,
+              "got": 4564
+            }
+          },
+          "at": 1789039183454
+        }
+      ],
+      "referenceToken": "vsplit1mtvfoe1r",
+      "referenceFile": "/tmp/volli-reflow-vsplit1mtvfoe1r-1789039081.txt",
+      "seedVerification": {
+        "ok": true,
+        "lineCount": 63,
+        "shortsSeen": 30,
+        "longsSeen": 30,
+        "pwd": "/tmp/vc291-matrix-yyJ3yh/worktree-home/.volli/worktrees/project-Vzjlzx-vc291-pr/VC-1-vc-291-reflow-matrix",
+        "problems": []
+      },
+      "seededPaneId": "b51055bb-6083-4c73-a75a-0293ff21a5da",
+      "paneMetrics": {
+        "clip": {
+          "x": 322,
+          "y": 82,
+          "width": 645,
+          "height": 716
+        },
+        "dpr": 2
+      },
+      "finishedAt": "2026-09-10T11:19:43.454Z"
+    },
+    {
+      "case": "vsplit",
+      "run": 2,
+      "surface": "ticket",
+      "startedAt": "2026-09-10T11:19:46.806Z",
+      "events": [
+        {
+          "t": "seedpost",
+          "role": "seed",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 1526,
+            "max": 1526,
+            "height": 2242,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-seedpost-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2754
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-EN",
+                "tailTruncatedByOcr": true
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "short30": 1526,
+              "pwd": 1526,
+              "end": 1526
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2776
+              },
+              {
+                "file": "vsplit-r2-seedpost-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2855
+              },
+              {
+                "file": "vsplit-r2-seedpost-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2853
+              },
+              {
+                "file": "vsplit-r2-seedpost-s03.png",
+                "requestedTop": 1526,
+                "actualTop": 1526,
+                "ocrChars": 2754
+              }
+            ],
+            "scrollMax": 1526,
+            "restored": {
+              "wanted": 1526,
+              "got": 1526
+            }
+          },
+          "at": 1789039191907
+        },
+        {
+          "t": "split-created",
+          "role": "note",
+          "canvases": 2,
+          "newPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039194401
+        },
+        {
+          "t": "drag-c1-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 5852,
+            "max": 5852,
+            "height": 6568,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c1-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1015
+          },
+          "shots": {
+            "steps": 11,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c1-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r2-drag-c1-25-s10.png",
+                "requestedTop": 5852,
+                "actualTop": 5852,
+                "ocrChars": 1015
+              }
+            ],
+            "scrollMax": 5852,
+            "restored": {
+              "wanted": 5852,
+              "got": 5852
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039202547
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 3122,
+            "max": 3122,
+            "height": 3838,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1831
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s06.png",
+                "requestedTop": 3122,
+                "actualTop": 3122,
+                "ocrChars": 1831
+              }
+            ],
+            "scrollMax": 3122,
+            "restored": {
+              "wanted": 3122,
+              "got": 3122
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039208854
+        },
+        {
+          "t": "drag-c1-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 2212,
+            "max": 2212,
+            "height": 2928,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c1-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2499
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2212,
+              "end": 2212
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c1-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2440
+              },
+              {
+                "file": "vsplit-r2-drag-c1-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r2-drag-c1-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c1-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c1-75-s04.png",
+                "requestedTop": 2212,
+                "actualTop": 2212,
+                "ocrChars": 2499
+              }
+            ],
+            "scrollMax": 2212,
+            "restored": {
+              "wanted": 2212,
+              "got": 2212
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039214664
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 3374,
+            "max": 3374,
+            "height": 4090,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1875
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c1-50-s06.png",
+                "requestedTop": 3374,
+                "actualTop": 3374,
+                "ocrChars": 1875
+              }
+            ],
+            "scrollMax": 3374,
+            "restored": {
+              "wanted": 3374,
+              "got": 3374
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039220971
+        },
+        {
+          "t": "drag-c2-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 6846,
+            "max": 6846,
+            "height": 7562,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c2-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 975
+          },
+          "shots": {
+            "steps": 13,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c2-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1007
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 996
+              },
+              {
+                "file": "vsplit-r2-drag-c2-25-s12.png",
+                "requestedTop": 6846,
+                "actualTop": 6846,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 6846,
+            "restored": {
+              "wanted": 6846,
+              "got": 6846
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039230120
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 3626,
+            "max": 3626,
+            "height": 4342,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1870
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s06.png",
+                "requestedTop": 3626,
+                "actualTop": 3626,
+                "ocrChars": 1870
+              }
+            ],
+            "scrollMax": 3626,
+            "restored": {
+              "wanted": 3626,
+              "got": 3626
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039236395
+        },
+        {
+          "t": "drag-c2-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 2590,
+            "max": 2590,
+            "height": 3306,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c2-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2586
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c2-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2440
+              },
+              {
+                "file": "vsplit-r2-drag-c2-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r2-drag-c2-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c2-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c2-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2561
+              },
+              {
+                "file": "vsplit-r2-drag-c2-75-s05.png",
+                "requestedTop": 2590,
+                "actualTop": 2590,
+                "ocrChars": 2586
+              }
+            ],
+            "scrollMax": 2590,
+            "restored": {
+              "wanted": 2590,
+              "got": 2590
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 1092,
+              "max": 1092,
+              "height": 1808,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039242877
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 3878,
+            "max": 3878,
+            "height": 4594,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r2-drag-c2-50-s07.png",
+                "requestedTop": 3878,
+                "actualTop": 3878,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 3878,
+            "restored": {
+              "wanted": 3878,
+              "got": 3878
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039249657
+        },
+        {
+          "t": "drag-c3-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 7840,
+            "max": 7840,
+            "height": 8556,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c3-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 973
+          },
+          "shots": {
+            "steps": 14,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c3-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1007
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 996
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s12.png",
+                "requestedTop": 7296,
+                "actualTop": 7294,
+                "ocrChars": 1000
+              },
+              {
+                "file": "vsplit-r2-drag-c3-25-s13.png",
+                "requestedTop": 7840,
+                "actualTop": 7840,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 7840,
+            "restored": {
+              "wanted": 7840,
+              "got": 7840
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039259237
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 4130,
+            "max": 4130,
+            "height": 4846,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1875
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s07.png",
+                "requestedTop": 4130,
+                "actualTop": 4130,
+                "ocrChars": 1875
+              }
+            ],
+            "scrollMax": 4130,
+            "restored": {
+              "wanted": 4130,
+              "got": 4130
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039266062
+        },
+        {
+          "t": "drag-c3-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 2940,
+            "max": 2940,
+            "height": 3656,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c3-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 2614
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c3-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2440
+              },
+              {
+                "file": "vsplit-r2-drag-c3-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r2-drag-c3-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c3-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r2-drag-c3-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2561
+              },
+              {
+                "file": "vsplit-r2-drag-c3-75-s05.png",
+                "requestedTop": 2940,
+                "actualTop": 2940,
+                "ocrChars": 2616
+              }
+            ],
+            "scrollMax": 2940,
+            "restored": {
+              "wanted": 2940,
+              "got": 2940
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 2086,
+              "max": 2086,
+              "height": 2802,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039272522
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 4382,
+            "max": 4382,
+            "height": 5098,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "ringActivePaneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1957
+              },
+              {
+                "file": "vsplit-r2-drag-c3-50-s08.png",
+                "requestedTop": 4382,
+                "actualTop": 4382,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 4382,
+            "restored": {
+              "wanted": 4382,
+              "got": 4382
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "cc397a9c-3d8d-4dd4-9e97-5cc70c4173cc",
+              "top": 826,
+              "max": 826,
+              "height": 1542,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039279991
+        },
+        {
+          "t": "split-final",
+          "role": "final",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "top": 4508,
+            "max": 4508,
+            "height": 5224,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+          "ringActivePaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r2-split-final-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1848
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r2-split-final-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1825
+              },
+              {
+                "file": "vsplit-r2-split-final-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-split-final-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r2-split-final-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r2-split-final-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r2-split-final-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1837
+              },
+              {
+                "file": "vsplit-r2-split-final-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r2-split-final-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1957
+              },
+              {
+                "file": "vsplit-r2-split-final-s08.png",
+                "requestedTop": 4508,
+                "actualTop": 4508,
+                "ocrChars": 1845
+              }
+            ],
+            "scrollMax": 4508,
+            "restored": {
+              "wanted": 4508,
+              "got": 4508
+            }
+          },
+          "at": 1789039285957
+        }
+      ],
+      "referenceToken": "vsplit2mtvfqnkj",
+      "referenceFile": "/tmp/volli-reflow-vsplit2mtvfqnkj-1789039187.txt",
+      "seedVerification": {
+        "ok": true,
+        "lineCount": 63,
+        "shortsSeen": 30,
+        "longsSeen": 30,
+        "pwd": "/tmp/vc291-matrix-yyJ3yh/worktree-home/.volli/worktrees/project-Vzjlzx-vc291-pr/VC-1-vc-291-reflow-matrix",
+        "problems": []
+      },
+      "seededPaneId": "beb8496b-85df-4f9f-9a61-e7db53d28e67",
+      "paneMetrics": {
+        "clip": {
+          "x": 322,
+          "y": 82,
+          "width": 645,
+          "height": 716
+        },
+        "dpr": 2
+      },
+      "finishedAt": "2026-09-10T11:21:25.957Z"
+    },
+    {
+      "case": "vsplit",
+      "run": 3,
+      "surface": "ticket",
+      "startedAt": "2026-09-10T11:21:29.428Z",
+      "events": [
+        {
+          "t": "seedpost",
+          "role": "seed",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 1526,
+            "max": 1526,
+            "height": 2242,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-seedpost-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2753
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-EN",
+                "tailTruncatedByOcr": true
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "short30": 1526,
+              "pwd": 1526,
+              "end": 1526
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2775
+              },
+              {
+                "file": "vsplit-r3-seedpost-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2855
+              },
+              {
+                "file": "vsplit-r3-seedpost-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2853
+              },
+              {
+                "file": "vsplit-r3-seedpost-s03.png",
+                "requestedTop": 1526,
+                "actualTop": 1526,
+                "ocrChars": 2753
+              }
+            ],
+            "scrollMax": 1526,
+            "restored": {
+              "wanted": 1526,
+              "got": 1526
+            }
+          },
+          "at": 1789039294273
+        },
+        {
+          "t": "split-created",
+          "role": "note",
+          "canvases": 2,
+          "newPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039296789
+        },
+        {
+          "t": "drag-c1-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 5852,
+            "max": 5852,
+            "height": 6568,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c1-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1017
+          },
+          "shots": {
+            "steps": 11,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c1-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r3-drag-c1-25-s10.png",
+                "requestedTop": 5852,
+                "actualTop": 5852,
+                "ocrChars": 1017
+              }
+            ],
+            "scrollMax": 5852,
+            "restored": {
+              "wanted": 5852,
+              "got": 5852
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039304846
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 3122,
+            "max": 3122,
+            "height": 3838,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1831
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s06.png",
+                "requestedTop": 3122,
+                "actualTop": 3122,
+                "ocrChars": 1830
+              }
+            ],
+            "scrollMax": 3122,
+            "restored": {
+              "wanted": 3122,
+              "got": 3122
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039311147
+        },
+        {
+          "t": "drag-c1-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 2212,
+            "max": 2212,
+            "height": 2928,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c1-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2499
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2212,
+              "end": 2212
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c1-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2438
+              },
+              {
+                "file": "vsplit-r3-drag-c1-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r3-drag-c1-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c1-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c1-75-s04.png",
+                "requestedTop": 2212,
+                "actualTop": 2212,
+                "ocrChars": 2499
+              }
+            ],
+            "scrollMax": 2212,
+            "restored": {
+              "wanted": 2212,
+              "got": 2212
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039317116
+        },
+        {
+          "t": "drag-c1-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 3374,
+            "max": 3374,
+            "height": 4090,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c1-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 1874
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c1-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c1-50-s06.png",
+                "requestedTop": 3374,
+                "actualTop": 3374,
+                "ocrChars": 1874
+              }
+            ],
+            "scrollMax": 3374,
+            "restored": {
+              "wanted": 3374,
+              "got": 3374
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039323403
+        },
+        {
+          "t": "drag-c2-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 6846,
+            "max": 6846,
+            "height": 7562,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c2-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 975
+          },
+          "shots": {
+            "steps": 13,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c2-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1002
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 996
+              },
+              {
+                "file": "vsplit-r3-drag-c2-25-s12.png",
+                "requestedTop": 6846,
+                "actualTop": 6846,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 6846,
+            "restored": {
+              "wanted": 6846,
+              "got": 6846
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 0,
+              "max": 0,
+              "height": 716,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039332470
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 3626,
+            "max": 3626,
+            "height": 4342,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1870
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s06.png",
+                "requestedTop": 3626,
+                "actualTop": 3626,
+                "ocrChars": 1870
+              }
+            ],
+            "scrollMax": 3626,
+            "restored": {
+              "wanted": 3626,
+              "got": 3626
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039338871
+        },
+        {
+          "t": "drag-c2-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 2590,
+            "max": 2590,
+            "height": 3306,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c2-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2586
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c2-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2438
+              },
+              {
+                "file": "vsplit-r3-drag-c2-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r3-drag-c2-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c2-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c2-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2561
+              },
+              {
+                "file": "vsplit-r3-drag-c2-75-s05.png",
+                "requestedTop": 2590,
+                "actualTop": 2590,
+                "ocrChars": 2586
+              }
+            ],
+            "scrollMax": 2590,
+            "restored": {
+              "wanted": 2590,
+              "got": 2590
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 1092,
+              "max": 1092,
+              "height": 1808,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039345690
+        },
+        {
+          "t": "drag-c2-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 3878,
+            "max": 3878,
+            "height": 4594,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c2-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c2-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r3-drag-c2-50-s07.png",
+                "requestedTop": 3878,
+                "actualTop": 3878,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 3878,
+            "restored": {
+              "wanted": 3878,
+              "got": 3878
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039353447
+        },
+        {
+          "t": "drag-c3-25",
+          "role": "boundary",
+          "grid": "51 20",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 7840,
+            "max": 7840,
+            "height": 8556,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c3-25-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 975
+          },
+          "shots": {
+            "steps": 14,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 2436,
+              "long15": 2436,
+              "short30": 5474,
+              "pwd": 5474,
+              "end": 5474
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c3-25-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1034
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1053
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s08.png",
+                "requestedTop": 4864,
+                "actualTop": 4858,
+                "ocrChars": 1047
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s09.png",
+                "requestedTop": 5472,
+                "actualTop": 5474,
+                "ocrChars": 1044
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s10.png",
+                "requestedTop": 6080,
+                "actualTop": 6076,
+                "ocrChars": 1002
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s11.png",
+                "requestedTop": 6688,
+                "actualTop": 6692,
+                "ocrChars": 996
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s12.png",
+                "requestedTop": 7296,
+                "actualTop": 7294,
+                "ocrChars": 1000
+              },
+              {
+                "file": "vsplit-r3-drag-c3-25-s13.png",
+                "requestedTop": 7840,
+                "actualTop": 7840,
+                "ocrChars": 975
+              }
+            ],
+            "scrollMax": 7840,
+            "restored": {
+              "wanted": 7840,
+              "got": 7840
+            }
+          },
+          "fraction": 0.25,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 63",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039363582
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 4130,
+            "max": 4130,
+            "height": 4846,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1875
+          },
+          "shots": {
+            "steps": 8,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s07.png",
+                "requestedTop": 4130,
+                "actualTop": 4130,
+                "ocrChars": 1875
+              }
+            ],
+            "scrollMax": 4130,
+            "restored": {
+              "wanted": 4130,
+              "got": 4130
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 716,
+              "max": 716,
+              "height": 1432,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039370561
+        },
+        {
+          "t": "drag-c3-75",
+          "role": "boundary",
+          "grid": "51 63",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 2940,
+            "max": 2940,
+            "height": 3656,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c3-75-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 2616
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 1218,
+              "short30": 1820,
+              "pwd": 2436,
+              "end": 2436
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c3-75-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2438
+              },
+              {
+                "file": "vsplit-r3-drag-c3-75-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2432
+              },
+              {
+                "file": "vsplit-r3-drag-c3-75-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c3-75-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 2328
+              },
+              {
+                "file": "vsplit-r3-drag-c3-75-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 2561
+              },
+              {
+                "file": "vsplit-r3-drag-c3-75-s05.png",
+                "requestedTop": 2940,
+                "actualTop": 2940,
+                "ocrChars": 2616
+              }
+            ],
+            "scrollMax": 2940,
+            "restored": {
+              "wanted": 2940,
+              "got": 2940
+            }
+          },
+          "fraction": 0.75,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 20",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 2086,
+              "max": 2086,
+              "height": 2802,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039377243
+        },
+        {
+          "t": "drag-c3-50",
+          "role": "boundary",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 4382,
+            "max": 4382,
+            "height": 5098,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "ringActivePaneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-drag-c3-50-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1859
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-drag-c3-50-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1957
+              },
+              {
+                "file": "vsplit-r3-drag-c3-50-s08.png",
+                "requestedTop": 4382,
+                "actualTop": 4382,
+                "ocrChars": 1859
+              }
+            ],
+            "scrollMax": 4382,
+            "restored": {
+              "wanted": 4382,
+              "got": 4382
+            }
+          },
+          "fraction": 0.5,
+          "dragged": true,
+          "secondPane": {
+            "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+            "grid": "51 42",
+            "scroll": {
+              "paneId": "46b17c4e-5cb4-43f5-96b9-418f95706468",
+              "top": 826,
+              "max": 826,
+              "height": 1542,
+              "client": 716,
+              "dpr": 2,
+              "focusedPaneId": null,
+              "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+              "paneCount": 2
+            }
+          },
+          "at": 1789039384702
+        },
+        {
+          "t": "split-final",
+          "role": "final",
+          "grid": "51 42",
+          "scroll": {
+            "paneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "top": 4508,
+            "max": 4508,
+            "height": 5224,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+            "paneCount": 2
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+          "ringActivePaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+          "onSeededPane": true,
+          "atRest": {
+            "file": "vsplit-r3-split-final-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1849
+          },
+          "shots": {
+            "steps": 9,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-END",
+                "tailTruncatedByOcr": false
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 1218,
+              "long15": 1218,
+              "short30": 3038,
+              "pwd": 3038,
+              "end": 3038
+            },
+            "shots": [
+              {
+                "file": "vsplit-r3-split-final-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1824
+              },
+              {
+                "file": "vsplit-r3-split-final-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-split-final-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1794
+              },
+              {
+                "file": "vsplit-r3-split-final-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1821
+              },
+              {
+                "file": "vsplit-r3-split-final-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1759
+              },
+              {
+                "file": "vsplit-r3-split-final-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1836
+              },
+              {
+                "file": "vsplit-r3-split-final-s06.png",
+                "requestedTop": 3648,
+                "actualTop": 3654,
+                "ocrChars": 1946
+              },
+              {
+                "file": "vsplit-r3-split-final-s07.png",
+                "requestedTop": 4256,
+                "actualTop": 4256,
+                "ocrChars": 1957
+              },
+              {
+                "file": "vsplit-r3-split-final-s08.png",
+                "requestedTop": 4508,
+                "actualTop": 4508,
+                "ocrChars": 1845
+              }
+            ],
+            "scrollMax": 4508,
+            "restored": {
+              "wanted": 4508,
+              "got": 4508
+            }
+          },
+          "at": 1789039390630
+        }
+      ],
+      "referenceToken": "vsplit3mtvfsuqv",
+      "referenceFile": "/tmp/volli-reflow-vsplit3mtvfsuqv-1789039289.txt",
+      "seedVerification": {
+        "ok": true,
+        "lineCount": 63,
+        "shortsSeen": 30,
+        "longsSeen": 30,
+        "pwd": "/tmp/vc291-matrix-yyJ3yh/worktree-home/.volli/worktrees/project-Vzjlzx-vc291-pr/VC-1-vc-291-reflow-matrix",
+        "problems": []
+      },
+      "seededPaneId": "40a92d44-ba24-40e7-b40e-d32b3fca3867",
+      "paneMetrics": {
+        "clip": {
+          "x": 322,
+          "y": 82,
+          "width": 645,
+          "height": 716
+        },
+        "dpr": 2
+      },
+      "finishedAt": "2026-09-10T11:23:10.631Z"
+    }
+  ]
+}
