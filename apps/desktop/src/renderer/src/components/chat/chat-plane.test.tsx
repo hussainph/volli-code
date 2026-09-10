@@ -6,11 +6,13 @@
  * `/skill` exactly as typed, and a compact Badge is the whole visible footprint
  * of the body that rode along.
  */
+import { sessionHostNoticeMetadata } from "@volli/shared";
+import { projectTranscriptRows } from "@volli/session-presentation";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 
-import { ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
+import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
 
 const context: TurnContext = {
   onOpenFile: () => undefined,
@@ -25,6 +27,43 @@ const SKILL_BODY = "# Hussain Sol\n\nThe fifteen kilobytes the chip stands for."
 function turn(message: UIMessage): string {
   return renderToStaticMarkup(<ChatTurn messages={[message]} context={context} live={false} />);
 }
+
+describe("the desktop transcript-row mapping", () => {
+  it("draws a projected host notice without entering the user-message component", () => {
+    const modelText =
+      '[Subagent Session child-1 ("Review tests") completed its task. Read its answer.]';
+    const [row] = projectTranscriptRows(
+      [
+        [
+          {
+            id: "notice-1",
+            role: "user",
+            metadata: sessionHostNoticeMetadata({
+              kind: "subagent",
+              childSessionId: "child-session-1",
+              title: "Review tests",
+              state: "completed",
+              reason: null,
+            }),
+            parts: [{ type: "text", text: modelText }],
+          },
+        ],
+      ],
+      [],
+      [],
+    );
+    if (row === undefined) throw new Error("expected one transcript row");
+
+    const html = renderToStaticMarkup(
+      <ChatTranscriptRow row={row} context={context} live={false} />,
+    );
+    expect(html).toContain("Review tests");
+    expect(html).toContain("Finished its task");
+    expect(html).not.toContain(modelText);
+    expect(html).not.toContain("is-user");
+    expect(html).not.toContain('aria-label="Copy"');
+  });
+});
 
 describe("a user turn that delivered a skill", () => {
   const message: UIMessage = {
@@ -92,11 +131,15 @@ describe("SessionBlocker hit testing", () => {
       </div>,
     );
 
-    // The inner row opts back in; WHICH attribute comes first is React's
-    // business, not this assertion's — pinning `class` to first position broke
-    // the moment the row gained its `data-slot` handle.
+    // The rule, not the markup: an overlay that lets clicks through, and the
+    // blocker inside it opting back in. Asserted without pinning attribute
+    // ORDER — the element grew a `data-slot` ahead of its class and the whole
+    // hit-testing claim went with it, which is a test describing a render
+    // rather than a behaviour. Keeps main's `data-slot` requirement, since the
+    // slot is how this element is addressed, without re-pinning the position
+    // of the next attribute somebody adds.
     expect(html).toMatch(
-      /^<div class="pointer-events-none"><div [^>]*class="[^"]*pointer-events-auto/,
+      /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
     );
     expect(html).toContain('aria-label="Dismiss"');
   });

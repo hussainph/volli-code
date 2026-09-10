@@ -1,7 +1,7 @@
 import { nativeObservationEventId, projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
-  CompactionReason,
+  CompactionWorkReason,
   ModelSelection,
   ModelTier,
   Session,
@@ -308,7 +308,8 @@ export interface SessionStreamCompactionProgress {
   /** The durable history the progress marker was emitted beside. */
   throughSequence: number;
   state: "started" | "finished";
-  reason: CompactionReason;
+  /** Progress belongs to work; a lost checkpoint runs none. */
+  reason: CompactionWorkReason;
 }
 
 export type SessionStreamTransient = SessionStreamOverlay | SessionStreamCompactionProgress;

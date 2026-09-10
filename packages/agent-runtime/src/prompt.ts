@@ -61,6 +61,30 @@ function operatingLayer(hasResources: boolean): string {
   ].join("\n");
 }
 
+/**
+ * The compact coding workflow every Role shares (VC-332).
+ *
+ * This layer is deliberately made only from product literals. References to
+ * "available" tools and supported parallel calls make the doctrine truthful
+ * for every frozen bundle without copying provider-owned tool descriptions
+ * into the Cache Prefix. At 778 characters / ~195 estimated tokens, it stays
+ * inside the documented 150–250 token budget.
+ */
+const EXECUTION_LAYER = [
+  "# Execution",
+  "",
+  "Answer or review requests by investigating and reporting; do not edit unless a",
+  "change is requested or authorized. For implementation, inspect relevant",
+  "workspace state and applicable repository instructions before editing. Prefer",
+  "available specialized tools to shell substitutes, and parallelize independent",
+  "reads when the tool interface supports it. Preserve user and concurrent-agent",
+  "changes; never discard or overwrite work you did not create. Carry each requested",
+  "change through focused implementation and proportional verification; do not stop",
+  "at analysis when action is authorized. Ask only for a genuine blocking decision",
+  "that the task and workspace cannot resolve. Finish with the outcome, the exact",
+  "checks run and their results, and any unresolved blockers.",
+].join("\n");
+
 const ROLE_LAYER: Record<RuntimeSessionRole, string> = {
   ticket: [
     "# Role and trust",
@@ -314,7 +338,7 @@ export interface SystemPromptInput {
 
 /** One named layer of the assembled system prompt, in delivery order. */
 export interface SystemPromptSection {
-  /** Stable machine name: `operating`, `role`, `authority`, `workspace`, `resources-header`, `resource:<name>`. */
+  /** Stable machine name: `operating`, `execution`, `role`, `authority`, `workspace`, `resources-header`, `resource:<name>`. */
   id: string;
   text: string;
 }
@@ -329,6 +353,7 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
   const resources = input.promptResources ?? [];
   const sections: SystemPromptSection[] = [
     { id: "operating", text: operatingLayer(resources.length > 0) },
+    { id: "execution", text: EXECUTION_LAYER },
     { id: "role", text: ROLE_LAYER[input.role] },
     { id: "authority", text: authorityLayer(input.role, input.tools) },
     { id: "workspace", text: workspaceLayer(input.role) },
@@ -350,7 +375,7 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
  */
 export type SystemPromptSpec = SystemPromptInput;
 
-/** Compose the full system prompt: operating rules, role and trust, workspace, resources. */
+/** Compose the full system prompt: operating and execution rules, trust, workspace, resources. */
 export function composeSystemPrompt(spec: SystemPromptSpec): string {
   return systemPromptSections(spec)
     .map((section) => section.text)

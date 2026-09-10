@@ -1,0 +1,67 @@
+diff --git a/dist/harness/compaction/compaction.d.ts b/dist/harness/compaction/compaction.d.ts
+index 85c89e80b879973e125a053f71f4044febd01744..01815a5c57baec5e92f337d781f268c5b78d3fb0 100644
+--- a/dist/harness/compaction/compaction.d.ts
++++ b/dist/harness/compaction/compaction.d.ts
+@@ -71,7 +71,7 @@ export interface CutPointResult {
+     isSplitTurn: boolean;
+ }
+ /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
+-export declare function findCutPoint(entries: Entry[], startIndex: number, endIndex: number, keepRecentTokens: number): CutPointResult;
++export declare function findCutPoint(entries: Entry[], startIndex: number, endIndex: number, keepRecentTokens: number, estimateMessage?: (message: AgentMessage) => number): CutPointResult;
+ export declare const SUMMARIZATION_SYSTEM_PROMPT = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
+ /** Generate or update a conversation summary for compaction. */
+ export declare function generateSummary(currentMessages: AgentMessage[], models: Models, model: Model<Api>, reserveTokens: number, customInstructions: string | undefined, previousSummary: string | undefined, thinkingLevel: ThinkingLevel | undefined, retry: RetryPolicy | undefined, callbacks: RetryCallbacks | undefined, context: Context): Promise<Result<string, CompactionError>>;
+@@ -112,7 +112,7 @@ export interface CompactionPreparation {
+     settings: CompactionSettings;
+ }
+ /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
+-export declare function prepareCompaction(pathEntries: Entry[], settings: CompactionSettings): Result<CompactionPreparation | undefined, CompactionError>;
++export declare function prepareCompaction(pathEntries: Entry[], settings: CompactionSettings, estimateMessage?: (message: AgentMessage) => number): Result<CompactionPreparation | undefined, CompactionError>;
+ export { serializeConversation } from "./utils.ts";
+ /** Generate compaction summary data from prepared session history. */
+ export declare function compact(preparation: CompactionPreparation, models: Models, model: Model<Api>, customInstructions: string | undefined, thinkingLevel: ThinkingLevel | undefined, retry: RetryPolicy | undefined, callbacks: RetryCallbacks | undefined, context: Context): Promise<Result<CompactResult, CompactionError>>;
+diff --git a/dist/harness/compaction/compaction.js b/dist/harness/compaction/compaction.js
+index d430a3f966cc9624cc2e78638fd207a83a75b312..fbfc5f5cce15cc93de1dbfbca940e7750290ebf1 100644
+--- a/dist/harness/compaction/compaction.js
++++ b/dist/harness/compaction/compaction.js
+@@ -250,7 +250,7 @@ export function findTurnStartIndex(entries, entryIndex, startIndex) {
+     return -1;
+ }
+ /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
+-export function findCutPoint(entries, startIndex, endIndex, keepRecentTokens) {
++export function findCutPoint(entries, startIndex, endIndex, keepRecentTokens, estimateMessage = estimateTokens) {
+     const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
+     if (cutPoints.length === 0) {
+         return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
+@@ -261,7 +261,7 @@ export function findCutPoint(entries, startIndex, endIndex, keepRecentTokens) {
+         const entry = entries[i];
+         if (entry.type !== "message")
+             continue;
+-        const messageTokens = estimateTokens(entry.message);
++        const messageTokens = estimateMessage(entry.message);
+         accumulatedTokens += messageTokens;
+         if (accumulatedTokens >= keepRecentTokens) {
+             for (let c = 0; c < cutPoints.length; c++) {
+@@ -410,7 +410,7 @@ export async function generateSummaryWithRequest(currentMessages, options, reque
+     return ok({ text: textContent, usage: response.usage });
+ }
+ /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
+-export function prepareCompaction(pathEntries, settings) {
++export function prepareCompaction(pathEntries, settings, estimateMessage) {
+     if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {
+         return ok(undefined);
+     }
+@@ -437,8 +437,11 @@ export function prepareCompaction(pathEntries, settings) {
+         compactableEntries = [...virtualRetainedEntries, ...pathEntries.slice(prevCompactionIndex + 1)];
+     }
+     const boundaryEnd = compactableEntries.length;
+-    const tokensBefore = estimateContextTokens(buildContextEntries(pathEntries).flatMap(sessionEntryToContextMessages)).tokens;
+-    const cutPoint = findCutPoint(compactableEntries, 0, boundaryEnd, settings.keepRecentTokens);
++    const messages = buildContextEntries(pathEntries).flatMap(sessionEntryToContextMessages);
++    const tokensBefore = estimateMessage
++        ? messages.reduce((total, message) => total + estimateMessage(message), 0)
++        : estimateContextTokens(messages).tokens;
++    const cutPoint = findCutPoint(compactableEntries, 0, boundaryEnd, settings.keepRecentTokens, estimateMessage);
+     const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
+     const messagesToSummarize = [];
+     for (let i = 0; i < historyEnd; i++) {

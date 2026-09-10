@@ -1205,6 +1205,7 @@ describe("BrowserTabHost holds (VC-239)", () => {
 
   it("lets the person take over, tells who was displaced, refuses the Session until hand-back, then frees it", () => {
     const tabId = openTab();
+    views[0]!.webContents.emit("page-title-updated", {}, "Example Docs");
     host.hold(tabId, A);
     const events = holdEvents();
 
@@ -1214,7 +1215,13 @@ describe("BrowserTabHost holds (VC-239)", () => {
     });
     expect(events).toEqual([
       { kind: "released", tabId, holder: A, why: "takeover" },
-      { kind: "person-took", tabId, displaced: A },
+      {
+        kind: "person-took",
+        tabId,
+        tabTitle: "Example Docs",
+        tabHostname: "example.com",
+        displaced: A,
+      },
     ]);
     expect(host.isHeldBy(tabId, A)).toBe(false);
     expect(host.hold(tabId, A)).toEqual({ kind: "refused", holder: { kind: "person" } });
@@ -1234,7 +1241,9 @@ describe("BrowserTabHost holds (VC-239)", () => {
     const tabId = openTab();
     const events = holdEvents();
     expect(host.takeOver(tabId).displaced).toBeNull();
-    expect(events).toEqual([{ kind: "person-took", tabId, displaced: null }]);
+    expect(events).toEqual([
+      { kind: "person-took", tabId, tabTitle: "", tabHostname: "example.com", displaced: null },
+    ]);
     // Taking over again is the same end state.
     expect(host.takeOver(tabId).displaced).toBeNull();
 
@@ -1256,7 +1265,13 @@ describe("BrowserTabHost holds (VC-239)", () => {
 
     host.hold(tabId, A);
     expect(host.askToLeave(tabId)).toEqual(A);
-    expect(events.at(-1)).toEqual({ kind: "ask-to-leave", tabId, holder: A });
+    expect(events.at(-1)).toEqual({
+      kind: "ask-to-leave",
+      tabId,
+      tabTitle: "",
+      tabHostname: "example.com",
+      holder: A,
+    });
     expect(host.isHeldBy(tabId, A)).toBe(true);
   });
 

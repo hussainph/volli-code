@@ -99,12 +99,16 @@ ledger fact). When its first turn completes a notice from Volli — the child's
 handle, state and title, none of its words — is steered into the parent, and the
 parent reads the answer with `volli session answer <handle>`, so the child's
 prose reaches it as a tool result and never as its user; the parent is never
-parked on it, and stopping the parent stops its children. In the parent's chat
-its children show in the Activity Island's agents cluster (VC-269): one chip per
-child, working / done / failed / stopped, where a row peeks the child's
-transcript read-only in an overlay, opens it as a full tab, or stops it as the
-person (`sessions.stop`, recorded with the `user` actor). That cluster is the
-only place a child is a ROW: a Subagent Session never appears in a Session
+parked on it, and stopping the parent stops its children. The Session
+Presentation Contract projects that notice into the parent's transcript as a
+quiet host-authored receipt row, not as a Turn in the person's voice. This row
+records the delegation outcome; it is not a listing of the child. While work is
+live, the parent's chat shows its children in the Activity Island's agents
+cluster (VC-269): one chip per child, working / done / failed / stopped, where a
+row peeks the child's transcript read-only in an overlay, opens it as a full
+tab, or stops it as the person (`sessions.stop`, recorded with the `user`
+actor). That cluster is the only place a child itself is an interactive activity
+ROW: a Subagent Session never appears in a Session
 listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
 Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
 about how the agents worked, not about what the person started. Only the
@@ -187,12 +191,27 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: one app-wide
-switch decides whether a Session compacts before it is asked to, and every
-Session runs on the executor's own reserve (per-model reserves retired,
-VC-155). Switching the threshold off never withholds the recovery an overflow
-triggers.
-_Avoid_: truncation, trimming history, pruning the transcript
+and each one is a Session Event. A fourth reason exists on the FAILED arm only:
+a provider-native checkpoint the Session can no longer use, whose history is
+restored in its place. It is a reason a person sees rather than a silent
+recovery, because their context just grew back and the next turn may compact
+again for a threshold they did not watch fill. Only the threshold is policy: one app-wide
+switch decides whether a Session compacts before it is asked to. Nobody
+configures a reserve: per-model reserve budgets were retired with the policy
+that carried them (VC-155) and there is no setting to bring them back. The
+threshold itself is the larger of the executor's own reserve and a fixed share
+of the model's window — not a preference, an arithmetic fact about windows: one
+flat allowance is sensible at 200k and a rounding error at 1M, where it leaves
+less than one dense tool result of room and a single unmeasured round can carry
+a Session past the window before the next check (VC-331). The occupancy it is
+measured against is the provider's last reported usage plus a model-aware
+estimate of everything unmeasured since — incoming messages and tool results
+included — and it is checked before each provider request, not only ahead of an
+idle prompt. The summary's own output allowance stays on the executor's smaller
+reserve: a 1M-window model has no reason to write an 80,000-token summary.
+Switching the threshold off never withholds the recovery an overflow triggers.
+_Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
+(a retired setting, not this window-proportional threshold)
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
@@ -301,9 +320,11 @@ no stale hold to time out. The person is never locked out: their own input
 into the page is always delivered, and the address bar, back, forward and
 reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
 are the person's explicit controls on the chrome pill and the cursor label;
-the affected Session is told in one in-band line. `heldBy` rides the tab's
-state so every surface — the pill, the tab strip's holder dot, the cursor —
-agrees on who has it.
+the affected Session is told in one in-band line. A client projects that line
+as a host-authored receipt named by the tab's bounded title or hostname, while
+the full opaque tab id remains its identity. `heldBy` rides the tab's state so
+every surface — the pill, the tab strip's holder dot, the cursor — agrees on
+who has it.
 _Avoid_: lock, lease (that is the wake hold against throttling), tab owner
 (a separate fact — see **Tab owner**; a headless tab can be held, and a held
 tab is not thereby owned)
