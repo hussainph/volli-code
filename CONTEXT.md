@@ -99,12 +99,16 @@ ledger fact). When its first turn completes a notice from Volli — the child's
 handle, state and title, none of its words — is steered into the parent, and the
 parent reads the answer with `volli session answer <handle>`, so the child's
 prose reaches it as a tool result and never as its user; the parent is never
-parked on it, and stopping the parent stops its children. In the parent's chat
-its children show in the Activity Island's agents cluster (VC-269): one chip per
-child, working / done / failed / stopped, where a row peeks the child's
-transcript read-only in an overlay, opens it as a full tab, or stops it as the
-person (`sessions.stop`, recorded with the `user` actor). That cluster is the
-only place a child is a ROW: a Subagent Session never appears in a Session
+parked on it, and stopping the parent stops its children. The Session
+Presentation Contract projects that notice into the parent's transcript as a
+quiet host-authored receipt row, not as a Turn in the person's voice. This row
+records the delegation outcome; it is not a listing of the child. While work is
+live, the parent's chat shows its children in the Activity Island's agents
+cluster (VC-269): one chip per child, working / done / failed / stopped, where a
+row peeks the child's transcript read-only in an overlay, opens it as a full
+tab, or stops it as the person (`sessions.stop`, recorded with the `user`
+actor). That cluster is the only place a child itself is an interactive activity
+ROW: a Subagent Session never appears in a Session
 listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
 Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
 about how the agents worked, not about what the person started. Only the
@@ -316,9 +320,11 @@ no stale hold to time out. The person is never locked out: their own input
 into the page is always delivered, and the address bar, back, forward and
 reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
 are the person's explicit controls on the chrome pill and the cursor label;
-the affected Session is told in one in-band line. `heldBy` rides the tab's
-state so every surface — the pill, the tab strip's holder dot, the cursor —
-agrees on who has it.
+the affected Session is told in one in-band line. A client projects that line
+as a host-authored receipt named by the tab's bounded title or hostname, while
+the full opaque tab id remains its identity. `heldBy` rides the tab's state so
+every surface — the pill, the tab strip's holder dot, the cursor — agrees on
+who has it.
 _Avoid_: lock, lease (that is the wake hold against throttling), tab owner
 (a separate fact — see **Tab owner**; a headless tab can be held, and a held
 tab is not thereby owned)
