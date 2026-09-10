@@ -60,7 +60,14 @@ import {
   waitUntil,
 } from "./lib/smoke-kit.mjs";
 
-const OUT_DIR = process.argv[2] ?? join(os.tmpdir(), "volli-onboarding-shots");
+/**
+ * Where the numbered PNGs land. An explicit argument wins; otherwise a
+ * repo-relative dir, as `tab-strip-shots.mjs` and `docs-shots.mjs` do.
+ * Deliberately NOT a fixed name under the shared temp dir: that is world
+ * writable, so a predictable path there lets another user pre-create or
+ * symlink it and take the capture (CodeQL js/insecure-temporary-file).
+ */
+const OUT_DIR = process.argv[2] ?? join(process.cwd(), "shots", "onboarding");
 
 /** Same provider + key as model-access-signin-smoke.mjs: api-key flow, one
  * masked step, nothing validated, nothing billed. */
