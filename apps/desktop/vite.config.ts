@@ -230,6 +230,12 @@ export default defineConfig(({ mode }) => ({
         // (VC-55): the count that qualifies itself under a filter, and the live
         // pair that deliberately does not.
         "src/components/board/board-summary.ts",
+        // How many label chips fit on one line of a card, and how many the `+n`
+        // chip stands for (VC-310). Enrolled on `tab-scroll.ts`'s argument: it
+        // is arithmetic the view cannot show being wrong — in jsdom every width
+        // is zero, and on screen a one-off packing error looks like a design
+        // choice. The measuring shell beside it stays out, as view glue.
+        "src/components/board/label-overflow.ts",
         "src/components/chat/chat-plane-model.ts",
         // The Activity Island's shell feed (VC-270). `-model.ts` is the pure
         // half — one Session's shells as the island models them, the flash

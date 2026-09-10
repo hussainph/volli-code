@@ -5,6 +5,7 @@ import {
   leavesActiveColumns,
   moveTicket,
   moveTickets,
+  type Label,
   type Ticket,
   type TicketEventActor,
   type HarnessId,
@@ -21,16 +22,19 @@ import { recordTicketEvent } from "./db/events-repo";
 import { createSignal } from "./db/signals-repo";
 import {
   addTicketLabel,
-  findLabelByName,
+  getLabel,
   getOrCreateLabel,
+  listTicketLabels,
+  listTicketsWithLabel,
   removeTicketLabel,
+  retireLabelInto,
+  type LabelMergeTicket,
 } from "./db/labels-repo";
 import {
   archiveTicket,
   bumpTicketVersion,
   deleteTicket,
   getTicket,
-  getTicketLabelNames,
   getTicketRow,
   insertTicket,
   listTicketsByProject,
@@ -69,6 +73,21 @@ function rowWorktreeIdentity(row: TicketRow): WorktreeIdentity {
     branch: row.branch,
     baseBranch: row.base_branch,
   };
+}
+
+/** Resolves requested names to canonical project Labels and deduplicates by identity. */
+function resolveRequestedLabels(
+  db: Database.Database,
+  projectId: string,
+  names: readonly string[],
+  now: number,
+): Label[] {
+  const resolved = new Map<string, Label>();
+  for (const name of names) {
+    const label = getOrCreateLabel(db, projectId, name, now);
+    if (!resolved.has(label.id)) resolved.set(label.id, label);
+  }
+  return [...resolved.values()];
 }
 
 export interface CreateTicketCommandInput {
@@ -119,15 +138,13 @@ export function createTicketCommand(
       context.now,
       context.actor,
     );
-    for (const name of ticket.labels) {
-      const label = getOrCreateLabel(db, ticket.projectId, name, context.now);
-      addTicketLabel(db, ticket.id, label.id);
-    }
-    if (ticket.labels.length > 0) {
+    const labels = resolveRequestedLabels(db, ticket.projectId, ticket.labels, context.now);
+    for (const label of labels) addTicketLabel(db, ticket.id, label.id);
+    if (labels.length > 0) {
       recordTicketEvent(
         db,
         ticket.id,
-        { kind: "labels_changed", added: ticket.labels, removed: [] },
+        { kind: "labels_changed", added: labels.map((label) => label.name), removed: [] },
         context.now,
         context.actor,
       );
@@ -386,23 +403,24 @@ export function setTicketLabelsCommand(
 ): Ticket {
   return db.transaction((): Ticket => {
     const row = requireLiveTicket(db, input.ticketId, "change the labels of");
-    const current = getTicketLabelNames(db, input.ticketId);
-    const added = input.labels.filter((name) => !current.includes(name));
-    const removed = current.filter((name) => !input.labels.includes(name));
+    const current = listTicketLabels(db, input.ticketId);
+    const requested = resolveRequestedLabels(db, row.project_id, input.labels, context.now);
+    const currentIds = new Set(current.map((label) => label.id));
+    const requestedIds = new Set(requested.map((label) => label.id));
+    const added = requested.filter((label) => !currentIds.has(label.id));
+    const removed = current.filter((label) => !requestedIds.has(label.id));
     if (added.length > 0 || removed.length > 0) {
-      for (const name of added) {
-        const label = getOrCreateLabel(db, row.project_id, name, context.now);
-        addTicketLabel(db, input.ticketId, label.id);
-      }
-      for (const name of removed) {
-        const label = findLabelByName(db, row.project_id, name);
-        if (label) removeTicketLabel(db, input.ticketId, label.id);
-      }
+      for (const label of added) addTicketLabel(db, input.ticketId, label.id);
+      for (const label of removed) removeTicketLabel(db, input.ticketId, label.id);
       bumpTicketVersion(db, input.ticketId, context.now);
       recordTicketEvent(
         db,
         input.ticketId,
-        { kind: "labels_changed", added, removed },
+        {
+          kind: "labels_changed",
+          added: added.map((label) => label.name),
+          removed: removed.map((label) => label.name),
+        },
         context.now,
         context.actor,
       );
@@ -410,6 +428,69 @@ export function setTicketLabelsCommand(
     const ticket = getTicket(db, input.ticketId);
     if (!ticket) throw new Error("Unknown ticket");
     return ticket;
+  })();
+}
+
+/** The stable source, target, and complete Ticket blast radius of one Label merge. */
+export interface LabelMergePlan {
+  readonly from: Label;
+  readonly into: Label;
+  readonly tickets: readonly LabelMergeTicket[];
+}
+
+/** Resolves and validates a Label merge without writing anything. */
+export function planLabelMerge(
+  db: Database.Database,
+  input: { fromLabelId: string; intoLabelId: string },
+): LabelMergePlan {
+  const from = getLabel(db, input.fromLabelId);
+  const into = getLabel(db, input.intoLabelId);
+  if (!from || !into) throw new Error("Unknown label");
+  if (from.id === into.id) throw new Error("Cannot merge a label into itself");
+  if (from.projectId !== into.projectId) throw new Error("Labels belong to different projects");
+  return { from, into, tickets: listTicketsWithLabel(db, from.id) };
+}
+
+/**
+ * Folds one Label into another across a whole Project (VC-310).
+ *
+ * The returned plan is the exact set changed inside the transaction, including
+ * archived Tickets. Callers use it for the receipt, client invalidation, and
+ * post-commit Ticket Wakes rather than recomputing a second blast radius.
+ */
+export function mergeLabelsCommand(
+  db: Database.Database,
+  input: { fromLabelId: string; intoLabelId: string },
+  context: TicketCommandContext,
+): LabelMergePlan {
+  return db.transaction(() => {
+    const plan = planLabelMerge(db, input);
+    const alreadyWearingTarget = new Set(
+      listTicketsWithLabel(db, plan.into.id).map((ticket) => ticket.id),
+    );
+    retireLabelInto(db, {
+      fromLabelId: plan.from.id,
+      intoLabelId: plan.into.id,
+      now: context.now,
+      actor: context.actor,
+    });
+    for (const ticket of plan.tickets) {
+      bumpTicketVersion(db, ticket.id, context.now);
+      recordTicketEvent(
+        db,
+        ticket.id,
+        {
+          kind: "labels_changed",
+          // A Ticket that already wore the target only loses a name; one that
+          // did not also gains it. Never record a phantom addition.
+          added: alreadyWearingTarget.has(ticket.id) ? [] : [plan.into.name],
+          removed: [plan.from.name],
+        },
+        context.now,
+        context.actor,
+      );
+    }
+    return plan;
   })();
 }
 

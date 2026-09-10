@@ -2026,6 +2026,30 @@ CREATE INDEX IF NOT EXISTS spawned_processes_open ON spawned_processes(exited_at
 CREATE INDEX IF NOT EXISTS spawned_processes_session ON spawned_processes(session_id);
 `;
 
+/**
+ * Migration 046: one live Label identity per SQLite-NOCASE name (VC-310).
+ *
+ * Case variants are merged before the index is created. A merged-away row is
+ * retained as an alias so the old name keeps resolving to the survivor and a
+ * zero-Ticket merge remains a durable, attributed fact. The partial index
+ * admits retired aliases while refusing a second live spelling.
+ *
+ * NOCASE folds ASCII, leaves non-ASCII case distinct, and stops at NUL.
+ * `labelNameKey`, lookup, migration grouping, and this index use that same
+ * identity so a Client Surface and its host cannot disagree.
+ */
+const MIGRATION_046_LABEL_MERGE_COLUMNS = `
+ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE;
+ALTER TABLE labels ADD COLUMN merged_at INTEGER;
+ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by));
+`;
+
+const MIGRATION_046_LABEL_CASE_IDENTITY = `
+CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
+  ON labels(project_id, name COLLATE NOCASE)
+  WHERE merged_into_id IS NULL;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2259,6 +2283,12 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "spawned_processes — the spawn ledger behind the orphan process sweep",
     sql: MIGRATION_045_SPAWN_LEDGER,
   },
+  {
+    version: 46,
+    name: "labels — one live identity per NOCASE name, with retained merge aliases",
+    sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
+    apply: applyMigration046LabelCaseIdentity,
+  },
 ];
 
 /**
@@ -2280,6 +2310,96 @@ function applyMigration044SessionEventSequence(db: Database.Database): void {
       .get() as unknown) !== undefined;
   if (exists) return;
   db.exec(MIGRATION_044_SESSION_EVENT_SEQUENCE);
+}
+
+function ensureLabelMergeColumns(db: Database.Database): void {
+  const columns = db.pragma("table_info(labels)") as { name: string }[];
+  const names = new Set(columns.map((column) => column.name));
+  if (!names.has("merged_into_id")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE",
+    );
+  }
+  if (!names.has("merged_at")) db.exec("ALTER TABLE labels ADD COLUMN merged_at INTEGER");
+  if (!names.has("merged_by")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by))",
+    );
+  }
+}
+
+/**
+ * Migration 046's Label merge and compatibility step.
+ *
+ * Live Board use chooses the survivor before archived use, then age and id make
+ * ties deterministic. That guarantees the audited 77× `UI` spelling survives
+ * the 1× `ui` variant even if the Archive favors lowercase. Associations move
+ * before the loser is retired; a Ticket wearing both variants keeps one row.
+ *
+ * The first two calls reconcile profiles that ran this Ticket's pre-release
+ * migrations under versions 43/44 before main assigned those numbers to the
+ * worktree cleanup and Session Event cursor schemas. Both upstream migrations
+ * are idempotent, so ordinary v45 profiles pay only their probes.
+ */
+function applyMigration046LabelCaseIdentity(db: Database.Database): void {
+  db.exec(MIGRATION_043_WORKTREE_CLEANUP);
+  applyMigration044SessionEventSequence(db);
+  ensureLabelMergeColumns(db);
+
+  // Group with the index's collation itself. `lower(name)` differs at NUL and
+  // can leave a pair that the unique index then refuses during startup.
+  const duplicateGroups = db
+    .prepare(
+      `SELECT project_id, name AS representative
+         FROM labels
+        WHERE merged_into_id IS NULL
+        GROUP BY project_id, name COLLATE NOCASE
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as { project_id: string; representative: string }[];
+  const variantsOf = db.prepare(
+    `SELECT l.id,
+            (SELECT COUNT(*)
+               FROM ticket_labels tl
+               JOIN tickets t ON t.id = tl.ticket_id
+              WHERE tl.label_id = l.id AND t.archived_at IS NULL) AS live_tickets,
+            (SELECT COUNT(*) FROM ticket_labels tl WHERE tl.label_id = l.id) AS tickets
+       FROM labels l
+      WHERE l.project_id = ?
+        AND l.name = ? COLLATE NOCASE
+        AND l.merged_into_id IS NULL
+      ORDER BY live_tickets DESC, tickets DESC, l.created_at ASC, l.id ASC`,
+  );
+  const repointAssociations = db.prepare(
+    "INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?",
+  );
+  const removeRetiredAssociations = db.prepare("DELETE FROM ticket_labels WHERE label_id = ?");
+  const repointAliases = db.prepare(
+    "UPDATE labels SET merged_into_id = ? WHERE merged_into_id = ?",
+  );
+  const retireVariant = db.prepare(
+    `UPDATE labels
+        SET merged_into_id = ?, merged_at = 0, merged_by = '{"kind":"automation"}',
+            row_version = row_version + 1
+      WHERE id = ?`,
+  );
+
+  for (const group of duplicateGroups) {
+    const variants = variantsOf.all(group.project_id, group.representative) as { id: string }[];
+    const [survivor, ...losers] = variants;
+    if (survivor === undefined) continue;
+    for (const loser of losers) {
+      repointAssociations.run(survivor.id, loser.id);
+      removeRetiredAssociations.run(loser.id);
+      repointAliases.run(survivor.id, loser.id);
+      retireVariant.run(survivor.id, loser.id);
+    }
+  }
+
+  // A pre-release profile can already carry the earlier full index. Rebuild it
+  // so retired aliases may coexist while a second live spelling remains barred.
+  db.exec("DROP INDEX IF EXISTS labels_project_name_nocase");
+  db.exec(MIGRATION_046_LABEL_CASE_IDENTITY);
 }
 
 function countRows(db: Database.Database, sql: string): number {

@@ -18,7 +18,7 @@
  * minutes ago would be missing from the picker for exactly as long as the app
  * stays open, which is the window duplicates are born in.
  */
-import { distinctLabels, type Label, type Ticket } from "@volli/shared";
+import { distinctLabels, labelNameKey, type Label, type Ticket } from "@volli/shared";
 
 /** One pickable row: a name the project knows, and whether this ticket carries it. */
 export interface LabelPickerOption {
@@ -50,10 +50,10 @@ export function labelPickerOptions(
   selected: readonly string[],
   query: string,
 ): LabelPickerOption[] {
-  const term = query.trim().toLowerCase();
+  const term = labelNameKey(query.trim());
   return [...new Set([...vocabulary, ...selected])]
     .toSorted()
-    .filter((name) => name.toLowerCase().includes(term))
+    .filter((name) => labelNameKey(name).includes(term))
     .map((name) => ({ name, selected: selected.includes(name) }));
 }
 
@@ -71,9 +71,8 @@ export function newLabelFromQuery(
 ): string | null {
   const trimmed = query.trim();
   if (trimmed === "") return null;
-  const taken = [...vocabulary, ...selected].some(
-    (name) => name.toLowerCase() === trimmed.toLowerCase(),
-  );
+  const key = labelNameKey(trimmed);
+  const taken = [...vocabulary, ...selected].some((name) => labelNameKey(name) === key);
   return taken ? null : trimmed;
 }
 

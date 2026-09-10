@@ -740,6 +740,30 @@ function modelTierCells(row: Record<string, unknown>): ModelTierCells {
 }
 
 /**
+ * A merge preview, or the receipt for one that ran (VC-310).
+ *
+ * The affected tickets are the whole point of the preview, so they are listed
+ * rather than counted — a number cannot be checked against what a person
+ * expected, and this is the last screen before a destructive write.
+ */
+function renderLabelMerge(data: Record<string, unknown>): string | null {
+  const tickets = recordsAt(data, "tickets");
+  if (tickets === null) return null;
+  const from = terminalSafeInline(data["from"]);
+  const into = terminalSafeInline(data["into"]);
+  const applied = data["applied"] === true;
+  const headline = applied
+    ? `Merged ${from} into ${into} across ${tickets.length} ticket(s).`
+    : `${from} → ${into} would change ${tickets.length} ticket(s).`;
+  const lines = tickets.map(
+    (ticket) =>
+      `  ${terminalSafeInline(ticket["id"])}${ticket["archived"] === true ? "  archived" : ""}  ${terminalSafeInline(ticket["title"])}`,
+  );
+  const next = typeof data["next"] === "string" ? [terminalSafeInline(data["next"])] : [];
+  return [headline, ...lines, ...next].join("\n");
+}
+
+/**
  * The model.list catalog: the app default first, then the tier table — one
  * aligned line per tier saying which model it resolves to and through which
  * rung — then one header line per provider with its copyable
@@ -1027,6 +1051,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         .join("\n") ?? null
     );
   }
+  if (command === "label.merge") return renderLabelMerge(data);
   if (command === "session.list") {
     const sessions = recordsAt(data, "sessions");
     return (

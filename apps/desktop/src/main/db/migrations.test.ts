@@ -3274,3 +3274,186 @@ describe("migration 044 — durable Session Event sequence", () => {
     db.close();
   });
 });
+
+/** A v45 database carrying the case-variant Label shape found by VC-310's audit. */
+function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
+  const db = openRawDb(dbPath);
+  db.pragma("foreign_keys = ON");
+  migrate(db, dbPath, { toVersion: 45 });
+
+  db.prepare(
+    `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'VC', 0, 0, 0, 0)`,
+  ).run();
+  const insertTicket = db.prepare(
+    `INSERT INTO tickets (id, project_id, ticket_number, title, status, priority, position, created_at, updated_at)
+       VALUES (@id, 'p1', @n, @title, 'todo', 'medium', 0, 0, 0)`,
+  );
+  insertTicket.run({ id: "t1", n: 1, title: "One" });
+  insertTicket.run({ id: "t2", n: 2, title: "Two" });
+  insertTicket.run({ id: "t3", n: 3, title: "Three" });
+  insertTicket.run({ id: "t4", n: 4, title: "Both" });
+
+  const insertLabel = db.prepare(
+    `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
+       VALUES (@id, 'p1', @name, @color, @createdAt, @createdAt)`,
+  );
+  insertLabel.run({ id: "l-upper", name: "UI", color: "#123456", createdAt: 10 });
+  // The stray is deliberately older: live use, not insertion age, must keep UI.
+  insertLabel.run({ id: "l-lower", name: "ui", color: null, createdAt: 5 });
+
+  const wear = db.prepare("INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)");
+  wear.run("t1", "l-upper");
+  wear.run("t2", "l-upper");
+  wear.run("t3", "l-lower");
+  // One Ticket wears both variants. Its rows must collapse without a junction collision.
+  wear.run("t4", "l-upper");
+  wear.run("t4", "l-lower");
+  return db;
+}
+
+describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", () => {
+  it("folds the stray spelling into a retained alias and preserves every association", () => {
+    const dbPath = tempDbPath();
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(
+      db
+        .prepare(
+          `SELECT id, name, color, merged_into_id, merged_at, merged_by
+             FROM labels WHERE project_id = 'p1' ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "l-lower",
+        name: "ui",
+        color: null,
+        merged_into_id: "l-upper",
+        merged_at: 0,
+        merged_by: '{"kind":"automation"}',
+      },
+      {
+        id: "l-upper",
+        name: "UI",
+        color: "#123456",
+        merged_into_id: null,
+        merged_at: null,
+        merged_by: null,
+      },
+    ]);
+    expect(
+      db.prepare("SELECT ticket_id, label_id FROM ticket_labels ORDER BY ticket_id").all(),
+    ).toEqual([
+      { ticket_id: "t1", label_id: "l-upper" },
+      { ticket_id: "t2", label_id: "l-upper" },
+      { ticket_id: "t3", label_id: "l-upper" },
+      { ticket_id: "t4", label_id: "l-upper" },
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("keeps the live Board's spelling even when the Archive favors the variant", () => {
+    const dbPath = tempDbPath();
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
+    const insertArchived = db.prepare(
+      `INSERT INTO tickets
+         (id, project_id, ticket_number, title, status, priority, position,
+          archived_at, created_at, updated_at)
+       VALUES (?, 'p1', ?, ?, 'done', 'medium', 0, 1, 0, 0)`,
+    );
+    const wear = db.prepare(
+      "INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, 'l-lower')",
+    );
+    for (let n = 5; n <= 12; n++) {
+      insertArchived.run(`t${n}`, n, `Archived ${n}`);
+      wear.run(`t${n}`);
+    }
+
+    migrate(db, dbPath);
+
+    expect(
+      db.prepare("SELECT id FROM labels WHERE merged_into_id IS NULL AND project_id = 'p1'").get(),
+    ).toEqual({ id: "l-upper" });
+    db.close();
+  });
+
+  it("uses exactly NOCASE equivalence when names contain NUL", () => {
+    const dbPath = tempDbPath();
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
+    db.prepare(
+      `INSERT INTO projects
+         (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p2', 'NUL', '/nul', 'NU', 0, 1, 0, 0)`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
+       VALUES (?, 'p2', ?, NULL, 0, 0)`,
+    );
+    insert.run("nul-a", "A\0x");
+    insert.run("nul-b", "a\0y");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+    expect(
+      db
+        .prepare(
+          `SELECT id, hex(name) AS name_hex, merged_into_id
+             FROM labels WHERE project_id = 'p2' ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      { id: "nul-a", name_hex: "410078", merged_into_id: null },
+      { id: "nul-b", name_hex: "610079", merged_into_id: "nul-a" },
+    ]);
+    expect(() => insert.run("nul-c", "a\0z")).toThrow();
+    db.close();
+  });
+
+  it("refuses a second live case spelling once the partial index is in place", () => {
+    const dbPath = tempDbPath();
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
+
+    migrate(db, dbPath);
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
+             VALUES ('l-new', 'p1', 'Ui', NULL, 0, 0)`,
+        )
+        .run(),
+    ).toThrow();
+    db.close();
+  });
+
+  it("reconciles profiles that ran this branch's pre-release v44 schema", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 42 });
+    // The old branch used versions 43/44 for this Label schema before main
+    // assigned them to worktree cleanup and Session Event cursors.
+    db.exec(`
+      ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE;
+      ALTER TABLE labels ADD COLUMN merged_at INTEGER;
+      ALTER TABLE labels ADD COLUMN merged_by TEXT;
+      CREATE UNIQUE INDEX labels_project_name_nocase
+        ON labels(project_id, name COLLATE NOCASE) WHERE merged_into_id IS NULL;
+    `);
+    db.pragma("user_version = 44");
+
+    migrate(db, dbPath);
+
+    expect(tableExists(db, "worktree_cleanup_commands")).toBe(true);
+    expect(tableExists(db, "session_event_sequence")).toBe(true);
+    expect(tableExists(db, "spawned_processes")).toBe(true);
+    expect(columnNames(db, "labels")).toEqual(
+      expect.arrayContaining(["merged_into_id", "merged_at", "merged_by"]),
+    );
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

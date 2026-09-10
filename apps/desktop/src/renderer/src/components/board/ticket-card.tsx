@@ -8,11 +8,10 @@ import type { TicketDragData } from "@renderer/components/board/board-dnd";
 import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import type { TicketSessionActivity } from "@renderer/components/board/board-session-activity";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { TagChip } from "@renderer/components/board/tag-chip";
+import { TicketCardLabels } from "@renderer/components/board/ticket-card-labels";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
-import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -104,13 +103,10 @@ export function TicketCardContent({
       <p className="text-sm font-medium leading-snug text-foreground line-clamp-2">
         {ticket.title}
       </p>
-      {ticket.labels.length > 0 ? (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {ticket.labels.map((label) => (
-            <TagChip key={label} tag={label} color={resolveLabelColor(projectLabels, label)} />
-          ))}
-        </div>
-      ) : null}
+      {/* Capped at one line, with a `+n` chip for the rest — a card's height is
+          the board's scanning unit, and a nine-label ticket used to draw a tile
+          several times its neighbours'. See `ticket-card-labels.tsx`. */}
+      <TicketCardLabels labels={ticket.labels} projectLabels={projectLabels} />
     </article>
   );
 }

@@ -76,6 +76,34 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
   });
 
+  it("renders Label merge previews with archived Tickets and applied receipts", () => {
+    const preview = {
+      applied: false,
+      from: "front-end",
+      into: "frontend",
+      tickets: [
+        { id: "VC-2", title: "Live", archived: false },
+        { id: "VC-5", title: "Old", archived: true },
+      ],
+      next: "Re-run with --apply.",
+    };
+    expect(renderCliSuccess("label.merge", preview, { json: false })).toBe(
+      "front-end → frontend would change 2 ticket(s).\n  VC-2  Live\n  VC-5  archived  Old\nRe-run with --apply.\n",
+    );
+    expect(
+      renderCliSuccess(
+        "label.merge",
+        { ...preview, applied: true, next: undefined },
+        { json: false },
+      ),
+    ).toBe(
+      "Merged front-end into frontend across 2 ticket(s).\n  VC-2  Live\n  VC-5  archived  Old\n",
+    );
+    // A malformed legacy response falls back to stable JSON instead of
+    // claiming a zero-Ticket preview it did not actually carry.
+    expect(renderCliSuccess("label.merge", {}, { json: false })).toBe("{}\n");
+  });
+
   it("renders the shared mutation plan as readable text or unchanged stable JSON", () => {
     const plan = buildMutationPlan(verbEntry("notify")!, {
       kind: "notification",
@@ -258,6 +286,24 @@ describe("renderCliSuccess", () => {
     ).toBe("VC-1  review  pass\n");
     expect(renderCliSuccess("label.list", { labels: [{ name: "bug", tickets: 2 }] }, options)).toBe(
       "bug  2 tickets\n",
+    );
+    expect(
+      renderCliSuccess(
+        "label.merge",
+        {
+          applied: false,
+          from: "front-end",
+          into: "frontend",
+          tickets: [
+            { id: "VC-2", title: "Live", archived: false },
+            { id: "VC-9", title: "Old", archived: true },
+          ],
+          next: "Re-run with --apply.",
+        },
+        options,
+      ),
+    ).toBe(
+      "front-end → frontend would change 2 ticket(s).\n  VC-2  Live\n  VC-9  archived  Old\nRe-run with --apply.\n",
     );
     // The cost and token cells sit before the title and are never dropped, so
     // the free-text title stays the last cell for anything cutting on columns.

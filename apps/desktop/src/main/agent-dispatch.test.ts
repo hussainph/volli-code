@@ -106,11 +106,13 @@ describe("the preload policy each entry declares", () => {
    * `conflicts` (VC-185) joined for a different reason and is worth naming: it
    * reads Tickets and worktree diffs and no Session anywhere, so the fold would
    * be pure cost on the one verb whose design claim is that it is cheap enough
-   * to run in a bash pipeline.
+   * to run in a bash pipeline. `label.merge` likewise reads only Labels and
+   * Tickets; its authenticated actor is resolved separately.
    */
   const NO_PROJECTIONS = [
     "model.list",
     "conflicts",
+    "label.merge",
     "ticket.signal",
     "session.done",
     "session.blocked",
