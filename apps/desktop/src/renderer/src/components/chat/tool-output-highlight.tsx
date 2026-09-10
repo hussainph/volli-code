@@ -7,9 +7,16 @@
  * and the Monaco/editor bundle stays out of chat. The plugin answers
  * synchronously once a snippet is cached and by callback the first time; the
  * hook mirrors Streamdown's own code-block body, which renders plain text
- * first and swaps in the tokens when they land. Nothing here runs for a closed
- * row: the disclosure unmounts its body, and the detail is already capped at
- * 400 lines, so the cost is bounded by what is on screen.
+ * first and swaps in the tokens when they land.
+ *
+ * NOTHING HERE RUNS FOR A ROW NOBODY IS LOOKING AT, and that is two separate
+ * facts. A CLOSED row never reaches this module at all — the disclosure
+ * unmounts its body, so there is no hook to run — and the detail is capped at
+ * 400 lines besides. An OPEN row that is off screen is the case VC-338 added:
+ * a bundle the live turn opened by itself, or one the reader left open fifty
+ * turns ago, used to tokenize its payload and mint a span per token the moment
+ * it mounted. {@link useOnScreen} is the gate, and it latches: once a payload
+ * has been coloured, scrolling past it does not take the colour away.
  */
 import { code, type HighlightResult } from "@streamdown/code";
 import * as React from "react";
@@ -31,12 +38,56 @@ function highlightLanguage(languageId: string | null): HighlightLanguage | null 
 }
 
 /**
- * Tokens for `text` in `languageId`, or `null` while they are not available —
- * before the grammar has loaded, or for a language with no grammar. The
- * result is keyed to the exact `text` + language it was asked for, so a row
- * whose content changes never shows tokens for the previous content.
+ * Whether an element has been on screen, and the ref that watches it.
+ *
+ * ONE WAY on purpose. The question this answers is "has anyone looked at this
+ * payload", not "is it visible now": tokenization is cached by text, so giving
+ * the colour back when the row scrolls away would buy nothing and cost a
+ * re-render plus a visible flicker on the way back. The margin is generous for
+ * the same reason the transcript's earlier-rows sentinel has one — arriving at a
+ * payload should not mean watching it colour itself.
+ *
+ * No IntersectionObserver (jsdom, server render) means "on screen": the gate
+ * exists to skip work nobody asked for, never to withhold colour from a surface
+ * that cannot tell us what it is showing.
  */
-export function useHighlightedLines(text: string, languageId: string | null): TokenLine[] | null {
+export function useOnScreen<T extends Element>(): {
+  ref: React.RefObject<T | null>;
+  onScreen: boolean;
+} {
+  const ref = React.useRef<T | null>(null);
+  const [onScreen, setOnScreen] = React.useState(() => typeof IntersectionObserver === "undefined");
+
+  React.useEffect(() => {
+    if (onScreen) return;
+    const node = ref.current;
+    if (node === null) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setOnScreen(true);
+      },
+      { rootMargin: "300px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [onScreen]);
+
+  return { ref, onScreen };
+}
+
+/**
+ * Tokens for `text` in `languageId`, or `null` while they are not available —
+ * before the grammar has loaded, for a language with no grammar, or while the
+ * payload has not been looked at. The result is keyed to the exact `text` +
+ * language it was asked for, so a row whose content changes never shows tokens
+ * for the previous content.
+ */
+export function useHighlightedLines(
+  text: string,
+  languageId: string | null,
+  /** Pass what {@link useOnScreen} answered; the default is "colour it now". */
+  onScreen = true,
+): TokenLine[] | null {
   const language = highlightLanguage(languageId);
   const [result, setResult] = React.useState<{
     text: string;
@@ -45,7 +96,7 @@ export function useHighlightedLines(text: string, languageId: string | null): To
   } | null>(null);
 
   React.useEffect(() => {
-    if (language === null) return;
+    if (language === null || !onScreen) return;
     let live = true;
     const adopt = (highlighted: HighlightResult) => {
       if (live) setResult({ text, language, tokens: highlighted.tokens });
@@ -55,7 +106,7 @@ export function useHighlightedLines(text: string, languageId: string | null): To
     return () => {
       live = false;
     };
-  }, [language, text]);
+  }, [language, onScreen, text]);
 
   if (language === null || result === null) return null;
   return result.text === text && result.language === language ? result.tokens : null;

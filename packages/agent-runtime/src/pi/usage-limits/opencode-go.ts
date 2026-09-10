@@ -31,7 +31,13 @@ import {
   type UsageWindow,
 } from "@volli/shared";
 
-import { isoTimestamp, percentOf, SESSION_WINDOW_MINS, WEEKLY_WINDOW_MINS } from "./windows";
+import {
+  isoTimestamp,
+  percentOf,
+  recordOf,
+  SESSION_WINDOW_MINS,
+  WEEKLY_WINDOW_MINS,
+} from "./windows";
 
 /** The three windows Go meters, in the order the rows are drawn. */
 const WINDOWS = [
@@ -53,16 +59,12 @@ const WINDOWS = [
  * body without any is not this account's usage.
  */
 export function opencodeGoUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
-  const usage = (body as { usage?: unknown }).usage;
-  if (typeof usage !== "object" || usage === null) return usageLimitsProbeFailed(checkedAt);
+  const usage = recordOf(recordOf(body)?.usage);
+  if (usage === undefined) return usageLimitsProbeFailed(checkedAt);
   const windows: UsageWindow[] = [];
   for (const shape of WINDOWS) {
-    const entry = (usage as Record<string, unknown>)[shape.key];
-    if (typeof entry !== "object" || entry === null) continue;
-    const fields = entry as { status?: unknown; percent?: unknown; resetsAt?: unknown };
+    const fields = recordOf(usage[shape.key]);
+    if (fields === undefined) continue;
     const reported = percentOf(fields.percent);
     if (reported === undefined) continue;
     const usedPercent = fields.status === "rate-limited" ? 100 : reported;

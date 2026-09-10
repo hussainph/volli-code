@@ -110,6 +110,7 @@ import {
 } from "@renderer/components/split/split-surface-drop";
 import { paneStripLabel, paneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
+import { SplitViewTabBar } from "@renderer/components/split/split-view-tab-bar";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
 import { RailResizeHandle } from "@renderer/components/ticket/rail-resize-handle";
 import { FileView } from "@renderer/components/ticket/file-view";
@@ -778,11 +779,21 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             onDirtyChange={fileWorkspace.handleDirtyChange}
           />
         ) : null}
-        {chatSessionId !== null ? (
+        {chatSessionId !== null && visible ? (
           // Keyed by Session — the client, the fold and the queue are resident
           // (@volli/session-presentation's registry), so a remount costs nothing
           // and carries nothing over. Which is exactly why a chat may live in a
           // pane cell while a terminal may not.
+          //
+          // AND WHY IT LEAVES WITH THE SURFACE (VC-338). Home's box is hidden,
+          // not unmounted, so that no live terminal is ever torn down — but a
+          // chat plane standing behind Settings or another nav page is a
+          // transcript's worth of DOM that nobody can see, for every Home chat
+          // in front of a pane. Nothing is lost by dropping it: the stream, the
+          // fold and the queue are in the registry, the half-typed message is in
+          // `chat-drafts.ts`, and the reading position is in
+          // `transcript-window.ts`. A terminal has none of that and keeps its
+          // box; a chat is a projection and can be redrawn.
           <ChatPlane
             key={chatSessionId}
             sessionId={chatSessionId}
@@ -852,34 +863,43 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       onNativeDrop={handleNativeDrop}
     >
       {stripVisible && selectedId !== null ? (
-        // The surface's own strip is the PRIMARY pane's strip — the pane that
-        // holds the permanent Board tab and never moves, which is what lets the
-        // full-width chrome survive a split unchanged.
-        <HomeTabs
-          projectId={selectedId}
-          pane={split.panes[0]!}
-          terminalTabs={terminalTabs}
-          chatIds={openChatIds}
-          fileTabs={fileTabs}
-          browserTabs={browserTabs}
-          dirtyFilePaths={fileWorkspace.dirtyPaths}
-          onSelect={handleSelect}
-          onClose={handleClose}
-          onRename={handleRename}
-          onReorder={(movedId, ids) => reorderInPane(split.primaryPaneId, movedId, ids)}
-          onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
-          onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
-          actions={{
-            creating,
-            onNewChat: () => void startProjectChat(selectedId),
-            onNewSession: () => void startProjectTerminal(selectedId),
-            onNewBrowser: () => void createBrowser(),
-            railCollapsed,
-            // A browser tab in front hides the rail (main's own gating): the
-            // native view owns that edge of the window.
-            railTogglable: !boardTabActive && activeBrowserTab === undefined,
-            onToggleRail: toggleRailCollapsed,
-          }}
+        <SplitViewTabBar
+          view={split}
+          railWidth={railVisible ? railWidth : 0}
+          onFocusPane={(paneId) => focusHomePane(selectedId, paneId)}
+          onResizeSplit={(splitId, ratio) => setHomeSplitRatio(selectedId, splitId, ratio)}
+          renderStrip={(pane, last) => (
+            <HomeTabs
+              projectId={selectedId}
+              pane={pane}
+              terminalTabs={terminalTabs}
+              chatIds={openChatIds}
+              fileTabs={fileTabs}
+              browserTabs={browserTabs}
+              dirtyFilePaths={fileWorkspace.dirtyPaths}
+              onSelect={handleSelect}
+              onClose={handleClose}
+              onRename={handleRename}
+              onReorder={(movedId, ids) => reorderInPane(pane.id, movedId, ids)}
+              onPinFile={(relPath) => pinHomeFile(selectedId, relPath)}
+              onCloseOtherFiles={(relPath) => void requestCloseOtherFiles(relPath)}
+              actions={
+                last
+                  ? {
+                      creating,
+                      onNewChat: () => void startProjectChat(selectedId),
+                      onNewSession: () => void startProjectTerminal(selectedId),
+                      onNewBrowser: () => void createBrowser(),
+                      railCollapsed,
+                      // A browser tab in front hides the rail: the native view owns
+                      // that edge of the window.
+                      railTogglable: !boardTabActive && activeBrowserTab === undefined,
+                      onToggleRail: toggleRailCollapsed,
+                    }
+                  : undefined
+              }
+            />
+          )}
         />
       ) : null}
 
@@ -910,12 +930,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             <SplitViewGrid
               view={split}
               renderStrip={(pane) =>
-                // No strip on the primary pane (the surface's own is its) and
-                // none on a pane holding nothing: an empty tablist is a band of
-                // chrome about no tabs, and the pane's menu is the whole of
-                // what it has to say.
-                pane.isPrimary || pane.tabIds.length === 0 || selectedId === null ? null : (
-                  <HomePaneTabs
+                // The grid asks only for lower panes; top-edge tabs share the
+                // main bar. An empty lower pane needs no extra band of chrome.
+                pane.tabIds.length === 0 || selectedId === null ? null : (
+                  <HomeTabs
                     projectId={selectedId}
                     pane={pane}
                     terminalTabs={terminalTabs}
@@ -994,7 +1012,7 @@ function useChatSessionsIdsForProject(projectId: string | null): readonly string
   );
 }
 
-/** The trailing cluster's props — only the surface's own strip carries them. */
+/** The trailing cluster's props — only the main bar's trailing strip carries them. */
 interface HomeStripActions {
   creating: boolean;
   onNewSession(): void;
@@ -1025,8 +1043,7 @@ interface HomePaneStripProps {
 }
 
 /**
- * The surface's own strip — the primary pane's — and the only place the
- * per-token chat reads live.
+ * One pane's strip, and the only place the per-token chat reads live.
  *
  * {@link HomeSurface} hosts every live terminal in the app and must not
  * re-render on a streamed word; a chat's title and lifecycle move on exactly
@@ -1034,42 +1051,24 @@ interface HomePaneStripProps {
  * {@link useHomeTabDescriptors}, and this component exists to be the thing that
  * re-renders instead.
  */
-function HomeTabs({ actions, ...strip }: HomePaneStripProps & { actions: HomeStripActions }) {
+function HomeTabs({ actions, ...strip }: HomePaneStripProps & { actions?: HomeStripActions }) {
   const tabs = paneTabs(strip.pane, useHomeTabDescriptors(strip));
-
-  return (
-    <HomeTabStrip
-      projectId={strip.projectId}
-      tabs={tabs}
-      activeTabId={strip.pane.activeTabId ?? ""}
-      onReorder={strip.onReorder}
-      onSelect={strip.onSelect}
-      onClose={strip.onClose}
-      onRename={strip.onRename}
-      onPinFile={strip.onPinFile}
-      onCloseOtherFiles={strip.onCloseOtherFiles}
-      {...actions}
-    />
-  );
-}
-
-/** One secondary pane's strip: the same tabs, named for its pane, no actions. */
-function HomePaneTabs(strip: HomePaneStripProps) {
-  const tabs = paneTabs(strip.pane, useHomeTabDescriptors(strip));
-
-  return (
-    <HomePaneTabStrip
-      label={paneStripLabel(strip.pane)}
-      projectId={strip.projectId}
-      tabs={tabs}
-      activeTabId={strip.pane.activeTabId ?? ""}
-      onReorder={strip.onReorder}
-      onSelect={strip.onSelect}
-      onClose={strip.onClose}
-      onRename={strip.onRename}
-      onPinFile={strip.onPinFile}
-      onCloseOtherFiles={strip.onCloseOtherFiles}
-    />
+  const list = {
+    label: strip.pane.isPrimary ? "Home tabs" : paneStripLabel(strip.pane),
+    projectId: strip.projectId,
+    tabs,
+    activeTabId: strip.pane.activeTabId ?? "",
+    onReorder: strip.onReorder,
+    onSelect: strip.onSelect,
+    onClose: strip.onClose,
+    onRename: strip.onRename,
+    onPinFile: strip.onPinFile,
+    onCloseOtherFiles: strip.onCloseOtherFiles,
+  };
+  return actions === undefined ? (
+    <HomePaneTabStrip {...list} />
+  ) : (
+    <HomeTabStrip {...list} {...actions} />
   );
 }
 

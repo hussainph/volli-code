@@ -17,7 +17,12 @@ import type {
   SessionInteraction,
   SessionInteractionResolution,
 } from "@volli/shared";
-import { findComposerVerb, REASONING_LEVELS, type ComposerVerb } from "@volli/shared";
+import {
+  findComposerVerb,
+  REASONING_LEVELS,
+  revealedSessionAttention,
+  type ComposerVerb,
+} from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import {
@@ -681,6 +686,17 @@ export interface SessionBlockerInput {
   /** The Session's own transport, as the resident slice reports it. */
   sessionError: string | null;
   attention: SessionAttentionProjection;
+  /**
+   * The Attention a notification click asked to be shown, or null (VC-295).
+   *
+   * The row draws ONE attention, and its default is `primary` — the newest
+   * active one. An alert names the attention it was raised about, which with
+   * several live is not always that one, so a click has to be able to say which
+   * problem it sent the person here for. It only ever SELECTS among what is
+   * already live: an id that has since cleared falls back to `primary`, and the
+   * click's own toast is what explains the absence.
+   */
+  revealedAttentionId: string | null;
   catalogState: CatalogState;
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
@@ -734,7 +750,11 @@ export function terminalCompanionTabId(
  *    raise is downstream of this one fact, the harness's own report of it names
  *    a provider id and offers a sign-in the reader did not ask for, and this is
  *    the only one of the two that can be read *before* a message is spent on it.
- * 3. `attention.primary` — the harness stating a state to recover from.
+ * 3. `attention` — the harness stating a state to recover from. Which one is
+ *    `primary` (the newest live), unless a notification click named another
+ *    that is still live: an alert that interrupted somebody about a specific
+ *    problem has to be able to put THAT problem in front of them, or the trip
+ *    it asked for ends on a different failure with no word about the first.
  * 4. `catalogState` / `catalogError` — nothing configured yet, which auth would
  *    otherwise be mistaken for since an unauthenticated provider lists no models
  *    either, and the refresh that could not answer at all.
@@ -806,7 +826,14 @@ export function sessionBlocker(
           dismiss(dismissKey),
         );
   }
-  const attention = input.attention.primary;
+  // The one a click asked for, when it is still live; otherwise the newest,
+  // which is what this row has always drawn.
+  // `revealedSessionAttention` is the SAME call the window reporting what it
+  // shows makes, so the row and that report cannot name different problems
+  // (VC-295 round 4).
+  const attention =
+    revealedSessionAttention(input.attention.active, input.revealedAttentionId) ??
+    input.attention.primary;
   if (attention) {
     return asked && answeredByCard(attention.kind)
       ? null

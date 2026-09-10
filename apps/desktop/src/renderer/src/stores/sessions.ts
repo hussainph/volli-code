@@ -291,6 +291,35 @@ export function findTabBySessionId(
   return null;
 }
 
+/**
+ * Where a Session lives in the terminal strips: its container, its TAB, and the
+ * pane inside that tab — or null when no strip holds it (VC-295 round 2).
+ *
+ * The null answer is load-bearing: it is how a caller tells a terminal Session
+ * from a chat one without a second registry to consult. A harness alert names a
+ * Session id and nothing else, and only this lookup can say whether opening it
+ * means a chat tab or a terminal pane — `findTabBySessionId` above answers only
+ * for a tab's ROOT session, so a split pane would have come back empty and the
+ * click would have landed nowhere.
+ */
+export function findTerminalPlacement(
+  byOwner: Record<string, SessionContainer>,
+  sessionId: string,
+): {
+  ownerId: string;
+  tabId: string;
+  paneId: string;
+  scope: SessionScope;
+} | null {
+  for (const [ownerId, container] of Object.entries(byOwner)) {
+    for (const tab of container.tabs) {
+      if (findSessionPane(tab.layout, sessionId) === null) continue;
+      return { ownerId, tabId: tab.sessionId, paneId: sessionId, scope: tab.scope };
+    }
+  }
+  return null;
+}
+
 function replacePaneWithSplit(
   layout: SessionLayout,
   sourcePaneId: string,

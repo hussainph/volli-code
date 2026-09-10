@@ -231,6 +231,7 @@ function measure(text: string): PromptBaselineTotal {
 
 /** Layers whose inputs are fixed by Role, its bundle and product version. */
 const SYSTEM_SECTION_CACHE_CLASS: Readonly<Record<string, PromptCacheClass>> = {
+  execution: "role-static",
   role: "role-static",
   authority: "role-static",
   workspace: "role-static",

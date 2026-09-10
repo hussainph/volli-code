@@ -392,6 +392,52 @@ describe("renderCliSuccess", () => {
       "fedcba98  chat  working  last 8s  VC-52  ~$1.50  184000  Validate VC-52\n" +
         "0a1b2c3d  chat  waiting on permission  last 7m  VC-53  \u2014  0  Review VC-53\n",
     );
+    // A turn that died (VC-324) says so, with the coarse reason in a
+    // parenthetical: nobody is being asked to go and do `crash-recovered`, so
+    // it is not spelled as the errand `waiting on` is.
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [
+            {
+              id: "d1def241",
+              kind: "chat",
+              status: "interrupted",
+              waitingOn: null,
+              interruptedReason: "stopped-by-runtime",
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-324",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Audit run",
+            },
+            // No reason to give: the state word stands alone, exactly as an
+            // idle row's does.
+            {
+              id: "930f6871",
+              kind: "chat",
+              status: "interrupted",
+              waitingOn: null,
+              interruptedReason: null,
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-324",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Audit run",
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBe(
+      "d1def241  chat  interrupted (stopped-by-runtime)  last 8s  VC-324  \u2014  0  Audit run\n" +
+        "930f6871  chat  interrupted  last 8s  VC-324  \u2014  0  Audit run\n",
+    );
     // The model cell (VC-259): the tier leads where the start named one, so a
     // `fast` Session and one a person pinned to the same model read apart.
     // A row that has recorded no policy has no cell, like a terminal row.
@@ -1439,6 +1485,28 @@ describe("renderCliSuccess", () => {
         { json: false },
       ),
     ).toBe("abcdef12  idle  last 0s  turn 0 depth 0\n");
+  });
+
+  // The peek header and the list row are one cell read at two distances
+  // (VC-86's rule), so the reason renders identically in both.
+  it("names why a chat peek's last turn died", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "interrupted",
+          waitingOn: null,
+          interruptedReason: "crash-recovered",
+          lastActivityAgeMs: 0,
+          turns: 2,
+          turnDepth: 0,
+          unreadable: 0,
+          transcript: [],
+        },
+        { json: false },
+      ),
+    ).toBe("abcdef12  interrupted (crash-recovered)  last 0s  turn 2 depth 0\n");
   });
 
   it("covers every usage exit-code spelling", () => {

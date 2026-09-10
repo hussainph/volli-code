@@ -314,6 +314,71 @@ export function listWorktreePaths(db: Database.Database): string[] {
 }
 
 /**
+ * Every ticket checkout with the Ticket it belongs to — what the orphan process
+ * sweep attributes a working directory by (VC-341).
+ *
+ * The display id rides along because that is the only name a person reading a
+ * list of runaway processes can act on: "something under
+ * `~/.volli/worktrees/volli-code-f373/VC-341-.../` is holding 2.9 GB" is a path,
+ * while "VC-341 is holding 2.9 GB" is a Ticket they can open. Archived tickets
+ * are included for the same reason {@link listWorktreePaths} includes them: a
+ * retained worktree is still a directory a process can be standing in, and its
+ * processes are the ones most likely to have been forgotten.
+ */
+export function listWorktreeRefs(
+  db: Database.Database,
+): Array<{ path: string; ticketId: string; ticketDisplayId: string; projectId: string }> {
+  const rows = prepared<
+    [],
+    {
+      worktree_path: string;
+      ticketId: string;
+      projectId: string;
+      ticketPrefix: string;
+      ticketNumber: number;
+    }
+  >(
+    db,
+    `SELECT t.worktree_path AS worktree_path, t.id AS ticketId, t.project_id AS projectId,
+            p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber
+       FROM tickets t JOIN projects p ON p.id = t.project_id
+      WHERE t.worktree_path IS NOT NULL`,
+  ).all();
+  return rows.map((row) => ({
+    path: row.worktree_path,
+    ticketId: row.ticketId,
+    ticketDisplayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
+    projectId: row.projectId,
+  }));
+}
+
+/**
+ * The checkouts the named Sessions are attached to, and which Session holds
+ * each — the orphan sweep's liveness test (VC-341).
+ *
+ * The holder's id rides along because worktree reuse needs it: a process whose
+ * own Session ended, in a checkout somebody else has since taken over, is
+ * listed as `held` and the row says who is standing there now. Without the id
+ * the panel could only say "somebody", which is not a fact a person can act on.
+ */
+export function listWorktreeHoldersForSessions(
+  db: Database.Database,
+  sessionIds: readonly string[],
+): Array<{ path: string; sessionId: string }> {
+  if (sessionIds.length === 0) return [];
+  // Placeholders rather than an interpolated list: these ids come from the
+  // token registry, and a bound parameter is the rule regardless of provenance.
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  const rows = prepared<string[], { worktree_path: string; sessionId: string }>(
+    db,
+    `SELECT DISTINCT t.worktree_path AS worktree_path, s.id AS sessionId
+       FROM sessions s JOIN tickets t ON t.id = s.ticket_id
+      WHERE s.id IN (${placeholders}) AND t.worktree_path IS NOT NULL`,
+  ).all(...sessionIds);
+  return rows.map((row) => ({ path: row.worktree_path, sessionId: row.sessionId }));
+}
+
+/**
  * The same set for ONE project — live AND archived alike, since a retained
  * worktree is still a directory a session can be standing in.
  *
@@ -347,6 +412,24 @@ export function listRetentionCandidates(db: Database.Database): TicketRow[] {
     `SELECT * FROM tickets
        WHERE archived_at IS NULL
          AND (worktree_path IS NOT NULL OR branch IS NOT NULL)`,
+  ).all();
+}
+
+/**
+ * The trim set (VC-340): every ticket with a materialised worktree that is
+ * FINISHED — in Done, or archived. Archived rows are included here precisely
+ * because {@link listRetentionCandidates} excludes them: an archive keeps the
+ * checkout, so an archived ticket is the longest-standing carrier of a dead
+ * `node_modules` in the app, and the merge-watch has never had a reason to look
+ * at one. A ticket whose PR merged while it sits elsewhere on the board is not
+ * in this query — the poll knows that from its own observation and adds it.
+ */
+export function listTrimCandidates(db: Database.Database): TicketRow[] {
+  return prepared<[], TicketRow>(
+    db,
+    `SELECT * FROM tickets
+       WHERE worktree_path IS NOT NULL
+         AND (status = 'done' OR archived_at IS NOT NULL)`,
   ).all();
 }
 

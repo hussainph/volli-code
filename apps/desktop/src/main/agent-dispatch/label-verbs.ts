@@ -1,7 +1,7 @@
 /**
  * The label cleanup verb (VC-310).
  *
- * Case identity is not this file's job — the repo boundary and migration 043
+ * Case identity is not this file's job — the repo boundary and migration 046
  * make `UI` and `ui` one label before any caller gets here. What is left is
  * the duplicate a machine cannot detect: two genuinely different names that a
  * person knows mean the same thing (`front-end`, `frontend`). Folding those is

@@ -27,10 +27,11 @@
  * exactly as long as it was the only thing anyone had.
  *
  * **The reason is worth a phrase, not a word.** `CompactionReason` is closed and
- * its three members are three different stories — the window filled on its own,
- * the provider refused a turn outright, or a person typed `/compact`. A reader
- * debugging a Session wants to know which one they are in, and "threshold" is
- * the executor's word for it rather than theirs.
+ * its members are different stories — the window filled on its own, the
+ * provider refused a turn outright, a person typed `/compact`, or a saved
+ * provider checkpoint stopped being readable. A reader debugging a Session
+ * wants to know which one they are in, and "threshold" is the executor's word
+ * for it rather than theirs.
  *
  * **A failure is a record, not a boundary.** It divides nothing: the summary was
  * never written and the context is exactly as it was. So it earns a line and not
@@ -38,6 +39,14 @@
  * turn that paid for the attempt was delivered on the old context, and the
  * refusal that may follow reads as arbitrary unless something says the summary
  * was tried first.
+ *
+ * **`checkpoint` is the failure that went the OTHER way.** Nothing was
+ * summarized there either, but the context did not stay as it was: a compaction
+ * that had already happened stopped being usable, and the Session restored the
+ * messages that summary had replaced. So it says the opposite thing on the same
+ * arm — the context grew back rather than held still — because telling a person
+ * "the context was left as it was" while their window refills is the sentence
+ * they would act on and be wrong about.
  *
  * Pure over its arguments, like every other chat projection: the words and the
  * placement are testable without mounting a session.
@@ -74,13 +83,14 @@ export interface CompactionBoundaryCopy {
 }
 
 /**
- * The closed vocabulary, spelled out. Three reasons, three sentences a person
- * would actually say — "threshold" is a rule's name, not an explanation.
+ * The closed vocabulary, spelled out. Sentences a person would actually say —
+ * "threshold" is a rule's name, not an explanation.
  */
 const REASON_PHRASE: Record<CompactionReason, string> = {
   threshold: "the window filled",
   overflow: "the provider refused this turn",
   manual: "you asked",
+  checkpoint: "the saved checkpoint could not be read",
 };
 
 /**
@@ -96,19 +106,25 @@ const COMPACTED_NOTE =
 /** The fact a failed attempt actually leaves behind: nothing moved. */
 const FAILED_NOTE = "The context was left as it was.";
 
+/** The fact a lost checkpoint leaves behind: the opposite one. */
+const RESTORED_NOTE = "The messages it had replaced are being sent to the model again.";
+
 export function compactionBoundaryCopy(compaction: TranscriptCompaction): CompactionBoundaryCopy {
   const reason = REASON_PHRASE[compaction.reason];
   if (compaction.outcome === "failed") {
     // Empty counts as absent: a diagnostic carrying no text would otherwise
     // draw a blank line under the row, and the sentence would end mid-air.
     const detail = compaction.detail.trim() === "" ? null : compaction.detail;
+    const restored = compaction.reason === "checkpoint";
+    const headline = restored ? "Compaction reverted" : "Compaction failed";
+    const note = restored ? RESTORED_NOTE : FAILED_NOTE;
     return {
-      headline: "Compaction failed",
+      headline,
       reason,
       before: null,
-      note: FAILED_NOTE,
+      note,
       detail,
-      description: sentence([`Compaction failed — ${reason}.`, FAILED_NOTE, detail]),
+      description: sentence([`${headline} — ${reason}.`, note, detail]),
     };
   }
   const before = formatTokens(compaction.tokensBefore);

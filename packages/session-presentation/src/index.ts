@@ -26,6 +26,7 @@ export * from "./compaction-boundary";
 export * from "./composer-effort";
 export * from "./composer-stack";
 export * from "./context-usage";
+export * from "./host-notice";
 export * from "./interaction";
 export * from "./markdown-source";
 export * from "./message-projection";

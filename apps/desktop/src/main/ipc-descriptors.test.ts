@@ -23,6 +23,8 @@ import {
   BROWSER_IPC,
   SHELL_CHANNELS,
   SHELL_IPC,
+  NOTIFICATION_CHANNELS,
+  NOTIFICATION_IPC,
 } from "./ipc-descriptors";
 
 describe("SHELL_IPC descriptor table (VC-270)", () => {
@@ -224,6 +226,55 @@ describe("UPDATE_IPC descriptor table", () => {
   });
 });
 
+describe("NOTIFICATION_IPC descriptor table (VC-295)", () => {
+  it("derives the whole notification surface from its descriptors", () => {
+    expect(NOTIFICATION_CHANNELS).toEqual(Object.keys(NOTIFICATION_IPC));
+    expect(NOTIFICATION_CHANNELS).toEqual([
+      "volli:notifications-get",
+      "volli:notifications-set",
+      "volli:notifications-pending-activation",
+    ]);
+  });
+
+  it("refuses stray arguments on the two read requests", () => {
+    for (const channel of [
+      "volli:notifications-get",
+      "volli:notifications-pending-activation",
+    ] as const) {
+      const { guard, invalidError } = NOTIFICATION_IPC[channel];
+      expect(guard([])).toBe(true);
+      expect(guard(["junk"])).toBe(false);
+      expect(invalidError).toBe("Invalid request");
+    }
+  });
+
+  describe("volli:notifications-set", () => {
+    const { guard, invalidError } = NOTIFICATION_IPC["volli:notifications-set"];
+
+    it("accepts a switch move on a category and on the master switch", () => {
+      expect(guard([{ event: "needs-you", enabled: false }])).toBe(true);
+      expect(guard([{ event: null, enabled: true }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      // Shape only — whether "sessions" names a category is the service's
+      // question, and its refusal is a sentence rather than this message.
+      expect(guard([{ event: "sessions", enabled: false }])).toBe(true);
+      expect(guard([{ event: "needs-you", enabled: "off" }])).toBe(false);
+      expect(guard([{ event: 7, enabled: true }])).toBe(false);
+      expect(guard([{ enabled: true }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard(["needs-you"])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ event: null, enabled: true }, "extra"])).toBe(false);
+    });
+
+    it("names what was wrong with the request", () => {
+      expect(invalidError).toBe("Invalid notification preference");
+    });
+  });
+});
+
 describe("DATA_IPC descriptor table", () => {
   describe("volli:data-bootstrap (no-arg request)", () => {
     const { guard } = DATA_IPC["volli:data-bootstrap"];
@@ -393,29 +444,21 @@ describe("DATA_IPC descriptor table", () => {
     const { guard } = DATA_IPC["volli:project-session-defaults"];
     const model = { providerId: "anthropic", modelId: "opus", reasoningLevel: "high" };
 
-    it("accepts both fields null — the shape that clears both overrides", () => {
-      expect(guard([{ id: "p1", harness: null, model: null }])).toBe(true);
+    it("accepts null to clear the Chat model override", () => {
+      expect(guard([{ id: "p1", model: null }])).toBe(true);
     });
 
-    it("accepts a harness and a full model selection", () => {
-      expect(guard([{ id: "p1", harness: "codex", model }])).toBe(true);
+    it("accepts a full model selection", () => {
+      expect(guard([{ id: "p1", model }])).toBe(true);
     });
 
     it("rejects a model missing a field or carrying an unknown reasoning level", () => {
-      expect(guard([{ id: "p1", harness: null, model: { providerId: "a", modelId: "b" } }])).toBe(
-        false,
-      );
-      expect(
-        guard([{ id: "p1", harness: null, model: { ...model, reasoningLevel: "extreme" } }]),
-      ).toBe(false);
-    });
-
-    it("rejects a non-string harness", () => {
-      expect(guard([{ id: "p1", harness: 7, model: null }])).toBe(false);
+      expect(guard([{ id: "p1", model: { providerId: "a", modelId: "b" } }])).toBe(false);
+      expect(guard([{ id: "p1", model: { ...model, reasoningLevel: "extreme" } }])).toBe(false);
     });
 
     it("rejects a missing id, non-record payload, or wrong arity", () => {
-      expect(guard([{ harness: null, model: null }])).toBe(false);
+      expect(guard([{ model: null }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });
@@ -1506,9 +1549,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{}])).toBe(true);
     });
 
-    it("accepts an explicit boolean rescan", () => {
-      expect(guard([{ rescan: true }])).toBe(true);
-      expect(guard([{ rescan: false }])).toBe(true);
+    it("accepts an explicit boolean refresh", () => {
+      expect(guard([{ refresh: true }])).toBe(true);
+      expect(guard([{ refresh: false }])).toBe(true);
     });
 
     it("rejects a non-object first argument", () => {
@@ -1516,8 +1559,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([null])).toBe(false);
     });
 
-    it("rejects a present-but-non-boolean rescan", () => {
-      expect(guard([{ rescan: "yes" }])).toBe(false);
+    it("rejects a present-but-non-boolean refresh", () => {
+      expect(guard([{ refresh: "yes" }])).toBe(false);
     });
 
     it("rejects a wrong arity", () => {
@@ -1526,6 +1569,72 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid request");
+    });
+  });
+
+  describe("volli:worktree-orphan-cleanup", () => {
+    const { guard, invalidError } = DATA_IPC["volli:worktree-orphan-cleanup"];
+
+    // A caller-minted UUID, like every other command channel in this catalog.
+    const commandId = "6f1a2b3c-4d5e-4f60-8a91-2b3c4d5e6f70";
+
+    it("accepts a command id, a scan revision, and the item ids confirmed from it", () => {
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }])).toBe(
+        true,
+      );
+      expect(
+        guard([
+          {
+            commandId,
+            scanRevision: "rev-1",
+            itemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
+          },
+        ]),
+      ).toBe(true);
+    });
+
+    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // `"cmd-1"` is an id a second writer could mint too, and cross-writer
+    // string equality has to mean "the same logical fact"
+    // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
+    it("rejects a command id that is not a UUID", () => {
+      for (const bad of ["cmd-1", "1", "", "6f1a2b3c4d5e4f608a912b3c4d5e6f70", 7, null]) {
+        expect(
+          guard([{ commandId: bad, scanRevision: "rev-1", itemIds: ["rev-1:worktree:0"] }]),
+        ).toBe(false);
+      }
+    });
+
+    // A cleanup with nothing to do would still open a durable record; refusing
+    // the shape keeps the history a log of acts rather than of clicks.
+    it("rejects a request that would change nothing", () => {
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [] }])).toBe(false);
+    });
+
+    // The channel takes ids, never paths: main resolves them against the plan
+    // it minted, so a client cannot name a directory no scan proposed (C1).
+    it("rejects the old path-carrying shape outright", () => {
+      expect(guard([{ paths: ["/wt/a"], projectIds: ["p1"] }])).toBe(false);
+    });
+
+    it("rejects anything that isn't a command id, a revision, and non-empty string ids", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard([{ scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId: "", scanRevision: "rev-1", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "", itemIds: ["a"] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: "a" }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [1] }])).toBe(false);
+      expect(guard([{ commandId, scanRevision: "rev-1", itemIds: [""] }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ commandId: "c", scanRevision: "r", itemIds: ["i"] }, {}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid cleanup request");
     });
   });
 
@@ -1605,10 +1714,12 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:worktree-change-set / volli:worktree-change-watch / volli:worktree-change-unwatch", () => {
+  describe("ticket-id Change Set and watch channels", () => {
     const channels = [
       "volli:worktree-change-set",
       "volli:worktree-change-watch",
+      "volli:worktree-change-watch-pause",
+      "volli:worktree-change-watch-resume",
       "volli:worktree-change-unwatch",
     ] as const;
 
@@ -1848,8 +1959,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 60 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(60);
+    it("covers all 67 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(67);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
@@ -1869,9 +1980,54 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-set");
       expect(DATA_CHANNELS).toContain("volli:worktree-base-read");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-watch");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-watch-pause");
+      expect(DATA_CHANNELS).toContain("volli:worktree-change-watch-resume");
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
+      // Build artifacts (VC-340): one read, one destructive action, and the two
+      // settings that govern both.
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+    });
+  });
+
+  // VC-340. The trim removes files, so its guard is the only thing between a
+  // renderer typo and a deletion: a non-boolean `dryRun` must not read as a
+  // preview, and an empty settings patch must not read as an update.
+  describe("the build-artifact channels", () => {
+    it("takes no argument at all for the destructive trim", () => {
+      const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
+      expect(guard([])).toBe(true);
+      // There is nothing to vary, so anything at all is a caller that does not
+      // know what this channel is (review r2 removed an unused dry-run input).
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ dryRun: true }])).toBe(false);
+      expect(guard(["nope"])).toBe(false);
+      expect(invalidError).toBe("Invalid trim request");
+    });
+
+    it("takes no argument for either read", () => {
+      expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
+      expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
+      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
+      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
+    });
+
+    it("requires a settings patch to actually patch something", () => {
+      const { guard, invalidError } = DATA_IPC["volli:worktree-trim-settings-set"];
+      expect(guard([{ trimOnFinish: false }])).toBe(true);
+      expect(guard([{ keepPatterns: [".env", "*.pem"] }])).toBe(true);
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ trimOnFinish: "off" }])).toBe(false);
+      expect(guard([{ keepPatterns: ".env" }])).toBe(false);
+      expect(guard([{ keepPatterns: [1, 2] }])).toBe(false);
+      expect(guard([])).toBe(false);
+      expect(guard([{ trimOnFinish: true }, "extra"])).toBe(false);
+      expect(guard(["nope"])).toBe(false);
+      expect(invalidError).toBe("Invalid trim settings");
     });
   });
 });

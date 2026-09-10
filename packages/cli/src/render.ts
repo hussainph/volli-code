@@ -228,6 +228,7 @@ const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = 
   pr_opened: ["url"],
   pr_merged: ["url"],
   worktree_reclaimed: ["branch", "daysInDone"],
+  worktree_trimmed: ["entries", "bytes", "kept"],
   attachment_added: ["attachmentId"],
   attachment_removed: ["attachmentId"],
   session_started: ["sessionId"],
@@ -430,6 +431,27 @@ function countCell(value: unknown): string {
 }
 
 /**
+ * A chat Session's liveness cell: its state word, and the reason that state
+ * carries when it has one.
+ *
+ * One helper for the list row and the peek header, because they are the same
+ * cell read at two distances and VC-86's rule is that they say the same thing.
+ * At most one reason can apply: `waitingOn` rides `waiting` and
+ * `interruptedReason` rides `interrupted` (VC-324), and main pins each to its
+ * own state before it is sent. `on` for the errand a person can run, a
+ * parenthetical for the post-mortem — nobody is being asked to go and do
+ * `crash-recovered`.
+ */
+function sessionStateCell(session: Record<string, unknown>): unknown {
+  const status = session["status"];
+  const waitingOn = session["waitingOn"];
+  if (typeof waitingOn === "string") return `${status} on ${waitingOn}`;
+  const interruptedReason = session["interruptedReason"];
+  if (typeof interruptedReason === "string") return `${status} (${interruptedReason})`;
+  return status;
+}
+
+/**
  * An elapsed span at the precision a peek is read at: seconds while something
  * is happening, minutes while it is thinking, hours once it has stopped. The
  * caller is deciding whether to look closer, not measuring anything.
@@ -450,12 +472,9 @@ function ageText(value: unknown): string {
  * conversation.
  */
 function renderChatPeek(data: Record<string, unknown>, transcript: readonly unknown[]): string {
-  const waitingOn = data["waitingOn"];
   const unreadable = data["unreadable"];
   const header = [
-    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${
-      typeof waitingOn === "string" ? ` on ${terminalSafeInline(waitingOn)}` : ""
-    }`,
+    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
     ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
@@ -1043,11 +1062,9 @@ function renderStableLines(command: string, data: unknown): string | null {
               session["id"],
               session["kind"],
               // The liveness cell (VC-86): peek's own vocabulary — the state,
-              // with its waiting reason inline so "waiting" never hides the
-              // one thing the caller could act on.
-              typeof session["waitingOn"] === "string"
-                ? `${session["status"]} on ${session["waitingOn"]}`
-                : session["status"],
+              // with its reason inline so "waiting" never hides the one thing
+              // the caller could act on.
+              sessionStateCell(session),
               // Age of the newest durable fact — the signal a wedge hides in.
               // Absent only on a legacy or malformed row, never rendered as "-".
               typeof session["lastActivityAgeMs"] === "number"

@@ -7,7 +7,7 @@ import type { Session } from "@volli/shared";
 import { broadcastDataChanged } from "../broadcast";
 import { getProjectById } from "../db/projects-repo";
 import { getTicket } from "../db/tickets-repo";
-import { ensure } from "../worktree";
+import { acquireWorktreeStartLease, ensure, UNDER_DELETION_REFUSAL } from "../worktree";
 import { worktreeDeps } from "../worktree-runtime";
 
 const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
@@ -28,7 +28,31 @@ const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
  * single-flight and its reconcile already owns "registered, directory missing →
  * prune, then recreate at the same path" — so a worktree comes back where it
  * was, on the branch it was on, with the work that was committed to it intact.
+ *
+ * Both of them are also agent STARTS, so both take the worktree start lease
+ * (VC-284 re-review C4). A Session can be bound to a directory this app now
+ * calls an orphan — deleting a ticket only clears `sessions.ticket_id` — so
+ * "an agent is about to work in here" and "a cleanup is about to remove here"
+ * are two acts over one directory, and the lease is what serializes them. It is
+ * held only across the materialization; the turn that follows is visible to the
+ * activity guard the destructive paths ask.
  */
+/**
+ * Holds the worktree START lease across one materialization, or refuses
+ * (VC-284 re-review C4). Starts do not exclude each other, so the nested
+ * acquisition `reaffirm` → `prepare` makes is free; only a destructive act
+ * holding the path refuses one.
+ */
+async function withStartLease<T>(directory: string, work: () => Promise<T>): Promise<T> {
+  const lease = acquireWorktreeStartLease(directory);
+  if (lease === null) throw new Error(UNDER_DELETION_REFUSAL);
+  try {
+    return await work();
+  } finally {
+    lease.release();
+  }
+}
+
 export function createDesktopSessionLocationResolver(
   db: Database.Database,
 ): SessionLocationResolver {
@@ -46,24 +70,29 @@ export function createDesktopSessionLocationResolver(
   const prepare = async (session: Session): Promise<SessionLocation> => {
     const { project, ticket } = site(session);
     if (ticket === null || !ticket.usesWorktree) {
-      return { directory: project.path, venue: LOCAL };
+      return withStartLease(project.path, async () => ({ directory: project.path, venue: LOCAL }));
     }
-    const outcome = await ensure(worktreeDeps(db), ticket.id);
-    if (!outcome.ok) {
-      // The path is the whole diagnosis when it is a stale stamp pointing at a
-      // checkout somebody deleted, so it is named whenever the ticket has one.
-      const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
-      throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
-    }
-    const { identity, created } = outcome.value;
-    if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
-    // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
-    // on the ticket; a reused one changed nothing. Same targeting the terminal
-    // uses, so the booting ticket's own rail refreshes promptly.
-    if (created) {
-      broadcastDataChanged({ ticketId: ticket.id, projectId: project.id, kind: "worktree" });
-    }
-    return { directory: identity.worktreePath, venue: LOCAL };
+    // The lease covers the whole materialization: `ensure` is git work plus a
+    // durable event, and a cleanup must not be able to take the directory
+    // between it succeeding and the binding existing.
+    return withStartLease(ticket.worktreePath ?? project.path, async () => {
+      const outcome = await ensure(worktreeDeps(db), ticket.id);
+      if (!outcome.ok) {
+        // The path is the whole diagnosis when it is a stale stamp pointing at a
+        // checkout somebody deleted, so it is named whenever the ticket has one.
+        const at = ticket.worktreePath === null ? "" : ` at ${ticket.worktreePath}`;
+        throw new Error(`Couldn't prepare the worktree${at} — ${outcome.error}`);
+      }
+      const { identity, created } = outcome.value;
+      if (identity.worktreePath === null) throw new Error("Worktree path was not resolved");
+      // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
+      // on the ticket; a reused one changed nothing. Same targeting the terminal
+      // uses, so the booting ticket's own rail refreshes promptly.
+      if (created) {
+        broadcastDataChanged({ ticketId: ticket.id, projectId: project.id, kind: "worktree" });
+      }
+      return { directory: identity.worktreePath, venue: LOCAL };
+    });
   };
 
   return {
@@ -75,19 +104,25 @@ export function createDesktopSessionLocationResolver(
     prepare,
 
     async reaffirm(session, directory) {
-      // One `existsSync` in the ordinary case, which is every case but the
-      // broken one: the whole point of asking before a turn is that asking
-      // costs nothing when nothing is wrong.
-      if (existsSync(directory)) return;
-      // `prepare` names the worktree and the git reason when `ensure` refuses,
-      // so a failure here already reads as Volli's own; it is left to throw.
-      await prepare(session);
-      if (existsSync(directory)) return;
-      // `prepare` succeeded and the bound directory is still not there: either
-      // the ticket now points somewhere else, or this Session runs in a project
-      // root, which nothing can recreate. Say so rather than let a harness say
-      // it worse, one prompt from now.
-      throw new Error(`The Session's directory ${directory} is gone and couldn't be recreated.`);
+      // A turn is about to write into this directory, so it is a start like any
+      // other, and the lease is taken before the question rather than after it:
+      // a directory a cleanup is removing right now must never be reaffirmed as
+      // somewhere to work.
+      await withStartLease(directory, async () => {
+        // One `existsSync` in the ordinary case, which is every case but the
+        // broken one: the whole point of asking before a turn is that asking
+        // costs nothing when nothing is wrong.
+        if (existsSync(directory)) return;
+        // `prepare` names the worktree and the git reason when `ensure` refuses,
+        // so a failure here already reads as Volli's own; it is left to throw.
+        await prepare(session);
+        if (existsSync(directory)) return;
+        // `prepare` succeeded and the bound directory is still not there:
+        // either the ticket now points somewhere else, or this Session runs in
+        // a project root, which nothing can recreate. Say so rather than let a
+        // harness say it worse, one prompt from now.
+        throw new Error(`The Session's directory ${directory} is gone and couldn't be recreated.`);
+      });
     },
   };
 }

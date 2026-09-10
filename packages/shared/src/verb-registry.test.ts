@@ -173,6 +173,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // the `project` bundle alone. Filed as a registry entry rather than minted
   // as a verb surface of its own, exactly as the parent ruling asked.
   "automation.run": "control",
+  // The Session-side await (VC-324 item 3): the same bargain as `ticket.await`
+  // — tool-only, Role-gated, never on the socket, because a CLI verb must
+  // never wait.
+  "session.await": "control",
   // The supervision pair (VC-86), born control tier the same way: control
   // over OTHER agents is only safe where the caller is unspoofable, so
   // neither has ever had a socket door to shut.
@@ -496,7 +500,13 @@ describe("the registry table", () => {
     // pair: it has no cli access mode at all, so a reference line would teach
     // an invocation the socket refuses. Its discovery surface is the tool
     // schema itself.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "automation.run"]);
+    expect(unlisted).toEqual([
+      "session.harness",
+      "hook",
+      "ticket.await",
+      "automation.run",
+      "session.await",
+    ]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {

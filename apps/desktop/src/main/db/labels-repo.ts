@@ -48,7 +48,7 @@ export function listLabelsByProject(db: Database.Database, projectId: string): L
 /**
  * The project's label named `name`, matched case-insensitively: `ui` finds
  * `UI` (VC-310). `COLLATE NOCASE` rather than a folded comparison in JS so
- * this reads the very index that enforces the rule (migration 043's
+ * this reads the very index that enforces the rule (migration 046's
  * `labels_project_name_nocase`). `labelNameKey` in `@volli/shared` mirrors
  * NOCASE's ASCII fold and NUL boundary so in-memory consumers cannot disagree.
  */

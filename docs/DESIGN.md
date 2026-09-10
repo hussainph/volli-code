@@ -210,7 +210,27 @@ Neither ring is drawn while a surface has one pane: a ring around the only pane 
 choice nobody has made. Both are the terminal split's own vocabulary
 (`sessions/session-split-layout.tsx`) because a split is the same act at two scopes — and splits
 open **right or down only** in both, which is what keeps the permanent tab's pane in the top left
-and the surface's full-width strip over it.
+at the start of the main bar.
+
+**The main bar splits with the plane (VC-333).** Panes along the top edge share
+one bar height, divided at the same ratios and grip widths as their content.
+Only a pane below a down split adds a lower tab strip, and only when it holds
+tabs. Mixed trees follow that rule recursively. The surface-wide new-session
+control and rail toggle stay once at the main bar's far right; the last segment
+extends over an open rail without moving the pane dividers.
+
+A pane is then one region drawn in two boxes, and the two boxes behave as one:
+a press anywhere in a pane's segment of the bar focuses that pane exactly as a
+press in its content does. The trailing actions cluster is the one exclusion —
+it acts on the surface and opens into whichever pane is focused, so pressing it
+never moves focus to the pane it happens to sit in. An empty top-edge segment
+keeps its share of the bar so the seams stay aligned, but draws a plain band
+rather than an empty named tablist.
+
+**One seam, one announced grip.** A row split is draggable along its whole
+height, bar and plane alike, but only the plane's grip is a `separator` in the
+accessibility tree and the tab order. Two would announce two dividers and cost
+two identical tab stops where the user sees one boundary.
 
 **Drop zones draw the result, never the target.** A pane's content box is tiled by three regions —
 a full-height column down the right edge, a strip along the bottom of what is left, and the centre

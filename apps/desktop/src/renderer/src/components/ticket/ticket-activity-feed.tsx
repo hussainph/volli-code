@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowCounterClockwise";
 import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { FlagIcon } from "@phosphor-icons/react/dist/csr/Flag";
@@ -79,6 +80,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   worktree_failed: WarningCircleIcon,
   worktree_committed: GitCommitIcon,
   worktree_reclaimed: GitBranchIcon,
+  worktree_trimmed: BroomIcon,
   pr_opened: GitPullRequestIcon,
   pr_merged: GitMergeIcon,
   attachment_added: PaperclipIcon,

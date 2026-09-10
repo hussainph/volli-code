@@ -3135,16 +3135,151 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
   });
 });
 
-/**
- * A v42 database carrying the exact shape the audit found: a project whose
- * label vocabulary contains both `UI` and `ui`, each worn by real tickets.
- * Built by walking the real runner to 42 rather than exec'ing SQL by hand,
- * so the fixture is the database a real install actually upgrades from.
- */
-function buildV42DbWithLabelCaseVariants(dbPath: string): Database.Database {
+describe("migration 044 — durable Session Event sequence", () => {
+  /** The provenance every seeded Session Event carries; shape, not meaning. */
+  const PROVENANCE =
+    '{"source":{"kind":"user","id":"u","detail":null},"venue":{"id":"local","kind":"local"}}';
+
+  function seedProvenance(db: Database.Database): void {
+    db.prepare("INSERT INTO session_provenances (id, provenance) VALUES (1, ?)").run(PROVENANCE);
+  }
+
+  /** A v43 database with two Sessions whose events were committed interleaved. */
+  function buildV43WithInterleavedEvents(dbPath: string): Database.Database {
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 43)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+    db.pragma("user_version = 43");
+    seedTicket(db);
+    seedProvenance(db);
+    const insertSession = db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES (?, 'p1', NULL, ?, 1)",
+    );
+    insertSession.run("s-one", "One");
+    insertSession.run("s-two", "Two");
+    const insertEvent = db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES (?, ?, ?, 1, 1, 1, NULL, NULL, ?)`,
+    );
+    // Written in commit order, which is NOT (session, sequence) order.
+    insertEvent.run("e-one-1", "s-one", 1, '{"kind":"session.archived"}');
+    insertEvent.run("e-two-1", "s-two", 1, '{"kind":"session.archived"}');
+    insertEvent.run("e-one-2", "s-one", 2, '{"kind":"turn.completed"}');
+    return db;
+  }
+
+  it("upgrades a populated v43 database, backfilling each Session's own order", () => {
+    const dbPath = tempDbPath();
+    const db = buildV43WithInterleavedEvents(dbPath);
+    expect(tableExists(db, "session_event_sequence")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(indexExists(db, "session_event_sequence_match")).toBe(true);
+    // Grouped by Session, each Session in its own ledger order: interleaving
+    // that predates this table is not recoverable, so the backfill is
+    // deterministic rather than invented.
+    expect(
+      db
+        .prepare(
+          "SELECT sequence, event_id, session_id, kind FROM session_event_sequence ORDER BY sequence",
+        )
+        .all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-one-1", session_id: "s-one", kind: "session.archived" },
+      { sequence: 2, event_id: "e-one-2", session_id: "s-one", kind: "turn.completed" },
+      { sequence: 3, event_id: "e-two-1", session_id: "s-two", kind: "session.archived" },
+    ]);
+
+    // And converges byte for byte on what a fresh database builds.
+    const freshPath = tempDbPath();
+    const fresh = openRawDb(freshPath);
+    migrate(fresh, freshPath);
+    expect(schema(db)).toEqual(schema(fresh));
+    fresh.close();
+    db.close();
+  });
+
+  it("fills itself from a trigger on a fresh database, and never reuses a cursor", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    expect(tableExists(db, "session_event_sequence")).toBe(true);
+    seedTicket(db);
+    seedProvenance(db);
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s-one', 'p1', NULL, 'One', 1)",
+    ).run();
+    const insertEvent = db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES (?, 's-one', ?, 1, 1, 1, NULL, NULL, ?)`,
+    );
+    // The writer (`session-control/sqlite-ledger.ts`) knows nothing about this
+    // table: the trigger is what keeps it true.
+    insertEvent.run("e-1", 1, '{"kind":"turn.completed"}');
+    insertEvent.run("e-2", 2, '{"kind":"session.signaled","signal":"done","reason":null}');
+    expect(
+      db
+        .prepare("SELECT sequence, event_id, kind FROM session_event_sequence ORDER BY sequence")
+        .all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-1", kind: "turn.completed" },
+      { sequence: 2, event_id: "e-2", kind: "session.signaled" },
+    ]);
+
+    // A deleted event cascades out, and its cursor is never handed to another
+    // event — a cursor that moved backwards would replay history as new.
+    db.prepare("DELETE FROM session_events WHERE id = 'e-2'").run();
+    insertEvent.run("e-3", 3, '{"kind":"turn.interrupted"}');
+    expect(
+      db.prepare("SELECT sequence, event_id FROM session_event_sequence ORDER BY sequence").all(),
+    ).toEqual([
+      { sequence: 1, event_id: "e-1" },
+      { sequence: 3, event_id: "e-3" },
+    ]);
+  });
+
+  it("holds event identity immutable so the sidecar can never point at another Session", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+    seedProvenance(db);
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s-one', 'p1', NULL, 'One', 1)",
+    ).run();
+    db.prepare(
+      `INSERT INTO session_events (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES ('e-1', 's-one', 1, 1, 1, 1, NULL, NULL, '{"kind":"turn.completed"}')`,
+    ).run();
+
+    expect(() =>
+      db.prepare("UPDATE session_events SET session_id = 's-two' WHERE id = 'e-1'").run(),
+    ).toThrow("session event identity is immutable");
+    expect(() => db.prepare("UPDATE session_events SET id = 'e-9' WHERE id = 'e-1'").run()).toThrow(
+      "session event identity is immutable",
+    );
+    // Metadata stays writable: the ledger appends and never updates, but a
+    // guard wider than identity would break the corruption-tolerance tests
+    // `sqlite-ledger.test.ts` writes on purpose.
+    expect(() =>
+      db.prepare("UPDATE session_events SET recorded_at = 2 WHERE id = 'e-1'").run(),
+    ).not.toThrow();
+    db.close();
+  });
+});
+
+/** A v45 database carrying the case-variant Label shape found by VC-310's audit. */
+function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  migrate(db, dbPath, { toVersion: 42 });
+  migrate(db, dbPath, { toVersion: 45 });
 
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
@@ -3163,8 +3298,6 @@ function buildV42DbWithLabelCaseVariants(dbPath: string): Database.Database {
     `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
        VALUES (@id, 'p1', @name, @color, @createdAt, @createdAt)`,
   );
-  // `UI` is the established spelling — two tickets wear it, and it carries
-  // the color someone chose. `ui` is the stray one door minted.
   insertLabel.run({ id: "l-upper", name: "UI", color: "#123456", createdAt: 10 });
   // The stray is deliberately older: live use, not insertion age, must keep UI.
   insertLabel.run({ id: "l-lower", name: "ui", color: null, createdAt: 5 });
@@ -3173,22 +3306,19 @@ function buildV42DbWithLabelCaseVariants(dbPath: string): Database.Database {
   wear.run("t1", "l-upper");
   wear.run("t2", "l-upper");
   wear.run("t3", "l-lower");
-  // One Ticket wears both variants. Its two rows must collapse without a
-  // junction-key collision and without leaving the retired alias attached.
+  // One Ticket wears both variants. Its rows must collapse without a junction collision.
   wear.run("t4", "l-upper");
   wear.run("t4", "l-lower");
   return db;
 }
 
-describe("migrate — 043, one label identity per case-folded name (VC-310)", () => {
-  it("folds the stray spelling into the established one, keeping every association", () => {
+describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", () => {
+  it("folds the stray spelling into a retained alias and preserves every association", () => {
     const dbPath = tempDbPath();
-    const db = buildV42DbWithLabelCaseVariants(dbPath);
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
 
     migrate(db, dbPath);
 
-    // The established Label stays live. The stray spelling remains as a
-    // durable alias, including who/when retired it, but never reaches clients.
     expect(
       db
         .prepare(
@@ -3214,7 +3344,6 @@ describe("migrate — 043, one label identity per case-folded name (VC-310)", ()
         merged_by: null,
       },
     ]);
-    // t3 wore only the stray spelling: it must still wear the label, not lose it.
     expect(
       db.prepare("SELECT ticket_id, label_id FROM ticket_labels ORDER BY ticket_id").all(),
     ).toEqual([
@@ -3227,9 +3356,9 @@ describe("migrate — 043, one label identity per case-folded name (VC-310)", ()
     db.close();
   });
 
-  it("keeps the live Board's established spelling even when the Archive favors the variant", () => {
+  it("keeps the live Board's spelling even when the Archive favors the variant", () => {
     const dbPath = tempDbPath();
-    const db = buildV42DbWithLabelCaseVariants(dbPath);
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
     const insertArchived = db.prepare(
       `INSERT INTO tickets
          (id, project_id, ticket_number, title, status, priority, position,
@@ -3254,7 +3383,7 @@ describe("migrate — 043, one label identity per case-folded name (VC-310)", ()
 
   it("uses exactly NOCASE equivalence when names contain NUL", () => {
     const dbPath = tempDbPath();
-    const db = buildV42DbWithLabelCaseVariants(dbPath);
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
     db.prepare(
       `INSERT INTO projects
          (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
@@ -3285,7 +3414,7 @@ describe("migrate — 043, one label identity per case-folded name (VC-310)", ()
 
   it("refuses a second live case spelling once the partial index is in place", () => {
     const dbPath = tempDbPath();
-    const db = buildV42DbWithLabelCaseVariants(dbPath);
+    const db = buildV45DbWithLabelCaseVariants(dbPath);
 
     migrate(db, dbPath);
 
@@ -3299,49 +3428,31 @@ describe("migrate — 043, one label identity per case-folded name (VC-310)", ()
     ).toThrow();
     db.close();
   });
-});
 
-describe("migrate — 044, retained aliases on pre-release v43 databases", () => {
-  it("adds the retirement columns and replaces the old full NOCASE index", () => {
+  it("reconciles profiles that ran this branch's pre-release v44 schema", () => {
     const dbPath = tempDbPath();
-    const db = buildV42DbWithLabelCaseVariants(dbPath);
-    // Reproduce the pre-review v43 shape: variants were destructively folded
-    // and the NOCASE index covered every row because aliases did not exist.
-    db.prepare(
-      `INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id)
-       SELECT ticket_id, 'l-upper' FROM ticket_labels WHERE label_id = 'l-lower'`,
-    ).run();
-    db.prepare("DELETE FROM labels WHERE id = 'l-lower'").run();
-    db.exec(
-      "CREATE UNIQUE INDEX labels_project_name_nocase ON labels(project_id, name COLLATE NOCASE)",
-    );
-    db.pragma("user_version = 43");
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 42 });
+    // The old branch used versions 43/44 for this Label schema before main
+    // assigned them to worktree cleanup and Session Event cursors.
+    db.exec(`
+      ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE;
+      ALTER TABLE labels ADD COLUMN merged_at INTEGER;
+      ALTER TABLE labels ADD COLUMN merged_by TEXT;
+      CREATE UNIQUE INDEX labels_project_name_nocase
+        ON labels(project_id, name COLLATE NOCASE) WHERE merged_into_id IS NULL;
+    `);
+    db.pragma("user_version = 44");
 
     migrate(db, dbPath);
 
+    expect(tableExists(db, "worktree_cleanup_commands")).toBe(true);
+    expect(tableExists(db, "session_event_sequence")).toBe(true);
+    expect(tableExists(db, "spawned_processes")).toBe(true);
     expect(columnNames(db, "labels")).toEqual(
       expect.arrayContaining(["merged_into_id", "merged_at", "merged_by"]),
     );
-    expect(
-      db
-        .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
-        .get("labels_project_name_nocase"),
-    ).toMatchObject({ sql: expect.stringMatching(/WHERE merged_into_id IS NULL/i) });
-    // A retired spelling may coexist; another live spelling may not.
-    db.prepare(
-      `INSERT INTO labels
-         (id, project_id, name, color, merged_into_id, merged_at, merged_by,
-          created_at, updated_at)
-       VALUES ('retired-ui', 'p1', 'ui', NULL, 'l-upper', 1, '{"kind":"user"}', 1, 1)`,
-    ).run();
-    expect(() =>
-      db
-        .prepare(
-          `INSERT INTO labels (id, project_id, name, color, created_at, updated_at)
-           VALUES ('live-ui', 'p1', 'Ui', NULL, 2, 2)`,
-        )
-        .run(),
-    ).toThrow();
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

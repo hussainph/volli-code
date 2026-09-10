@@ -67,6 +67,19 @@ export interface PiExecutionEnvOptions {
    */
   identity?: PiSessionEnvIdentity;
   /**
+   * Host-supplied variables every command in this Session is handed, layered
+   * over the sanitized set and under the identity.
+   *
+   * The one caller is the concurrency budget (VC-339): main computes this
+   * Session's share of the machine at attach and states it in the variables
+   * `cargo`, `make`, `go`, `pytest` and vitest already read, so a Session's
+   * builds self-limit on a machine several Sessions share. It is a facts-about-
+   * the-machine channel, not a general escape hatch — anything that says WHO is
+   * running belongs on {@link identity}, which is composed after it and
+   * therefore cannot be shadowed from here.
+   */
+  environment?: Readonly<Record<string, string>>;
+  /**
    * Runs exactly once when the attachment cleans this environment up. Main
    * uses it to revoke the per-attachment Session token exported above; keeping
    * cleanup on the environment ties credential lifetime to the same owner that
@@ -192,6 +205,8 @@ export interface SessionCommandEnvironmentOptions {
   pathPrefixes?: readonly string[];
   /** See {@link PiExecutionEnvOptions.identity}. */
   identity?: PiSessionEnvIdentity;
+  /** See {@link PiExecutionEnvOptions.environment}. */
+  environment?: Readonly<Record<string, string>>;
   /**
    * The caller's own variables, believed over the sanitized set and the
    * identity alike: a tool call that names `VOLLI_SESSION` explicitly is
@@ -225,6 +240,7 @@ export function sessionCommandEnvironment(
 ): Record<string, string> {
   const merged = {
     ...unsandboxedEnvironment(source),
+    ...options.environment,
     ...identityVariables(options.identity),
     ...options.overrides,
   };
@@ -234,6 +250,7 @@ export function sessionCommandEnvironment(
 class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   readonly #pathPrefixes: readonly string[];
   readonly #identity: PiSessionEnvIdentity | undefined;
+  readonly #environment: Readonly<Record<string, string>> | undefined;
   readonly #onCleanup: (() => void | Promise<void>) | undefined;
   #cleaned = false;
 
@@ -241,11 +258,13 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
     cwd: string;
     pathPrefixes?: readonly string[];
     identity?: PiSessionEnvIdentity;
+    environment?: Readonly<Record<string, string>>;
     onCleanup?: () => void | Promise<void>;
   }) {
     super({ cwd: options.cwd });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identity = options.identity;
+    this.#environment = options.environment;
     this.#onCleanup = options.onCleanup;
   }
 
@@ -265,6 +284,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
     const env = sessionCommandEnvironment(process.env, {
       pathPrefixes: this.#pathPrefixes,
       identity: this.#identity,
+      environment: this.#environment,
       overrides: options?.env,
     });
     return super.exec(command, { ...options, env, inheritEnv: false }, context);
@@ -308,6 +328,16 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
  *
+ * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
+ * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and
+ * exposes no child, no pid and no spawn hook — `exec` resolves only once the
+ * command has finished — so there is no honest moment at which this class could
+ * write `(pid, pgid, startTime)`. Inventing one from a process-table scan would
+ * be a guess written into a ledger whose whole value is that it is not a guess.
+ * `ScopedExecutionEnv`, which does own its spawn, takes the ledger port; what
+ * escapes from THIS path is covered by the cwd sweep, since a command started
+ * here stands in the Session's workspace, and by `execute`'s own group kill.
+ *
  * `identity` exists for the same caller: main hands in the Session's durable
  * id and its Ticket's display id, so `VOLLI_SESSION`/`VOLLI_TICKET` are set in
  * a structured Session's shell exactly as `agentSessionEnv` sets them in a
@@ -334,6 +364,7 @@ export async function piExecutionEnv(
     cwd: workspacePath,
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
+    environment: options?.environment,
     onCleanup: options?.onCleanup,
   });
 }

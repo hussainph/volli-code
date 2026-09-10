@@ -977,6 +977,7 @@ describe("registry ↔ argv mechanics", () => {
       "session.stop",
       "session.send",
       "session.delegate",
+      "session.await",
     ]);
   });
 });

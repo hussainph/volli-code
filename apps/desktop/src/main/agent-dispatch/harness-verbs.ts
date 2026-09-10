@@ -555,10 +555,25 @@ export async function hookVerb(
       ticket && ticketProject
         ? displayTicketId(ticketProject.ticketPrefix, ticket.ticketNumber)
         : session.title;
-    options.notify?.(
-      `${subject} needs you`,
-      `${harnessLabel(effectiveHarnessId(session))} is waiting on a human`,
-    );
+    // `needs-you`, and the only harness event that earns one (VC-295 keeps the
+    // category read in the delivery path). The target is the exact Session the
+    // hook fired for, so the click lands on the terminal that is waiting rather
+    // than on the board.
+    options.notify?.({
+      producer: "harness-input-needed",
+      title: `${subject} needs you`,
+      body: `${harnessLabel(effectiveHarnessId(session))} is waiting on a human`,
+      target: {
+        kind: "session",
+        projectId: session.projectId,
+        ticketId: session.ticketId,
+        sessionId: session.id,
+        // A TUI harness's question lives in its terminal, not in a durable
+        // Interaction — naming one here would be an id nothing can open.
+        interactionId: null,
+        attentionId: null,
+      },
+    });
   }
   // A superseded event is still announced, carrying its own `firedAt`, and
   // the renderer applies the same rule to it independently. Filtering here

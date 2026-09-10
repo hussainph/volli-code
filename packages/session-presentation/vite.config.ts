@@ -1,8 +1,12 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
+
 export default defineConfig({
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339).
+    ...SHARED_MACHINE_TEST_WORKERS,
     coverage: {
       // The gate travelled here with the modules from apps/desktop's vite
       // config (VC-169) and keeps its bar: these files are the pure logic
@@ -28,6 +32,9 @@ export default defineConfig({
         "src/client.ts",
         "src/compaction-boundary.ts",
         "src/composer-effort.ts",
+        // Host-authored transcript messages must never fall back to the
+        // person's voice, including for historical data and version skew.
+        "src/host-notice.ts",
         "src/interaction.ts",
         "src/markdown-source.ts",
         "src/message-projection.ts",
@@ -44,6 +51,8 @@ export default defineConfig({
         // confident sentence about a Session nothing actually observed.
         "src/terminal-history.ts",
         "src/transcript.ts",
+        // The complete portable row union, including the host-notice decision.
+        "src/transcript-rows.ts",
         "src/wire.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },

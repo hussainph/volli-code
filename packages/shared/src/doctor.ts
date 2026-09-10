@@ -114,6 +114,18 @@ export interface DoctorFacts {
   reporting: readonly { harnessId: string; declared: number; verified: number }[];
   /** Managed skill files the installer left alone because the user edited them. */
   skillConflicts: readonly string[];
+  /**
+   * Running processes no live Session owns (VC-341), as the latest sweep
+   * counted them: `total` is everything the panel lists and `reapable` is the
+   * subset Volli is prepared to kill — the rest is a person's own terminal
+   * standing in a worktree, which is context rather than a finding.
+   *
+   * `undefined` is a launch that could not sweep at all (no database, no
+   * `ps`), and it reads as "unknown" rather than as zero. Zero is a
+   * measurement worth printing: it is the answer this check exists to give
+   * on a healthy machine.
+   */
+  orphanProcesses?: { total: number; reapable: number };
 }
 
 function ok(id: string, title: string, detail: string): DoctorCheck {
@@ -455,6 +467,36 @@ function reportingChecks(facts: DoctorFacts): DoctorCheck[] {
   });
 }
 
+/**
+ * The count VC-341's audit would have surfaced: ten dev servers and tool
+ * daemons, three to eighteen days old, under worktrees whose Sessions had long
+ * since ended, with nothing on the machine able to name them.
+ *
+ * A `warn` rather than a `fail`, and deliberately: a stale process is not a
+ * broken install, it is memory nobody is getting back, and the remedy is a
+ * person looking at a list rather than a repair this app can perform.
+ */
+function orphanProcessCheck(facts: DoctorFacts): DoctorCheck {
+  const id = "orphan-processes";
+  const title = "Processes no live Session owns";
+  const counts = facts.orphanProcesses;
+  if (counts === undefined) {
+    return bad(id, title, "warn", "the process sweep did not run this launch");
+  }
+  if (counts.total === 0) return ok(id, title, "none");
+  const listed = `${counts.total} still running`;
+  if (counts.reapable === 0) {
+    return ok(id, title, `${listed}, none of them Volli's to reap`);
+  }
+  return bad(
+    id,
+    title,
+    "warn",
+    `${listed}, ${counts.reapable} of them Volli's`,
+    "Settings → Storage lists them with their Ticket, age and memory, and reaps the ones you choose.",
+  );
+}
+
 function skillCheck(facts: DoctorFacts): DoctorCheck[] {
   if (facts.skillConflicts.length === 0) return [];
   return [
@@ -487,6 +529,7 @@ export function runDoctorChecks(
     ...resolutionChecks(observation, facts),
     ...refusedChecks(facts),
     ...reportingChecks(facts),
+    orphanProcessCheck(facts),
     ...skillCheck(facts),
   ];
   const rank: Record<DoctorStatus, number> = { fail: 0, warn: 1, ok: 2 };

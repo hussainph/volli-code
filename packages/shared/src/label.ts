@@ -31,14 +31,14 @@ export function labelColor(label: Pick<Label, "name" | "color">): string {
  * one (VC-310).
  *
  * The fold is ASCII-only, deliberately, because it has to agree EXACTLY with
- * the `COLLATE NOCASE` unique index that backs it (migration 043). A JS
+ * the `COLLATE NOCASE` unique index that backs it (migration 046). A JS
  * `toLowerCase()` would fold more than the index does, so the repo could report
  * `ü` taken by `Ü` while SQLite still stored both.
  *
  * SQLite's built-in collations stop comparing at the first NUL byte. JavaScript
  * strings can carry NUL through the Client Surface even though shell argv
  * cannot, so the key stops there too: `A\0x` and `a\0y` are one SQLite NOCASE
- * identity. Migration 043 groups with the collation itself for the same reason.
+ * identity. Migration 046 groups with the collation itself for the same reason.
  *
  * It does not trim: the index sees leading and trailing spaces, so `" ui"` and
  * `"ui"` are genuinely different names. Trimming input is a separate concern

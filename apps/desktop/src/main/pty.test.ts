@@ -1263,6 +1263,30 @@ describe("ticket sessions", () => {
     insertTicket(testDb.db, testTicket("w", { id: "tk1", ticketNumber: 12, usesWorktree: false }));
   });
 
+  // VC-339: the session's share of the machine, in the spellings toolchains
+  // already read. The budget itself is `session-concurrency.ts`'s; what this
+  // pins is that a spawned terminal actually receives it, and that a value the
+  // user exported in their own shell survives untouched.
+  it("injects the concurrency budget, and never over the user's own value", async () => {
+    const priorMakeflags = process.env["MAKEFLAGS"];
+    process.env["MAKEFLAGS"] = "-j16";
+    try {
+      await createTicketSession("tk1");
+      const env = lastSpawnEnv();
+      const hint = Number.parseInt(env["VOLLI_CONCURRENCY_HINT"] ?? "0", 10);
+      expect(hint).toBeGreaterThanOrEqual(1);
+      expect(env["VITEST_MAX_WORKERS"]).toBe(String(hint));
+      expect(env["CARGO_BUILD_JOBS"]).toBe(String(hint));
+      expect(env["GOFLAGS"]).toBe(`-p=${hint}`);
+      // Volli fills gaps; it does not clobber — and never merges into a
+      // flag-carrying variable it did not write.
+      expect(env["MAKEFLAGS"]).toBe("-j16");
+    } finally {
+      if (priorMakeflags === undefined) delete process.env["MAKEFLAGS"];
+      else process.env["MAKEFLAGS"] = priorMakeflags;
+    }
+  });
+
   it("persists a ticket-scoped ledger projection and injects ticket env", async () => {
     const { result } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);

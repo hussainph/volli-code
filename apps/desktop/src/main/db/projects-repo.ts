@@ -41,8 +41,9 @@ interface ProjectRow {
   /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
   theme_canvas: string | null;
   theme_appearance: string | null;
-  /** Migration 023 — this project's agent configuration; NULL = inherit on all three. */
+  /** Migration 023 — active project agent configuration; NULL = inherit. */
   skill_modes: string | null;
+  /** Retired setting, retained for append-only schema and export compatibility. */
   session_harness: string | null;
   session_model: string | null;
   /** Migration 025 — this project's authority departures; NULL = inherit every default. */
@@ -145,7 +146,6 @@ function mapProject(row: ProjectRow): Project {
     // carries that. `getProjectAuthorityPolicy` below is the other reader, and
     // it resolves because the attach path wants the answer, not the question.
     authorityPolicy: parseAuthorityPolicyOverride(parseJsonColumn(row.authority_policy)),
-    sessionHarness: row.session_harness,
     sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
     colorIndex: row.color_index,
     sortOrder: row.sort_order,
@@ -408,31 +408,20 @@ export function updateProjectSkillModes(
   return getProjectById(db, id);
 }
 
-/**
- * Sets this project's harness and model for new Sessions (migration 023).
- *
- * ONE write for both, unlike the theme pair beside it, and the difference is
- * worth stating: a canvas and an appearance are independently meaningful, so
- * writing them together would make overriding one clear the other. A harness
- * and a model are chosen together in one section by one person answering one
- * question, and the caller always holds both — so a single write is what the
- * surface actually does, and two would let a failure land half of it.
- *
- * `null` on either field clears it back to inheriting.
- */
+/** Sets this project's Chat model default; `null` clears it back to inheriting. */
 export function updateProjectSessionDefaults(
   db: Database.Database,
   id: string,
-  defaults: { harness: string | null; model: ModelSelection | null },
+  defaults: { model: ModelSelection | null },
   now: number,
 ): Project | undefined {
   const model = defaults.model === null ? null : parseSessionModel(defaults.model);
   prepared(
     db,
     `UPDATE projects
-        SET session_harness = ?, session_model = ?, row_version = row_version + 1, updated_at = ?
+        SET session_model = ?, row_version = row_version + 1, updated_at = ?
       WHERE id = ?`,
-  ).run(defaults.harness, model === null ? null : JSON.stringify(model), now, id);
+  ).run(model === null ? null : JSON.stringify(model), now, id);
   return getProjectById(db, id);
 }
 

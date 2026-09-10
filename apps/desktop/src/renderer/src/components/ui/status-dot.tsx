@@ -52,7 +52,9 @@ export type StatusDotState =
   /** Over. */
   | "exited"
   /** Ended on purpose — a supervisor, the person, or the watchdog (VC-86). */
-  | "stopped";
+  | "stopped"
+  /** The last turn died rather than finished — nobody ended it (VC-324). */
+  | "interrupted";
 
 /**
  * The map, and the only place a Session state becomes a colour.
@@ -95,6 +97,12 @@ const STATUS_DOT_TONE: Record<StatusDotState, string> = {
   // Ended-by-decision is not an error and asks for nobody: it rests at the
   // same not-running weight as `exited`. The label, not the dot, says who.
   stopped: "bg-muted-foreground/30",
+  // A turn that DIED is the plumbing failing, so it takes `error`'s colour
+  // rather than a fifth one: the two are one family (something broke), and
+  // the state word beside the dot is what separates them. It is deliberately
+  // NOT `stopped`'s resting neutral — reading a dead turn as an ended-on-
+  // purpose one is the exact confusion VC-324 exists to remove.
+  interrupted: "bg-destructive",
 };
 
 /** 6px in a row of text, 8px on a tab. The two the app already draws. */

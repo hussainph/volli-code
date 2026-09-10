@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { SpawnLedgerSpawn } from "@volli/shared";
+
 import type { BackgroundShellState } from "../../ipc/contract";
 import { BackgroundShellHost, type BackgroundShellOwner } from "./background-shell-host";
 
@@ -373,5 +375,51 @@ describe("BackgroundShellHost", () => {
     const started = await start(host, "exit 0");
     expect(started.shell.startedAt).toBe(1_000);
     expect(started.shell.exitedAt).toBe(1_000);
+  });
+
+  it("records every started shell in the spawn ledger and closes the row on exit", async () => {
+    // VC-341: the record here dies with the launch, so what a later sweep
+    // reads is the ROW — the Session, the Ticket, the pid, and the group a
+    // reap would signal (the shell is spawned detached, so pid === pgid).
+    const recorded: SpawnLedgerSpawn[] = [];
+    const exited: string[] = [];
+    const { host } = harness({
+      now: () => 1_000,
+      ledger: {
+        recordSpawn: (spawn) => {
+          recorded.push(spawn);
+          return `row-${recorded.length}`;
+        },
+        markExited: (id) => exited.push(id),
+      },
+    });
+
+    const started = await start(host, "sleep 30");
+    expect(recorded).toEqual([
+      {
+        sessionId: "session-1",
+        ticketId: "ticket-1",
+        projectId: "project-1",
+        kind: "shell",
+        pid: started.pid,
+        pgid: started.pid,
+        startedAt: 1_000,
+        cwd: expect.any(String) as unknown as string,
+        command: "sleep 30",
+      },
+    ]);
+    expect(exited).toEqual([]);
+
+    await host.kill(owner, started.shell.shellId);
+    expect(exited).toEqual(["row-1"]);
+  });
+
+  it("marks nothing when the ledger declined to record the spawn", async () => {
+    const exited: string[] = [];
+    const { host } = harness({
+      ledger: { recordSpawn: () => null, markExited: (id) => exited.push(id) },
+    });
+    await start(host, "exit 0");
+    expect(exited).toEqual([]);
   });
 });

@@ -11,9 +11,9 @@
  * outcome. Diffs use NUL-delimited (`-z`) output and explicit rename detection
  * (`-M`) so paths with spaces/quotes/Unicode and renames parse safely.
  *
- * Every git call here goes through the ASYNC runner ({@link RunGitAsync}). A
- * snapshot is five commands over the whole worktree and re-runs on every
- * debounced filesystem event, so on `execFileSync` it froze the main process
+ * Every git call here goes through the ASYNC runner ({@link RunGitAsync}). The
+ * whole-worktree diff and status reads re-run on every debounced filesystem
+ * event, so on `execFileSync` they froze the main process
  * — cursor, menus, and all other IPC — for its whole duration while an agent
  * was writing files.
  */
@@ -124,17 +124,16 @@ export async function changeSetSnapshot(
     }
     const headRevision = (await git(["rev-parse", "HEAD"], input.worktreePath)).trim();
 
-    // The three reads are independent of each other and each spawns git, so
-    // they overlap rather than queue — the snapshot costs one round trip, not
-    // three (and the working tree can't move between them any more than it
-    // could between three sequential spawns).
-    const [nameStatusOut, numstatOut, statusOut] = await Promise.all([
-      git(["diff", "--name-status", "-z", "-M", baseRevision], input.worktreePath),
-      git(["diff", "--numstat", "-z", "-M", baseRevision], input.worktreePath),
+    // Raw status and numstat are two grouped sections from ONE diff process,
+    // so their path sets describe the same instant instead of racing in
+    // separate children. Status remains independent and overlaps that read.
+    const [diffOut, statusOut] = await Promise.all([
+      git(["diff", "--raw", "--numstat", "-z", "-M", baseRevision], input.worktreePath),
       git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath),
     ]);
 
-    const tracked = composeFiles(parseNameStatus(nameStatusOut), parseNumstat(numstatOut));
+    const diff = parseRawNumstat(diffOut);
+    const tracked = composeFiles(diff.nameStatuses, diff.numstats);
     // `git diff <base>` reports conflicted paths as M; porcelain v2 `u` lines
     // are the honest unmerged signal — upgrade/add those as conflicted.
     const withConflicts = applyUnmerged(tracked, parseUnmergedPaths(statusOut));
@@ -210,12 +209,12 @@ export async function changeSetPaths(
         "No base branch is known for this worktree, so its Change Set cannot be computed.",
       );
     }
-    const [nameStatusOut, statusOut] = await Promise.all([
-      git(["diff", "--name-status", "-z", "-M", baseRevision], input.worktreePath),
+    const [rawOut, statusOut] = await Promise.all([
+      git(["diff", "--raw", "-z", "-M", baseRevision], input.worktreePath),
       git(["status", "--porcelain=v2", "-z", "-uall"], input.worktreePath),
     ]);
     const paths = new Set([
-      ...parseNameStatus(nameStatusOut).map((entry) => entry.path),
+      ...parseRawNumstat(rawOut).nameStatuses.map((entry) => entry.path),
       ...parseUntracked(statusOut).map((entry) => entry.path),
       ...parseUnmergedPaths(statusOut),
     ]);
@@ -326,29 +325,30 @@ function composeFiles(
 }
 
 /**
- * Parses `git diff --name-status -z -M` output.
- * Ordinary: `M\0path\0` · Rename: `R100\0old\0new\0`.
+ * Parses the grouped sections from `git diff --raw --numstat -z -M`.
+ * Raw records lead (`:<modes> <shas> M\0path\0`, or two rename paths), then
+ * numstat records follow in the existing tab/NUL format. A raw-only call is
+ * also accepted for {@link changeSetPaths}.
  */
-function parseNameStatus(out: string): ParsedNameStatus[] {
+function parseRawNumstat(out: string): {
+  nameStatuses: ParsedNameStatus[];
+  numstats: ParsedNumstat[];
+} {
   const tokens = splitNul(out);
-  const entries: ParsedNameStatus[] = [];
+  const nameStatuses: ParsedNameStatus[] = [];
   let i = 0;
-  while (i < tokens.length) {
-    const code = tokens[i]!;
-    i += 1;
-    if (code.length === 0) continue;
-    const kind = code[0]!;
-    // R and C are the two-token codes: `<code>\0<from>\0<to>\0`. `-M` on the
-    // command line turns copy detection OFF whatever `diff.renames` says, so C
-    // should never arrive — it is consumed anyway because the alternative is
-    // reading its `<from>` as this entry's path and its `<to>` as the next
-    // status code, desyncing the rest of the stream. A copy is an added file
-    // that happens to know where its content came from.
+  while (i < tokens.length && tokens[i]!.startsWith(":")) {
+    const header = tokens[i++]!;
+    const code = header.slice(header.lastIndexOf(" ") + 1);
+    const kind = code[0] ?? "";
+    // R and C carry `<header>\0<from>\0<to>\0`. `-M` turns copy detection off,
+    // but consuming C defensively keeps a configured git from desynchronizing
+    // the rest of the raw block.
     if (kind === "R" || kind === "C") {
       const previousPath = tokens[i++] ?? "";
       const path = tokens[i++] ?? "";
       if (path.length === 0) continue;
-      entries.push({
+      nameStatuses.push({
         status: kind === "R" ? "renamed" : "added",
         path,
         previousPath,
@@ -357,22 +357,16 @@ function parseNameStatus(out: string): ParsedNameStatus[] {
     }
     const path = tokens[i++] ?? "";
     if (path.length === 0) continue;
-    // statusFromCode never returns null — unrecognized codes become conflicted
-    // so they cannot vanish from the snapshot (never silently swallow).
-    entries.push({ status: statusFromCode(kind), path });
+    nameStatuses.push({ status: statusFromCode(kind), path });
   }
-  return entries;
+
+  return { nameStatuses, numstats: parseNumstatTokens(tokens, i) };
 }
 
-/**
- * Parses `git diff --numstat -z -M` output.
- * Ordinary: `added\tdeleted\tpath\0`
- * Rename:   `added\tdeleted\t\0old\0new\0` (empty path field, then two path tokens).
- */
-function parseNumstat(out: string): ParsedNumstat[] {
-  const tokens = splitNul(out);
+/** Parses the trailing numstat block, starting after all raw records. */
+function parseNumstatTokens(tokens: readonly string[], start: number): ParsedNumstat[] {
   const entries: ParsedNumstat[] = [];
-  let i = 0;
+  let i = start;
   while (i < tokens.length) {
     const field = tokens[i++]!;
     if (field.length === 0) continue;

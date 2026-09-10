@@ -73,14 +73,13 @@ describe("deleteProject", () => {
 });
 
 describe("per-project agent configuration (migration 023)", () => {
-  it("reads a fresh project as inheriting all three", () => {
+  it("reads a fresh project as inheriting its active defaults", () => {
     ctx = openTestDb();
     const project = testProject({ id: "p1" });
     insertProject(ctx.db, project);
 
     expect(getProjectById(ctx.db, "p1")).toMatchObject({
       skillModes: {},
-      sessionHarness: null,
       sessionModel: null,
     });
   });
@@ -110,25 +109,26 @@ describe("per-project agent configuration (migration 023)", () => {
     });
   });
 
-  it("round-trips the session harness and model, and clears them back to inherit", () => {
+  it("round-trips the Chat model without changing the retired harness column", () => {
     ctx = openTestDb();
     insertProject(ctx.db, testProject({ id: "p1" }));
+    ctx.db.prepare("UPDATE projects SET session_harness = 'codex' WHERE id = 'p1'").run();
     const selection = {
       providerId: "anthropic",
       modelId: "claude-opus-4-6",
       reasoningLevel: "high" as const,
     };
 
-    updateProjectSessionDefaults(ctx.db, "p1", { harness: "codex", model: selection }, 10);
-    expect(getProjectById(ctx.db, "p1")).toMatchObject({
-      sessionHarness: "codex",
-      sessionModel: selection,
+    updateProjectSessionDefaults(ctx.db, "p1", { model: selection }, 10);
+    expect(getProjectById(ctx.db, "p1")?.sessionModel).toEqual(selection);
+    expect(ctx.db.prepare("SELECT session_harness FROM projects WHERE id = 'p1'").get()).toEqual({
+      session_harness: "codex",
     });
 
-    updateProjectSessionDefaults(ctx.db, "p1", { harness: null, model: null }, 11);
-    expect(getProjectById(ctx.db, "p1")).toMatchObject({
-      sessionHarness: null,
-      sessionModel: null,
+    updateProjectSessionDefaults(ctx.db, "p1", { model: null }, 11);
+    expect(getProjectById(ctx.db, "p1")?.sessionModel).toBeNull();
+    expect(ctx.db.prepare("SELECT session_harness FROM projects WHERE id = 'p1'").get()).toEqual({
+      session_harness: "codex",
     });
   });
 
