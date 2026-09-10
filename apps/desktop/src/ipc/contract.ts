@@ -790,11 +790,12 @@ export interface VolliDataIpcContract {
    */
   "volli:worktree-trim-scan": { args: []; result: WorktreeTrimScanResult };
   /**
-   * The trim itself, across every non-active owned worktree. `{ dryRun: true }`
-   * measures and reports without removing anything. Git metadata is untouched:
-   * pruning is the confirmed orphan cleanup's act, not this one's.
+   * The trim itself, across every non-active owned worktree. Takes no argument:
+   * the only thing a caller could vary is the dry run, and no surface offers one,
+   * so a destructive channel keeps the smallest input it can. Git metadata is
+   * untouched — pruning is the confirmed orphan cleanup's act, not this one's.
    */
-  "volli:worktree-trim": { args: [input?: WorktreeTrimInput]; result: WorktreeTrimResult };
+  "volli:worktree-trim": { args: []; result: WorktreeTrimResult };
   /** The preserved-configuration allowlist and the automatic-trim opt-out. */
   "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
   "volli:worktree-trim-settings-set": {
@@ -3433,11 +3434,6 @@ export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings
 export interface WorktreeTrimSettingsInput {
   trimOnFinish?: boolean;
   keepPatterns?: string[];
-}
-
-/** `{ dryRun? }` — a trim that measures and reports without removing anything. */
-export interface WorktreeTrimInput {
-  dryRun?: boolean;
 }
 
 /** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */

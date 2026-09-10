@@ -173,8 +173,12 @@ export {
   setTrimSettings,
   TRIM_SETTINGS_KEY,
 } from "./trim-settings";
-// The manual pass over every owned worktree, with `git worktree prune` in the
-// same action — the Settings surface for what is already on disk.
+// The manual pass over every owned worktree — the Settings surface for what is
+// already on disk. It removes ignored CONTENT only and never prunes git
+// metadata: `git worktree prune` takes no path argument, so it acts on the whole
+// repository, and VC-284 earned the right to run it with a synchronous gate that
+// re-lists the prunable set and refuses unless it is exactly the set the user
+// confirmed (`cleanup.ts`). Running it blind from here would hand that back.
 export { scanTrimTargets, trimAllWorktrees } from "./trim-sweep";
 export type { TrimSweepDeps } from "./trim-sweep";
 // Worktree OWNERSHIP (VC-113): which containers under the shared

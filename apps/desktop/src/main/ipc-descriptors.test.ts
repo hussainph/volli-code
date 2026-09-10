@@ -1998,13 +1998,13 @@ describe("DATA_IPC descriptor table", () => {
   // renderer typo and a deletion: a non-boolean `dryRun` must not read as a
   // preview, and an empty settings patch must not read as an update.
   describe("the build-artifact channels", () => {
-    it("accepts a bare trim and a boolean dryRun, and nothing looser", () => {
+    it("takes no argument at all for the destructive trim", () => {
       const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
       expect(guard([])).toBe(true);
-      expect(guard([{}])).toBe(true);
-      expect(guard([{ dryRun: true }])).toBe(true);
-      expect(guard([{ dryRun: "yes" }])).toBe(false);
-      expect(guard([{ dryRun: true }, "extra"])).toBe(false);
+      // There is nothing to vary, so anything at all is a caller that does not
+      // know what this channel is (review r2 removed an unused dry-run input).
+      expect(guard([{}])).toBe(false);
+      expect(guard([{ dryRun: true }])).toBe(false);
       expect(guard(["nope"])).toBe(false);
       expect(invalidError).toBe("Invalid trim request");
     });

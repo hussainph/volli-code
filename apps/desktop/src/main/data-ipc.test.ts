@@ -1354,6 +1354,21 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(trim.mock.calls[0]?.[1]).toBe(ticket.id);
   });
 
+  // The other door (review r2): an archive KEEPS the checkout, which makes an
+  // archived ticket the longest-lived carrier of a dead dependency tree, so the
+  // wiring is held here and not only in the primitive's own suite.
+  it("trims the ticket's worktree when the ticket is archived", () => {
+    const trim = vi.mocked(trimFinishedWorktree);
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    trim.mockClear();
+
+    archiveTicket(ticket.id);
+
+    expect(trim).toHaveBeenCalledTimes(1);
+    expect(trim.mock.calls[0]?.[1]).toBe(ticket.id);
+  });
+
   it("does not trim on a move that is not a finish", () => {
     const trim = vi.mocked(trimFinishedWorktree);
     const projectId = createProject();
@@ -2946,19 +2961,6 @@ describe("the build-artifact channels", () => {
       channel: "volli:data-changed",
       payload: expect.objectContaining({ kind: "worktree" }),
     });
-  });
-
-  it("broadcasts nothing for a preview, which changed nothing", async () => {
-    vi.mocked(trimAllWorktrees).mockResolvedValue({ ...report, dryRun: true });
-    dataChangedSends.length = 0;
-
-    const result = await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim", {
-      dryRun: true,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(vi.mocked(trimAllWorktrees).mock.calls.at(-1)?.[1]).toEqual({ dryRun: true });
-    expect(dataChangedSends).toEqual([]);
   });
 
   it("broadcasts nothing when a real pass removed nothing", async () => {

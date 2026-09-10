@@ -324,7 +324,8 @@ function BuildArtifactsSection() {
         hint={
           <>
             A trim removes what git ignores — dependencies, build output, caches — and keeps .env,
-            keys, and other local configuration. One install puts a worktree back.
+            keys, and other local configuration. Keeping a file keeps the folders around it, so a
+            folder that held one can stay behind part-emptied. One install puts a worktree back.
           </>
         }
         action={
@@ -408,9 +409,10 @@ function BuildArtifactsSection() {
             <AlertDialogDescription>
               <span className="block">
                 Removes the git-ignored files in {trimmable.length} worktree(s) — dependencies,
-                build output, caches. Tracked files, uncommitted work, .env files, and keys stay.
-                Volli re-checks every worktree before touching it and skips any with a running
-                agent, an open terminal, or uncommitted changes.
+                build output, caches. Tracked files, uncommitted work, .env files, and keys stay,
+                and so do the folders around anything kept, so a folder holding one can remain
+                part-emptied. Volli re-checks every worktree before touching it and skips any with a
+                running agent, an open terminal, or uncommitted changes.
               </span>
               <span className="mt-2 block max-h-48 overflow-auto whitespace-pre-wrap font-mono text-ui text-foreground">
                 {trimmable.map((entry) => entry.path).join("\n")}
@@ -440,8 +442,12 @@ const TRIM_REPORT_ROWS = 5;
 
 /**
  * What the trim did, where the action was: the total, the biggest things it took,
- * what it kept, and what it refused. A destructive action that reports only "done"
- * is the failure `removedClean` was added to the orphan list to end.
+ * the configuration it kept, and what it refused. A destructive action that
+ * reports only "done" is the failure `removedClean` was added to the orphan list
+ * to end — and a kept COUNT with no names is the same failure at one remove: a
+ * person reading "kept 3" cannot tell whether their `.env` is one of the three.
+ * So the kept paths are listed with the pattern that spared each, bounded the
+ * same way the offenders are.
  */
 function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
   const offenders = report.worktrees
@@ -453,7 +459,14 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
     )
     .toSorted((a, b) => b.bytes - a.bytes)
     .slice(0, TRIM_REPORT_ROWS);
-  const keptCount = report.worktrees.reduce((sum, worktree) => sum + worktree.kept.length, 0);
+  const allKept = report.worktrees.flatMap((worktree) =>
+    worktree.kept.map((keep) => ({
+      path: `${truncateMiddle(worktree.worktreePath, 32)}/${keep.path}`,
+      reason: keep.reason,
+    })),
+  );
+  const kept = allKept.slice(0, TRIM_REPORT_ROWS);
+  const keptCount = allKept.length;
 
   return (
     <>
@@ -471,6 +484,18 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
           meta={`Removed · ${formatFileSize(offender.bytes)}`}
         />
       ))}
+      {/* The preserved configuration, by name: this is the difference between a
+          trim and a blind `git clean -fdX`, so it is the part that must be
+          readable rather than counted. */}
+      {kept.map((entry) => (
+        <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
+      ))}
+      {keptCount > kept.length ? (
+        <ItemRow
+          name={`… and ${keptCount - kept.length} more kept`}
+          meta="Ignored, but preserved as configuration."
+        />
+      ) : null}
       {report.skipped.map((skipped) => (
         <ItemRow
           key={`skipped:${skipped.path}`}

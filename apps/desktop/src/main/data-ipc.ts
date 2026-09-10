@@ -121,7 +121,6 @@ import type {
   WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
-  WorktreeTrimInput,
   WorktreeTrimResult,
   WorktreeTrimScanResult,
   WorktreeTrimSettingsInput,
@@ -183,6 +182,7 @@ import {
   busyRefusal,
   busySiteWithin,
   type BusyWorktreeSite,
+  type BusyWorktreeSites,
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
@@ -473,20 +473,13 @@ export function registerDataIpcHandlers(
    * destructive worktree route asks. Built per call, like `worktreeDeps(db)`
    * everywhere else here, so nothing caches a stale db handle.
    */
-  const trimSweepDeps = () => ({
-    worktree: worktreeDeps(db),
-    ...(options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites }),
-  });
+  const busySeam = (): { busySites?: BusyWorktreeSites } =>
+    options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
+  const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
 
   const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
     void trimFinishedWorktree(
-      {
-        worktree: worktreeDeps(db),
-        now: () => Date.now(),
-        ...(options.busyWorktreeSites === undefined
-          ? {}
-          : { busySites: options.busyWorktreeSites }),
-      },
+      { worktree: worktreeDeps(db), now: () => Date.now(), ...busySeam() },
       ticketId,
     )
       .then((outcome) => {
@@ -1467,11 +1460,8 @@ export function registerDataIpcHandlers(
       return { ok: true, worktrees: scan.worktrees };
     },
 
-    "volli:worktree-trim": async (input?: WorktreeTrimInput): Promise<WorktreeTrimResult> => {
-      const report = await trimAllWorktrees(
-        trimSweepDeps(),
-        input?.dryRun === undefined ? {} : { dryRun: input.dryRun },
-      );
+    "volli:worktree-trim": async (): Promise<WorktreeTrimResult> => {
+      const report = await trimAllWorktrees(trimSweepDeps());
       // Nothing about any ticket's identity moved — the checkouts are all still
       // there, on the same branches, and git's own records are untouched — but
       // the Settings table and any surface reading worktree state should re-read

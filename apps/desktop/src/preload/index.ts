@@ -234,7 +234,6 @@ import type {
   WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
-  WorktreeTrimInput,
   WorktreeTrimResult,
   WorktreeTrimScanResult,
   WorktreeTrimSettingsInput,
@@ -1119,13 +1118,16 @@ const api = {
       invoke("volli:worktree-orphan-delete", { path }),
     /**
      * Build artifacts (VC-340). `trimScan` reads which owned worktrees carry
-     * git-ignored content and which are off limits; `trim` removes it across
-     * every non-active one and prunes stale worktree metadata in the same pass.
-     * `{ dryRun: true }` measures without removing.
+     * git-ignored content and which are off limits; `trim` removes that content
+     * across every non-active one.
+     *
+     * It removes ignored CONTENT and nothing else: git's own records are
+     * untouched, because `git worktree prune` acts on a whole repository and so
+     * belongs to the confirmed orphan cleanup that reviews a set before taking it
+     * (`cleanupOrphans` above), never to this action running it blind.
      */
     trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
-    trim: (input?: WorktreeTrimInput): Promise<WorktreeTrimResult> =>
-      invoke("volli:worktree-trim", input ?? {}),
+    trim: (): Promise<WorktreeTrimResult> => invoke("volli:worktree-trim"),
     /** The preserved-configuration allowlist and the automatic-trim opt-out. */
     trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
       invoke("volli:worktree-trim-settings-get"),

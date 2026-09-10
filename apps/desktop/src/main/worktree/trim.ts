@@ -204,6 +204,12 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
   }
 
   if (!info.isDirectory()) return { kind: "remove", bytes: info.size, directory: false };
+  // A directory on another device is a mount, not an artifact: an `rm -rf` across
+  // one is not a trim. Untested on purpose rather than by omission — the branch
+  // reads `lstat().dev` from the real filesystem and this module takes no seam
+  // that could fake one, so pinning it would mean mounting a disk image inside
+  // the suite. The line is one comparison with no state behind it; every path
+  // around it is covered.
   if (info.dev !== context.device) {
     return { kind: "keep", reason: "it sits on another filesystem" };
   }

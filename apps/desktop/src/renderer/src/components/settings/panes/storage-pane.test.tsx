@@ -257,6 +257,10 @@ describe("Settings → Storage build artifacts", () => {
     expect(text).toContain("Freed");
     expect(text).toContain("2.0 KB");
     expect(text).toContain("kept 1");
+    // Named, not just counted (review r2): a person reading "kept 1" cannot tell
+    // whether their .env is the one.
+    expect(text).toContain(".env");
+    expect(text).toContain("Kept — it matches .env");
     expect(text).toContain("node_modules/");
     expect(text).toContain("Skipped — An agent is still running in this worktree. Stop it first.");
     // The table it was based on is re-read, since every trimmed row changed.

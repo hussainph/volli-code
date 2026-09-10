@@ -891,17 +891,9 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     invalidError: "Invalid request",
   },
   "volli:worktree-trim": {
-    // The renderer sends `{}` or `{ dryRun }`; nothing else may reach an action
-    // that removes files, and a non-boolean `dryRun` is exactly the typo that
-    // would turn a preview into a deletion.
-    guard: (args): args is IpcArgs<"volli:worktree-trim"> => {
-      if (args.length === 0) return true;
-      if (args.length !== 1) return false;
-      const [input] = args;
-      return (
-        isRecord(input) && (input["dryRun"] === undefined || typeof input["dryRun"] === "boolean")
-      );
-    },
+    // Nothing at all: an action that removes files takes no caller-supplied
+    // input, so there is no shape to get wrong.
+    guard: (args): args is IpcArgs<"volli:worktree-trim"> => args.length === 0,
     invalidError: "Invalid trim request",
   },
   "volli:worktree-trim-settings-get": {
