@@ -95,11 +95,8 @@ the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 
-The Session composer and anything parked on it (ask-user questions; later, plans and subagent
-activity) share one shell: `rounded-container`, hairline `border-border`, `bg-card`,
-`shadow-raised` (`COMPOSER_STACK_SHELL` in `@volli/session-presentation`). Overlays stack **above** the
-composer and never replace it — the input stays so a follow-up can be typed while a question or a
-run is live.
+Cards parked above the composer (questions, activity, picker suggestions) keep the quiet
+`COMPOSER_STACK_SHELL` in `@volli/session-presentation`. They never replace the input.
 
 ### New-ticket composer
 
@@ -115,24 +112,30 @@ its saved Runtime. `⌘/Ctrl+Enter` performs the selected action, while
 `⇧⌘/Ctrl+Enter` explicitly starts chat. Launch mode is per-open and resets when
 retargeting projects; the ticket draft itself still survives closing.
 
-### Prompt chrome — one rung, one `+`, one shell (VC-335)
+### Prompt chrome — writing sheet and control tray (VC-335)
 
-Every surface a prompt is written into — the Session composer, the New-ticket footer, the
-Automation Instructions box — draws its chrome from `chat/composer-chrome.ts`, so the three read as
-one family and cannot drift a rung at a time. Measured against the field (T3 Code, OpenCode,
-claude.ai, ChatGPT, Claude Code Desktop, Cursor 2), a composer's control row sits at 24–32px with
-its primary one step above, filled; the app's ladder already had both words for that:
+The first pass unified controls but still looked like the old flat box. The follow-up makes
+prompt writing a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
+accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
+owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
+There is no backdrop blur, animated glow, or focus-triggered shell change.
+
+This treatment reaches Session chat, New ticket, Automation instructions (including Run once),
+command-prompt creation, and ticket comments. Command creation has no inline actions and takes
+only the writing sheet, not an empty tray. Questions retain their quieter stacked-card treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Control row (`+`, model, effort, context) | `sm` / `icon-sm` — 24px, ghost, muted ink | facts about the turn |
-| Primary (Send / Queue, Stop) | `icon` — 28px; Send filled, Stop `outline` | the one act on the turn |
-| Text box at rest | two lines (`min-h-14`, `py-2`), grown by content | "this takes a paragraph" |
-| Footer band | `px-2 pt-1 pb-2` | the glyph lands on the text's left edge |
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink | facts about the turn |
+| Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
+| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
+| Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
+| Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
+| Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
 
-**The chrome stands at one ink.** The row used to rest at 70% and come up under focus; on the
-app's own canvases that made a resting composer and a disabled one the same picture. The muted
-tier already says "chrome" against a full-ink message, and no rule is drawn between the bands.
+The send key is a deliberate exception to the action-pill silhouette: it shares the 12px control
+radius, while settings remain pills. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
+The chrome stays at one ink, so a resting composer never masquerades as disabled.
 
 **`+` is the one door.** A menu, not a paperclip: Attach files… · Commands `/` · Mention a
 file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary. The two
@@ -146,7 +149,8 @@ control the chord replaces; never as a hint line under the box.
 
 **Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
 context pill drops its percent and keeps the ring, then the model name truncates to its 56px
-floor, then the effort chip takes the next line. The primary cluster never moves.
+floor, then the effort chip takes the next line. Add sits outside that wrapping group so it
+cannot become an orphan row during a live turn. The primary cluster never moves.
 
 ## Elevation — three tiers
 

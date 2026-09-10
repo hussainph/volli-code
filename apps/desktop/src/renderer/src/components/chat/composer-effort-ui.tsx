@@ -77,6 +77,7 @@ import {
   readEffortPointer,
 } from "@volli/session-presentation";
 import {
+  COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
   COMPOSER_GLYPH_WEIGHT,
 } from "@renderer/components/chat/composer-chrome";
@@ -116,7 +117,11 @@ export function EffortPill({ levels, value, onChange, disabled = false }: Effort
           variant="ghost"
           disabled={disabled}
           aria-label={`Reasoning effort: ${effortLabel(value)}`}
-          className={cn("min-w-0 text-muted-foreground", open && "bg-accent text-foreground")}
+          className={cn(
+            COMPOSER_CONFIG_CHIP,
+            "min-w-0 text-muted-foreground",
+            open && "bg-accent text-foreground",
+          )}
         >
           {/* `bold`, not the outline default and not `fill`. Gauge is arcs and
               a needle, and at the control rung's 14px regular draws lighter

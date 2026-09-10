@@ -83,7 +83,6 @@ import {
 } from "@volli/shared";
 
 import {
-  COMPOSER_STACK_SHELL,
   composerIntent,
   reclampEffort,
   takeQueued,
@@ -118,7 +117,9 @@ import {
   type ComposerCaretBinding,
 } from "@renderer/components/chat/composer-caret";
 import {
+  COMPOSER_CONFIG_CHIP,
   COMPOSER_CONTROL_SIZE,
+  PROMPT_SURFACE,
   COMPOSER_GLYPH_WEIGHT,
   COMPOSER_PRIMARY_SIZE,
 } from "@renderer/components/chat/composer-chrome";
@@ -447,7 +448,7 @@ export const SessionComposer = React.memo(function SessionComposer({
           // drops a word must drop it for the BOX's width, not the window's —
           // the tab strip's own rule.
           "group/composer @container/composer pointer-events-auto overflow-hidden transition-[color,border-color,box-shadow]",
-          COMPOSER_STACK_SHELL,
+          PROMPT_SURFACE,
           className,
         )}
         onSubmit={() => send(composerIntent({ working, steer: false }))}
@@ -589,68 +590,16 @@ export const SessionComposer = React.memo(function SessionComposer({
           />
         </PromptInputBody>
 
-        {/* THE CHROME STANDS AT FULL INK, AND THE DIM IS GONE (VC-335). This
-            row used to rest at 70% and come up under focus, on claude.ai's
-            rule. Measured on the app's own canvases, 70% × muted ink × 20px
-            controls was a footer nobody could read: a disabled composer and a
-            resting one were the same picture, and the send button — 50%
-            disabled under a 70% row — drew at a third of its ink. The field
-            does not do this: T3 Code, OpenCode, ChatGPT and Cursor keep the
-            chrome at one ink and let the muted tier say "chrome" on its own,
-            which is what the row does now. What separates the two bands is
-            still not a line — the message is full ink and the row is muted —
-            and the seam is still the widest air in the box (see
-            {@link PromptInputFooter}). ChatGPT and claude.ai draw no rule
-            here either. */}
+        {/* The tinted tray separates settings from the writing sheet. */}
         <PromptInputFooter>
-          {/* `flex-1`, so the control cluster is the row's elastic half and
-              the submit cluster beside it never has to move. Inside it, the
-              model NAME is the one thing that gives: it is the long value and
-              the only one with anything to lose, where an effort word is three
-              to ten characters and truncating it would leave "Extra hi…".
-
-              EVERY CONTROL IN THIS ROW IS ONE RUNG, AND IT IS
-              {@link COMPOSER_CONTROL_SIZE} — 24px, the ladder's own "toolbar
-              buttons, footer actions" — with the primary one step above it at
-              {@link COMPOSER_PRIMARY_SIZE}. The row wore 20px, the rung for
-              inline row actions and hover affordances, on an argument that
-              chrome must stand shorter than one line of the message. The
-              field runs the other way (T3 Code 28/32, OpenCode 28, claude.ai
-              32/32, Claude Code Desktop 28) and so does this app's every other
-              toolbar; a composer whose controls were the smallest things in
-              the window read as furniture, not as controls. The hierarchy
-              inside the row is unchanged: submit is the only filled object in
-              it, and fill plus one rung is what outranks the rest. */}
-          {/* AND IT WRAPS ONCE, AT A POINT THE MODEL PILL CHOOSES. The chat
-              pane is genuinely narrow in the app's own default layout — 940px
-              window minimum, less the 60px workspace rail, the sidebar panel,
-              the framed card's 9px and a ticket's 300px right rail, leaves the
-              composer 265px of usable width — and at that width the row had a
-              44px submit cluster and a 111px effort chip taking everything, so
-              the model name was crushed to 36px and then to 3px. A pill naming
-              nothing is not a smaller pill; it is a control that has stopped
-              being one.
-
-              So the model NAME still gives first, exactly as the row's own rule
-              says, and it stops giving at a floor it can still be read at
-              ({@link ModelPill}). Past that floor the pills no longer fit
-              beside each other and the effort chip takes its own line rather
-              than either of them shrinking into illegibility. ONE break point,
-              not reflow: `flex-wrap` here can only ever move the second of two
-              chips, and the submit cluster is outside this box, so it does not
-              move at all — which is the whole reason the row was built with the
-              cluster as the fixed half. */}
+          {/* Keep Add outside the wrapping settings: at 265px a live turn
+              must not orphan it above the model and effort. The primary
+              cluster stays fixed while the settings give in width, then wrap. */}
+          <ComposerAddMenu
+            {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
+            imagesUnsupported={imagesUnsupported === true}
+          />
           <PromptInputTools className="min-w-0 flex-1 flex-wrap">
-            {/* `+`, not a paperclip (VC-335): the one mark the field agrees
-                on for "add to this prompt", and a menu because there are
-                three things to add — files, a `/` command, an `@` file — two
-                of which had no visible door until now. Reads the caret binding
-                from the stack, the same way the textarea does; nothing about
-                it is a prop of this hook-free composer. */}
-            <ComposerAddMenu
-              {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
-              imagesUnsupported={imagesUnsupported === true}
-            />
             <ModelPill
               models={models}
               tiers={tiers}
@@ -727,6 +676,7 @@ export const SessionComposer = React.memo(function SessionComposer({
             <ComposerHint label={working ? "Queue ⏎ · Steer ⌘⏎" : "Send ⏎ · New line ⇧⏎"}>
               <PromptInputSubmit
                 status="ready"
+                className="prompt-primary rounded-control"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
                 aria-label={working ? "Queue" : "Send"}
@@ -896,28 +846,9 @@ function ComposerTextarea({
       // and a draft typed here is never taken for one.
       aria-label="Message"
       placeholder="Ask, plan, or implement…"
-      // TWO LINES AT REST: 8 + (2 × 20) + 8 = 56px, which is `min-h-14`
-      // against `text-sm`'s 20px leading and the `py-2` below — and with the
-      // 40px control band under it, a 96px box, which is OpenCode's own
-      // resting height to the pixel.
-      //
-      // This floor has been 36px and 96px. One line reads as a search field,
-      // which is the argument that took it to four; four lines is a form
-      // field waiting to be filled in, which is what it looked like on every
-      // canvas once the chrome under it was drawn at a size anyone could see
-      // (VC-335). Nobody in the field rests above two: claude.ai and ChatGPT
-      // rest at one, Cursor, Claude Code Desktop and OpenCode at two, T3 Code
-      // collapses to one on scroll. Two is the paragraph's first two lines —
-      // enough to say "this takes a paragraph" without reserving three lines
-      // of nothing above the transcript it sits on — and `field-sizing-content`
-      // grows it from the third line, which is the exception the auto-grow is
-      // for.
-      //
-      // `py-2` STAYS: the vendored `py-4` is sized for a box whose whole height
-      // is padding plus one line, and here it would be a wide margin above and
-      // below a block of text. 8px keeps the first line clear of the top edge
-      // without framing the paragraph.
-      className="min-h-14 py-2 text-sm"
+      // A writing sheet, not a search field: 16px insets with room for a
+      // short paragraph. Content still grows to the existing scroll ceiling.
+      className="min-h-20 py-4 text-sm"
       onChange={(event) => {
         caret.trackCaret(event.currentTarget);
         onValueChange(event.currentTarget.value);
@@ -1705,7 +1636,11 @@ export function ModelPill({
               data-testid="model-pill"
               aria-disabled
               aria-label={`Model: ${identity}`}
-              className={cn(MODEL_PILL_GIVE, "text-muted-foreground opacity-50")}
+              className={cn(
+                MODEL_PILL_GIVE,
+                COMPOSER_CONFIG_CHIP,
+                "text-muted-foreground opacity-50",
+              )}
             >
               <ModelPillFace
                 models={models}
@@ -1744,7 +1679,7 @@ export function ModelPill({
           // pill opens leads with the same string, in ink, one press away.
           aria-label={`Model: ${identity}`}
           title={identity}
-          className={cn(MODEL_PILL_GIVE, "text-muted-foreground")}
+          className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground")}
         >
           <ModelPillFace
             models={models}

@@ -54,7 +54,9 @@ export function ComposerFooter({
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
       <div className="flex min-w-0 flex-wrap items-center gap-1">
-        {onAttachFiles === undefined ? null : <ComposerAttachButton onFiles={onAttachFiles} />}
+        {onAttachFiles === undefined ? null : (
+          <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
+        )}
         {launch.kind === "kickoff" ? <ComposerRunRow run={run} /> : null}
         {launch.kind === "automation" ? (
           <span

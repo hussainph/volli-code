@@ -44,7 +44,8 @@ import {
   type TicketStatus,
   type ValidAutomationRuntime,
 } from "@volli/shared";
-import { COMPOSER_STACK_SHELL, reclampEffort } from "@volli/session-presentation";
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
+import { reclampEffort } from "@volli/session-presentation";
 
 import {
   ComposerPickerStack,
@@ -865,7 +866,7 @@ export function AutomationEditorPanel({
  * prompt — the same `/` and `@` grammar, the same picker card over it — and it
  * was drawn as a bare form field with a browser resize grip in its corner, so
  * the two surfaces a person writes prompts into looked like two different
- * kinds of thing. Now it is `COMPOSER_STACK_SHELL` around the same textarea
+ * kinds of thing. Now it is `PROMPT_SURFACE` around the same textarea
  * insets, with the same control band under the text; the band holds the `+`
  * (Commands and Mention a file — no attach row, because Instructions take no
  * files) and nothing else, because nothing else is decided here. The runtime
@@ -889,7 +890,7 @@ export function InstructionsTextarea({
   return (
     <div
       data-slot="instructions-box"
-      className={cn("flex min-w-0 flex-col overflow-hidden", COMPOSER_STACK_SHELL)}
+      className={cn("flex min-w-0 flex-col overflow-hidden", PROMPT_SURFACE)}
     >
       <textarea
         ref={caret.ref}
@@ -901,7 +902,7 @@ export function InstructionsTextarea({
           // grown by content to a ceiling and scrolled inside itself past it.
           // No resize grip — `field-sizing-content` is the growth, and the
           // grip drew a form field where a prompt box should be.
-          "field-sizing-content min-h-32 max-h-96 w-full resize-none bg-transparent px-4 py-2",
+          "field-sizing-content min-h-32 max-h-96 w-full resize-none bg-transparent px-4 py-4",
           "text-sm text-foreground outline-none placeholder:text-muted-foreground",
           className,
         )}
@@ -915,9 +916,8 @@ export function InstructionsTextarea({
           if (caret.handleKeyDown(event)) return;
         }}
       />
-      {/* The chat footer's own geometry (`PromptInputFooter`): 8px at the
-          edge, a 4px lid, an 8px floor. */}
-      <div className="flex items-center gap-1 px-2 pt-1 pb-2">
+      {/* The same tinted control tray as chat and ticket creation. */}
+      <div className="prompt-toolbar flex items-center gap-1 px-2 py-2">
         <ComposerAddMenu />
       </div>
     </div>

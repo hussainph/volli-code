@@ -14,9 +14,7 @@
  * display attached, and read the result back as an image.
  */
 import { chromium } from "playwright-core";
-import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { chromiumPath } from "./lab-browser.mjs";
 
 const args = process.argv.slice(2);
 const slug = args[0];
@@ -45,19 +43,6 @@ for (let i = 0; i < args.length; i += 1) {
   if (args[i] === "--hover") clicks.push({ kind: "hover", value: args[i + 1] });
 }
 
-function chromiumPath() {
-  const root = join(homedir(), "Library", "Caches", "ms-playwright");
-  const dirs = readdirSync(root)
-    .filter((d) => d.startsWith("chromium_headless_shell-"))
-    .toSorted()
-    .toReversed();
-  for (const dir of dirs) {
-    const candidate = join(root, dir, "chrome-headless-shell-mac-arm64", "chrome-headless-shell");
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error("no playwright chromium headless shell under " + root);
-}
-
 const browser = await chromium.launch({ executablePath: chromiumPath(), headless: true });
 const page = await browser.newPage({
   viewport: { width, height },
@@ -65,7 +50,8 @@ const page = await browser.newPage({
   colorScheme: light ? "light" : "dark",
 });
 await page.goto(`http://localhost:${port}/lab/#${slug}`, { waitUntil: "commit" });
-await page.waitForSelector("main, [data-lab-stage]", { timeout: 180_000 });
+// Window-stage scratches (e.g. the real New-ticket dialog) have no <main>.
+await page.getByTestId("lab-theme-toolbar").waitFor({ timeout: 180_000 });
 if (light) {
   await page.evaluate(() => {
     document.documentElement.classList.remove("dark");

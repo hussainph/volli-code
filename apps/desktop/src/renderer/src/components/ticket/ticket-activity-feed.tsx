@@ -42,6 +42,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -324,7 +325,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card px-4 py-2">
+    <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -336,11 +337,12 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         }}
         placeholder="Add a comment…"
         aria-label="Add a comment"
-        className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50 [field-sizing:content]"
+        className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
       />
-      <div className="flex justify-end">
+      <div className="prompt-toolbar flex justify-end px-2 py-2">
         <Button
           size="sm"
+          className="prompt-primary"
           disabled={draft.trim() === "" || submitting}
           onClick={() => void submit()}
         >

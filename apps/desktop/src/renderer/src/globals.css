@@ -24,6 +24,59 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Prompt materials (VC-335). A quiet writing sheet, an accent-tinted tray,
+ * and a directional edge highlight make this a distinct object at rest.
+ * No backdrop blur, moving glow, or focus-triggered repaint of the shell.
+ * Layers are opaque over --card: transcript text cannot bleed into the draft.
+ */
+@layer components {
+  .prompt-surface {
+    border-color: transparent;
+    background:
+      linear-gradient(var(--card), var(--card)) padding-box,
+      linear-gradient(
+          135deg,
+          color-mix(in oklab, var(--primary) 50%, var(--border-strong)),
+          var(--border-strong) 38%,
+          var(--border) 72%,
+          color-mix(in oklab, var(--primary) 30%, var(--border-strong))
+        )
+        border-box;
+  }
+
+  .prompt-toolbar {
+    border-top: 1px solid color-mix(in oklab, var(--primary) 10%, var(--border));
+    background: linear-gradient(
+      110deg,
+      color-mix(in oklab, var(--primary) 10%, var(--muted)),
+      var(--muted) 70%
+    );
+  }
+
+  .prompt-add {
+    border: 1px solid var(--border-strong);
+    background-color: var(--card);
+  }
+
+  .prompt-primary {
+    /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--primary-foreground) 30%, transparent),
+      var(--shadow-raised);
+  }
+}
+
+/* Outside the component layer so the forced-colors edge also overrides the
+ * shell's border-transparent utility when decorative fills disappear. */
+@media (forced-colors: active) {
+  .prompt-surface,
+  .prompt-toolbar,
+  .prompt-add {
+    border-color: ButtonBorder;
+  }
+}
+
 /* GENERATED THEME TOKENS — BEGIN */
 /*
  * Every color below is the canvas pipeline's output for the shipped default

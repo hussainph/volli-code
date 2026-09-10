@@ -472,7 +472,7 @@ export function ComposerForm({
         className="border-t border-border px-6 pt-2"
       />
 
-      <div className="border-t border-border bg-muted/10 px-6 py-4">
+      <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}
           onAttachFiles={(picked) => void attachFiles(picked)}

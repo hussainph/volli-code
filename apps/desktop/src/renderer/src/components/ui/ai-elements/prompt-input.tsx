@@ -662,37 +662,9 @@ export type PromptInputFooterProps = Omit<ComponentProps<typeof InputGroupAddon>
 export const PromptInputFooter = ({ className, ...props }: PromptInputFooterProps) => (
   <InputGroupAddon
     align="block-end"
-    // THE PADDING IS SETTLED HERE, and it has to be. `inputGroupAddonVariants`
-    // pairs `block-end` with `pb-4` and `[.border-t]:pt-4` — a 16px lid and a
-    // 16px floor, sized for a field whose body is a 64px box. This footer's
-    // body is a 36px line, so 16/16 around one control row made the control
-    // band 45% of a collapsed composer.
-    //
-    // 4/8 RATHER THAN 8/8, and the asymmetry is the whole point. The lid and
-    // the floor are not the same measurement: the floor is the card's own
-    // inset, matching what the body reserves at the top, while the lid is half
-    // of the GAP between the message and its chrome — the body's own `pb`
-    // supplies the other half. 4 + 8 = 12px of air between the two bands
-    // against 8px of inset at each outer edge, so the internal seam is the
-    // widest space in the box and the grouping reads without a rule drawn
-    // across it. 8/8 made the seam and the edges equal, which is the geometry
-    // that needs a line to disambiguate.
-    //
-    // `[.border-t]` SURVIVES for a footer that does draw one. Written with the
-    // same variant rather than as a bare `pt-*`: the variant compiles to
-    // `&.border-t`, which is (0,2,0) against a plain utility's (0,1,0), so a
-    // bare override is emitted and never applied — and a bordered footer would
-    // silently take the variant's 16px lid. Matching the variant puts both in
-    // one `cn()` group instead, where the later one simply replaces it.
-    //
-    // `px-2`, NOT THE ADDON'S `px-4` (VC-335): the row's controls are ghost
-    // buttons carrying their own 8–10px inset, so at 16px the first glyph
-    // stood 24px in from the edge while the text above it started at 16 —
-    // an 8px stagger between a message and the `+` under it, visible on
-    // every canvas. At 8px the glyph lands within 3px of the text's edge,
-    // which is the alignment OpenCode and claude.ai both draw: the row's
-    // inset is the button's, and the band's is only what the button lacks.
-    className={cn("justify-between gap-1 px-2 pt-1 pb-2 [.border-t]:pt-2", className)}
+    // The tray is one shared material across chat, ticket creation and
+    // instructions. Its 8px inset plus the controls' own inset aligns with prose.
+    className={cn("prompt-toolbar justify-between gap-1 px-2 py-2 [.border-t]:pt-2", className)}
     {...props}
   />
 );

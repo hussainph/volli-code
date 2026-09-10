@@ -454,20 +454,29 @@ describe("the effort control's place in the footer", () => {
     expect(html).not.toContain("group-focus-within/composer:opacity-100");
   });
 
-  it("draws every control on the shared rung, and the primary one above it (VC-335)", () => {
+  it("draws every control on the shared rung, and the primary at the larger send-key rung (VC-335)", () => {
     const html = renderFooter();
 
-    // The model and effort pills are `sm`; Send is `icon`, filled — the one
-    // rung up and the one fill in the row. Nothing in the row is `xs` any
+    // The model and effort pills are `sm`; Send is `icon-lg`, filled.
+    // Its 32px key stands above the 24px settings. Nothing is `xs` any
     // more: that rung is for inline row actions, and the queued rows (absent
     // here) are the only place the composer still wears it.
     expect(html).toMatch(/data-variant="ghost" data-size="sm"[^>]*data-testid="model-pill"/);
     expect(html).toMatch(
       /data-variant="ghost" data-size="sm"[^>]*aria-label="Reasoning effort: Medium"/,
     );
-    expect(html).toMatch(/data-variant="default" data-size="icon"[^>]*aria-label="Send"/);
+    expect(html).toMatch(/data-variant="default" data-size="icon-lg"[^>]*aria-label="Send"/);
     expect(html).not.toContain('data-size="xs"');
     expect(html).not.toContain('data-size="icon-xs"');
+  });
+
+  it("separates the writing sheet, settings tray, and send key (VC-335)", () => {
+    const html = renderFooter();
+    expect(html).toContain("prompt-surface");
+    expect(html).toContain("prompt-toolbar");
+    expect(html).toContain("prompt-config");
+    expect(html).toContain("prompt-primary rounded-control");
+    expect(html).toContain("min-h-20");
   });
 
   it("names the chord on the primary's hover, and both of them while a turn is live", () => {

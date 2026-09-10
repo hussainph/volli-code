@@ -29,6 +29,7 @@ import {
 import { ComposerFooter } from "@renderer/components/board/new-ticket/composer-footer";
 import { InstructionsTextarea } from "@renderer/components/automations/automation-editor";
 import type { QueuedMessage, SessionContextUsage } from "@volli/session-presentation";
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { cn } from "@renderer/lib/utils";
 
 export const title = "Composer · states × widths";
@@ -280,8 +281,8 @@ export default function ComposerStatesScratch() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-label uppercase text-muted-foreground">New-ticket footer</h2>
-        <div style={{ width }} className={cn("rounded-xl border border-border bg-card")}>
-          <div className="border-t border-border px-4 py-2">
+        <div style={{ width }} className={cn(PROMPT_SURFACE, "overflow-hidden")}>
+          <div className="prompt-toolbar px-4 py-2">
             <ComposerFooter
               onAttachFiles={() => undefined}
               run={{
@@ -317,7 +318,7 @@ export default function ComposerStatesScratch() {
             <InstructionsTextarea
               value={instructions}
               onValueChange={setInstructions}
-              className="min-h-48 rounded-xl bg-card px-4 py-4 shadow-raised"
+              className="min-h-48"
             />
           </ComposerPickerStack>
         </div>
