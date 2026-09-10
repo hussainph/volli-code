@@ -107,14 +107,7 @@ export type VerbTier = "read" | "coordination" | "control";
 /** One durable write a voluntary verb intends. */
 export interface VerbDurableWrite {
   readonly resource: string;
-  /**
-   * `delete` was added by VC-310's label merge, the first verb on this surface
-   * that durably removes a row rather than superseding or archiving one. It is
-   * spelled out rather than folded into `update` because this list is what a
-   * caller reads to decide whether to run a verb, and "a row goes away" is
-   * exactly the kind of thing that must not be phrased softly.
-   */
-  readonly operation: "create" | "update" | "append" | "delete";
+  readonly operation: "create" | "update" | "append";
   readonly summary: string;
 }
 
@@ -994,7 +987,8 @@ export const VERB_REGISTRY = [
     notes: [
       "Previews by default: without --apply nothing is written.",
       "Case variants are already one label, so this is for names that merely mean the same thing.",
-      "Every ticket wearing the merged-away name comes out wearing the surviving one.",
+      "Every Ticket wearing the merged-away name comes out wearing the surviving one.",
+      "The old name remains an alias, so using it later still resolves to the survivor.",
     ],
     effects: {
       durableWrites: [
@@ -1006,14 +1000,17 @@ export const VERB_REGISTRY = [
         },
         {
           resource: "label",
-          operation: "delete",
-          summary: "Delete the merged-away label row once nothing wears it.",
+          operation: "update",
+          summary:
+            "Retire the merged-away Label as an alias, so its old name keeps resolving to the survivor.",
         },
       ],
       humanVisible: [
         "Affected Ticket cards show the surviving label, and the merged-away one leaves the board's Label filter.",
       ],
-      nonEffects: ["No Ticket moves, and no Ticket loses a label it was wearing."],
+      nonEffects: [
+        "No Ticket moves, no Ticket loses a Label it was wearing, and the retired name is not re-created later.",
+      ],
     },
     options: [
       {

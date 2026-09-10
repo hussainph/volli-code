@@ -45,20 +45,25 @@ const measuredChipWidths = new Map<string, number>();
 const OverflowChip = React.forwardRef<
   HTMLButtonElement,
   React.ComponentProps<"button"> & { count: number }
->(function OverflowChip({ count, className, ...props }, ref) {
+>(function OverflowChip({ count, className, onPointerDown, onClick, ...props }, ref) {
   return (
     <button
+      {...props}
       ref={ref}
       type="button"
-      // The card underneath is a drag handle and a selection target; opening
-      // the label list is neither, so the gesture stops here.
-      onPointerDown={(event) => event.stopPropagation()}
+      // Radix supplies the trigger handlers through `props`. Compose them
+      // before stopping the gesture so the Popover still opens but the card
+      // underneath is neither selected nor dragged.
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        event.stopPropagation();
+      }}
       onClick={(event) => {
+        onClick?.(event);
         event.stopPropagation();
         event.preventDefault();
       }}
       className={cn("shrink-0 rounded-full outline-hidden focus-visible:ring-2", className)}
-      {...props}
     >
       <Badge variant="outline" className="px-1 py-px">
         {`+${count}`}
@@ -84,6 +89,7 @@ export function TicketCardLabels({
   // Every name whose width is already known needs no measure pass. The
   // overflow chip is measured under the widest count it could ever show, so
   // the reservation is never an underestimate that clips a chip.
+  const hasLabels = labels.length > 0;
   const overflowKey = `\u0000+${labels.length}`;
   const needsMeasuring =
     labels.some((name) => !measuredChipWidths.has(name)) || !measuredChipWidths.has(overflowKey);
@@ -98,7 +104,7 @@ export function TicketCardLabels({
     observer.observe(row);
     setAvailable(row.clientWidth);
     return () => observer.disconnect();
-  }, []);
+  }, [hasLabels]);
 
   // Runs in the same commit as the measure pass, BEFORE paint, so the full row
   // it renders is never shown — the split row replaces it in the same frame.
@@ -134,7 +140,7 @@ export function TicketCardLabels({
     // would be a second spelling of the same fact.
   }, [labels, available, needsMeasuring, overflowKey]);
 
-  if (labels.length === 0) return null;
+  if (!hasLabels) return null;
 
   const chip = (name: string) => (
     <TagChip tag={name} color={resolveLabelColor(projectLabels, name)} />

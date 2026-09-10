@@ -721,19 +721,6 @@ function modelTierCells(row: Record<string, unknown>): ModelTierCells {
 }
 
 /**
- * The model.list catalog: the app default first, then the tier table — one
- * aligned line per tier saying which model it resolves to and through which
- * rung — then one header line per provider with its copyable
- * `provider/model` rows and reasoning levels beneath it, and honest rollups
- * for unavailable providers and models inside a shown provider. The command
- * never offers that signed-out catalog to an agent, so the rollups explain the
- * smaller answer without advertising it.
- *
- * The `default` line is the tier table's `ticket` row under the name older
- * callers copy from; both print, and the table's widths include it so the two
- * read as one block.
- */
-/**
  * A merge preview, or the receipt for one that ran (VC-310).
  *
  * The affected tickets are the whole point of the preview, so they are listed
@@ -750,12 +737,26 @@ function renderLabelMerge(data: Record<string, unknown>): string | null {
     ? `Merged ${from} into ${into} across ${tickets.length} ticket(s).`
     : `${from} → ${into} would change ${tickets.length} ticket(s).`;
   const lines = tickets.map(
-    (ticket) => `  ${terminalSafeInline(ticket["id"])}  ${terminalSafeInline(ticket["title"])}`,
+    (ticket) =>
+      `  ${terminalSafeInline(ticket["id"])}${ticket["archived"] === true ? "  archived" : ""}  ${terminalSafeInline(ticket["title"])}`,
   );
   const next = typeof data["next"] === "string" ? [terminalSafeInline(data["next"])] : [];
   return [headline, ...lines, ...next].join("\n");
 }
 
+/**
+ * The model.list catalog: the app default first, then the tier table — one
+ * aligned line per tier saying which model it resolves to and through which
+ * rung — then one header line per provider with its copyable
+ * `provider/model` rows and reasoning levels beneath it, and honest rollups
+ * for unavailable providers and models inside a shown provider. The command
+ * never offers that signed-out catalog to an agent, so the rollups explain the
+ * smaller answer without advertising it.
+ *
+ * The `default` line is the tier table's `ticket` row under the name older
+ * callers copy from; both print, and the table's widths include it so the two
+ * read as one block.
+ */
 function renderModelList(data: Record<string, unknown>): string | null {
   const providers = recordsAt(data, "providers");
   if (providers === null) return null;

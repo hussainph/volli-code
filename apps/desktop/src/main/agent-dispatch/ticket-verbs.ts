@@ -21,6 +21,7 @@ import {
   isTicketSignalVerdict,
   isTicketStatus,
   isValidBranchName,
+  labelNameKey,
   parseHarnessId,
   shortSessionId,
   TICKET_SIGNAL_KINDS,
@@ -37,6 +38,7 @@ import type {
 } from "@volli/shared";
 
 import { getRegisteredHarness } from "../db/harness-registry-repo";
+import { findLabelByName } from "../db/labels-repo";
 import { listTicketsByProject } from "../db/tickets-repo";
 import {
   createTicketCommand,
@@ -282,9 +284,14 @@ export async function ticketUpdateVerb(
         );
       }
       const currentLabels = resolved.ticket.labels;
+      const canonicalName = (name: string) =>
+        findLabelByName(options.db, resolved.project.id, name)?.name ?? name;
+      const canonicalAdds = addLabels.map(canonicalName);
+      const currentKeys = new Set(currentLabels.map(labelNameKey));
+      const removedKeys = new Set(removeLabels.map(canonicalName).map(labelNameKey));
       const requestedLabels = currentLabels
-        .filter((label) => !removeLabels.includes(label))
-        .concat(addLabels.filter((label) => !currentLabels.includes(label)));
+        .filter((label) => !removedKeys.has(labelNameKey(label)))
+        .concat(canonicalAdds.filter((label) => !currentKeys.has(labelNameKey(label))));
       ticket = setTicketLabelsCommand(
         options.db,
         { ticketId: resolved.ticket.id, labels: requestedLabels },

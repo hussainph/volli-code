@@ -1803,19 +1803,32 @@ const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MI
  * are also identical under NOCASE), so the old one is left in place rather
  * than rebuilding the table to drop a redundant guard.
  *
- * NOCASE folds `A`-`Z` and nothing else, which is exactly what `labelNameKey`
- * in `@volli/shared` folds and exactly what `findLabelByName` matches with.
- * That agreement is the point: a JS-side fold that reached further than the
- * index would report a name taken that the index would then happily store
- * twice.
+ * NOCASE folds `A`-`Z`, leaves non-ASCII case distinct, and stops at NUL.
+ * `labelNameKey` in `@volli/shared`, the merge grouping below, and
+ * `findLabelByName` follow those same rules. That agreement is the point: a
+ * JavaScript fold that reached further than the index would report a name
+ * taken that SQLite would then happily store twice.
  *
- * It cannot be created before the duplicates are gone — see
- * {@link applyMigration043LabelCaseIdentity}, which merges them first, in the
- * same transaction.
+ * A merged-away row remains as an alias, so the index is partial: one live
+ * identity per folded name, while retired spellings can still resolve to it.
+ * The columns and duplicate cleanup are applied by
+ * {@link applyMigration043LabelCaseIdentity} before the index is created.
  */
+const MIGRATION_043_LABEL_MERGE_COLUMNS = `
+ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE;
+ALTER TABLE labels ADD COLUMN merged_at INTEGER;
+ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by));
+`;
+
 const MIGRATION_043_LABEL_CASE_IDENTITY = `
 CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
-  ON labels(project_id, name COLLATE NOCASE);
+  ON labels(project_id, name COLLATE NOCASE)
+  WHERE merged_into_id IS NULL;
+`;
+
+/** Reconciles developer databases that ran the pre-merge version of 043. */
+const MIGRATION_044_LABEL_ALIAS_RECONCILE = `
+-- Applied by applyMigration044LabelAliasReconcile: add alias columns and rebuild the partial index.
 `;
 
 /**
@@ -2105,8 +2118,14 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 43,
     name: "labels — one identity per case-folded name, existing variants merged",
-    sql: MIGRATION_043_LABEL_CASE_IDENTITY,
+    sql: `${MIGRATION_043_LABEL_MERGE_COLUMNS}${MIGRATION_043_LABEL_CASE_IDENTITY}`,
     apply: applyMigration043LabelCaseIdentity,
+  },
+  {
+    version: 44,
+    name: "labels — retained merge aliases for pre-release v43 databases",
+    sql: MIGRATION_044_LABEL_ALIAS_RECONCILE,
+    apply: applyMigration044LabelAliasReconcile,
   },
 ];
 
@@ -2310,58 +2329,99 @@ function applyMigration042SessionEventStorage(db: Database.Database): void {
  * Migration 043's merge step: fold every case variant of a label name onto one
  * row, so the NOCASE unique index can be created (VC-310).
  *
- * WHICH SPELLING SURVIVES. The one the project actually uses: most tickets
- * wins, then the oldest row, then the lowest id so the outcome never depends
- * on scan order. On the board this audit came from that folds `ui` (1 ticket)
- * into `UI` (77) — the answer a person would have given. The survivor keeps
- * its OWN color: adopting a loser's would repaint 77 tickets' chips because
- * one stray ticket carried a color, which is the "silently rewrite existing
- * organisation" this ticket rules out.
+ * WHICH SPELLING SURVIVES. The one the live Board actually uses: most live
+ * Tickets wins, then most archived associations, then the oldest row, then the
+ * lowest id. The audit's visible 77× `UI` versus 1× `ui` therefore guarantees
+ * `UI` survives even if the Archive contains older lowercase associations. The
+ * survivor keeps its OWN color: adopting a loser's would repaint the established
+ * chips because one stray spelling carried a color.
  *
  * Associations are preserved, never dropped: a ticket wearing only the losing
  * spelling comes out wearing the survivor. `INSERT OR IGNORE` covers the
  * ticket that wore BOTH spellings, whose two rows collapse into the one it
  * already has rather than colliding on the junction's primary key.
  */
+function ensureLabelMergeColumns(db: Database.Database): void {
+  const columns = db.pragma("table_info(labels)") as { name: string }[];
+  const names = new Set(columns.map((column) => column.name));
+  if (!names.has("merged_into_id")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE",
+    );
+  }
+  if (!names.has("merged_at")) db.exec("ALTER TABLE labels ADD COLUMN merged_at INTEGER");
+  if (!names.has("merged_by")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by))",
+    );
+  }
+}
+
 function applyMigration043LabelCaseIdentity(db: Database.Database): void {
-  // `lower()` is SQLite's own ASCII fold, so the grouping here is precisely
-  // the equivalence the index below will enforce — no group is merged that the
-  // index would have allowed to coexist, and none is left that it would reject.
+  ensureLabelMergeColumns(db);
+  // Group with the index's collation itself. `lower(name)` is almost the same,
+  // but SQLite collations stop at NUL while lower() preserves the suffix; using
+  // two rules there can leave a pair the unique index then refuses at startup.
   const duplicateGroups = db
     .prepare(
-      `SELECT project_id, lower(name) AS folded
+      `SELECT project_id, name AS representative
          FROM labels
-        GROUP BY project_id, lower(name)
+        WHERE merged_into_id IS NULL
+        GROUP BY project_id, name COLLATE NOCASE
        HAVING COUNT(*) > 1`,
     )
-    .all() as { project_id: string; folded: string }[];
+    .all() as { project_id: string; representative: string }[];
 
   const variantsOf = db.prepare(
     `SELECT l.id,
+            (SELECT COUNT(*)
+               FROM ticket_labels tl
+               JOIN tickets t ON t.id = tl.ticket_id
+              WHERE tl.label_id = l.id AND t.archived_at IS NULL) AS live_tickets,
             (SELECT COUNT(*) FROM ticket_labels tl WHERE tl.label_id = l.id) AS tickets
        FROM labels l
-      WHERE l.project_id = ? AND lower(l.name) = ?
-      ORDER BY tickets DESC, l.created_at ASC, l.id ASC`,
+      WHERE l.project_id = ?
+        AND l.name = ? COLLATE NOCASE
+        AND l.merged_into_id IS NULL
+      ORDER BY live_tickets DESC, tickets DESC, l.created_at ASC, l.id ASC`,
   );
-  // OR IGNORE, for the ticket that wore both spellings: it already has the
-  // survivor's junction row, and the loser's would collide on (ticket, label).
+  // OR IGNORE, for the Ticket that wore both spellings: it already has the
+  // survivor's junction row, and the loser's would collide on (ticket, Label).
   const repointAssociations = db.prepare(
     "INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?",
   );
-  // The losing label row goes, and `ticket_labels.label_id`'s ON DELETE
-  // CASCADE takes its now-redundant junction rows with it.
-  const dropVariant = db.prepare("DELETE FROM labels WHERE id = ?");
+  const removeRetiredAssociations = db.prepare("DELETE FROM ticket_labels WHERE label_id = ?");
+  const repointAliases = db.prepare(
+    "UPDATE labels SET merged_into_id = ? WHERE merged_into_id = ?",
+  );
+  const retireVariant = db.prepare(
+    `UPDATE labels
+        SET merged_into_id = ?, merged_at = 0, merged_by = '{"kind":"automation"}',
+            row_version = row_version + 1
+      WHERE id = ?`,
+  );
 
   for (const group of duplicateGroups) {
-    const variants = variantsOf.all(group.project_id, group.folded) as { id: string }[];
+    const variants = variantsOf.all(group.project_id, group.representative) as { id: string }[];
     const [survivor, ...losers] = variants;
     if (survivor === undefined) continue;
     for (const loser of losers) {
       repointAssociations.run(survivor.id, loser.id);
-      dropVariant.run(loser.id);
+      removeRetiredAssociations.run(loser.id);
+      repointAliases.run(survivor.id, loser.id);
+      retireVariant.run(survivor.id, loser.id);
     }
   }
 
+  // Rebuild rather than relying on IF NOT EXISTS so a developer database that
+  // ran the earlier full-index version of 043 converges on the alias-aware one.
+  db.exec("DROP INDEX IF EXISTS labels_project_name_nocase");
+  db.exec(MIGRATION_043_LABEL_CASE_IDENTITY);
+}
+
+function applyMigration044LabelAliasReconcile(db: Database.Database): void {
+  ensureLabelMergeColumns(db);
+  db.exec("DROP INDEX IF EXISTS labels_project_name_nocase");
   db.exec(MIGRATION_043_LABEL_CASE_IDENTITY);
 }
 

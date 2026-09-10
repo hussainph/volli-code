@@ -499,16 +499,17 @@ Options:
 
 Effects:
 - Durable write: Move every association from the merged-away label onto the surviving one, and record a labels_changed event per affected Ticket.
-- Durable write: Delete the merged-away label row once nothing wears it.
+- Durable write: Retire the merged-away Label as an alias, so its old name keeps resolving to the survivor.
 - Human sees: Affected Ticket cards show the surviving label, and the merged-away one leaves the board's Label filter.
-- Does not: No Ticket moves, and no Ticket loses a label it was wearing.
+- Does not: No Ticket moves, no Ticket loses a Label it was wearing, and the retired name is not re-created later.
 
 Example: volli label merge --from front-end --into frontend
 
 Notes:
 - Previews by default: without --apply nothing is written.
 - Case variants are already one label, so this is for names that merely mean the same thing.
-- Every ticket wearing the merged-away name comes out wearing the surviving one.
+- Every Ticket wearing the merged-away name comes out wearing the surviving one.
+- The old name remains an alias, so using it later still resolves to the survivor.
 
 ============================================================================
 volli help session start

@@ -129,7 +129,7 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   conflicts: "read",
   "project.list": "read",
   "label.list": "read",
-  // A coordination write despite sitting beside a read: it deletes a label row
+  // A coordination write despite sitting beside a read: it retires a Label
   // and rewrites associations, so it is attributable or it does not happen.
   "label.merge": "coordination",
   "model.list": "read",
@@ -554,12 +554,15 @@ describe("the registry table", () => {
     }
   });
 
-  it("never lets a verb claim both preview shapes, which would contradict each other", () => {
+  it("pins the default-preview shape and never lets it contradict --dry-run", () => {
     // `--dry-run` means "this run writes unless you ask otherwise";
     // `previewsByDefault` means the opposite. A verb declaring both leaves a
     // caller no way to know what the plain form does.
-    for (const entry of VERB_REGISTRY as readonly VerbEntry[]) {
-      if (entry.previewsByDefault !== true) continue;
+    const defaultPreviews = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+      (entry) => entry.previewsByDefault === true,
+    );
+    expect(defaultPreviews.map((entry) => entry.key)).toEqual(["label.merge"]);
+    for (const entry of defaultPreviews) {
       expect(
         entry.options.some((option) => option.name === "--dry-run"),
         entry.key,

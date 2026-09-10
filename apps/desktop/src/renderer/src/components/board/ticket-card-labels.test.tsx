@@ -23,8 +23,10 @@ const OVERFLOW_WIDTH = 24;
 let container: HTMLElement | null = null;
 let root: Root | null = null;
 const nativeRect = Element.prototype.getBoundingClientRect;
+const nativeClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
 /** The row's width, per test — the whole point of the component is reacting to it. */
 let rowWidth = 200;
+let resizeObservers: TestResizeObserver[] = [];
 
 function rect(width: number): DOMRect {
   return {
@@ -40,21 +42,35 @@ function rect(width: number): DOMRect {
   } as DOMRect;
 }
 
+class TestResizeObserver {
+  constructor(private readonly callback: ResizeObserverCallback) {
+    resizeObservers.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  resize(width: number): void {
+    this.callback(
+      [{ contentRect: rect(width) } as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+}
+
 beforeEach(() => {
+  rowWidth = 200;
+  resizeObservers = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    },
-  );
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
   Element.prototype.getBoundingClientRect = function getRect(this: Element) {
     const key = this.getAttribute("data-measure-key");
     if (key === null) return rect(rowWidth);
     return rect(key.startsWith("\u0000+") ? OVERFLOW_WIDTH : CHIP_WIDTH);
   };
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => rowWidth,
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -66,6 +82,8 @@ afterEach(() => {
   root = null;
   container = null;
   Element.prototype.getBoundingClientRect = nativeRect;
+  if (nativeClientWidth === undefined) Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+  else Object.defineProperty(HTMLElement.prototype, "clientWidth", nativeClientWidth);
   vi.unstubAllGlobals();
 });
 
@@ -74,10 +92,6 @@ afterEach(() => {
  * 0 and which is not a `getBoundingClientRect` call — so it is defined here.
  */
 function render(labels: string[]): void {
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-    configurable: true,
-    get: () => rowWidth,
-  });
   act(() => {
     root?.render(<TicketCardLabels labels={labels} projectLabels={[]} />);
   });
@@ -99,6 +113,13 @@ function overflowButton(): HTMLButtonElement | null {
   return container?.querySelector("button") ?? null;
 }
 
+function resizeRow(width: number): void {
+  rowWidth = width;
+  act(() => {
+    for (const observer of resizeObservers) observer.resize(width);
+  });
+}
+
 describe("TicketCardLabels", () => {
   it("draws every label when the row has room for them", () => {
     rowWidth = 400;
@@ -113,6 +134,17 @@ describe("TicketCardLabels", () => {
     // plus the +n chip is 60 + 4 + 60 + 4 + 24 = 152 — over, so one chip shows.
     rowWidth = 150;
     render(["alpha", "beta", "gamma"]);
+
+    expect(visibleLabels()).toEqual(["alpha"]);
+    expect(overflowButton()?.textContent).toBe("+2");
+  });
+
+  it("re-splits when ResizeObserver reports a narrower row", () => {
+    rowWidth = 400;
+    render(["alpha", "beta", "gamma"]);
+    expect(visibleLabels()).toEqual(["alpha", "beta", "gamma"]);
+
+    resizeRow(150);
 
     expect(visibleLabels()).toEqual(["alpha"]);
     expect(overflowButton()?.textContent).toBe("+2");
@@ -145,7 +177,41 @@ describe("TicketCardLabels", () => {
     expect(panel?.textContent).toContain("gamma");
   });
 
-  it("renders nothing at all for a ticket wearing no labels", () => {
+  it("attaches measurement when an initially empty Ticket gains Labels", () => {
+    rowWidth = 400;
+    render([]);
+    expect(container?.firstElementChild).toBeNull();
+
+    render(["alpha", "beta"]);
+
+    expect(visibleLabels()).toEqual(["alpha", "beta"]);
+    expect(resizeObservers).toHaveLength(1);
+  });
+
+  it("opens by click without selecting or dragging the parent card", () => {
+    rowWidth = 150;
+    const parentClick = vi.fn();
+    const parentPointerDown = vi.fn();
+    act(() => {
+      root?.render(
+        <div onClick={parentClick} onPointerDown={parentPointerDown}>
+          <TicketCardLabels labels={["alpha", "beta", "gamma"]} projectLabels={[]} />
+        </div>,
+      );
+    });
+    const button = overflowButton();
+
+    act(() => {
+      button?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(parentPointerDown).not.toHaveBeenCalled();
+    expect(parentClick).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[data-slot="popover-content"]')).not.toBeNull();
+  });
+
+  it("renders nothing at all for a Ticket wearing no Labels", () => {
     rowWidth = 400;
     render([]);
 

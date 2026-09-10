@@ -31,18 +31,21 @@ export function labelColor(label: Pick<Label, "name" | "color">): string {
  * one (VC-310).
  *
  * The fold is ASCII-only, deliberately, because it has to agree EXACTLY with
- * the `COLLATE NOCASE` unique index that backs it (migration 043): SQLite's
- * NOCASE and its `lower()` both fold `A`-`Z` and nothing else. A JS
- * `toLowerCase()` here would fold more than the index does, and the two would
- * disagree on non-ASCII — the repo would report `ü` taken by `Ü` while the
- * index happily stored both. One rule, enforced in two places, has to BE one
- * rule. The cost is that names differing only in a non-ASCII letter's case
- * stay distinct labels, which is precisely what the database enforces.
+ * the `COLLATE NOCASE` unique index that backs it (migration 043). A JS
+ * `toLowerCase()` would fold more than the index does, so the repo could report
+ * `ü` taken by `Ü` while SQLite still stored both.
  *
- * It does not trim, for the same reason: the index sees the stored name, so
- * `" ui"` and `"ui"` are genuinely different names. Trimming input is a
- * separate concern from deciding identity.
+ * SQLite's built-in collations stop comparing at the first NUL byte. JavaScript
+ * strings can carry NUL through the Client Surface even though shell argv
+ * cannot, so the key stops there too: `A\0x` and `a\0y` are one SQLite NOCASE
+ * identity. Migration 043 groups with the collation itself for the same reason.
+ *
+ * It does not trim: the index sees leading and trailing spaces, so `" ui"` and
+ * `"ui"` are genuinely different names. Trimming input is a separate concern
+ * from deciding identity.
  */
 export function labelNameKey(name: string): string {
-  return name.replaceAll(/[A-Z]/g, (letter) => letter.toLowerCase());
+  const nul = name.indexOf("\0");
+  const significant = nul === -1 ? name : name.slice(0, nul);
+  return significant.replaceAll(/[A-Z]/g, (letter) => letter.toLowerCase());
 }

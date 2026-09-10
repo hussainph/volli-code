@@ -27,7 +27,19 @@ describe("labelColor", () => {
 });
 
 describe("labelNameKey", () => {
-  it("gives two ASCII case variants of one name the same key", () => {
-    expect(labelNameKey("UI")).toBe(labelNameKey("ui"));
+  it("folds ASCII case to the expected stable key", () => {
+    expect(labelNameKey("UI")).toBe("ui");
+    expect(labelNameKey("ui")).toBe("ui");
+    expect(labelNameKey("UX")).toBe("ux");
+  });
+
+  it("matches SQLite NOCASE at NUL and does not fold non-ASCII letters", () => {
+    expect(labelNameKey("A\0x")).toBe(labelNameKey("a\0y"));
+    expect(labelNameKey("Ü")).not.toBe(labelNameKey("ü"));
+  });
+
+  it("does not trim names as part of identity", () => {
+    expect(labelNameKey(" ui")).not.toBe(labelNameKey("ui"));
+    expect(labelNameKey("ui ")).not.toBe(labelNameKey("ui"));
   });
 });

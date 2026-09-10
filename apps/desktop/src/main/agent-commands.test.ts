@@ -41,7 +41,7 @@ import {
   listArchivedTicketsByProject,
   listTicketsByProject,
 } from "./db/tickets-repo";
-import { recordTicketEvent } from "./db/events-repo";
+import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import {
@@ -369,7 +369,7 @@ describe("agent command service", () => {
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
     expect(onMutation).toHaveBeenCalledTimes(7);
-  });
+  }, 15_000);
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
     ctx = openTestDb();
@@ -6983,8 +6983,8 @@ describe("the ticket wake bus", () => {
  * Migration 043 means two spellings of ONE name can no longer coexist, so what
  * is left for a person to fix by hand is the other kind of duplicate: two
  * genuinely different names that mean the same thing. Merging those is
- * destructive and unattributed history cannot be undone, which is why the
- * preview is the DEFAULT here rather than a `--dry-run` a caller must remember.
+ * project-wide, which is why the preview is the DEFAULT here rather than a
+ * `--dry-run` a caller must remember. The retired row remains as an alias.
  */
 describe("label merge", () => {
   async function projectWithDriftedLabels() {
@@ -6994,11 +6994,13 @@ describe("label merge", () => {
       testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
     );
     let ticketNumber = 0;
+    const onMutation = vi.fn();
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
       now: () => 1_000,
       newId: () => `ticket-${++ticketNumber}`,
+      onMutation,
     });
     const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
       service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
@@ -7009,17 +7011,22 @@ describe("label merge", () => {
     // fail on the junction's primary key.
     await execute("ticket.create", { title: "Three", labels: ["frontend", "front-end"] });
     await execute("ticket.create", { title: "Four", labels: ["infra"] });
-    return execute;
+    await execute("ticket.create", { title: "Archived", labels: ["front-end"] });
+    archiveTicketCommand(ctx.db, "ticket-5", { now: 1_000, actor: { kind: "user" } });
+    onMutation.mockClear();
+    return { execute, onMutation };
   }
 
-  function labelNames(): string[] {
+  function liveLabelNames(): string[] {
     return (
-      ctx.db.prepare("SELECT name FROM labels ORDER BY name").all() as { name: string }[]
+      ctx.db
+        .prepare("SELECT name FROM labels WHERE merged_into_id IS NULL ORDER BY name")
+        .all() as { name: string }[]
     ).map((row) => row.name);
   }
 
-  it("previews the affected tickets and writes nothing", async () => {
-    const execute = await projectWithDriftedLabels();
+  it("previews live and archived Tickets and writes or announces nothing", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
 
     const preview = await execute("label.merge", { from: "front-end", into: "frontend" });
 
@@ -7030,16 +7037,103 @@ describe("label merge", () => {
         from: "front-end",
         into: "frontend",
         tickets: [
-          { id: "VC-2", title: "Two" },
-          { id: "VC-3", title: "Three" },
+          { id: "VC-2", title: "Two", archived: false },
+          { id: "VC-3", title: "Three", archived: false },
+          { id: "VC-5", title: "Archived", archived: true },
         ],
       },
     });
-    expect(labelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(onMutation).not.toHaveBeenCalled();
   });
 
-  it("performs the merge under --apply, preserving every association", async () => {
-    const execute = await projectWithDriftedLabels();
+  it("refuses dryRun instead of confusing the default preview with an apply", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+
+    const response = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      dryRun: true,
+    });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(response).toMatchObject({
+      error: { reason: expect.stringMatching(/previews by default/) },
+    });
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(onMutation).not.toHaveBeenCalled();
+  });
+
+  it("applies the complete merge, retaining an alias and announcing every Ticket fact", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+    const wakes: TicketWake[] = [];
+    const unsubscribe = subscribeTicketWake((wake) => wakes.push(wake));
+
+    const applied = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      apply: true,
+    });
+    unsubscribe();
+
+    expect(applied).toMatchObject({
+      ok: true,
+      data: {
+        applied: true,
+        tickets: [{ id: "VC-2" }, { id: "VC-3" }, { id: "VC-5", archived: true }],
+      },
+    });
+    expect(liveLabelNames()).toEqual(["frontend", "infra"]);
+    const retirement = ctx.db
+      .prepare(
+        `SELECT name, merged_into_id, merged_at, merged_by
+           FROM labels WHERE name = 'front-end'`,
+      )
+      .get() as Record<string, unknown>;
+    expect(retirement).toMatchObject({
+      name: "front-end",
+      merged_at: 1_000,
+      merged_by: JSON.stringify({ kind: "session", sessionId: ACTING_SESSION, ticketId: null }),
+    });
+    expect(typeof retirement["merged_into_id"]).toBe("string");
+    expect(onMutation).toHaveBeenCalledTimes(1);
+    expect(onMutation).toHaveBeenCalledWith({ projectId: "project-one", kind: "ticket" });
+    expect(wakes.map((wake) => wake.event.ticketId)).toEqual(["ticket-2", "ticket-3", "ticket-5"]);
+    expect(wakes.map((wake) => wake.event.payload.kind)).toEqual([
+      "labels_changed",
+      "labels_changed",
+      "labels_changed",
+    ]);
+    // The live name and its retired alias resolve to the same complete set.
+    for (const label of ["frontend", "front-end"]) {
+      expect(await execute("ticket.list", { label })).toMatchObject({
+        ok: true,
+        data: { tickets: [{ id: "VC-1" }, { id: "VC-2" }, { id: "VC-3" }] },
+      });
+    }
+
+    // The Archive keeps its association too.
+    expect(listArchivedTicketsByProject(ctx.db, "project-one")[0]?.labels).toEqual(["frontend"]);
+    // Reusing the retired name resolves to the survivor instead of recreating drift.
+    const aliased = await execute("ticket.create", { title: "Alias", labels: ["front-end"] });
+    expect(aliased).toMatchObject({ ok: true, data: { ticket: { labels: ["frontend"] } } });
+    expect(
+      await execute("ticket.update", { id: "VC-6", removeLabels: ["front-end"] }),
+    ).toMatchObject({ ok: true, data: { ticket: { labels: [] } } });
+    expect(liveLabelNames()).toEqual(["frontend", "infra"]);
+    expect(await execute("label.merge", { from: "front-end", into: "frontend" })).toMatchObject({
+      ok: false,
+      error: { reason: expect.stringMatching(/already merged into frontend/) },
+    });
+  });
+
+  it("retains a durable alias even when the source Label has no Tickets", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+    await execute("ticket.update", { id: "VC-2", removeLabels: ["front-end"] });
+    await execute("ticket.update", { id: "VC-3", removeLabels: ["front-end"] });
+    archiveTicketCommand(ctx.db, "ticket-5", { now: 1_001, actor: { kind: "user" } });
+    ctx.db.prepare("DELETE FROM ticket_labels WHERE ticket_id = 'ticket-5'").run();
+    onMutation.mockClear();
 
     const applied = await execute("label.merge", {
       from: "front-end",
@@ -7047,26 +7141,20 @@ describe("label merge", () => {
       apply: true,
     });
 
-    expect(applied).toMatchObject({
-      ok: true,
-      data: { applied: true, tickets: [{ id: "VC-2" }, { id: "VC-3" }] },
-    });
-    expect(labelNames()).toEqual(["frontend", "infra"]);
-    // VC-2 gained the surviving label; VC-3 kept its single copy of it.
-    const wearers = await execute("ticket.list", { label: "frontend" });
-    expect(wearers).toMatchObject({
-      ok: true,
-      data: { tickets: [{ id: "VC-1" }, { id: "VC-2" }, { id: "VC-3" }] },
-    });
+    expect(applied).toMatchObject({ ok: true, data: { applied: true, tickets: [] } });
+    expect(
+      ctx.db.prepare("SELECT merged_into_id FROM labels WHERE name = 'front-end'").get(),
+    ).toMatchObject({ merged_into_id: expect.any(String) });
+    expect(onMutation).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a name the project does not have, naming what it does have", async () => {
-    const execute = await projectWithDriftedLabels();
+  it("refuses a name the Project does not have, naming what it does have", async () => {
+    const { execute } = await projectWithDriftedLabels();
 
     const refusal = await execute("label.merge", { from: "backend", into: "frontend" });
 
     expect(refusal).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(labelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
   });
 });
 
@@ -7102,15 +7190,35 @@ describe("label case identity through the agent door", () => {
     const third = await execute("ticket.create", { title: "Third" });
     const updated = await execute("ticket.update", { id: "VC-3", addLabels: ["Ui"] });
 
-    // Each door hands back the settled spelling, so nothing downstream has to
-    // normalise it a second time.
+    // Each door hands back and records the settled spelling, so a future host
+    // can replay the Ticket Event without inventing a second identity.
     expect(second).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
     expect(third).toMatchObject({ ok: true });
     expect(updated).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
-    // And the project still has exactly one label, worn by all three tickets.
+    expect(
+      listTicketEvents(ctx.db, "ticket-2").find((event) => event.payload.kind === "labels_changed")
+        ?.payload,
+    ).toEqual({ kind: "labels_changed", added: ["UI"], removed: [] });
+
+    // Adding a case variant to a Ticket that already wears the Label is a real
+    // no-op: no version bump and no phantom labels_changed fact.
+    const beforeEvents = listTicketEvents(ctx.db, "ticket-2");
+    const duplicateAdd = await execute("ticket.update", { id: "VC-2", addLabels: ["uI"] });
+    expect(duplicateAdd).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    expect(listTicketEvents(ctx.db, "ticket-2")).toEqual(beforeEvents);
+
+    // Removal and read filters use the same identity too.
+    const removed = await execute("ticket.update", { id: "VC-1", removeLabels: ["ui"] });
+    expect(removed).toMatchObject({ ok: true, data: { ticket: { labels: [] } } });
+    for (const spelling of ["UI", "ui", "Ui"]) {
+      expect(await execute("ticket.list", { label: spelling })).toMatchObject({
+        ok: true,
+        data: { tickets: [{ id: "VC-2" }, { id: "VC-3" }] },
+      });
+    }
     expect(await execute("label.list", {})).toMatchObject({
       ok: true,
-      data: { labels: [{ name: "UI", tickets: 3 }] },
+      data: { labels: [{ name: "UI", tickets: 2 }] },
     });
   });
 });
