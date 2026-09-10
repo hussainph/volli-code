@@ -1,0 +1,25 @@
+<!doctype html>
+<!--
+  The chat-transcript bench page (VC-338).
+
+  Not the lab: this one IS built, because what it measures — renderer RSS and
+  document size for a long Session's chat plane — only means something in a real
+  Chromium with a real layout, and the bench runner loads it in Electron. See
+  main.tsx for the shape of the measurement and `e2e/chat-window-bench.mjs` for
+  the runner that drives it.
+-->
+<html class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Volli chat-window bench</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

@@ -246,6 +246,13 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // How much of a transcript is in the document (VC-338). Gated because
+        // it decides what is on screen AT ALL: an off-by-one in the anchor
+        // clamp is a conversation that silently ends before its newest turn,
+        // and "mount the tail" measured from the end rather than from a row is
+        // a window that walks out from under a reader while the Session
+        // streams. Neither is visible in a screenshot of a short transcript.
+        "src/components/chat/transcript-window.ts",
         // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
         // to, where it truncates behind "Show all", and the Ticket-priority
         // score wrapped around cmdk's matcher. One shared filter scores both

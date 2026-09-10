@@ -66,7 +66,7 @@ import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
-import { TokenText, useHighlightedLines } from "./tool-output-highlight";
+import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
 
 /* ------------------------------------------------------------------- motion */
 
@@ -642,8 +642,20 @@ const DETAIL_FRAME =
  * the window the payload scrolls, at its edge the feed takes over, exactly
  * like every nested scroller the platform ships.
  */
-function DetailFrame({ className, children }: React.PropsWithChildren<{ className?: string }>) {
-  return <div className={cn("my-1", DETAIL_FRAME, className)}>{children}</div>;
+function DetailFrame({
+  className,
+  children,
+  ref,
+}: React.PropsWithChildren<{
+  className?: string;
+  /** What {@link useOnScreen} watches, for a frame whose body is highlighted. */
+  ref?: React.Ref<HTMLDivElement>;
+}>) {
+  return (
+    <div ref={ref} className={cn("my-1", DETAIL_FRAME, className)}>
+      {children}
+    </div>
+  );
 }
 
 function ToolDetail({
@@ -741,9 +753,10 @@ function SourceOutputDetail({ text, language }: { text: string; language: string
       return sourceLine;
     });
   }, [text]);
-  const tokens = useHighlightedLines(text, language);
+  const { ref, onScreen } = useOnScreen<HTMLDivElement>();
+  const tokens = useHighlightedLines(text, language, onScreen);
   return (
-    <DetailFrame>
+    <DetailFrame ref={ref}>
       {lines.map((line, index) => (
         <div key={line.offset} data-line className="whitespace-pre text-muted-foreground">
           <TokenText text={line.text} tokens={tokens?.[index]} />
@@ -761,9 +774,10 @@ function SourceOutputDetail({ text, language }: { text: string; language: string
  */
 function NumberedDetail({ lines, language }: { lines: NumberedLine[]; language: string | null }) {
   const text = React.useMemo(() => lines.map((line) => line.text).join("\n"), [lines]);
-  const tokens = useHighlightedLines(text, language);
+  const { ref, onScreen } = useOnScreen<HTMLDivElement>();
+  const tokens = useHighlightedLines(text, language, onScreen);
   return (
-    <DetailFrame>
+    <DetailFrame ref={ref}>
       {lines.map((line, index) => (
         <div key={line.number} data-line className="flex gap-4 whitespace-pre">
           <span className="w-8 shrink-0 text-right text-muted-foreground/50 tabular-nums">
@@ -805,9 +819,10 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
       lines.map((line) => (line.kind === "hunk" ? "" : splitDiffMarker(line).source)).join("\n"),
     [lines],
   );
-  const tokens = useHighlightedLines(text, language);
+  const { ref, onScreen } = useOnScreen<HTMLDivElement>();
+  const tokens = useHighlightedLines(text, language, onScreen);
   return (
-    <DetailFrame>
+    <DetailFrame ref={ref}>
       {lines.map((line, index) => {
         if (line.kind === "hunk") {
           return (
