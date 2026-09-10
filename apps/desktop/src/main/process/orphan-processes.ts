@@ -43,6 +43,7 @@ import {
   type OrphanProcessCandidate,
   type ProcessFact,
   type SpawnLedgerEntry,
+  type WorktreeHolder,
   type WorktreeRef,
 } from "@volli/shared";
 
@@ -72,8 +73,8 @@ export interface OrphanProcessDeps {
   worktrees(): readonly WorktreeRef[];
   /** Sessions holding a live executor. */
   liveSessionIds(): readonly string[];
-  /** Worktrees a live Session is attached to. */
-  liveWorktreePaths(): readonly string[];
+  /** Worktrees a live Session is attached to, and which Session holds each. */
+  liveWorktrees(): readonly WorktreeHolder[];
   /** Working directories of open terminal tabs. */
   openTerminalCwds(): readonly string[];
   /** The process table with working directories; the real one by default. */
@@ -87,27 +88,42 @@ export interface OrphanProcessDeps {
   nextId?: () => string;
   /** The signal seam; the real `process.kill` by default. */
   signal?: (target: number, signal: NodeJS.Signals | 0) => void;
+  /**
+   * Pids no sweep may ever propose or signal — Volli's own process and its
+   * parent by default. Read at both windows (the scan and, again, immediately
+   * before the signal), so a pid that becomes protected between them is still
+   * refused.
+   */
+  protectedPids?: () => readonly number[];
   killGraceMs?: number;
 }
 
 interface ScanState {
   inventory: OrphanProcessInventory;
   candidates: Map<string, OrphanProcessCandidate>;
-  /** The ledger row behind a candidate, so a reap can close it. */
-  ledgerIds: Map<string, string>;
 }
 
-/** Signals a process, answering whether the signal could be delivered at all. */
+/**
+ * One signal, and what the kernel said about it.
+ *
+ * The outcome is kept rather than discarded because the three answers are
+ * genuinely different: delivered, `ESRCH` (nothing there — which for a kill is
+ * success and for a probe is "it is gone"), and anything else, of which `EPERM`
+ * is the one that matters. A process this app may not signal used to be
+ * reported as reaped, closing its ledger row while it kept running.
+ */
+type SignalOutcome = "delivered" | "gone" | "refused";
+
 function deliver(
   signal: (target: number, sig: NodeJS.Signals | 0) => void,
   target: number,
   sig: NodeJS.Signals | 0,
-): boolean {
+): SignalOutcome {
   try {
     signal(target, sig);
-    return true;
-  } catch {
-    return false;
+    return "delivered";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | null)?.code === "ESRCH" ? "gone" : "refused";
   }
 }
 
@@ -120,6 +136,7 @@ export class OrphanProcessService {
   readonly #policy: () => AutoReapPolicy;
   readonly #signal: (target: number, sig: NodeJS.Signals | 0) => void;
   readonly #killGraceMs: number;
+  readonly #protectedPids: () => readonly number[];
   #current: ScanState | null = null;
 
   constructor(deps: OrphanProcessDeps) {
@@ -131,6 +148,7 @@ export class OrphanProcessService {
     this.#policy = deps.policy ?? (() => DEFAULT_AUTO_REAP_POLICY);
     this.#signal = deps.signal ?? ((target, sig) => process.kill(target, sig === 0 ? 0 : sig));
     this.#killGraceMs = deps.killGraceMs ?? REAP_KILL_GRACE_MS;
+    this.#protectedPids = deps.protectedPids ?? (() => [process.pid, process.ppid]);
   }
 
   /**
@@ -154,9 +172,9 @@ export class OrphanProcessService {
       ledger,
       worktrees: this.#deps.worktrees(),
       liveSessionIds: this.#deps.liveSessionIds(),
-      liveWorktreePaths: this.#deps.liveWorktreePaths(),
+      liveWorktrees: this.#deps.liveWorktrees(),
       openTerminalCwds: this.#deps.openTerminalCwds(),
-      protectedPids: protectedPids(),
+      protectedPids: this.#protectedPids(),
     });
     this.#closeVanishedRows(ledger, processes, now);
     this.#deps.ledger.prune();
@@ -170,7 +188,6 @@ export class OrphanProcessService {
     this.#current = {
       inventory,
       candidates: new Map(candidates.map((candidate) => [candidate.itemId, candidate])),
-      ledgerIds: ledgerIdsByItem(candidates, ledger),
     };
     return inventory;
   }
@@ -209,19 +226,40 @@ export class OrphanProcessService {
 
     const processes = await this.#inventory();
     const byPid = new Map(processes.map((fact) => [fact.pid, fact] as const));
-    const guarded = new Set(protectedPids());
-    const reaped: OrphanProcessCandidate[] = [];
+    const guarded = new Set(this.#protectedPids());
+    // Read fresh rather than remembered from the scan: the row a reap closes
+    // must be one that is still open NOW, and a cwd-swept candidate has no row
+    // at all.
+    const openRows = this.#deps.ledger.listOpen();
     const kept: OrphanProcessReapReport["kept"] = [];
+    const signalling: OrphanProcessCandidate[] = [];
 
     for (const candidate of selected) {
       const refusal = this.#refuseReap(candidate, byPid, guarded);
-      if (refusal !== null) {
-        kept.push({ candidate, reason: refusal });
+      if (refusal === null) signalling.push(candidate);
+      else kept.push({ candidate, reason: refusal });
+    }
+
+    // Concurrently, because each termination spends the grace period WAITING.
+    // Ten rows serially is ten graces — the better part of a minute with the
+    // renderer's invoke parked on it — and the waits have nothing to do with
+    // each other.
+    const outcomes = await Promise.all(
+      signalling.map(async (candidate) => ({ candidate, ended: await this.#terminate(candidate) })),
+    );
+    const reaped: OrphanProcessCandidate[] = [];
+    for (const { candidate, ended } of outcomes) {
+      if (ended === null) {
+        // Still running after the whole SIGTERM → SIGKILL sequence, or a signal
+        // this app was not allowed to send. Either way the ledger row stays
+        // open, because the process it names is still there.
+        kept.push({ candidate, reason: this.#survivedReason(candidate) });
         continue;
       }
-      await this.#terminate(candidate);
-      const ledgerId = scan.ledgerIds.get(candidate.itemId);
-      if (ledgerId !== undefined) this.#deps.ledger.markExited(ledgerId, this.#now());
+      const row = openRows.find((entry) =>
+        ledgerEntryMatches(entry, { pid: candidate.pid, startedAt: candidate.startedAt }),
+      );
+      if (row !== undefined) this.#deps.ledger.markExited(row.id, this.#now());
       reaped.push(candidate);
     }
 
@@ -266,7 +304,9 @@ export class OrphanProcessService {
     byPid: Map<number, ProcessFact>,
     guarded: Set<number>,
   ): string | null {
-    if (candidate.stance !== "reapable") {
+    // `held` is signalled on a person's explicit per-row word; only `not-volli`
+    // is refused outright.
+    if (candidate.stance === "not-volli") {
       return "Not Volli's to kill — it has a terminal of its own.";
     }
     if (guarded.has(candidate.pid)) return "This is Volli's own process.";
@@ -278,17 +318,33 @@ export class OrphanProcessService {
     return null;
   }
 
-  /** SIGTERM, then SIGKILL after the grace, to the group when the candidate leads one. */
-  async #terminate(candidate: OrphanProcessCandidate): Promise<void> {
+  /**
+   * SIGTERM, then SIGKILL after the grace, to the group when the candidate
+   * leads one. Answers the outcome: `"ended"` when the process is gone,
+   * `"refused"` when a signal could not be delivered, `null` when it is simply
+   * still there.
+   */
+  async #terminate(candidate: OrphanProcessCandidate): Promise<"ended" | null> {
     // A candidate that leads its group takes the group with it; one that does
     // not is signalled alone, because its group belongs to somebody else.
     const leadsGroup = candidate.pgid !== null && candidate.pgid === candidate.pid;
     const target = leadsGroup ? -candidate.pid : candidate.pid;
-    deliver(this.#signal, target, "SIGTERM");
+    if (deliver(this.#signal, target, "SIGTERM") === "refused") return null;
     await new Promise<void>((resolve) => setTimeout(resolve, this.#killGraceMs));
-    // Signal 0 asks "is it still there" without touching it. Gone means the
-    // TERM was enough, which is the ordinary case and costs no KILL.
-    if (deliver(this.#signal, candidate.pid, 0)) deliver(this.#signal, target, "SIGKILL");
+    // Signal 0 asks "is it still there" without touching it. `gone` means the
+    // TERM was enough, which is the ordinary case and costs no KILL. (A process
+    // that died but has not been reaped by its parent still answers here; the
+    // extra KILL that buys is harmless and cheaper than guessing.)
+    if (deliver(this.#signal, candidate.pid, 0) === "gone") return "ended";
+    if (deliver(this.#signal, target, "SIGKILL") === "refused") return null;
+    return deliver(this.#signal, candidate.pid, 0) === "gone" ? "ended" : null;
+  }
+
+  /** What to tell a person about a process that outlived its own SIGKILL. */
+  #survivedReason(candidate: OrphanProcessCandidate): string {
+    return deliver(this.#signal, candidate.pid, 0) === "refused"
+      ? "This machine would not let Volli signal it (try it from a terminal)."
+      : "It was still running after SIGTERM and SIGKILL.";
   }
 
   /** Closes the rows whose processes are no longer in the table. */
@@ -304,25 +360,4 @@ export class OrphanProcessService {
       this.#deps.ledger.markExited(entry.id, now);
     }
   }
-}
-
-/** Volli's own process, which no sweep may ever propose. */
-function protectedPids(): readonly number[] {
-  return [process.pid, process.ppid];
-}
-
-/** Which ledger row each ledger-sourced candidate came from. */
-function ledgerIdsByItem(
-  candidates: readonly OrphanProcessCandidate[],
-  ledger: readonly SpawnLedgerEntry[],
-): Map<string, string> {
-  const ids = new Map<string, string>();
-  for (const candidate of candidates) {
-    if (candidate.source !== "ledger") continue;
-    const entry = ledger.find((row) =>
-      ledgerEntryMatches(row, { pid: candidate.pid, startedAt: candidate.startedAt }),
-    );
-    if (entry !== undefined) ids.set(candidate.itemId, entry.id);
-  }
-  return ids;
 }

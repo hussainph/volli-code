@@ -11,17 +11,24 @@
  * is only ever matched against a live process whose start time agrees with it,
  * so a row left open by a crash is inert rather than dangerous.
  *
- * Retention is by the same logic: exited rows are bookkeeping and are pruned
- * once they are old, and an open row older than the prune horizon is dropped
- * too, because a process that has been running for a month under a Session that
- * ended is either already listed by the cwd sweep or is not there at all.
+ * Retention is by the same logic, with two horizons rather than one. An EXITED
+ * row is bookkeeping about something that is over, and a week of it is plenty.
+ * An OPEN row is evidence, and the evidence this feature exists for was three
+ * to EIGHTEEN days old (VC-341's load audit) — pruning open rows at a week
+ * would throw away exactly the rows that name the worst offenders, and a Board
+ * Session's process, which no cwd sweep can see, would lose its only
+ * attribution. So open rows are kept far longer
+ * ({@link SPAWN_LEDGER_OPEN_RETENTION_MS}), and they mostly never reach that
+ * horizon anyway: every scan closes the rows whose processes are gone, which
+ * turns them into exited rows on the short clock.
  */
 import type Database from "better-sqlite3";
 import { isSpawnLedgerKind, type SpawnLedgerEntry, type SpawnLedgerSpawn } from "@volli/shared";
 
 import { prepared } from "./prepared";
 
-interface SpawnRow {
+/** One stored row, as SQLite hands it back. */
+export interface SpawnRow {
   id: string;
   session_id: string;
   ticket_id: string | null;
@@ -34,8 +41,14 @@ interface SpawnRow {
   command: string;
 }
 
-/** How long a row is kept after it is no longer telling anyone anything. */
+/** How long an EXITED row is kept after it stopped telling anyone anything. */
 export const SPAWN_LEDGER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * How long an OPEN row is kept: well past the 3–18 day window the orphans this
+ * feature was filed about were found in, so evidence is never pruned inside it.
+ */
+export const SPAWN_LEDGER_OPEN_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 /**
  * The command as the ledger keeps it: informational text for a person reading
@@ -50,8 +63,15 @@ function boundedCommand(command: string): string {
     : `${command.slice(0, SPAWN_LEDGER_COMMAND_MAX)}…`;
 }
 
-/** Fail closed on a hand-edited row: an unreadable row must never name a kill. */
-function mapRow(row: SpawnRow): SpawnLedgerEntry | null {
+/**
+ * Fail closed on a hand-edited row: an unreadable row must never name a kill.
+ *
+ * Exported because the CHECK constraint blocks the bad `kind` from ever
+ * reaching this through SQL, which is the point of having both — the schema
+ * refuses the write and the mapper refuses the read. A rule with no reachable
+ * caller is a rule nobody can test, so the test calls it directly.
+ */
+export function spawnLedgerEntryFrom(row: SpawnRow): SpawnLedgerEntry | null {
   if (!isSpawnLedgerKind(row.kind)) return null;
   if (!Number.isInteger(row.pid) || row.pid <= 0) return null;
   return {
@@ -120,23 +140,23 @@ export function listOpenSpawns(db: Database.Database): SpawnLedgerEntry[] {
       ORDER BY started_at ASC`,
   ).all();
   return rows.flatMap((row) => {
-    const entry = mapRow(row);
+    const entry = spawnLedgerEntryFrom(row);
     return entry === null ? [] : [entry];
   });
 }
 
-/** Drops what no longer describes anything: old exits, and rows older than the horizon. */
+/** Drops what no longer describes anything: old exits, and open rows past the far horizon. */
 export function pruneSpawnLedger(
   db: Database.Database,
   now: number,
   retentionMs: number = SPAWN_LEDGER_RETENTION_MS,
+  openRetentionMs: number = SPAWN_LEDGER_OPEN_RETENTION_MS,
 ): number {
-  const horizon = now - retentionMs;
   const result = prepared<[number, number]>(
     db,
     `DELETE FROM spawned_processes
       WHERE (exited_at IS NOT NULL AND exited_at < ?)
-         OR started_at < ?`,
-  ).run(horizon, horizon);
+         OR (exited_at IS NULL AND started_at < ?)`,
+  ).run(now - retentionMs, now - openRetentionMs);
   return result.changes;
 }

@@ -103,7 +103,7 @@ import {
   getTicket,
   getTicketBrief,
   getTicketRow,
-  listWorktreePathsForSessions,
+  listWorktreeHoldersForSessions,
   listWorktreeRefs,
 } from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
@@ -2280,8 +2280,8 @@ app.whenReady().then(async () => {
         // A writing caller is live exactly while its attachment token is valid,
         // which is the same fact `volli doctor` reports as the Session check.
         liveSessionIds: () => sessionTokens.liveSessionIds(),
-        liveWorktreePaths: () =>
-          listWorktreePathsForSessions(dbHandle.db, sessionTokens.liveSessionIds()),
+        liveWorktrees: () =>
+          listWorktreeHoldersForSessions(dbHandle.db, sessionTokens.liveSessionIds()),
         // A terminal tab standing in a worktree is a person looking at it.
         openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
         policy: () => getAutoReapPolicy(dbHandle.db),

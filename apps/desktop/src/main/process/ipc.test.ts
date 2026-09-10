@@ -61,11 +61,15 @@ function service(): OrphanProcessService {
     ledger: { listOpen: () => [], markExited: () => {}, prune: () => 0 },
     worktrees: () => [worktree],
     liveSessionIds: () => [],
-    liveWorktreePaths: () => [],
+    liveWorktrees: () => [],
     openTerminalCwds: () => [],
     inventory: async () => [orphan],
     now: () => NOW,
-    signal: () => {},
+    // The process is gone the moment it is asked about: the signal path itself
+    // is `orphan-processes.test.ts`'s subject, not this file's.
+    signal: (_target, sig) => {
+      if (sig === 0) throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    },
     killGraceMs: 0,
   });
 }

@@ -2000,6 +2000,13 @@ END;
  * No foreign key to `sessions`. A row is a fact about a process that existed,
  * and it has to outlive both the Session record and the launch that wrote it —
  * a crash mid-turn is precisely the case the ledger is read after.
+ *
+ * THREE KINDS, AND NO `browser`. A CHECK constraint is frozen the moment it
+ * ships, so it lists only what something can actually write: the `execute`
+ * environment, background shells, and terminal PTYs. A Browser Tab is a
+ * `WebContentsView` inside this process (`browser/tab-host.ts`) — there is no
+ * child pid to record — so a fourth value would be dead vocabulary nothing
+ * could ever insert and nothing could later remove.
  */
 const MIGRATION_045_SPAWN_LEDGER = `
 CREATE TABLE IF NOT EXISTS spawned_processes (
@@ -2007,7 +2014,7 @@ CREATE TABLE IF NOT EXISTS spawned_processes (
   session_id TEXT NOT NULL,
   ticket_id  TEXT,
   project_id TEXT,
-  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal', 'browser')),
+  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal')),
   pid        INTEGER NOT NULL,
   pgid       INTEGER,
   started_at INTEGER NOT NULL,

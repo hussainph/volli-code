@@ -42,10 +42,21 @@ const THEIRS: OrphanProcessCandidate = {
   reason: "Not Volli's — a terminal of your own is standing in this worktree.",
 };
 
+/** Volli's own, in a worktree a new Session has taken over (VC-341 amendment). */
+const HELD: OrphanProcessCandidate = {
+  ...LEAKED,
+  itemId: "ledger:501:3",
+  stance: "held",
+  pid: 501,
+  pgid: 501,
+  command: "vite",
+  reason: "Owner Session ended; worktree now held by session-now.",
+};
+
 const INVENTORY: OrphanProcessInventory = {
   revision: "rev-7",
   scannedAt: 1_700_000_000_000,
-  candidates: [LEAKED, THEIRS],
+  candidates: [LEAKED, HELD, THEIRS],
   reapableCount: 1,
 };
 
@@ -124,7 +135,7 @@ describe("Settings → Storage → Running processes", () => {
     expect(document.body.textContent).toContain("VC-341 · next dev");
     expect(document.body.textContent).toContain("pid 4242");
     expect(document.body.textContent).toContain("18d 0h");
-    expect(document.body.textContent).toContain("1 to reap, 1 not Volli's");
+    expect(document.body.textContent).toContain("1 to reap, 1 in a worktree in use, 1 not Volli's");
   });
 
   it("offers a Reap on Volli's own process and none on the person's own shell", async () => {
@@ -150,7 +161,19 @@ describe("Settings → Storage → Running processes", () => {
 
     await act(async () => buttonNamed("Reap all").click());
 
+    // Not the held row: a worktree somebody is working in is not something a
+    // sweep-everything button may empty.
     expect(main.reap).toHaveBeenCalledWith({ scanRevision: "rev-7", itemIds: ["ledger:4242:1"] });
+  });
+
+  it("still offers the held row its own Reap", async () => {
+    const main = bridge();
+    await open();
+    await act(async () => buttonNamed("Look for processes no Session owns").click());
+
+    await act(async () => buttonNamed("Reap pid 501").click());
+
+    expect(main.reap).toHaveBeenCalledWith({ scanRevision: "rev-7", itemIds: ["ledger:501:3"] });
   });
 
   it("reports a failed scan in place, with a retry", async () => {

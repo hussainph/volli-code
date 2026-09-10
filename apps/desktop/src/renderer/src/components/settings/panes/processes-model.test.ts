@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrphanProcessCandidate } from "@volli/shared";
 
 import type { OrphanProcessInventory } from "../../../../../ipc/contract";
-import { processRowMeta, processSummary, reapableIds } from "./processes-model";
+import { offersReap, processRowMeta, processSummary, reapableIds } from "./processes-model";
 
 const HOUR = 3_600_000;
 
@@ -40,7 +40,11 @@ function inventory(candidates: OrphanProcessCandidate[]): OrphanProcessInventory
 describe("reapableIds", () => {
   it("never names a row Volli may not kill", () => {
     expect(
-      reapableIds([candidate(), candidate({ itemId: "cwd:900:1", stance: "not-volli" })]),
+      reapableIds([
+        candidate(),
+        candidate({ itemId: "ledger:5:1", stance: "held" }),
+        candidate({ itemId: "cwd:900:1", stance: "not-volli" }),
+      ]),
     ).toEqual(["ledger:4242:1"]);
   });
 });
@@ -57,6 +61,17 @@ describe("processSummary", () => {
         inventory([candidate(), candidate({ itemId: "cwd:900:1", stance: "not-volli" })]),
       ),
     ).toBe("1 to reap, 1 not Volli's");
+    // Three different facts about the same machine, counted separately.
+    expect(
+      processSummary(
+        false,
+        inventory([
+          candidate(),
+          candidate({ itemId: "ledger:5:1", stance: "held" }),
+          candidate({ itemId: "cwd:900:1", stance: "not-volli" }),
+        ]),
+      ),
+    ).toBe("1 to reap, 1 in a worktree in use, 1 not Volli's");
   });
 });
 
@@ -71,5 +86,14 @@ describe("processRowMeta", () => {
     expect(
       processRowMeta(candidate({ source: "cwd", stance: "not-volli", tty: "s004" }), age, bytes),
     ).toBe("pid 4242 · 30h · 2900 MB · found by working directory · not Volli's");
+    expect(processRowMeta(candidate({ stance: "held" }), age, bytes)).toBe(
+      "pid 4242 · 30h · 2900 MB · started by Volli · worktree in use",
+    );
+  });
+
+  it("offers a Reap on everything except somebody else's terminal", () => {
+    expect(offersReap(candidate())).toBe(true);
+    expect(offersReap(candidate({ stance: "held" }))).toBe(true);
+    expect(offersReap(candidate({ stance: "not-volli" }))).toBe(false);
   });
 });

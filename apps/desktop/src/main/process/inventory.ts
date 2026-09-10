@@ -73,8 +73,9 @@ export function parsePsLine(line: string): ProcessFact | null {
   if (numbers.some((value) => !Number.isInteger(value) || value < 0)) return null;
   const startedAt = Date.parse(rest.slice(0, 5).join(" "));
   if (!Number.isFinite(startedAt)) return null;
+  // Whatever is left after the date is the command, and there is always
+  // something left: a line with fewer than eleven words was refused above.
   const command = rest.slice(5).join(" ");
-  if (command.length === 0) return null;
   return {
     pid: numbers[0]!,
     ppid: numbers[1]!,

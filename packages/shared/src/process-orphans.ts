@@ -41,6 +41,15 @@
  * killing a shell out from under the person who opened it would be exactly the
  * kind of silent, confident destruction this feature is supposed to replace.
  *
+ * AND WORKTREES ARE REUSED. A dev server started by a Session that has since
+ * ended, in a checkout a NEW live Session now holds, is genuinely an orphan —
+ * its owner is gone — and hiding it would recreate the bug this exists to fix.
+ * But the new Session may be depending on it: a held port, a running watch, a
+ * warm cache. So it is `held`: listed with the holder named, offered a Reap on
+ * its own row where a person can weigh it, and never taken by "Reap all" or by
+ * the background policy, whatever its age and whatever the machine's memory is
+ * doing.
+ *
  * SURFACING IS NOT REAPING. Nothing here kills anything or decides on its own
  * that something should die. {@link selectAutoReapable} is the one policy
  * function, and it is written to say no: it requires the setting to be on, the
@@ -55,18 +64,28 @@ export type OrphanProcessSource = "ledger" | "cwd";
  * What may be done about a candidate.
  *
  * `reapable` is a process Volli is prepared to signal on a person's word.
+ * `held` is Volli's own process in a worktree somebody else is now working in:
+ * killable, but only one row at a time and only by hand.
  * `not-volli` is listed for the same reason a doctor reports a measurement it
  * has no remedy for — it explains what is holding the worktree — and offers no
  * action.
  */
-export type OrphanProcessStance = "reapable" | "not-volli";
+export type OrphanProcessStance = "reapable" | "held" | "not-volli";
 
-/** What Volli starts on a Session's behalf, by door. */
-export type SpawnLedgerKind = "execute" | "shell" | "terminal" | "browser";
+/**
+ * What Volli starts on a Session's behalf, by door.
+ *
+ * Three doors, because three doors own a spawn. There is deliberately no
+ * `browser` kind: a Browser Tab is a `WebContentsView` inside this process
+ * (`browser/tab-host.ts`), so there is no child pid to record and a value
+ * nothing can ever write would be dead vocabulary frozen into a CHECK
+ * constraint.
+ */
+export type SpawnLedgerKind = "execute" | "shell" | "terminal";
 
 /** Whether a value is a spawn kind this build knows. */
 export function isSpawnLedgerKind(value: unknown): value is SpawnLedgerKind {
-  return value === "execute" || value === "shell" || value === "terminal" || value === "browser";
+  return value === "execute" || value === "shell" || value === "terminal";
 }
 
 /** One process as the machine reports it right now. */
@@ -120,6 +139,12 @@ export interface SpawnLedgerPort {
   markExited(id: string, exitedAt?: number): void;
 }
 
+/** A live Session and the checkout it is attached to. */
+export interface WorktreeHolder {
+  path: string;
+  sessionId: string;
+}
+
 /** A ticket's checkout, as the classification needs to know it. */
 export interface WorktreeRef {
   path: string;
@@ -163,8 +188,15 @@ export interface OrphanProcessScanInput {
   worktrees: readonly WorktreeRef[];
   /** Sessions holding a live executor right now. */
   liveSessionIds: readonly string[];
-  /** Worktrees a live Session is attached to — the cwd sweep's liveness test. */
-  liveWorktreePaths: readonly string[];
+  /**
+   * Worktrees a live Session is attached to, and which Session holds each.
+   *
+   * Two different answers come out of this one fact: the cwd sweep says nothing
+   * at all about a checkout somebody is working in (it cannot tell that
+   * Session's own process from a leak), while the ledger — which knows whose a
+   * process is — downgrades its candidate to `held` and names the holder.
+   */
+  liveWorktrees: readonly WorktreeHolder[];
   /** Working directories of open terminal tabs; a person is looking at these. */
   openTerminalCwds: readonly string[];
   /** Volli's own process and anything it must never signal. */
@@ -267,10 +299,16 @@ export function classifyOrphanProcesses(
     claimed.add(fact.pid);
     if (liveSessions.has(entry.sessionId)) continue;
     const worktree = worktreeForPath(entry.cwd, input.worktrees);
+    // Worktree reuse: the owner is gone, but somebody is standing in the
+    // checkout now and may be depending on what is running in it.
+    const holder =
+      worktree === null
+        ? undefined
+        : input.liveWorktrees.find((live) => isUnderPath(live.path, worktree.path));
     candidates.push({
       itemId: `ledger:${fact.pid}:${fact.startedAt}`,
       source: "ledger",
-      stance: "reapable",
+      stance: holder === undefined ? "reapable" : "held",
       pid: fact.pid,
       pgid: entry.pgid ?? fact.pgid,
       startedAt: fact.startedAt,
@@ -283,15 +321,19 @@ export function classifyOrphanProcesses(
       ticketId: entry.ticketId ?? worktree?.ticketId ?? null,
       ticketDisplayId: worktree?.ticketDisplayId ?? null,
       worktreePath: worktree?.path ?? null,
-      reason: `Volli started this for a Session that has ended (${entry.kind}).`,
+      reason:
+        holder === undefined
+          ? `Volli started this for a Session that has ended (${entry.kind}).`
+          : `Owner Session ended; worktree now held by ${holder.sessionId}.`,
     });
   }
 
   for (const fact of input.processes) {
     if (claimed.has(fact.pid) || protectedPids.has(fact.pid)) continue;
-    const worktree = worktreeForPath(fact.cwd, input.worktrees);
-    if (worktree === null || fact.cwd === null) continue;
-    if (input.liveWorktreePaths.some((path) => isUnderPath(path, fact.cwd as string))) continue;
+    const cwd = fact.cwd;
+    const worktree = cwd === null ? null : worktreeForPath(cwd, input.worktrees);
+    if (worktree === null || cwd === null) continue;
+    if (input.liveWorktrees.some((live) => isUnderPath(live.path, cwd))) continue;
     if (input.openTerminalCwds.some((path) => isUnderPath(worktree.path, path))) continue;
     // A controlling terminal and no ledger row is a person's own shell. It is
     // reported, because it explains what is holding the checkout, and it is
@@ -307,7 +349,7 @@ export function classifyOrphanProcesses(
       ageMs: ageOf(input.now, fact.startedAt),
       rssBytes: fact.rssBytes,
       command: fact.command,
-      cwd: fact.cwd,
+      cwd,
       tty: fact.tty,
       sessionId: null,
       ticketId: worktree.ticketId,
@@ -346,6 +388,12 @@ export const DEFAULT_AUTO_REAP_POLICY: AutoReapPolicy = { enabled: false, minimu
  * stance, the age, and real memory pressure. A candidate that only satisfies
  * three of the four keeps running and stays on the panel, where a person can
  * decide about it themselves.
+ *
+ * `reapable` and nothing else. A `held` process — Volli's own, in a checkout a
+ * live Session has taken over — is excluded here regardless of age and
+ * regardless of how short of memory the machine is: whoever is working in that
+ * worktree may be depending on it, and no threshold makes an unattended kill
+ * the right answer to that.
  */
 export function selectAutoReapable(
   candidates: readonly OrphanProcessCandidate[],

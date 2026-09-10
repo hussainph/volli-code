@@ -32,24 +32,20 @@ export const SWAP_PRESSURE_BYTES = 4 * 1024 * 1024 * 1024;
 /** The free percentage `memory_pressure -Q` reported, or null when it said nothing legible. */
 export function parseFreePercentage(stdout: string): number | null {
   const match = /free percentage:\s*(\d+(?:\.\d+)?)%/i.exec(stdout);
-  if (match === null) return null;
-  const percent = Number(match[1]);
-  return Number.isFinite(percent) ? percent : null;
+  // The pattern admits only digits, so what it captured is a number; a second
+  // finite-check here would be a branch nothing could ever take.
+  return match === null ? null : Number(match[1]);
 }
 
 /** Bytes of swap in use, from `sysctl vm.swapusage`, or null when unreadable. */
 export function parseSwapUsedBytes(stdout: string): number | null {
   const match = /used\s*=\s*(\d+(?:\.\d+)?)([KMGT])/i.exec(stdout);
   if (match === null) return null;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value)) return null;
-  const scale: Record<string, number> = {
-    K: 1024,
-    M: 1024 ** 2,
-    G: 1024 ** 3,
-    T: 1024 ** 4,
-  };
-  return value * (scale[match[2]!.toUpperCase()] ?? 1);
+  // Both captures are constrained by the pattern: digits, and one of four
+  // letters. The unit lookup is total over exactly those four, so there is no
+  // fallback to test and none to get wrong.
+  const scale = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 } as const;
+  return Number(match[1]) * scale[match[2]!.toUpperCase() as keyof typeof scale];
 }
 
 /** The verdict from whichever of the two readings could be taken. */

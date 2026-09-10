@@ -29,6 +29,18 @@ describe("the automatic reap's tick", () => {
     expect(lines).toEqual(["[orphan-processes] reaped 2 under memory pressure"]);
   });
 
+  it("writes to the main log when no logger was supplied", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      await createAutoReapWatch(
+        service(async () => ({ reaped: [{} as never], declined: null })),
+      ).tick();
+      expect(info.mock.calls[0]?.[0]).toContain("[orphan-processes]");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("logs a failure rather than raising it: nobody asked for this work", async () => {
     const lines: string[] = [];
     const watch = createAutoReapWatch(

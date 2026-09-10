@@ -54,8 +54,10 @@ describe("parsePsLine", () => {
 });
 
 describe("parsePsTable", () => {
-  it("keeps every readable row and skips blank lines", () => {
-    expect(parsePsTable(`${PS_FIXTURE}\n\n`).map((fact) => fact.pid)).toEqual([1, 4242, 9001]);
+  it("keeps every readable row, skipping blank lines and rows it cannot read", () => {
+    expect(parsePsTable(`${PS_FIXTURE}\n\nnot a ps row at all\n`).map((fact) => fact.pid)).toEqual([
+      1, 4242, 9001,
+    ]);
   });
 });
 

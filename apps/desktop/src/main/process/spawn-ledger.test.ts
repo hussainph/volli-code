@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { openTestDb } from "../db/test-helpers";
 import { NO_SPAWN_LEDGER, SpawnLedger } from "./spawn-ledger";
@@ -44,7 +44,7 @@ describe("SpawnLedger", () => {
   it("prunes with its own clock", () => {
     const { db } = testDb();
     const ledger = new SpawnLedger(db, {
-      now: () => NOW + 90 * 24 * 60 * 60 * 1000,
+      now: () => NOW + 200 * 24 * 60 * 60 * 1000,
       createId: () => "row-1",
     });
     ledger.recordSpawn(spawn);
@@ -74,6 +74,19 @@ describe("SpawnLedger", () => {
     expect(ledger.prune()).toBe(0);
     expect(errors).toHaveLength(4);
     expect(errors[0]).toContain("pid 321");
+  });
+
+  it("warns on the main log when no reporter was supplied", () => {
+    const { db } = testDb();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ledger = new SpawnLedger(db);
+      db.close();
+      expect(ledger.recordSpawn(spawn)).toBeNull();
+      expect(warn.mock.calls[0]?.[0]).toContain("[spawn-ledger]");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("has a null object for the callers that have no ledger", () => {

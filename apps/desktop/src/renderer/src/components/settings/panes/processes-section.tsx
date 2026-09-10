@@ -37,8 +37,10 @@ import { Button } from "@renderer/components/ui/button";
 import { Switch } from "@renderer/components/ui/switch";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { toast } from "sonner";
+
 import { toastError } from "@renderer/lib/toast";
-import { processRowMeta, processSummary, reapableIds } from "./processes-model";
+import { offersReap, processRowMeta, processSummary, reapableIds } from "./processes-model";
 
 export function RunningProcessesSection() {
   const [state, setState] = React.useState<AsyncState<OrphanProcessInventory | null>>({
@@ -96,11 +98,11 @@ export function RunningProcessesSection() {
         toastError(`Couldn't reap: ${result.error}`);
         return;
       }
-      // A kept row is not a failure of the reap — it is main reporting that the
-      // process it was asked to kill is not what is running under that number
-      // any more. Saying so is the whole point of re-checking.
+      // A kept row is not a failure of the reap — it is main reporting what it
+      // found when it re-checked, which is the whole point of re-checking. An
+      // outcome is not an error, so it is said plainly rather than in red.
       for (const kept of result.report.kept) {
-        toastError(`Left pid ${kept.candidate.pid} alone — ${kept.reason}`);
+        toast(`Left pid ${kept.candidate.pid} alone — ${kept.reason}`);
       }
       await scan();
     } catch (error) {
@@ -187,7 +189,7 @@ export function RunningProcessesSection() {
                 name={`${candidate.ticketDisplayId ?? "No ticket"} · ${candidate.command}`}
                 meta={processRowMeta(candidate, formatProcessAge, formatFileSize)}
               >
-                {candidate.stance === "reapable" ? (
+                {offersReap(candidate) ? (
                   <RowAction
                     label={`Reap pid ${candidate.pid}`}
                     hint="Reap"

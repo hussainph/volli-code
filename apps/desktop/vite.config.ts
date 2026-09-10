@@ -299,6 +299,10 @@ export default defineConfig(({ mode }) => ({
         // was a label — every removed row read "Removed at launch", including
         // the ones a person had just asked for by hand.
         "src/components/settings/panes/storage-orphans-model.ts",
+        // Its sibling one section down (VC-341): which rows a "Reap all" names,
+        // and which are only killable one at a time. A missed branch there is
+        // a button that signals something the person never singled out.
+        "src/components/settings/panes/processes-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -490,6 +494,14 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",
         "**/src/main/observability/sink.ts",
+        // The orphan process sweep (VC-341). Enrolled for the same reason the
+        // IPC handlers and `quit-gate.ts` are, only more so: this is the one
+        // place in the app that calls `process.kill`, and every uncovered
+        // branch in it is a branch nobody has watched decide whether to signal
+        // a stranger's process. The ledger's storage rides along, because a row
+        // it hands back wrong is what that decision is made from.
+        "**/src/main/process/**",
+        "**/src/main/db/spawn-ledger-repo.ts",
         "**/src/main/project-roots.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",

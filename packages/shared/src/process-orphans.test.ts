@@ -66,7 +66,7 @@ function scanInput(overrides: Partial<OrphanProcessScanInput> = {}): OrphanProce
     ledger: [],
     worktrees: [worktree],
     liveSessionIds: [],
-    liveWorktreePaths: [],
+    liveWorktrees: [],
     openTerminalCwds: [],
     protectedPids: [],
     ...overrides,
@@ -75,7 +75,10 @@ function scanInput(overrides: Partial<OrphanProcessScanInput> = {}): OrphanProce
 
 describe("isSpawnLedgerKind", () => {
   it("accepts every door Volli spawns through and nothing else", () => {
-    expect(["execute", "shell", "terminal", "browser"].every(isSpawnLedgerKind)).toBe(true);
+    expect(["execute", "shell", "terminal"].every(isSpawnLedgerKind)).toBe(true);
+    // A Browser Tab is a WebContentsView in this process: no child pid, so no
+    // kind. The value is refused rather than reserved.
+    expect(isSpawnLedgerKind("browser")).toBe(false);
     expect(isSpawnLedgerKind("daemon")).toBe(false);
     expect(isSpawnLedgerKind(undefined)).toBe(false);
   });
@@ -151,6 +154,20 @@ describe("classifyOrphanProcesses — the ledger", () => {
       ageMs: 3 * HOUR,
     });
     expect(candidate?.reason).toContain("has ended");
+  });
+
+  it("lists a Volli process in a reused worktree as held, naming who holds it now", () => {
+    // Worktree reuse is the ordinary case: the owner ended, somebody else is
+    // standing in the checkout, and what is running in it may be theirs to use.
+    const [candidate] = classifyOrphanProcesses(
+      scanInput({
+        processes: [processFact()],
+        ledger: [ledgerEntry()],
+        liveWorktrees: [{ path: worktree.path, sessionId: "session-now" }],
+      }),
+    );
+    expect(candidate).toMatchObject({ source: "ledger", stance: "held" });
+    expect(candidate?.reason).toBe("Owner Session ended; worktree now held by session-now.");
   });
 
   it("never lists a process whose Session still holds an executor", () => {
@@ -246,7 +263,10 @@ describe("classifyOrphanProcesses — the cwd sweep", () => {
   it("says nothing about a worktree a live Session is attached to", () => {
     expect(
       classifyOrphanProcesses(
-        scanInput({ processes: [processFact()], liveWorktreePaths: [worktree.path] }),
+        scanInput({
+          processes: [processFact()],
+          liveWorktrees: [{ path: worktree.path, sessionId: "session-now" }],
+        }),
       ),
     ).toEqual([]);
   });
@@ -363,6 +383,16 @@ describe("selectAutoReapable", () => {
       pressure,
     );
     expect(theirs.reap).toEqual([]);
+  });
+
+  it("never takes a held process, whatever its age and however short the machine is", () => {
+    const result = selectAutoReapable(
+      [candidate({ stance: "held", ageMs: 30 * 24 * HOUR })],
+      { enabled: true, minimumAgeHours: 1 },
+      pressure,
+    );
+    expect(result.reap).toEqual([]);
+    expect(result.declined).toContain("1h");
   });
 
   it("takes an old reapable candidate under real pressure", () => {

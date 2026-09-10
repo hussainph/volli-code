@@ -8,11 +8,23 @@ import type { OrphanProcessCandidate } from "@volli/shared";
 
 import type { OrphanProcessInventory } from "../../../../../ipc/contract";
 
-/** The item ids a Reap all would name: never a row Volli may not kill. */
+/**
+ * The item ids a Reap all would name.
+ *
+ * `reapable` only. A `held` process — Volli's own, in a worktree a live Session
+ * has since taken over — is killable, but one row at a time and on purpose: a
+ * sweep-everything button must not take something the person working in that
+ * checkout may be relying on.
+ */
 export function reapableIds(candidates: readonly OrphanProcessCandidate[]): string[] {
   return candidates
     .filter((candidate) => candidate.stance === "reapable")
     .map((candidate) => candidate.itemId);
+}
+
+/** Whether this row carries its own Reap: everything except somebody's own terminal. */
+export function offersReap(candidate: OrphanProcessCandidate): boolean {
+  return candidate.stance !== "not-volli";
 }
 
 /**
@@ -27,9 +39,12 @@ export function processSummary(loading: boolean, inventory: OrphanProcessInvento
   if (inventory === null) return "Not scanned";
   const total = inventory.candidates.length;
   if (total === 0) return "None";
-  const theirs = total - inventory.reapableCount;
-  const mine = `${inventory.reapableCount} to reap`;
-  return theirs === 0 ? mine : `${mine}, ${theirs} not Volli's`;
+  const held = inventory.candidates.filter((candidate) => candidate.stance === "held").length;
+  const theirs = total - inventory.reapableCount - held;
+  const parts = [`${inventory.reapableCount} to reap`];
+  if (held > 0) parts.push(`${held} in a worktree in use`);
+  if (theirs > 0) parts.push(`${theirs} not Volli's`);
+  return parts.join(", ");
 }
 
 /**
@@ -52,6 +67,7 @@ export function processRowMeta(
     formatBytes(candidate.rssBytes),
     source,
     candidate.stance === "not-volli" ? "not Volli's" : null,
+    candidate.stance === "held" ? "worktree in use" : null,
   ]
     .filter((part) => part !== null)
     .join(" · ");

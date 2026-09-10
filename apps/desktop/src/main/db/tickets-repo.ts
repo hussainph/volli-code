@@ -353,25 +353,29 @@ export function listWorktreeRefs(
 }
 
 /**
- * The worktree paths of the Sessions named, as the orphan sweep's liveness test
- * (VC-341): a process standing in a checkout a live Session is attached to is
- * that Session's business, whoever started it.
+ * The checkouts the named Sessions are attached to, and which Session holds
+ * each — the orphan sweep's liveness test (VC-341).
+ *
+ * The holder's id rides along because worktree reuse needs it: a process whose
+ * own Session ended, in a checkout somebody else has since taken over, is
+ * listed as `held` and the row says who is standing there now. Without the id
+ * the panel could only say "somebody", which is not a fact a person can act on.
  */
-export function listWorktreePathsForSessions(
+export function listWorktreeHoldersForSessions(
   db: Database.Database,
   sessionIds: readonly string[],
-): string[] {
+): Array<{ path: string; sessionId: string }> {
   if (sessionIds.length === 0) return [];
   // Placeholders rather than an interpolated list: these ids come from the
   // token registry, and a bound parameter is the rule regardless of provenance.
   const placeholders = sessionIds.map(() => "?").join(", ");
-  const rows = prepared<string[], { worktree_path: string }>(
+  const rows = prepared<string[], { worktree_path: string; sessionId: string }>(
     db,
-    `SELECT DISTINCT t.worktree_path AS worktree_path
+    `SELECT DISTINCT t.worktree_path AS worktree_path, s.id AS sessionId
        FROM sessions s JOIN tickets t ON t.id = s.ticket_id
       WHERE s.id IN (${placeholders}) AND t.worktree_path IS NOT NULL`,
   ).all(...sessionIds);
-  return rows.map((row) => row.worktree_path);
+  return rows.map((row) => ({ path: row.worktree_path, sessionId: row.sessionId }));
 }
 
 /**
