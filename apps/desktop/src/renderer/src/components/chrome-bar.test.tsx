@@ -26,5 +26,7 @@ describe("chrome band copy", () => {
     expect(html).not.toContain("workspace switcher");
     // The sidebar trigger beside it names the pane, not the rail concept.
     expect(html).toContain("Toggle navigation sidebar");
+    // Usage limits is window chrome too, so every ordinary page inherits it.
+    expect(html).toContain('aria-label="Usage limits"');
   });
 });
