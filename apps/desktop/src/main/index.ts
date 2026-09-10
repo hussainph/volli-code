@@ -288,6 +288,7 @@ import {
   userCliLinkPath,
 } from "./agent-tools";
 import { registerCliIpcHandlers } from "./cli-ipc";
+import { registerSupportIpcHandlers } from "./support-info";
 import { probeCliDoctor } from "./cli-doctor";
 import { readCliStatus } from "./cli-status";
 import { getAllAppState, setAppState } from "./db/app-state-repo";
@@ -3410,6 +3411,18 @@ app.whenReady().then(async () => {
     repair: async () => {
       await repairSessionEnvironment();
     },
+  });
+
+  // About's support metadata (VC-293): the build, release line, OS and schema
+  // version a report has to name. Registered beside the CLI surface and, like
+  // it, OUTSIDE `dbHandle.ok` — a profile that would not open is exactly the
+  // launch whose report matters, and the handler answers unavailable rather
+  // than vanishing or presenting partial metadata. Every dep reads at CALL time.
+  registerSupportIpcHandlers({
+    appVersion: () => app.getVersion(),
+    database: () => (dbHandle.ok ? dbHandle.db : null),
+    platform: process.platform,
+    arch: process.arch,
   });
 
   try {

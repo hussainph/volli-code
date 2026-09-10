@@ -9,6 +9,7 @@ import {
   HARNESS_CHANNELS,
   HARNESS_IPC,
   CLI_IPC,
+  SUPPORT_IPC,
   MODEL_ACCESS_CHANNELS,
   MODEL_ACCESS_IPC,
   THEME_CHANNELS,
@@ -3067,6 +3068,23 @@ describe("CLI_IPC descriptor table", () => {
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid doctor request");
     });
+  });
+});
+
+describe("SUPPORT_IPC descriptor table", () => {
+  const { guard, invalidError } = SUPPORT_IPC["volli:support-info"];
+
+  // The whole surface is an allowlist of five facts (VC-293), so a caller has
+  // nothing to name — and an argument arriving here means somebody thought it
+  // did.
+  it("takes no argument at all", () => {
+    expect(guard([])).toBe(true);
+    expect(guard([{}])).toBe(false);
+    expect(guard(["secrets"])).toBe(false);
+  });
+
+  it("carries the handler's exact invalid-input message", () => {
+    expect(invalidError).toBe("Invalid request");
   });
 });
 

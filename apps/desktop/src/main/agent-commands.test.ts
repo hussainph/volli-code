@@ -5830,7 +5830,9 @@ describe("doctor", () => {
     const shellInit = await checkFrom(malformed, "shell-init");
     expect(shellInit.status).toBe("warn");
     expect(shellInit.detail).toContain("not reported");
-    expect(shellInit.remedy).toBeUndefined();
+    expect(shellInit.remedy).toBe(
+      "Run `volli doctor` from a Volli terminal, where shell integration is visible.",
+    );
 
     const volli = await checkFrom(malformed, "volli-cli");
     expect(volli.status).toBe("warn");
