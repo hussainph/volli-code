@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
   AutoReapPolicy,
@@ -421,6 +423,42 @@ describe("OrphanProcessService with nothing injected", () => {
       declined: "Automatic reaping is off.",
     });
   });
+
+  it("signals a real process through the default seam", async () => {
+    // The one path that reaches `process.kill` itself. Everything else in this
+    // file scripts the signal seam, which is right for testing decisions and
+    // wrong for testing that the decision reaches the kernel — so this one
+    // spawns its own child, hands the service a ledger row naming it, and
+    // leaves every signal on its real default.
+    const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    child.unref();
+    const pid = child.pid!;
+    const startedAt = Date.now();
+    const service = new OrphanProcessService({
+      ledger: {
+        listOpen: () => [{ ...row(), pid, pgid: pid, startedAt, cwd: worktree.path }],
+        markExited: () => {},
+        prune: () => 0,
+      },
+      worktrees: () => [worktree],
+      liveSessionIds: () => [],
+      liveWorktrees: () => [],
+      openTerminalCwds: () => [],
+      inventory: async () => [fact({ pid, pgid: pid, startedAt, command: "sleep 30" })],
+      now: () => startedAt,
+      killGraceMs: 100,
+    });
+
+    const inventory = await service.scan();
+    const report = await service.reap({
+      scanRevision: inventory.revision,
+      itemIds: [inventory.candidates[0]!.itemId],
+    });
+
+    expect(report.reapedCount).toBe(1);
+    // Gone for real: the probe the service itself uses, run once more here.
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 20_000);
 
   it("reads this machine with the real tools when nothing is scripted", async () => {
     // Read-only: `ps`, `lsof`, `memory_pressure` and `sysctl`, against no
