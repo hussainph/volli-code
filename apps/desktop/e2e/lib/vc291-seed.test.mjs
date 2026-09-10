@@ -33,7 +33,16 @@ import {
 /** Shells the seed can land on: `sh` runs the script, the rest are the PTY's. */
 const SHELLS = ["/bin/sh", "/bin/zsh", "/bin/bash", "/bin/dash"].filter((s) => existsSync(s));
 
-async function runSeed(shell) {
+/**
+ * Run the seed under one shell and hand back everything it produced.
+ *
+ * `t.after` cleanup is not optional here: the seed writes its reference to
+ * `/tmp/volli-reflow-<token>-<epoch>.txt` by design (a real run is meant to keep
+ * that file), so a test that does not tidy up leaves a temp directory AND a
+ * stray reference behind on every invocation — which is exactly what it did
+ * until this was noticed, to the tune of 60-odd directories.
+ */
+async function runSeed(shell, t) {
   const dir = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "vc291-seed-test-")));
   const pointer = join(dir, "pointer.txt");
   const script = join(dir, "seed.sh");
@@ -43,12 +52,16 @@ async function runSeed(shell) {
   const pointed = parseBaselinePointer(await fs.readFile(pointer, "utf8"), token);
   assert.equal(pointed.ok, true, `pointer unusable: ${pointed.reason}`);
   const reference = await fs.readFile(pointed.path, "utf8");
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(pointed.path, { force: true });
+  });
   return { dir, stdout, reference, referencePath: pointed.path, token };
 }
 
 for (const shell of SHELLS) {
-  test(`seed produces the intended ${SEED_LINE_COUNT}-line sequence under ${shell}`, async () => {
-    const { stdout, reference, dir } = await runSeed(shell);
+  test(`seed produces the intended ${SEED_LINE_COUNT}-line sequence under ${shell}`, async (t) => {
+    const { stdout, reference, dir } = await runSeed(shell, t);
 
     const verdict = verifySeedReference(reference);
     assert.deepEqual(verdict.problems, [], `seed malformed under ${shell}`);
@@ -70,8 +83,8 @@ for (const shell of SHELLS) {
     assert.doesNotMatch(stdout, /invalid option|printf:/);
   });
 
-  test(`every long line has exactly ${SEED_LONG_FILL} x's and its own -END under ${shell}`, async () => {
-    const { reference } = await runSeed(shell);
+  test(`every long line has exactly ${SEED_LONG_FILL} x's and its own -END under ${shell}`, async (t) => {
+    const { reference } = await runSeed(shell, t);
     const lines = reference.trimEnd().split("\n");
     const longs = lines.filter((l) => l.startsWith("REFLOW-LONG-"));
     assert.equal(longs.length, 30);
