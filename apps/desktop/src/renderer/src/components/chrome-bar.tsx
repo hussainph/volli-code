@@ -8,6 +8,7 @@ import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
 import { CommandPalette } from "@renderer/components/command-palette";
 import { QuickOpen } from "@renderer/components/files/quick-open";
+import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { Button } from "@renderer/components/ui/button";
 import { SidebarTrigger } from "@renderer/components/ui/sidebar";
 import { useCommandPaletteShortcut } from "@renderer/hooks/use-command-palette-shortcut";
@@ -84,7 +85,7 @@ export function ChromeBar() {
               />
             </div>
             <NavHistoryButtons />
-            <CommandPaletteTrigger onClick={() => setCommandPaletteOpen(true)} />
+            <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
             {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
           </>
         )}
@@ -281,15 +282,39 @@ function TerminalFocusExit() {
 }
 
 /**
- * The chrome band's ⌘K center opens the app-wide ticket/session destination
+ * The band's center: the ⌘K pill, and the usage-limits meter beside it
+ * (VC-350).
+ *
+ * Absolutely centered so the pair anchors to the WINDOW's midline regardless of
+ * the traffic-light spacer / fullscreen collapse. Overlap math at minWidth
+ * 940px (main/index.ts): left chrome occupies ≈110px (78px spacer + trigger);
+ * the cluster is 380 + 4 + 24 = 408px wide (pill, gap-1, an `icon-sm` at
+ * size-6), so its left edge sits at (940 − 408) / 2 = 266px — still
+ * comfortably clear of it.
+ *
+ * The two are one absolutely-positioned GROUP rather than two independently
+ * placed controls. The pill is elastic (`max-w-[40vw]`), so anything pinned to
+ * where its right edge "is" would drift off it the moment the window narrowed;
+ * inside a flex row the meter simply stays beside it at every width.
+ *
+ * top-[19px] (not top-1/2): the band's center is 18px, but the sibling
+ * icon-buttons carry translate-y-px to meet the traffic lights at ~19px. The
+ * group's -translate-y-1/2 center is anchored to 19px so it lines up with them,
+ * and the pill inside no longer carries a correction of its own.
+ */
+function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
+  return (
+    <div className="absolute left-1/2 top-[19px] flex -translate-x-1/2 -translate-y-1/2 items-center gap-1">
+      <CommandPaletteTrigger onClick={onCommandPalette} />
+      <UsageLimitsPopover />
+    </div>
+  );
+}
+
+/**
+ * The chrome band's ⌘K trigger opens the app-wide ticket/session destination
  * picker. It is a button, not a board filter: the palette can move directly to
  * a ticket document or an already-running terminal from anywhere in the app.
- *
- * Absolutely centered so it anchors to the WINDOW's midline regardless of the
- * traffic-light spacer / fullscreen collapse. Overlap math at minWidth 940px
- * (main/index.ts): left chrome occupies ≈110px (78px spacer + trigger); the
- * pill's left edge sits at (940 − 380) / 2 = 280px — comfortably clear.
- * max-w-[40vw] only shrinks it further on narrow windows.
  */
 function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
   return (
@@ -299,9 +324,6 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       aria-haspopup="dialog"
       aria-label="Search tickets and sessions"
       title="Search tickets and sessions (⌘K)"
-      // top-[19px] (not top-1/2): band center is 18px, but the sibling
-      // icon-buttons carry translate-y-px to meet the traffic lights at ~19px.
-      // Anchor the pill's -translate-y-1/2 center to 19px so it aligns with them.
       //
       // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
       // so it is a wash of the ink: `--foreground` runs toward white in dark and
@@ -314,7 +336,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       // grey patch on the band, not a hover. The border was already doing the
       // work (`border-border/50` → `border-border`); the fill now holds still at
       // the one wash rung and lets it.
-      className="app-region-no-drag absolute left-1/2 top-[19px] flex h-[22px] w-[380px] max-w-[40vw] -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+      className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>

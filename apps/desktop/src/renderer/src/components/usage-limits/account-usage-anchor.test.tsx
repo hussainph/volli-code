@@ -13,7 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UsageLimits } from "@volli/shared";
 
-import { ModelAccessUsage } from "./model-access-usage";
+import { AccountUsage } from "./account-usage";
 
 const MOUNTED_AT = Date.parse("2026-03-01T12:00:00Z");
 const MINUTE = 60_000;
@@ -58,11 +58,11 @@ afterEach(() => {
 
 function render(limits: UsageLimits): void {
   act(() => {
-    root?.render(<ModelAccessUsage limits={limits} />);
+    root?.render(<AccountUsage limits={limits} />);
   });
 }
 
-describe("ModelAccessUsage anchor", () => {
+describe("AccountUsage anchor", () => {
   it("re-anchors the countdown when a newer snapshot arrives on the same mount", () => {
     render(limitsResettingAt(MOUNTED_AT + 120 * MINUTE, MOUNTED_AT));
     expect(container?.textContent).toContain("resets in 2h");

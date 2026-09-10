@@ -310,6 +310,13 @@ export default defineConfig(({ mode }) => ({
         // out of a rail that must add up to the total above it, or attributes
         // one person's Session to another.
         "src/components/usage/usage-rail-model.ts",
+        // Which subscriptions the chrome band's popover lists, which window of
+        // each is the one about to run out, and what order they sit in
+        // (VC-350). In the gate because a missed branch here is a bar that is
+        // not drawn: an account dropped from the list, or the wrong window
+        // chosen as the headline, is a person told they have room they do not
+        // have — and neither shows up as an error anywhere.
+        "src/components/usage-limits/accounts.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
