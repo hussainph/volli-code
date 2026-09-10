@@ -11,12 +11,18 @@
   // The UI lab (src/renderer/lab) is dev-server-only and never built, but it
   // IS type-checked: it imports real app components, so a signature change in
   // the app should break the lab here rather than at `pnpm lab`.
+  // e2e/bench holds browser-side measurement harnesses (VC-338's chat-window
+  // bench) and is on the list for the same reason: it mounts the real
+  // `ChatPlane`, so a prop it no longer has should fail here rather than in the
+  // middle of taking a number.
   // src/ipc is the shared type-only IPC contract — all three processes read it.
   "include": [
     "src/ipc/**/*",
     "src/renderer/src/**/*",
     "src/renderer/cursor/**/*",
     "src/renderer/lab/**/*",
+    "e2e/bench/**/*.ts",
+    "e2e/bench/**/*.tsx",
     "src/preload/*.d.ts"
   ]
 }
