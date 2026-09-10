@@ -186,8 +186,8 @@ export interface UsageProbeInput {
   force: boolean;
 }
 
-/** One provider's usage endpoint and how to read it. */
-interface UsageReader {
+/** The facts every provider reader owns. */
+interface UsageReaderBase {
   url: string;
   /**
    * Whether an `api_key` credential is a subscription here. False for a
@@ -215,12 +215,22 @@ interface UsageReader {
    * rather than a failed attempt. Absent means every refusal is an attempt.
    */
   noSubscriptionStatus?: number;
-  /** Headers beyond `authorization`, which every reader sends. */
-  headers(accessToken: string): Record<string, string>;
-  /** A multi-step wire read; absent readers make the ordinary one GET. */
-  request?(accessToken: string, input: UsageProbeInput): Promise<Response>;
   parse(body: unknown, checkedAt: number): UsageLimits;
 }
+
+/** One ordinary GET, or a provider-owned multi-step read. */
+type UsageReader = UsageReaderBase &
+  (
+    | {
+        /** Headers beyond `authorization`, which every ordinary reader sends. */
+        headers(accessToken: string): Record<string, string>;
+        request?: never;
+      }
+    | {
+        headers?: never;
+        request(accessToken: string, input: UsageProbeInput): Promise<Response>;
+      }
+  );
 
 const XAI_USER_URL = "https://cli-chat-proxy.grok.com/v1/user";
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -277,7 +287,6 @@ const READERS: Readonly<Record<string, UsageReader>> = {
     // A SuperGrok or X Premium subscription signs in; an `XAI_API_KEY` is the
     // pay-as-you-go platform account, which is invoiced rather than windowed.
     acceptsApiKey: false,
-    headers: () => ({}),
     // Grok Build requires the authenticated account id on billing reads. Read
     // it from the bounded `/user` response, use it once, and retain neither the
     // identity body nor its id. Both requests carry the same reviewed auth,
@@ -348,19 +357,7 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
     if (accessToken === undefined) {
       return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
     }
-    const response =
-      reader.request === undefined
-        ? await input.fetch(reader.url, {
-            method: "GET",
-            headers: {
-              authorization: `${reader.scheme ?? "Bearer"} ${accessToken}`,
-              accept: "application/json",
-              ...reader.headers(accessToken),
-            },
-            signal: input.signal,
-            redirect: "error",
-          })
-        : await reader.request(accessToken, input);
+    const response = await requestUsage(reader, accessToken, input);
     if (response.status === 429) {
       const retryAfterMs = retryAfterMillis(response.headers.get("retry-after"), input.now());
       input.schedule.holdOff(
@@ -378,6 +375,25 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
   } catch {
     return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
   }
+}
+
+/** Make the ordinary one GET, or let a multi-step reader own its wire contract. */
+function requestUsage(
+  reader: UsageReader,
+  accessToken: string,
+  input: UsageProbeInput,
+): Promise<Response> {
+  if (reader.request !== undefined) return reader.request(accessToken, input);
+  return input.fetch(reader.url, {
+    method: "GET",
+    headers: {
+      authorization: `${reader.scheme ?? "Bearer"} ${accessToken}`,
+      accept: "application/json",
+      ...reader.headers(accessToken),
+    },
+    signal: input.signal,
+    redirect: "error",
+  });
 }
 
 /** The secret this reader's endpoint takes, or nothing when it cannot be had. */

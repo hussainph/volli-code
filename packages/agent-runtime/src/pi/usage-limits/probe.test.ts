@@ -422,7 +422,26 @@ describe("probeUsageLimits", () => {
   });
 
   it("does not request xAI billing when account identity is not header-safe", async () => {
-    const { fetch, calls } = scripted(() => json({ userId: "user_42\r\ninjected: true" }));
+    const unsafe = ["not an object", { userId: "user_42\r\ninjected: true" }];
+    for (const identity of unsafe) {
+      const { fetch, calls } = scripted(() => json(identity));
+      const outcome = await probeUsageLimits(
+        input({
+          providerId: "xai",
+          models: models(oauth, { auth: { apiKey: "xai-oat-token" }, source: "OAuth" }),
+          fetch,
+        }),
+      );
+      expect(outcome).toEqual({
+        kind: "verdict",
+        limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+      });
+      expect(calls.map((call) => call.url)).toEqual(["https://cli-chat-proxy.grok.com/v1/user"]);
+    }
+  });
+
+  it("stops before xAI billing when its identity read is refused", async () => {
+    const { fetch, calls } = scripted(() => new Response(null, { status: 403 }));
     const outcome = await probeUsageLimits(
       input({
         providerId: "xai",
@@ -430,9 +449,9 @@ describe("probeUsageLimits", () => {
         fetch,
       }),
     );
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       kind: "verdict",
-      limits: { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } },
+      limits: { unavailable: { reason: "probeFailed" } },
     });
     expect(calls.map((call) => call.url)).toEqual(["https://cli-chat-proxy.grok.com/v1/user"]);
   });
