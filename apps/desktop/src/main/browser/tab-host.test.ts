@@ -144,6 +144,26 @@ const fakeWindow = {
   },
 };
 
+function navigationDetails(url: string) {
+  return {
+    url,
+    isSameDocument: false,
+    isMainFrame: true,
+    frame: null,
+    initiator: null,
+    preventDefault: vi.fn(),
+  };
+}
+
+/** Electron 44 retains deprecated positional args on these two event families. */
+function emitMainFrameNavigation(
+  contents: FakeWebContents,
+  event: "will-navigate" | "will-redirect",
+  details: ReturnType<typeof navigationDetails>,
+): void {
+  contents.emit(event, details, details.url, false, true, 4, 1);
+}
+
 /**
  * The off-screen stage (VC-278). Never shown, so a test that finds a view here
  * is finding a tab the person cannot see — which is the whole point of it.
@@ -447,6 +467,31 @@ describe("BrowserTabHost security", () => {
     ).not.toThrow();
   });
 
+  it("allows HTTP(S) navigation from every Electron 44 page-driven event shape", () => {
+    host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const contents = views[0]?.webContents;
+    if (contents === undefined) throw new Error("expected WebContents");
+
+    const navigation = navigationDetails("https://example.com/next");
+    emitMainFrameNavigation(contents, "will-navigate", navigation);
+    expect(navigation.preventDefault).not.toHaveBeenCalled();
+
+    const redirect = navigationDetails("https://docs.example.com/final");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
+    expect(redirect.preventDefault).not.toHaveBeenCalled();
+
+    // Unlike the other two events, will-frame-navigate has no trailing legacy
+    // positional arguments in Electron 44.
+    const frameNavigation = navigationDetails("https://localhost:3000/frame");
+    contents.emit("will-frame-navigate", frameNavigation);
+    expect(frameNavigation.preventDefault).not.toHaveBeenCalled();
+  });
+
   it("refuses file, JavaScript, and custom-scheme navigation from both host and page", () => {
     const tab = host.open({
       url: "https://example.com",
@@ -462,16 +507,17 @@ describe("BrowserTabHost security", () => {
     expect(() => host.navigate(tab.tabId, "javascript:alert(1)")).toThrow();
     expect(() => host.navigate(tab.tabId, "volli-app://bundle/index.html")).toThrow();
 
-    const pageNavigation = { url: "file:///etc/passwd", preventDefault: vi.fn() };
-    contents?.emit("will-navigate", pageNavigation);
+    if (contents === undefined) throw new Error("expected WebContents");
+    const pageNavigation = navigationDetails("file:///etc/passwd");
+    emitMainFrameNavigation(contents, "will-navigate", pageNavigation);
     expect(pageNavigation.preventDefault).toHaveBeenCalledOnce();
 
-    const redirect = { url: "javascript:alert(1)", preventDefault: vi.fn() };
-    contents?.emit("will-redirect", redirect);
+    const redirect = navigationDetails("javascript:alert(1)");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
     expect(redirect.preventDefault).toHaveBeenCalledOnce();
 
-    const frameNavigation = { url: "custom://escape", preventDefault: vi.fn() };
-    contents?.emit("will-frame-navigate", frameNavigation);
+    const frameNavigation = navigationDetails("custom://escape");
+    contents.emit("will-frame-navigate", frameNavigation);
     expect(frameNavigation.preventDefault).toHaveBeenCalledOnce();
   });
 
@@ -495,8 +541,10 @@ describe("BrowserTabHost security", () => {
     });
     expect(views).toHaveLength(before);
 
-    const redirect = { url: BROWSER_START_URL, preventDefault: vi.fn() };
-    views[0]?.webContents.emit("will-redirect", redirect);
+    const redirect = navigationDetails(BROWSER_START_URL);
+    const contents = views[0]?.webContents;
+    if (contents === undefined) throw new Error("expected WebContents");
+    emitMainFrameNavigation(contents, "will-redirect", redirect);
     expect(redirect.preventDefault).toHaveBeenCalledOnce();
   });
 });

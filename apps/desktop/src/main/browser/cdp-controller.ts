@@ -157,8 +157,10 @@ const SELECT_OPTION_FUNCTION = `function(value) {
 }`;
 
 /** Keys `press` understands beyond single characters, in CDP's spellings. */
-const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number }> = {
-  enter: { key: "Enter", code: "Enter", keyCode: 13 },
+const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
+  // CDP needs Enter's text payload to run browser default actions such as form
+  // submission; rawKeyDown alone dispatches key listeners but not that action.
+  enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
   tab: { key: "Tab", code: "Tab", keyCode: 9 },
   escape: { key: "Escape", code: "Escape", keyCode: 27 },
   backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
@@ -589,15 +591,17 @@ export class BrowserTabController {
       code: key.code,
       windowsVirtualKeyCode: key.keyCode,
     };
+    const namedText = (modifiers & ~8) === 0 ? named?.text : undefined;
     try {
       await this.#command(
         "Input.dispatchKeyEvent",
         {
-          type: "rawKeyDown",
+          type: namedText === undefined ? "rawKeyDown" : "keyDown",
           modifiers,
           key: key.key,
           code: key.code,
           windowsVirtualKeyCode: key.keyCode,
+          ...(namedText === undefined ? {} : { text: namedText, unmodifiedText: namedText }),
         },
         signal,
       );
