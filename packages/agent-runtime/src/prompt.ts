@@ -61,6 +61,30 @@ function operatingLayer(hasResources: boolean): string {
   ].join("\n");
 }
 
+/**
+ * The compact coding workflow every Role shares (VC-332).
+ *
+ * This layer is deliberately made only from product literals. References to
+ * "available" tools and supported parallel calls make the doctrine truthful
+ * for every frozen bundle without copying provider-owned tool descriptions
+ * into the Cache Prefix. At 778 characters / ~195 estimated tokens, it stays
+ * inside the documented 150–250 token budget.
+ */
+const EXECUTION_LAYER = [
+  "# Execution",
+  "",
+  "Answer or review requests by investigating and reporting; do not edit unless a",
+  "change is requested or authorized. For implementation, inspect relevant",
+  "workspace state and applicable repository instructions before editing. Prefer",
+  "available specialized tools to shell substitutes, and parallelize independent",
+  "reads when the tool interface supports it. Preserve user and concurrent-agent",
+  "changes; never discard or overwrite work you did not create. Carry each requested",
+  "change through focused implementation and proportional verification; do not stop",
+  "at analysis when action is authorized. Ask only for a genuine blocking decision",
+  "that the task and workspace cannot resolve. Finish with the outcome, the exact",
+  "checks run and their results, and any unresolved blockers.",
+].join("\n");
+
 const ROLE_LAYER: Record<RuntimeSessionRole, string> = {
   ticket: [
     "# Role and trust",
@@ -219,9 +243,33 @@ const WORKSPACE_DOUBT: Record<RuntimeSessionRole, string> = {
  * Named where the tools are named, because how a command runs is a fact about
  * the tool the Session was actually handed. Stated only when `execute` is in
  * the bundle: a Session with no shell should not be told how its shell behaves.
+ *
+ * The second line is the concurrency budget (VC-339). Volli sets that budget in
+ * the environment, in the variables `cargo`, `make`, `cmake`, `go`, `pytest`,
+ * gradle and vitest already read, so most tools self-limit with no cooperation
+ * from the model at all. This line exists for the remainder — Jest reads no
+ * environment variable, and neither does an ad-hoc `xargs -P` — where the only
+ * way to spend the budget is to put it on the command line.
+ *
+ * It names the VARIABLE and not a number, deliberately. How many Sessions are
+ * working is a per-Session, per-moment fact, and this layer is Cache Prefix
+ * bytes: writing the count here would give two Sessions of the same Role
+ * different prompts, and would be stale for the rest of a Session's life
+ * anyway. The environment carries the live answer, and the agent can read it.
+ *
+ * ONE line, and a terse one, because these bytes are rationed: a fresh Board
+ * package at the skills-index ceiling is held below 1,500 estimated tokens
+ * (`prompt-baseline.test.ts`), and four lines of this spent a quarter of the
+ * remaining headroom to say what the variable's own name says. The full
+ * statement of the contract — which variables Volli fills, the no-clobber rule,
+ * the flag for every tool that reads none — lives in `AGENTS.md`, which a
+ * Session reads on demand rather than paying for on every request.
  */
 function executionLayer(): readonly string[] {
-  return ["Commands run directly on the user's machine, and the network is reachable."];
+  return [
+    "Commands run directly on the user's machine, and the network is reachable.",
+    "The machine is shared: pass `$VOLLI_CONCURRENCY_HINT` to `-j`/`--maxWorkers`.",
+  ];
 }
 
 /**
@@ -295,7 +343,7 @@ export interface SystemPromptInput {
 
 /** One named layer of the assembled system prompt, in delivery order. */
 export interface SystemPromptSection {
-  /** Stable machine name: `operating`, `role`, `authority`, `workspace`, `resources-header`, `resource:<name>`. */
+  /** Stable machine name: `operating`, `execution`, `role`, `authority`, `workspace`, `resources-header`, `resource:<name>`. */
   id: string;
   text: string;
 }
@@ -310,6 +358,7 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
   const resources = input.promptResources ?? [];
   const sections: SystemPromptSection[] = [
     { id: "operating", text: operatingLayer(resources.length > 0) },
+    { id: "execution", text: EXECUTION_LAYER },
     { id: "role", text: ROLE_LAYER[input.role] },
     { id: "authority", text: authorityLayer(input.role, input.tools) },
     { id: "workspace", text: workspaceLayer(input.role) },
@@ -331,7 +380,7 @@ export function systemPromptSections(input: SystemPromptInput): readonly SystemP
  */
 export type SystemPromptSpec = SystemPromptInput;
 
-/** Compose the full system prompt: operating rules, role and trust, workspace, resources. */
+/** Compose the full system prompt: operating and execution rules, trust, workspace, resources. */
 export function composeSystemPrompt(spec: SystemPromptSpec): string {
   return systemPromptSections(spec)
     .map((section) => section.text)

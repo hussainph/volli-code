@@ -35,3 +35,24 @@ describe("the Models category's search index", () => {
     }
   });
 });
+
+describe("the Storage category's search index", () => {
+  it("finds the orphaned Pi log row by the label on screen", () => {
+    const terms = keywordsFor("storage").map((term) => term.toLowerCase());
+
+    expect(terms).toContain("orphaned logs");
+  });
+
+  it("finds every label the Running processes section draws (VC-341)", () => {
+    // The three strings that section puts on screen. The rail matches a
+    // lowercased substring, so each visible label must be inside some term.
+    const terms = keywordsFor("storage").map((term) => term.toLowerCase());
+
+    for (const label of ["Running processes", "No Session owns", "Reap under memory pressure"]) {
+      expect(
+        terms.some((term) => term.includes(label.toLowerCase())),
+        `${label} is drawn in Settings → Storage but nothing in the rail finds it`,
+      ).toBe(true);
+    }
+  });
+});

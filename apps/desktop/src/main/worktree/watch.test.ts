@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type Database from "better-sqlite3";
@@ -13,6 +14,8 @@ import {
   setTicketRetentionKeep,
   updateTicketFields,
 } from "../db/tickets-repo";
+import type { NotificationRequest } from "../notifications/dispatch";
+import { runGitCapturing, runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
 import { setRetentionTtlDays } from "./retention";
 import { netFailure, scriptedNet } from "./scripted-net";
@@ -54,10 +57,7 @@ function cleanGit(wt: string) {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-interface Notified {
-  title: string;
-  body: string;
-}
+type Notified = NotificationRequest;
 
 /** Poll deps over the test db: scripted net + fixed clock + notify/onChange spies. */
 function makeDeps(
@@ -72,7 +72,7 @@ function makeDeps(
       db: ctx.db,
       net: run,
       now: () => now,
-      notify: (title, body) => notifications.push({ title, body }),
+      notify: (request) => notifications.push(request),
       onChange: () => {
         changes.n += 1;
       },
@@ -204,6 +204,14 @@ describe("pollRetention — merge", () => {
     expect(merged[0]!.actor).toBe("automation");
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Pull request merged");
+    // The completion the `finished` switch actually governs (VC-295), pointing
+    // at the ticket it merged for.
+    expect(notifications[0]!.producer).toBe("pull-request-merged");
+    expect(notifications[0]!.target).toEqual({
+      kind: "ticket",
+      projectId: "p1",
+      ticketId: "t1",
+    });
     // Broadcast only on the cycle that changed things.
     expect(changes.n).toBe(1);
   });
@@ -342,8 +350,12 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
 
     expect(notifications).toEqual([
       {
+        producer: "worktree-reclaimed",
         title: "Worktree removed",
         body: expect.stringContaining("Branch volli/VC-1-x is kept, so you can recreate it"),
+        // A click opens the ticket whose folder went away — its branch is kept,
+        // and the ticket is where recreating it starts (VC-295).
+        target: { kind: "ticket", projectId: "p1", ticketId: "t1" },
       },
     ]);
     // The board has to re-hydrate: a card's worktree just stopped existing.
@@ -587,6 +599,15 @@ describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and
     // — the only user-visible surface a background poll has.
     expect(notifications).toHaveLength(1);
     expect(notifications[0]!.title).toBe("Couldn't save discovered PR");
+    // Operational: a durable write that did not land is a fault with no other
+    // surface, so no preference can silence it — and it still opens the ticket
+    // it is about, which is a target it genuinely has (round 2).
+    expect(notifications[0]!.producer).toBe("worktree-record-failed");
+    expect(notifications[0]!.target).toEqual({
+      kind: "ticket",
+      projectId: "p1",
+      ticketId: "t1",
+    });
     // Retry path: the write never landed, so pr_url is still null — DISCOVER
     // tries the stamp again next poll.
     expect(getTicketRow(ctx.db, "t1")!.pr_url).toBeNull();
@@ -778,5 +799,80 @@ describe("nextBackoffDelay + config", () => {
     expect(retentionConfigFromEnv({ VOLLI_RETENTION_INTERVAL_MS: "0" }).intervalMs).toBe(
       RETENTION_POLL_INTERVAL_MS,
     );
+  });
+});
+
+// VC-340: the poll is where everything ALREADY finished gets caught up. The move
+// and archive doors trim at the moment a ticket finishes; this pass is what
+// reaches the 131 worktrees that finished before the feature existed, plus the
+// archived ones the merge-watch has never looked at.
+describe("pollRetention — trim-on-finish backfill (VC-340)", () => {
+  /** A committed repo ignoring `node_modules/`, with one inside it. */
+  function trimmableWorktree(): string {
+    const root = mkdtempSync(join(tmpdir(), "volli-watch-trim-"));
+    tempDirs.push(root);
+    const run = (args: readonly string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Volli Test",
+          GIT_AUTHOR_EMAIL: "test@volli.local",
+          GIT_COMMITTER_NAME: "Volli Test",
+          GIT_COMMITTER_EMAIL: "test@volli.local",
+        },
+      });
+    run(["init", "-q", "-b", "main"]);
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+    writeFileSync(join(root, "package.json"), "{}\n");
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "fixture"]);
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "index.js"), "1\n");
+    return root;
+  }
+
+  function trimSeams() {
+    return {
+      worktree: {
+        db: ctx.db,
+        git: runGitCapturing,
+        gitAsync: runGitCapturingAsync,
+        blobsRoot: "unused",
+      },
+      now: () => 1000,
+      busySites: async () => [],
+    };
+  }
+
+  it("trims a Done ticket's worktree and broadcasts once", async () => {
+    seedProject();
+    const wt = trimmableWorktree();
+    seedTicket({ status: "done", worktreePath: wt, branch: null, prUrl: null });
+    const { deps, changes, notifications } = makeDeps(() => ({ stdout: "" }));
+
+    await pollRetention({ ...deps, trim: trimSeams() }, createRetentionStore());
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(false);
+    expect(existsSync(join(wt, "package.json"))).toBe(true);
+    expect(changes.n).toBe(1);
+    // Quiet on purpose: a trim removes only what an install rebuilds, so it
+    // accounts for itself in History rather than interrupting with an alert.
+    expect(notifications).toEqual([]);
+    expect(
+      listTicketEvents(ctx.db, "t1").filter((event) => event.payload.kind === "worktree_trimmed"),
+    ).toHaveLength(1);
+  });
+
+  it("leaves every worktree alone when the trim seams are absent", async () => {
+    seedProject();
+    const wt = trimmableWorktree();
+    seedTicket({ status: "done", worktreePath: wt, branch: null, prUrl: null });
+    const { deps } = makeDeps(() => ({ stdout: "" }));
+
+    await pollRetention(deps, createRetentionStore());
+
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
   });
 });

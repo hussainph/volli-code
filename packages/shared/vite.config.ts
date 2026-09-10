@@ -1,12 +1,16 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
+
 // This config exists solely for the coverage gate — test discovery and
 // environment stay on vitest defaults, so the plain `vp test run` script
 // behaves exactly as it did without a config file. Thresholds only evaluate
 // under `--coverage` (the `test:coverage` script / CI).
 export default defineConfig({
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339).
+    ...SHARED_MACHINE_TEST_WORKERS,
     coverage: {
       include: ["src/**"],
       // The whole package is pure, unit-tested domain code (CLAUDE.md

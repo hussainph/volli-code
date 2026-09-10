@@ -25,6 +25,14 @@
  * broken host and fails the call. The `cwd` rule lives in the port, which
  * knows the workspace.
  *
+ * WHAT THE LEDGER KNOWS. Every start writes one row to the spawn ledger
+ * (VC-341) — the Session, the Ticket, the pid, the group, the clock and the
+ * cwd — and every close marks it exited. The record here is still not a ledger
+ * fact and still does not survive a relaunch; the ROW does, and that is the
+ * point. A shell whose Volli was killed mid-turn leaves a live process and a
+ * durable row saying whose it was, which is what lets a later sweep list it
+ * instead of guessing from its command line.
+ *
  * WHAT ENDS IT. A kill is SIGTERM to the group, then SIGKILL after
  * {@link SHELL_KILL_GRACE_MS}. {@link disposeSession} is the attachment's end
  * — stop, done, detach, replace, relaunch, all through the adapter's one
@@ -40,9 +48,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
-import type { RuntimeShellRecord } from "@volli/shared";
+import type { RuntimeShellRecord, SpawnLedgerPort } from "@volli/shared";
 
 import type { BackgroundShellState } from "../../ipc/contract";
+import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 
 /** Bytes retained per shell — the PTY peek's own bound (`pty/output.ts`). */
 export const SHELL_OUTPUT_MAX_BYTES = 256_000;
@@ -75,6 +84,8 @@ export interface BackgroundShellHostDependencies {
   publishState(state: BackgroundShellState): void;
   /** The renderer's feed: a shell the host forgot. */
   publishRemoved(shellId: string): void;
+  /** Where a started shell is recorded so a later launch can still attribute it. */
+  ledger?: SpawnLedgerPort;
   createId?: () => string;
   now?: () => number;
   settleMs?: number;
@@ -182,8 +193,10 @@ export class BackgroundShellHost {
   private readonly killGraceMs: number;
   private readonly outputMaxBytes: number;
   private readonly tailMaxBytes: number;
+  private readonly ledger: SpawnLedgerPort;
 
   constructor(private readonly deps: BackgroundShellHostDependencies) {
+    this.ledger = deps.ledger ?? NO_SPAWN_LEDGER;
     this.createId = deps.createId ?? randomUUID;
     this.now = deps.now ?? Date.now;
     this.settleMs = deps.settleMs ?? SHELL_START_SETTLE_MS;
@@ -262,6 +275,21 @@ export class BackgroundShellHost {
       const failure = await new Promise<Error>((resolve) => child.once("error", resolve));
       throw new Error(`Could not start a background shell: ${failure.message}`);
     }
+    const startedAt = this.now();
+    // Written before the first chunk can arrive, and with the pid the group
+    // kill would signal: `detached: true` above makes this child its own group
+    // leader, so its pid IS its pgid.
+    const ledgerId = this.ledger.recordSpawn({
+      sessionId: owner.sessionId,
+      ticketId: owner.ticketId,
+      projectId: owner.projectId,
+      kind: "shell",
+      pid,
+      pgid: pid,
+      startedAt,
+      cwd: input.cwd,
+      command: input.command,
+    });
     const record: RuntimeShellRecord = {
       shellId,
       command: input.command,
@@ -269,7 +297,7 @@ export class BackgroundShellHost {
       state: "running",
       code: null,
       signal: null,
-      startedAt: this.now(),
+      startedAt,
       exitedAt: null,
     };
     const ring = new OutputRing(this.outputMaxBytes);
@@ -287,6 +315,7 @@ export class BackgroundShellHost {
         record.code = code;
         record.signal = signal;
         record.exitedAt = this.now();
+        if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
         if (this.shells.has(shellId)) this.deps.publishState(this.stateOf(entry));
         resolve();
       };

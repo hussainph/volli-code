@@ -318,16 +318,20 @@ describe("PreviousBandRow identity", () => {
     title: "Review fixes",
     kind: "chat",
     endedOrQuietAt: 0,
+    activity: "idle",
     provenance: PERSON_STARTED,
     target: null,
     cleaned: false,
   };
 
-  function renderPrevious(showIdentity?: boolean): string {
+  function renderPrevious(
+    showIdentity?: boolean,
+    overrides: Partial<PreviousSessionRow> = {},
+  ): string {
     return renderToStaticMarkup(
       <SidebarProvider>
         <PreviousBandRow
-          row={previous}
+          row={{ ...previous, ...overrides }}
           projectId="proj-1"
           ticketPrefix="VC"
           now={60_000}
@@ -378,5 +382,30 @@ describe("PreviousBandRow identity", () => {
     // Only the identity goes: the row keeps its title and its kind glyph.
     expect(markup).toContain("Review fixes");
     expect(markup).toContain('aria-label="Chat"');
+  });
+
+  // VC-324: `interrupted` is durable, so it survives the quiet window into
+  // Previous — and it must survive the RELAUNCH too, which is the same row
+  // built purely from the record. One line is all this band gives a row, so
+  // the mark is the destructive dot plus the words out of band.
+  it("draws the interrupted dot for a historical interrupted Session (VC-324)", () => {
+    const interrupted = renderPrevious(undefined, {
+      id: "session:dead",
+      title: "Died mid-run",
+      activity: "interrupted",
+    });
+    const idle = renderPrevious(undefined, { activity: "idle" });
+
+    // The destructive state the Active band gives the same fact.
+    expect(interrupted).toContain('data-state="interrupted"');
+    expect(idle).not.toContain('data-state="interrupted"');
+  });
+
+  it("says Interrupted out of band, as this row's one-line size demands", () => {
+    const interrupted = renderPrevious(undefined, { activity: "interrupted" });
+    const idle = renderPrevious(undefined, { activity: "idle" });
+
+    expect(interrupted).toContain('class="sr-only">Interrupted</span>');
+    expect(idle).not.toContain("Interrupted");
   });
 });

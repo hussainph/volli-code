@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 
-import { contextGridCells, formatTokens, sessionContextUsage } from "./context-usage";
+import {
+  contextGridCells,
+  formatTokens,
+  sessionContextUsage,
+  type SessionContextUsage,
+} from "./context-usage";
+
+/** The "Your messages" share of one breakdown. */
+function userSegmentTokens(usage: SessionContextUsage): number {
+  return usage.segments.find((segment) => segment.id === "user")!.tokens;
+}
 
 function user(id: string, text: string): UIMessage {
   return { id, role: "user", parts: [{ type: "text", text }] } as UIMessage;
@@ -81,8 +91,8 @@ describe("sessionContextUsage", () => {
   });
 
   it("segments sum exactly to the measured total, with the shortfall filed as system", () => {
-    // 400 chars of user text ≈ 100 estimated tokens against a measured 1000:
-    // the unexplained 900 is the system prompt and overhead.
+    // 600 ASCII chars of transcript ≈ 200 estimated tokens against a measured
+    // 1000: the unexplained ~800 is the system prompt and overhead.
     const usage = sessionContextUsage(
       [
         user("u1", "x".repeat(400)),
@@ -94,8 +104,34 @@ describe("sessionContextUsage", () => {
     expect(total).toBe(1000);
     const system = usage.segments.find((segment) => segment.id === "system");
     expect(system).toBeDefined();
-    expect(system!.tokens).toBeGreaterThan(800);
+    expect(system!.tokens).toBeGreaterThan(700);
     expect(usage.segments.map((segment) => segment.id)).toEqual(["system", "user", "assistant"]);
+  });
+
+  it("does not price a CJK message as if it were the same length in ASCII", () => {
+    // The split is normalized, so understating one bucket inflates the others.
+    // Equal character counts, wildly unequal context: a divide-by-four estimate
+    // gave these two identical shares and quietly moved the difference into
+    // whatever segment sat beside them.
+    const usage = sessionContextUsage(
+      [
+        user("u1", "追加情報".repeat(100)),
+        user("u2", "x".repeat(400)),
+        assistant("a1", "ok", { input: 5_000, output: 100, cacheRead: 0, cacheWrite: 0 }),
+      ],
+      null,
+    )!;
+    const ascii = sessionContextUsage(
+      [
+        user("u1", "y".repeat(400)),
+        user("u2", "x".repeat(400)),
+        assistant("a1", "ok", { input: 5_000, output: 100, cacheRead: 0, cacheWrite: 0 }),
+      ],
+      null,
+    )!;
+    expect(userSegmentTokens(usage)).toBeGreaterThan(userSegmentTokens(ascii) * 1.5);
+    // …and the measured whole is still the measured whole.
+    expect(usage.segments.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(5_100);
   });
 
   it("scales estimates down when they outclaim the measurement, and drops system", () => {

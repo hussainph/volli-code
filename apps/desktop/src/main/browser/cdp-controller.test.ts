@@ -236,16 +236,30 @@ describe("BrowserTabController", () => {
     expect(shot).toEqual({ base64Png: "aGVsbG8=", width: 800, height: 600 });
   });
 
-  it("fails a command the engine never answers instead of wedging the call", async () => {
-    // A throttled, crashed or torn-down engine can hold a debugger command
-    // open forever; the caller must get one readable failure, not a hang.
+  it("gives a timed-out screenshot accurate recovery guidance", async () => {
     const controller = new BrowserTabController(
       { send: () => new Promise<never>(() => undefined) },
       { maxCommandMs: 20 },
     );
 
-    await expect(controller.snapshot()).rejects.toThrow(
-      "did not answer Accessibility.getFullAXTree within 20ms",
+    await expect(controller.screenshot()).rejects.toHaveProperty(
+      "message",
+      "The Browser Tab did not finish taking a screenshot within 20ms. The page may still be busy or too heavy to capture in time. Take a snapshot to check its current state, then try the screenshot again.",
+    );
+  });
+
+  it("gives a timed-out snapshot non-circular recovery guidance", async () => {
+    // A throttled, crashed or torn-down page can hold a command open forever;
+    // the caller must get one readable failure, not a hang or advice to take
+    // the same snapshot that just failed.
+    const controller = new BrowserTabController(
+      { send: () => new Promise<never>(() => undefined) },
+      { maxCommandMs: 20 },
+    );
+
+    await expect(controller.snapshot()).rejects.toHaveProperty(
+      "message",
+      "The Browser Tab did not finish taking a snapshot within 20ms. Wait for the page to settle, then try the snapshot again.",
     );
   });
 
@@ -284,7 +298,10 @@ describe("BrowserTabController", () => {
 
     await expect(
       controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
-    ).rejects.toThrow("did not answer Input.dispatchMouseEvent within 20ms");
+    ).rejects.toHaveProperty(
+      "message",
+      "The Browser Tab did not finish the requested action within 20ms. The action may or may not have reached the page; check its current state before trying again.",
+    );
 
     // The caller still hears the press failure, and the page still gets its up.
     const types = sent
@@ -322,6 +339,21 @@ describe("BrowserTabController", () => {
       .filter((call) => call.method === "Input.dispatchKeyEvent")
       .map((call) => (call.params as { type?: string }).type);
     expect(types).toEqual(["rawKeyDown", "keyUp"]);
+  });
+
+  it("reports readiness timeouts without suggesting a snapshot the tab cannot take yet", async () => {
+    const controller = new BrowserTabController(
+      {
+        send: async () => ({}),
+        ensureReady: () => new Promise<never>(() => undefined),
+      },
+      { maxCommandMs: 20 },
+    );
+
+    await expect(controller.enable()).rejects.toHaveProperty(
+      "message",
+      "The Browser Tab did not become ready within 20ms. Try the Browser Tab command again.",
+    );
   });
 
   it("attaches nothing when the turn was already withdrawn before enable", async () => {

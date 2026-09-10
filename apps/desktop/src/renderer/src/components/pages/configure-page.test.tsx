@@ -66,7 +66,7 @@ describe("Configure → Worktrees", () => {
 
     expect(html).toContain("Copied files");
     expect(html).toContain(".worktreeinclude");
-    // `sweepOrphans` walks every project in the db and reports directories git
+    // `scanOrphans` walks every project in the db and reports directories git
     // attributes to none of them, so its list — and its permanent deletes —
     // cannot be scoped here. Settings → Storage owns it.
     expect(html).not.toContain("Orphaned worktrees");
@@ -74,14 +74,26 @@ describe("Configure → Worktrees", () => {
 });
 
 describe("Configure → Sessions", () => {
-  it("offers the harness choice without a scope switch", () => {
+  it("offers the Chat model default without an inert Harness setting or scope switch", () => {
     const html = renderConfigure("sessions");
 
-    expect(html).toContain("Harness");
-    expect(html).toContain("New sessions");
+    expect(html).toContain("Chat");
+    expect(html).toContain("Model");
+    expect(html).not.toContain("Harness");
+    expect(html).not.toContain("Terminal companion");
+    expect(html).not.toContain("New sessions");
     // Scope is the surface, not a mode: an Inherit/Custom pair per row is the
     // exact vocabulary this redesign removed (see kit/override.tsx).
     expect(html).not.toContain("Inherit");
+  });
+
+  it("indexes the visible Chat section and retires the removed Harness vocabulary", () => {
+    const category = configureGroups(project)
+      .flatMap((group) => group.categories)
+      .find((candidate) => candidate.key === "sessions");
+
+    expect(category?.keywords).toContain("chat");
+    expect(category?.keywords).not.toContain("harness");
   });
 
   it("keeps a disabled model picker visible while its catalogue loads", () => {

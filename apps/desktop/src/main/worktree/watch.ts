@@ -24,14 +24,22 @@ import type { PrCheck, TicketRetentionState } from "../../ipc/contract";
 import { recordTicketEvent } from "../db/events-repo";
 import { getProjectById } from "../db/projects-repo";
 import { prepared } from "../db/prepared";
-import { listRetentionCandidates, updateTicketFields, type TicketRow } from "../db/tickets-repo";
+import {
+  listRetentionCandidates,
+  listTrimCandidates,
+  updateTicketFields,
+  type TicketRow,
+} from "../db/tickets-repo";
+import type { NotificationRequest } from "../notifications/dispatch";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import {
   computeArchiveReadiness,
   doneEntryTimestamp,
   reclaimIfStale,
   retentionTtlMs,
+  trimFinishedWorktree,
   type ReclaimDeps,
+  type TrimFinishDeps,
 } from "./retention";
 
 export type { TicketRetentionState } from "../../ipc/contract";
@@ -121,8 +129,14 @@ export interface RetentionPollDeps {
   net: RunNet;
   /** Injected clock (never `Date.now()` inline) — the TTL and readiness read it. */
   now: () => number;
-  /** Fires the single native "PR merged" notification. */
-  notify: (title: string, body: string) => void;
+  /**
+   * The one delivery path (VC-295). This watch posts three different alerts
+   * under three different policies — a merged PR (`finished`), a reclaimed
+   * worktree (`swept`), and a durable write that did not land (operational,
+   * never muteable) — so it names a producer per alert rather than a title and
+   * a body, and the preference is decided in one place for all three.
+   */
+  notify: (request: NotificationRequest) => void;
   /** Broadcast seam (wired to `broadcastDataChanged`) — called once when any observation changed. */
   onChange?: () => void;
   /**
@@ -132,6 +146,12 @@ export interface RetentionPollDeps {
    * appear, and the only thing lost is the automatic disk reclaim.
    */
   reclaim?: ReclaimDeps;
+  /**
+   * The trim-on-finish pass (VC-340). Absent — in tests, and in a degraded boot
+   * that could not build the worktree seams — leaves the poll exactly as it was:
+   * no worktree gives up its ignored content, and nothing else changes.
+   */
+  trim?: TrimFinishDeps;
 }
 
 /** The poll cycle's outcome — the driver reads it to update backoff and broadcast. */
@@ -205,6 +225,8 @@ export async function pollRetention(
   store: RetentionStore,
 ): Promise<PollResult> {
   const result: PollResult = { changed: false, attempted: 0, failed: 0 };
+  /** Tickets this cycle saw merged — finished, whatever column they are in. */
+  const mergedThisCycle = new Set<string>();
 
   for (const ticket of listRetentionCandidates(deps.db)) {
     // Per-ticket isolation: a throw here (SQLITE_BUSY, an FK failure on a
@@ -294,11 +316,22 @@ export async function pollRetention(
             deps.now(),
             AUTOMATION_ACTOR,
           );
-          deps.notify("Pull request merged", ticket.title);
+          deps.notify({
+            producer: "pull-request-merged",
+            title: "Pull request merged",
+            body: ticket.title,
+            // The completion `finished` actually governs, and a click opens
+            // the ticket it merged for.
+            target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+          });
           result.changed = true;
         }
         store.notifiedMerged.add(ticket.id);
       }
+
+      // A merge is a finish wherever the card happens to sit, so the trim pass
+      // below is told about it — `listTrimCandidates` only knows Done/archived.
+      if (observation.prState === "merged") mergedThisCycle.add(ticket.id);
 
       // (4) RECLAIM — the duration gate (VC-113). Runs LAST, after the PR state
       // this cycle observed is known, because "is a PR still open on it?" is
@@ -309,8 +342,57 @@ export async function pollRetention(
     }
   }
 
+  // (5) TRIM — the footprint gate (VC-340), over Done/archived tickets plus
+  // anything this cycle saw merged. Runs after the reclaim so a directory that
+  // was just removed is not walked on the way out.
+  if (await runTrimPass(deps, mergedThisCycle)) result.changed = true;
+
   if (result.changed) deps.onChange?.();
   return result;
+}
+
+/**
+ * The trim-on-finish pass (VC-340): every finished ticket's worktree gives up
+ * what git ignores. Deliberately quiet — no notification, unlike the reclaim.
+ * The reclaim speaks because a FOLDER vanished and the user needs to know it can
+ * come back; a trim removes only what a package manager rebuilds, and a native
+ * alert for every Done move would be noise nobody can act on. It is still
+ * accounted for: each trim writes a `worktree_trimmed` event, so the ticket's own
+ * History says what went and how much, and the pass broadcasts so surfaces
+ * re-read.
+ *
+ * Refusals are silent by the same rule that makes background reads silent, and
+ * per-ticket failures are isolated: one unreadable worktree must not stop the
+ * rest of the pass.
+ */
+async function runTrimPass(
+  deps: RetentionPollDeps,
+  mergedThisCycle: ReadonlySet<string>,
+): Promise<boolean> {
+  const trim = deps.trim;
+  if (trim === undefined) return false;
+  const ticketIds = new Set<string>([
+    ...listTrimCandidates(deps.db).map((ticket) => ticket.id),
+    ...mergedThisCycle,
+  ]);
+  let changed = false;
+  for (const ticketId of ticketIds) {
+    try {
+      const outcome = await trimFinishedWorktree(trim, ticketId, {
+        prMerged: mergedThisCycle.has(ticketId),
+      });
+      if (outcome.kind !== "trimmed") continue;
+      changed = true;
+      console.log(
+        `[retention] trimmed ${outcome.report.removed.length} ignored path(s) ` +
+          `(${outcome.report.totalBytes} bytes, kept ${outcome.report.kept.length}) ` +
+          `from ${outcome.report.worktreePath}`,
+      );
+    } catch (error) {
+      console.error(`[retention] trim failed for ${ticketId}:`, error);
+    }
+  }
+  return changed;
 }
 
 /**
@@ -331,12 +413,17 @@ async function maybeReclaim(
   if (!deps.reclaim) return false;
   const outcome = await reclaimIfStale(deps.reclaim, ticket.id, prState);
   if (outcome.kind !== "reclaimed") return false;
-  deps.notify(
-    "Worktree removed",
-    outcome.branch === null
-      ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
-      : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
-  );
+  deps.notify({
+    producer: "worktree-reclaimed",
+    title: "Worktree removed",
+    body:
+      outcome.branch === null
+        ? `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done.`
+        : `${ticket.title}: Volli removed the folder after ${outcome.daysInDone} days in Done. Branch ${outcome.branch} is kept, so you can recreate it.`,
+    // The folder is gone; the ticket it belonged to is what a person can still
+    // act on (its branch is kept, and the ticket is where recreating starts).
+    target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+  });
   return true;
 }
 
@@ -363,10 +450,21 @@ function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: stri
     return true;
   } catch (error) {
     console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
-    deps.notify(
-      "Couldn't save discovered PR",
-      `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
-    );
+    // Operational, and deliberately outside the switches: this is a durable
+    // write that failed in a background pass with no other user-visible
+    // surface (CLAUDE.md's never-swallow rule). A "worktree maintenance"
+    // preference that could hide a failed write would be a mute button on the
+    // one thing the pass cannot recover by itself.
+    //
+    // It still opens the ticket it is about. Operational means no preference is
+    // consulted, not that the person is left to find the card themselves — and
+    // this target is one the failure genuinely has rather than an invented one.
+    deps.notify({
+      producer: "worktree-record-failed",
+      title: "Couldn't save discovered PR",
+      body: `${ticket.title}: found PR ${url} but couldn't record it. Will retry.`,
+      target: { kind: "ticket", projectId: ticket.project_id, ticketId: ticket.id },
+    });
     return false;
   }
 }

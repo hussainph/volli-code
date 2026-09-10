@@ -25,6 +25,8 @@
 import type Database from "better-sqlite3";
 import { errorMessage } from "@volli/shared";
 
+import type { NotificationRequest } from "./notifications/dispatch";
+
 import type { UpdateUiState } from "../ipc/contract";
 import { setAppState } from "./db/app-state-repo";
 import { prepared } from "./db/prepared";
@@ -158,8 +160,13 @@ export interface AutoUpdateDeps {
   allowPrerelease: boolean;
   /** The running build's version (`app.getVersion()`) — the "from" of any update. */
   currentVersion: string;
-  /** The app's notification seam: a native `Notification`, never a dialog. */
-  notify(title: string, body: string): void;
+  /**
+   * The app's notification seam: the one delivery path (VC-295), never a
+   * dialog. The staged-update alert is the `update` category, and a click on
+   * it opens the update surface — which is why it carries a target rather than
+   * a title and a body.
+   */
+  notify(request: NotificationRequest): void;
   /** The main-process log seam (`console.info` in production). */
   log(line: string): void;
   /**
@@ -174,6 +181,13 @@ export interface AutoUpdateDeps {
    * native "Update ready" notification stays quiet (VC-59's double-notify
    * guard); with no window — macOS keeps the app alive after the last window
    * closes — the notification is the only voice left and still fires.
+   *
+   * This is NOT the focused-target rule (VC-295 rule 5), and the two are kept
+   * separate deliberately. That rule asks whether the exact target is in front
+   * of the person in a FOCUSED window; this one asks only whether a window
+   * exists at all, because the update badge is per-window chrome that lights up
+   * in every open window whether or not anyone is looking at it. Settings
+   * describes them as the two different things they are.
    */
   hasUpdateSurface(): boolean;
 }
@@ -300,10 +314,12 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     if (notifiedVersions.has(info.version)) return;
     if (deps.hasUpdateSurface()) return;
     notifiedVersions.add(info.version);
-    deps.notify(
-      "Update ready",
-      `Volli Code ${info.version} has been downloaded and will install when you quit.`,
-    );
+    deps.notify({
+      producer: "update-ready",
+      title: "Update ready",
+      body: `Volli Code ${info.version} has been downloaded and will install when you quit.`,
+      target: { kind: "update" },
+    });
   });
 
   // The returned promise is also where a failed feed read/download kickoff

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { SpawnOptions } from "node:child_process";
+import { spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -250,6 +250,26 @@ describe("ScopedExecutionEnv", () => {
     });
   });
 
+  it.each(["nohup sleep 300", "sleep 300 &"])(
+    "refuses daemonizing execute syntax before launch and names shell_start: %s",
+    async (command) => {
+      const { worktree } = roots();
+      const srt = sandbox();
+      const spawn = vi.fn();
+      const env = await ScopedExecutionEnv.create(worktree, { sandbox: srt, spawn });
+
+      await expect(env.exec(command)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "spawn_error",
+          message: expect.stringContaining("shell_start"),
+        },
+      });
+      expect(srt.calls).toMatchObject({ checks: 1, initializes: 1, wraps: [] });
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
   it("preflights the process-global sandbox exactly once for concurrent Ticket environments", async () => {
     const { worktree } = roots();
     const srt = sandbox();
@@ -495,6 +515,89 @@ describe("ScopedExecutionEnv", () => {
     expect(abortKill).toHaveBeenCalledWith(-1234, "SIGTERM");
   });
 
+  it("terminates the process group after a successful close without delaying the result", async () => {
+    const { worktree } = roots();
+    const running = child();
+    const processKill = vi.fn();
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      processKill,
+    });
+    const run = env.exec("echo done");
+    await vi.waitFor(() => expect(running.listenerCount("close")).toBeGreaterThan(0));
+
+    vi.useFakeTimers();
+    try {
+      running.emit("close", 0);
+      await expect(run).resolves.toMatchObject({ ok: true, value: { exitCode: 0 } });
+      expect(processKill).toHaveBeenCalledWith(-1234, "SIGTERM");
+      expect(processKill).not.toHaveBeenCalledWith(-1234, "SIGKILL");
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(processKill).not.toHaveBeenCalledWith(-1234, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processKill).toHaveBeenCalledWith(-1234, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "removes a plain sleeper from the process group after its shell exits successfully",
+    async () => {
+      const { worktree } = roots();
+      let processGroup: number | undefined;
+      const srt = sandbox({
+        wrapWithSandboxArgv: async (command) => ({
+          argv: ["/bin/bash", "-c", command],
+          env: { PATH: "/usr/bin:/bin" },
+        }),
+      });
+      const env = await ScopedExecutionEnv.create(worktree, {
+        sandbox: srt,
+        spawn: ((command: string, args: readonly string[], options: SpawnOptions) => {
+          const running = nodeSpawn(command, args, options);
+          processGroup = running.pid;
+          return running;
+        }) as never,
+      });
+      const seen = collected();
+
+      try {
+        const result = await env.exec('bash -c "sleep 300 & echo hi"', {
+          ...seen.options,
+          // If the successful-exit cleanup regresses, the timeout path still
+          // prevents this acceptance test from leaving its sleeper behind.
+          timeout: 2,
+        });
+        expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } });
+        expect(seen.text).toBe("hi\n");
+        expect(processGroup).toBeTypeOf("number");
+
+        await vi.waitFor(() => {
+          let code: string | undefined;
+          try {
+            process.kill(-processGroup!, 0);
+          } catch (error) {
+            code = (error as NodeJS.ErrnoException).code;
+          }
+          expect(code).toBe("ESRCH");
+        });
+      } finally {
+        if (processGroup !== undefined) {
+          try {
+            process.kill(-processGroup, "SIGKILL");
+          } catch {
+            /* the successful-close cleanup already removed the group */
+          }
+        }
+        await env.cleanup();
+      }
+    },
+    5_000,
+  );
+
   it("escalates the original process group after its leader closes", async () => {
     const { worktree } = roots();
     const running = child();
@@ -511,6 +614,7 @@ describe("ScopedExecutionEnv", () => {
     vi.useFakeTimers();
     try {
       controller.abort();
+      running.emit("exit", null, "SIGTERM");
       running.emit("close", 0);
       await vi.advanceTimersByTimeAsync(249);
       expect(processKill).toHaveBeenCalledWith(-1234, "SIGTERM");
@@ -1166,5 +1270,77 @@ describe("ScopedExecutionEnv", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("records each spawned command in the spawn ledger and closes the row on close", async () => {
+    // VC-341: the row, not the command line, is what says whose a process is
+    // after the Session that asked for it has ended. `detached` makes the child
+    // its own group leader, so the pid recorded is also the group a reap would
+    // signal.
+    const { worktree } = roots();
+    const running = child();
+    const recorded: unknown[] = [];
+    const exited: string[] = [];
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      ledger: {
+        port: {
+          recordSpawn: (spawn) => {
+            recorded.push(spawn);
+            return "row-1";
+          },
+          markExited: (id) => exited.push(id),
+        },
+        owner: { sessionId: "session-1", ticketId: "ticket-1", projectId: "project-1" },
+      },
+    });
+
+    const execution = env.exec("pnpm dev");
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({
+      sessionId: "session-1",
+      ticketId: "ticket-1",
+      projectId: "project-1",
+      kind: "execute",
+      pid: 1234,
+      pgid: 1234,
+      cwd: env.cwd,
+      command: "pnpm dev",
+    });
+    expect(exited).toEqual([]);
+
+    running.emit("close", 0);
+    await execution;
+    expect(exited).toEqual(["row-1"]);
+  });
+
+  it("records nothing for a spawn that produced no pid", async () => {
+    const { worktree } = roots();
+    const pidless = child();
+    // A host double that never forked: there is no process to name, and a row
+    // naming no process would be worse than no row.
+    Reflect.deleteProperty(pidless, "pid");
+    const recorded: unknown[] = [];
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => pidless) as never,
+      ledger: {
+        port: {
+          recordSpawn: (spawn) => {
+            recorded.push(spawn);
+            return "row-1";
+          },
+          markExited: () => {},
+        },
+        owner: { sessionId: "session-1", ticketId: null, projectId: null },
+      },
+    });
+
+    const execution = env.exec("true");
+    await vi.waitFor(() => expect(pidless.listenerCount("close")).toBeGreaterThan(0));
+    pidless.emit("close", 0);
+    await execution;
+    expect(recorded).toEqual([]);
   });
 });

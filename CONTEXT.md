@@ -27,15 +27,16 @@ _Avoid_: ticket worktree, artifact view
 The project-level tabbed workspace, and the app's landing page. Its permanent
 first tab is the Board; the project's own Board Sessions and Project Files
 open as tabs beside it. Opening a ticket takes Home over: the Ticket workspace
-fills the surface and Home's tab strip steps aside, so only one tab strip is
-ever on screen.
+fills the surface and Home's tab bar steps aside, so the two surfaces' tabs
+never stack above one another.
 _Avoid_: Board (for the page), Sessions page, dashboard, Files (as a nav item)
 
 **Split view**:
 A tabbed surface's plane divided into Panes, each holding a subset of that
 surface's tabs (VC-202). Both surfaces have one, each keeps its own, and tabs
 never cross between them. Splits open right or down only, which keeps the
-permanent tab's Pane in the top left and the surface's own tab strip over it. A
+permanent tab's Pane in the top left. Top-edge Panes divide the main tab bar;
+only Panes below a down split add lower tab strips (VC-333). A
 surface with no split is not "a split view of one" — it is the plane it always
 was, and the app stores nothing for it.
 _Avoid_: split screen, editor group, pane tree, multi-pane mode
@@ -98,12 +99,16 @@ ledger fact). When its first turn completes a notice from Volli — the child's
 handle, state and title, none of its words — is steered into the parent, and the
 parent reads the answer with `volli session answer <handle>`, so the child's
 prose reaches it as a tool result and never as its user; the parent is never
-parked on it, and stopping the parent stops its children. In the parent's chat
-its children show in the Activity Island's agents cluster (VC-269): one chip per
-child, working / done / failed / stopped, where a row peeks the child's
-transcript read-only in an overlay, opens it as a full tab, or stops it as the
-person (`sessions.stop`, recorded with the `user` actor). That cluster is the
-only place a child is a ROW: a Subagent Session never appears in a Session
+parked on it, and stopping the parent stops its children. The Session
+Presentation Contract projects that notice into the parent's transcript as a
+quiet host-authored receipt row, not as a Turn in the person's voice. This row
+records the delegation outcome; it is not a listing of the child. While work is
+live, the parent's chat shows its children in the Activity Island's agents
+cluster (VC-269): one chip per child, working / done / failed / stopped, where a
+row peeks the child's transcript read-only in an overlay, opens it as a full
+tab, or stops it as the person (`sessions.stop`, recorded with the `user`
+actor). That cluster is the only place a child itself is an interactive activity
+ROW: a Subagent Session never appears in a Session
 listing (VC-279) — not the project sidebar's bands, the ticket rail's roster,
 Home's Sessions page or ⌘K — because how many helpers a turn opened is a fact
 about how the agents worked, not about what the person started. Only the
@@ -186,12 +191,27 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: one app-wide
-switch decides whether a Session compacts before it is asked to, and every
-Session runs on the executor's own reserve (per-model reserves retired,
-VC-155). Switching the threshold off never withholds the recovery an overflow
-triggers.
-_Avoid_: truncation, trimming history, pruning the transcript
+and each one is a Session Event. A fourth reason exists on the FAILED arm only:
+a provider-native checkpoint the Session can no longer use, whose history is
+restored in its place. It is a reason a person sees rather than a silent
+recovery, because their context just grew back and the next turn may compact
+again for a threshold they did not watch fill. Only the threshold is policy: one app-wide
+switch decides whether a Session compacts before it is asked to. Nobody
+configures a reserve: per-model reserve budgets were retired with the policy
+that carried them (VC-155) and there is no setting to bring them back. The
+threshold itself is the larger of the executor's own reserve and a fixed share
+of the model's window — not a preference, an arithmetic fact about windows: one
+flat allowance is sensible at 200k and a rounding error at 1M, where it leaves
+less than one dense tool result of room and a single unmeasured round can carry
+a Session past the window before the next check (VC-331). The occupancy it is
+measured against is the provider's last reported usage plus a model-aware
+estimate of everything unmeasured since — incoming messages and tool results
+included — and it is checked before each provider request, not only ahead of an
+idle prompt. The summary's own output allowance stays on the executor's smaller
+reserve: a 1M-window model has no reason to write an 80,000-token summary.
+Switching the threshold off never withholds the recovery an overflow triggers.
+_Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
+(a retired setting, not this window-proportional threshold)
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a
@@ -248,14 +268,23 @@ session (when meaning a tab)
 **Headless tab**:
 A Browser Tab a Session opened and nobody has asked to see (VC-238). It has
 its real viewport, wake hold, console and screenshots, but is in no strip, in
-no tab order, and attached to no window. Every Session-created tab is born
-this way; a person's own tabs never are. A headless tab is visible only in the
-chat that owns it — as the **tab card** under the browser row that touched it,
+no tab order, and on no surface a person can look at. Every Session-created tab
+is born this way; a person's own tabs never are. Headless is a fact about
+presentation, never about rendering: the host still parks the page in an
+internal compositor host it never shows and never hands to the person (today an
+off-screen window in Electron main, VC-278), because a page with no compositor
+surface cannot be captured or clicked at all — its screenshots never answer and
+its clicks reach nothing while its accessibility tree reads perfectly. "Drawn
+nowhere a person can look" is the rule; "attached to nothing" is not, and would
+stay wrong however the Browser host is later split between a **Client Surface**
+and the host that serves it. A headless tab is visible only in the chat that
+owns it — as the **tab card** under the browser row that touched it,
 and in the Activity Island's tabs cluster above the composer (VC-268), whose
 card lists every tab the Session and its children hold — and it closes with
 its owner Session's attachment or when its Ticket is archived. The model can never
 reveal one; the person can.
-_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it is)
+_Avoid_: hidden tab, background tab, agent tab (says who opened it, not where it
+is), off-screen tab (where the host parks it, not what headless means)
 
 **Tab owner**:
 The Session that opened a Browser Tab (`ownerSessionId`), or nobody for a
@@ -271,12 +300,12 @@ _Avoid_: creator, session tab (ambiguous with the Session's own tabs)
 
 **Presentation**:
 Where a Browser Tab is drawn, decided by the person and held by main:
-`headless` (nowhere), `preview` (pinned live above the owning chat's
-composer, one per Session), or `tab` (an item in the Home or Ticket strip,
-marked as driven). A person's tabs are always `tab`. Show, Hide and Open as
-tab change presentation and nothing else — not the owner, the generation,
-the cookies, or anything the agent sees. A tab the person has shown is
-theirs and survives its Session.
+`headless` (on no surface a person can look at), `preview` (pinned live above
+the owning chat's composer, one per Session), or `tab` (an item in the Home or
+Ticket strip, marked as driven). A person's tabs are always `tab`. Show, Hide
+and Open as tab change presentation and nothing else — not the owner, the
+generation, the cookies, or anything the agent sees. A tab the person has shown
+is theirs and survives its Session.
 _Avoid_: visibility (that is whether the native plane is attached right now),
 shown/hidden as states (they are the actions)
 **Tab hold**:
@@ -291,9 +320,11 @@ no stale hold to time out. The person is never locked out: their own input
 into the page is always delivered, and the address bar, back, forward and
 reload are not a takeover. **Take over**, **Ask to leave** and **Hand back**
 are the person's explicit controls on the chrome pill and the cursor label;
-the affected Session is told in one in-band line. `heldBy` rides the tab's
-state so every surface — the pill, the tab strip's holder dot, the cursor —
-agrees on who has it.
+the affected Session is told in one in-band line. A client projects that line
+as a host-authored receipt named by the tab's bounded title or hostname, while
+the full opaque tab id remains its identity. `heldBy` rides the tab's state so
+every surface — the pill, the tab strip's holder dot, the cursor — agrees on
+who has it.
 _Avoid_: lock, lease (that is the wake hold against throttling), tab owner
 (a separate fact — see **Tab owner**; a headless tab can be held, and a held
 tab is not thereby owned)
@@ -646,6 +677,52 @@ be awaited is per-actor policy data (`awaitable`); chaining the opaque `cursor`
 returned by every wake or timeout makes the watch window continuous. A cursor
 is ledger order; `occurredAt` is metadata and must never be used as one.
 _Avoid_: watch verb, `volli ticket wait`, polling loop
+
+**Session Await**:
+The control-tier wait between Sessions: a Session's `session_await` tool call
+parks its turn until a watched Session finishes a turn (`for: turn`), signals
+done or blocked (`verdict`), or is stopped (`stopped`) — then wakes with that
+one fact (VC-324). Same discipline as **Await**, one ledger over: one or many
+short session ids, the same `timeoutSeconds`, and the same opaque `cursor`.
+The first cursor comes from the `session_start`, `session_send`, or
+`session_delegate` receipt; each wake or timeout returns the next cursor to
+chain, so a Board Session supervising a fleet misses nothing between calls
+without polling `session list`. A Board Session
+may await any Session in its project; a ticket Session only itself and the
+subagents it delegated. What may be awaited is per-actor policy data
+(`awaitableSessions`); a Board Session no longer needs every child to post a
+Ticket Signal at the end of every stage just to be waited on.
+_Avoid_: `volli session wait` (a CLI verb must never wait), polling loop,
+waking on every Session Event (bookkeeping would hand back a turn per write)
+
+**Session Wake**:
+The one durable Session Event a Session Await parks on, returned with the same
+opaque `cursor` discipline as a Ticket Wake — the cursor is ledger order and
+`occurredAt` is metadata that must never be used as one. One await kind maps
+to a LIST of Session Event kinds: `turn` wakes on both `turn.completed` and
+`turn.interrupted`, because "the child is done talking" wants both while still
+naming which it got — an interruption is a wake, not a missing wake.
+_Avoid_: notification, treating `turn.completed` and `turn.interrupted` as one
+
+**`awaitableSessions`**:
+The Session-await half of an actor's policy list, beside `awaitable` (VC-324):
+which of `turn`, `verdict`, `stopped` (and `$defaults`) the actor may wait on
+another Session with. A separate list under a separate name, never a widened
+`awaitable`: Ticket await kinds name planner facts and this list names Session
+Events — two ledgers, two sequences, and two cursors. A document naming a
+Ticket kind in this list is refused, not filtered.
+_Avoid_: merged await list, shared vocabulary with `awaitable`
+
+**`interrupted`**:
+The red listing state a Session reads when its latest turn ended by
+interruption, an active failure Attention explains that interruption, and
+nothing has started since: `session list` and `session peek` say `interrupted`,
+with why. It sits below working and above idle — stopped still outranks it —
+and a Session that resumed reads working again. A deliberate user cancellation
+has no failure Attention and stays out of this state. A fleet that read idle
+while four of its members had been cut off is the failure this state exists to
+end.
+_Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
 A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.

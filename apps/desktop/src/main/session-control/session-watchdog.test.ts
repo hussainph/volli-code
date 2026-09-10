@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { DEFAULT_SESSION_WATCHDOG_SILENCE_MS, EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionProjection } from "@volli/shared";
 
+import type { NotificationRequest } from "../notifications/dispatch";
 import { createSessionWatchdog } from "./session-watchdog";
 import type { SessionWatchdogPorts } from "./session-watchdog";
 
@@ -47,7 +48,7 @@ function harness(input: {
   stopSession?: SessionWatchdogPorts["stopSession"];
 }) {
   const submits: unknown[] = [];
-  const notifications: { title: string; body: string }[] = [];
+  const notifications: NotificationRequest[] = [];
   const errors: unknown[] = [];
   const byId = new Map(input.projections.map((entry) => [entry.session.id, entry]));
   // Runtime observations, not durable ledger facts, are the watchdog clock.
@@ -98,8 +99,19 @@ describe("createSessionWatchdog", () => {
     });
     expect(h.notifications).toEqual([
       {
+        producer: "session-watchdog",
         title: "Session may be wedged",
         body: "Implementer has an open turn with no runtime progress for 10m.",
+        // A click opens the Session whose turn stopped moving (VC-295); with
+        // nothing durable to reveal inside it, the Session itself is the target.
+        target: {
+          kind: "session",
+          projectId: "project-1",
+          ticketId: null,
+          sessionId: SESSION,
+          interactionId: null,
+          attentionId: null,
+        },
       },
     ]);
   });
@@ -232,6 +244,59 @@ describe("createSessionWatchdog", () => {
       h.watchdog.stop();
       await vi.advanceTimersByTimeAsync(600_000);
       expect(h.submits).toHaveLength(1);
+    });
+  });
+});
+
+/** One failure attention, as a ledger fold reports it. */
+const WEDGE_FAILURE = {
+  id: "attention-1",
+  kind: "adapter_disconnected",
+  attachmentId: null,
+  detail: null,
+  diagnostic: null,
+};
+
+describe("the wedge alert's target (VC-295 round 2)", () => {
+  it("names the failure the wedged Session is already carrying", async () => {
+    // A wedge often IS a broken transport: the Attention is what a person can
+    // act on, so the click has to land on it rather than on the Session's top.
+    const failing = projection({
+      attention: {
+        active: [WEDGE_FAILURE],
+        // The ledger's own answer: the newest active attention, and the row the
+        // plane draws — so the alert names the item a click will land on.
+        primary: WEDGE_FAILURE,
+      } as unknown as SessionProjection["attention"],
+    });
+    const h = harness({ projections: [failing] });
+
+    await h.watchdog.scan();
+
+    expect(h.notifications[0]?.target).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: null,
+      sessionId: SESSION,
+      interactionId: null,
+      attentionId: "attention-1",
+    });
+  });
+
+  it("carries no item for a wedge with nothing durable behind it", async () => {
+    // The other half of the same rule, and the reason it cannot be an open
+    // question: a Session waiting on a person is not wedged at all
+    // (`sessionWedge` stands down on `awaiting-user`), so the only items a
+    // wedge alert can name are failures. With none, the Session is the target
+    // and the click simply opens it.
+    const h = harness({ projections: [projection()] });
+
+    await h.watchdog.scan();
+
+    expect(h.notifications[0]?.target).toMatchObject({
+      sessionId: SESSION,
+      interactionId: null,
+      attentionId: null,
     });
   });
 });

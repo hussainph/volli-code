@@ -1,7 +1,7 @@
 import { nativeObservationEventId, projectSession } from "@volli/shared";
 import type {
   CommandReceipt,
-  CompactionReason,
+  CompactionWorkReason,
   ModelSelection,
   ModelTier,
   Session,
@@ -11,6 +11,7 @@ import type {
   SessionCommandIntent,
   SessionEvent,
   SessionEventProvenance,
+  RuntimeMessageSettle,
   RuntimeObservation,
   SessionExecutionVenue,
   SessionInteractionCancelReason,
@@ -121,6 +122,16 @@ export type SessionClientCommand =
       kind: "message.submit";
       message: UIMessage;
       delivery?: NativeMessageDelivery;
+      /**
+       * How long this command waits before it answers (VC-324).
+       *
+       * A property of the RUNTIME command, deliberately not of the durable
+       * {@link SessionCommandIntent}: the Command means the same thing whether
+       * its sender waited for the turn to end or only for it to open, and a
+       * durable field nothing replays from would be a shape change for a
+       * transport fact. Absent is `"turn"`, today's behaviour.
+       */
+      settle?: RuntimeMessageSettle;
       model?: { providerId: string; modelId: string } | null;
       agent?: string | null;
       variant?: string | null;
@@ -238,6 +249,21 @@ export interface SessionRuntimeCommandResult {
   command: SessionCommand;
   receipt: CommandReceipt | null;
   throughSequence: number;
+  /**
+   * How the adapter delivered a `message.submit`, in memory only. This is the
+   * authoritative distinction between a prompt that began a turn and a steer
+   * that joined one; the durable Receipt records acceptance, not transport.
+   */
+  delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"];
+  /**
+   * Whether a `message.submit` OPENED the turn it landed in (VC-324).
+   *
+   * In-memory answer to this call, never durable: the receipt records that the
+   * runtime accepted the Command, and this says which of the two ways it did.
+   * Absent whenever the adapter did not answer the question — a replayed
+   * command, a rejection, any command that is not a submit.
+   */
+  turnOpened?: boolean;
 }
 type DeliveredSessionRuntimeCommandResult = SessionRuntimeCommandResult & {
   receipt: CommandReceipt;
@@ -282,7 +308,8 @@ export interface SessionStreamCompactionProgress {
   /** The durable history the progress marker was emitted beside. */
   throughSequence: number;
   state: "started" | "finished";
-  reason: CompactionReason;
+  /** Progress belongs to work; a lost checkpoint runs none. */
+  reason: CompactionWorkReason;
 }
 
 export type SessionStreamTransient = SessionStreamOverlay | SessionStreamCompactionProgress;
@@ -1240,6 +1267,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: binding.spec.attachmentId,
       message: request.command.message,
       delivery: request.command.delivery ?? "queue",
+      ...(request.command.settle === undefined ? {} : { settle: request.command.settle }),
       model: request.command.model ?? null,
       agent: request.command.agent ?? null,
       variant: request.command.variant ?? null,
@@ -1252,7 +1280,16 @@ class DefaultSessionRuntime implements SessionRuntime {
       receipt,
       "message.submitted",
     );
-    return this.#result(request.sessionId, submitted.command, durable);
+    const result = await this.#result(request.sessionId, submitted.command, durable);
+    // Read off the adapter's receipt rather than the durable one: how a
+    // delivery landed is transport detail this call answers, and the ledger's
+    // receipt says only that the runtime accepted the Command.
+    if (receipt.status !== "accepted") return result;
+    return {
+      ...result,
+      ...(receipt.delivery === undefined ? {} : { delivery: receipt.delivery }),
+      ...(receipt.turnOpened === undefined ? {} : { turnOpened: receipt.turnOpened }),
+    };
   }
 
   /**

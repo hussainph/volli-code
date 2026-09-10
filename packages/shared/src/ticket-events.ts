@@ -67,6 +67,15 @@ export const TICKET_EVENT_KINDS = [
   // moved, this one says WHY, and names the branch the deletion kept. A
   // deletion nobody can account for is how VC-113 read as lost work.
   "worktree_reclaimed",
+  // Worktree trim (VC-340): the retention pass removed the git-IGNORED content
+  // of a finished ticket's worktree — dependencies, build output, caches — while
+  // the checkout, its tracked files, and its untracked work all stayed. Written
+  // with an `automation` actor. It exists for the same reason
+  // `worktree_reclaimed` does: a folder that quietly loses a hundred thousand
+  // files should be able to say when, and how much, and that one install puts it
+  // back. No `worktree_changed` accompanies it — nothing about the ticket's
+  // identity moved.
+  "worktree_trimmed",
   // Attachments (`ticket_attachments`, migration 011, issue #77): spec
   // material — a file or URL — attached to a ticket. Mirrors `commented`'s
   // shape (the attachment itself lives in `ticket_attachments`, `label` here
@@ -155,6 +164,13 @@ export type TicketEventPayload =
    * rule fired instead of leaving the reader to infer one.
    */
   | { kind: "worktree_reclaimed"; branch: string | null; daysInDone: number }
+  /**
+   * The retention pass trimmed the worktree's ignored content (VC-340).
+   * `entries` is how many ignored paths were removed and `bytes` their apparent
+   * size; `kept` is how many ignored paths were PRESERVED as configuration,
+   * because that number is the difference between a trim and a `git clean -fdX`.
+   */
+  | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
   | { kind: "session_started"; sessionId: string };

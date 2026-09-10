@@ -168,8 +168,20 @@ jobs:
 
       # The identical suite plus the 100%-threshold gate over the protected
       # logic layer. This remains the hard regression gate.
+      #
+      # `--maxWorkers` restores vitest's own default — one worker per core —
+      # which every package's config caps at 2 for a developer laptop shared
+      # with several agent Sessions (VC-339, `vitest.workers.ts`). A runner has
+      # the box to itself, so it gets the whole box and CI wall time is
+      # unchanged. `nproc`, not a literal: a bigger runner then buys what it is
+      # paid for, and this line never has to be revisited.
+      #
+      # The FLAG and not `VITEST_MAX_WORKERS`: that variable is the Session
+      # concurrency budget's vitest entry, and a budget may only ever lower a
+      # cap — `vitest.workers.ts` clamps it for exactly that reason. An explicit
+      # flag is this invocation saying what it may take, and it outranks both.
       - name: Test protected coverage surface
-        run: vp run -r test:coverage
+        run: vp run -r test:coverage --maxWorkers=$(nproc)
 
   # Fail fast: five probes that each boot the app through a different door
   # (board, composer, terminal, worktree, agent socket). If the app does not

@@ -1861,6 +1861,171 @@ CREATE INDEX session_receipts_command_sequence ON session_command_receipts(comma
 CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
 `;
 
+/**
+ * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ *
+ * Deleting a worktree directory is a destructive product act, so it takes the
+ * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
+ * carrying the caller's UUID and the exact plan a person confirmed, immutable
+ * facts for what each item did, and receipts for local acceptance. Nothing here
+ * is ever UPDATEd — the previous design replaced one `app_state` JSON blob
+ * after every item, which is how an app that died mid-removal could come back
+ * and describe an already-deleted folder as work it never attempted.
+ *
+ * Three tables rather than one row because the fold needs order and identity:
+ * `rowid` is this ledger's provisional local order (rule 2, single writer at
+ * `cleanup-ledger.ts`) and is what the reads sort by — two facts can share a
+ * millisecond, and the fold's rules (a start before an outcome, the FIRST
+ * outcome wins) are about the order they were appended in. Every durable id is
+ * a UUID the core mints; the indexes below are for the filter, not the order.
+ *
+ * `ON DELETE RESTRICT` on both children, not CASCADE: a command that removed a
+ * directory must not become erasable by deleting its own row. Projects are NOT
+ * referenced at all — a cleanup's record has to outlive the project it ran in,
+ * and the plan already carries the project's id, path and name as they read at
+ * the moment of confirmation.
+ */
+const MIGRATION_043_WORKTREE_CLEANUP = `
+CREATE TABLE IF NOT EXISTS worktree_cleanup_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_facts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL CHECK (kind <> ''),
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_facts_command
+  ON worktree_cleanup_facts(command_id, created_at);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_receipts (
+  id          TEXT PRIMARY KEY,
+  command_id  TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  status      TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  code        TEXT,
+  detail      TEXT,
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
+  ON worktree_cleanup_receipts(command_id, recorded_at);
+`;
+
+/**
+ * Migration 044: durable opaque cursors for lossless waits on a SESSION.
+ *
+ * Migration 029's argument, one ledger over. `session_events` is unique on
+ * `(session_id, sequence)` only: the Session Engine assigns that sequence per
+ * Session, so it orders one Session's history and says nothing about the order
+ * two Sessions' facts were committed in. A wait over a fleet needs exactly
+ * that missing total order — "the first matching event after X, across these
+ * handles" is one question, not one question per handle.
+ *
+ * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
+ * commits can share a millisecond and a timestamp is metadata rather than
+ * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * cannot either — it may be reused after a cascading delete, and a Session
+ * delete cascades this whole table.
+ *
+ * So the same sidecar: an AUTOINCREMENT sequence per appended Session Event,
+ * host-private behind {@link encodeSessionEventCursor}'s opaque prefix, with
+ * session and kind repeated so a multi-handle/multi-kind replay is one
+ * indexed, bounded query rather than a fold over each Session's log. The
+ * trigger is what keeps `session-control/sqlite-ledger.ts` — the one durable
+ * Session Event writer — from having to remember a second insert.
+ *
+ * The backfill orders by `(session_id, sequence)` rather than by `rowid`.
+ * Ledger order between two Sessions that were interleaved before this table
+ * existed is not recoverable from anything in the schema, so the honest
+ * choice is a deterministic one: every Session's own history stays in its own
+ * order, which is the order any reader of one Session already believes. New
+ * appends are in true commit order from here on, and a cursor only ever
+ * promises "nothing after this point is missed".
+ *
+ * `session_events` has no `kind` column — the kind lives inside the JSON
+ * payload — so both the backfill and the trigger read it with `json_extract`.
+ * The immutability trigger guards `id` and `session_id`, the two values the
+ * sidecar copies verbatim, and deliberately NOT `payload`: nothing in the
+ * product ever updates a `session_events` row, and `sqlite-ledger.test.ts`
+ * rewrites a payload on purpose to prove the read path tolerates corruption.
+ * The `kind` copy is therefore what the event was COMMITTED as, which is the
+ * fact a wake reports.
+ */
+const MIGRATION_044_SESSION_EVENT_SEQUENCE = `
+CREATE TABLE session_event_sequence (
+  sequence   INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   TEXT NOT NULL UNIQUE REFERENCES session_events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL
+);
+INSERT INTO session_event_sequence (event_id, session_id, kind)
+SELECT id, session_id, json_extract(payload, '$.kind')
+  FROM session_events
+ ORDER BY session_id ASC, sequence ASC;
+CREATE INDEX session_event_sequence_match
+  ON session_event_sequence(session_id, kind, sequence);
+CREATE TRIGGER session_event_sequence_insert
+AFTER INSERT ON session_events
+BEGIN
+  INSERT INTO session_event_sequence (event_id, session_id, kind)
+  VALUES (NEW.id, NEW.session_id, json_extract(NEW.payload, '$.kind'));
+END;
+CREATE TRIGGER session_event_sequence_identity_immutable
+BEFORE UPDATE OF id, session_id ON session_events
+BEGIN
+  SELECT RAISE(ABORT, 'session event identity is immutable');
+END;
+`;
+
+/**
+ * Migration 045: the SPAWN LEDGER — every child Volli starts on a Session's
+ * behalf, written at spawn (VC-341).
+ *
+ * The leak this answers is not a missing kill; it is missing knowledge. Once a
+ * Session's executor releases, nothing on the machine knew that the `next dev`
+ * still holding 2.9 GB was ever that Session's, so no sweep could reason about
+ * it. Command lines cannot supply the answer — grepping argv for `node` finds
+ * JavaScript and misses a Gradle daemon or a `uvicorn --reload` — and a
+ * working directory only says where a process is standing. A row written at
+ * spawn says whose it is.
+ *
+ * `started_at` is beside `pid` for one reason: pids recycle. The pair is the
+ * identity every reap re-checks against the live process table before it
+ * signals anything (`ledgerEntryMatches`), so a row whose number has since been
+ * handed to the user's editor names a process this app will not touch.
+ *
+ * No foreign key to `sessions`. A row is a fact about a process that existed,
+ * and it has to outlive both the Session record and the launch that wrote it —
+ * a crash mid-turn is precisely the case the ledger is read after.
+ *
+ * THREE KINDS, AND NO `browser`. A CHECK constraint is frozen the moment it
+ * ships, so it lists only what something can actually write: the `execute`
+ * environment, background shells, and terminal PTYs. A Browser Tab is a
+ * `WebContentsView` inside this process (`browser/tab-host.ts`) — there is no
+ * child pid to record — so a fourth value would be dead vocabulary nothing
+ * could ever insert and nothing could later remove.
+ */
+const MIGRATION_045_SPAWN_LEDGER = `
+CREATE TABLE IF NOT EXISTS spawned_processes (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ticket_id  TEXT,
+  project_id TEXT,
+  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal')),
+  pid        INTEGER NOT NULL,
+  pgid       INTEGER,
+  started_at INTEGER NOT NULL,
+  cwd        TEXT NOT NULL,
+  command    TEXT NOT NULL,
+  exited_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS spawned_processes_open ON spawned_processes(exited_at, started_at);
+CREATE INDEX IF NOT EXISTS spawned_processes_session ON spawned_processes(session_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2078,7 +2243,44 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_042_SESSION_EVENT_STORAGE,
     apply: applyMigration042SessionEventStorage,
   },
+  {
+    version: 43,
+    name: "worktree cleanup — command ledger, immutable per-item facts, acceptance receipts",
+    sql: MIGRATION_043_WORKTREE_CLEANUP,
+  },
+  {
+    version: 44,
+    name: "session_event_sequence — durable opaque cursors for lossless waits on a Session",
+    sql: MIGRATION_044_SESSION_EVENT_SEQUENCE,
+    apply: applyMigration044SessionEventSequence,
+  },
+  {
+    version: 45,
+    name: "spawned_processes — the spawn ledger behind the orphan process sweep",
+    sql: MIGRATION_045_SPAWN_LEDGER,
+  },
 ];
+
+/**
+ * Migration 044's reconciler, probe-gated like 040's and 041's.
+ *
+ * `CREATE TABLE` is as un-idempotent as `ADD COLUMN` here: a database that is
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — must converge rather than fail
+ * on a duplicate object, and this file's own tests re-offer every version.
+ * One probe covers the whole block, because the table, its index and both
+ * triggers are created together or not at all.
+ */
+function applyMigration044SessionEventSequence(db: Database.Database): void {
+  const exists =
+    (db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_event_sequence'",
+      )
+      .get() as unknown) !== undefined;
+  if (exists) return;
+  db.exec(MIGRATION_044_SESSION_EVENT_SEQUENCE);
+}
 
 function countRows(db: Database.Database, sql: string): number {
   return (db.prepare(sql).get() as { count: number }).count;

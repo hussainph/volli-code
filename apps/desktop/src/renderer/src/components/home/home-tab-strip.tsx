@@ -88,8 +88,8 @@ export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD
 /**
  * What a strip needs to draw Home's tabs, whatever strip it is.
  *
- * Two now: the surface's own full-width strip ({@link HomeTabStrip}) and a
- * secondary pane's ({@link HomePaneTabStrip}, VC-202). They differ in the
+ * Two now: the main bar's trailing strip ({@link HomeTabStrip}) and another
+ * pane's ({@link HomePaneTabStrip}). They differ in the
  * tablist's name and in the trailing actions cluster — a pane strip has none,
  * because the controls up there act on the SURFACE and there is exactly one of
  * it. Everything about how a tab is drawn is shared, and shared as a component
@@ -124,6 +124,7 @@ interface HomeTabListProps {
 }
 
 interface HomeTabStripProps extends HomeTabListProps {
+  label?: string;
   onNewSession(): void;
   onNewChat(): void;
   onNewBrowser(): void;
@@ -168,6 +169,7 @@ interface HomeTabStripProps extends HomeTabListProps {
  * #51), and a chat Session holds none.
  */
 export function HomeTabStrip({
+  label = "Home tabs",
   onNewSession,
   onNewChat,
   onNewBrowser,
@@ -180,7 +182,7 @@ export function HomeTabStrip({
   return (
     <TabStrip
       variant="folder"
-      label="Home tabs"
+      label={label}
       reorder={reorderFor(list)}
       actions={
         <>
@@ -229,9 +231,8 @@ export function HomeTabStrip({
 }
 
 /**
- * ONE SECONDARY PANE's strip (VC-202): the same tabs, named for the pane, with
- * no actions cluster — the surface's controls live on the surface's own strip,
- * which is the primary pane's.
+ * A pane's strip without actions. The surface's controls stay on the main
+ * bar's trailing strip, even when the primary pane no longer reaches that edge.
  */
 export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label: string }) {
   return (

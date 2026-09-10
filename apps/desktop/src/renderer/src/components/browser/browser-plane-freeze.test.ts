@@ -34,9 +34,9 @@ describe("hasNativePlaneOverlay", () => {
   });
 
   it("ignores a permanent listbox INSIDE the app root", () => {
-    // The VC-251 bug: the Ticket Change Set renders `<ul role="listbox">` for
-    // the life of the panel. Matching it detached a Browser Tab's plane and
-    // never reattached it.
+    // The VC-251 bug: the Ticket Change Set rendered `<ul role="listbox">` for
+    // the life of the panel (it is a plain list since VC-311). Matching it
+    // detached a Browser Tab's plane and never reattached it.
     const root = mountAppRoot();
     root.append(element("ul", { role: "listbox", "aria-label": "Change Set" }));
     expect(hasNativePlaneOverlay(document)).toBe(false);

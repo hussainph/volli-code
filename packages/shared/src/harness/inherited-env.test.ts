@@ -64,6 +64,7 @@ describe("scrubInheritedSessionEnv", () => {
         VOLLI_ARTIFACTS_DIR: "/outer/.volli/artifacts",
         VOLLI_PROJECT_DIR: "/outer",
         VOLLI_BIN_DIR: "/outer/bin",
+        VOLLI_CONCURRENCY_HINT: "7",
         VOLLI_HARNESS_ARGV_CLAUDE_CODE: '["--settings","/outer/settings.json"]',
         VOLLI_HARNESS_BIN_CLAUDE_CODE: "/outer/bin/claude",
         HOME: "/Users/x",
@@ -83,6 +84,16 @@ describe("scrubInheritedSessionEnv", () => {
     expect(
       scrubInheritedSessionEnv({ VOLLI_SESSION_TOKEN: "outer-token", HOME: "/Users/x" }, []),
     ).toEqual({ HOME: "/Users/x" });
+  });
+
+  // The budget an outer Volli computed is an answer about a machine at a
+  // moment (VC-339): it divided its cores by the Sessions IT had working. An
+  // inherited one would survive as if a person had set it, and the no-clobber
+  // rule would then protect it forever.
+  it("clears an inherited concurrency hint, so this launch computes its own budget", () => {
+    expect(
+      scrubInheritedSessionEnv({ VOLLI_CONCURRENCY_HINT: "7", MAKEFLAGS: "-j16" }, []),
+    ).toEqual({ MAKEFLAGS: "-j16" });
   });
 
   it("clears another agent manager's surface markers", () => {

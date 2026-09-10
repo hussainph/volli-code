@@ -6,7 +6,9 @@
  *
  *   1. Did this Session just ENTER `waiting` or `error`? (`sessionPersonNeed`)
  *   2. Was the Run that opened it unattended? (`AutomationRun.attendance`)
- *   3. Does this machine want to be told? (VC-75's `needs-you` preference)
+ *   3. Does this machine want to be told? — asked by the delivery path, not
+ *      here (VC-295). This observer names its producer and its target and the
+ *      preference is consulted in one place for every alert in the app.
  *
  * ── WHY A TRANSITION AND NOT A STATE ──────────────────────────────────────
  * VC-112 says a Session that ENTERS one of those states, and the verb is the
@@ -60,14 +62,16 @@
  * to fail the command that triggered it.
  */
 import {
+  sessionNotificationItem,
   sessionPersonNeed,
   shortSessionId,
-  notificationAllowed,
   type AutomationRunAttendance,
-  type NotificationPreferences,
+  type SessionNotificationTarget,
   type SessionPersonNeed,
   type SessionProjection,
 } from "@volli/shared";
+
+import type { NotificationRequest } from "../notifications/dispatch";
 
 export interface RunAttentionPorts {
   /**
@@ -79,10 +83,12 @@ export interface RunAttentionPorts {
    * have to be rebuilt on every Run.
    */
   attendanceOf(sessionId: string): AutomationRunAttendance | null;
-  /** This machine's answer, re-read per notification so a change takes effect at once. */
-  preferences(): NotificationPreferences;
-  /** The person's channel. */
-  notify(input: { title: string; body: string }): void;
+  /**
+   * The one delivery path (VC-295). It owns the preference check, the
+   * focused-target rule and the click, so this observer decides only whether
+   * there is something to say and what it points at.
+   */
+  notify(request: NotificationRequest): void;
   /** Diagnostics seam. Defaults to `console.warn`. */
   onError?: (error: unknown) => void;
 }
@@ -135,6 +141,35 @@ export function runAttentionNotification(
     : { title: "An Automation stopped", body: `${subject} could not keep running.` };
 }
 
+/**
+ * Where a click on that notification goes (VC-295): the exact Session, and the
+ * exact thing in it that needs the person.
+ *
+ * The item comes from `sessionNotificationItem`, which is also what a WINDOW
+ * reports about what it is showing — so the click and the focused-target
+ * comparison are talking about the same thing (round 2). It is read from the
+ * same projection in the same fold as the need, not looked up again later,
+ * which is how a click comes to point at a question the rule was not talking
+ * about. It may of course have RESOLVED by the time somebody clicks; that is
+ * the renderer's problem to state honestly, and it can only state it because
+ * the id is here.
+ *
+ * `need` is taken but not read: it is the reason this target exists, and the
+ * precedence inside the item derivation is the same one that produced it.
+ */
+export function runAttentionTarget(
+  _need: SessionPersonNeed,
+  projection: SessionProjection,
+): SessionNotificationTarget {
+  return {
+    kind: "session",
+    projectId: projection.session.projectId,
+    ticketId: projection.session.ticketId,
+    sessionId: projection.session.id,
+    ...sessionNotificationItem(projection),
+  };
+}
+
 export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionWatch {
   const onError =
     ports.onError ?? ((error: unknown) => console.warn("[volli] run attention:", error));
@@ -177,9 +212,14 @@ export function createRunAttentionWatch(ports: RunAttentionPorts): RunAttentionW
         if (ports.attendanceOf(sessionId) !== "unattended") return;
         // VC-75's seam, not a second setting of our own. An unattended Run that
         // needs a person IS "an agent needs my input" — the event that pane has
-        // named since before this ticket.
-        if (!notificationAllowed(ports.preferences(), "needs-you")) return;
-        ports.notify(runAttentionNotification(need, projection.session));
+        // named since before this ticket. The switch itself is read by the
+        // delivery path this producer name reaches (VC-295), so there is no
+        // preference read to forget here and none to get wrong.
+        ports.notify({
+          producer: "run-attention",
+          ...runAttentionNotification(need, projection.session),
+          target: runAttentionTarget(need, projection),
+        });
       } catch (error) {
         onError(error);
       }
