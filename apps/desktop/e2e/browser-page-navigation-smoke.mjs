@@ -32,7 +32,7 @@ const PROJECT = {
 async function startFixtureServer() {
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-    const { pathname, search } = requestUrl;
+    const { pathname } = requestUrl;
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("Content-Type", "text/html; charset=utf-8");
 
@@ -55,9 +55,12 @@ async function startFixtureServer() {
       response.end(page);
       return;
     }
-    if (pathname === "/submitted-button" || pathname === "/submitted-enter") {
-      const title = `${pathname.slice(1)}${search}`;
-      response.end(`<!doctype html><title>${title}</title><h1>${title}</h1>`);
+    if (pathname === "/submitted-button") {
+      response.end("<!doctype html><title>Button submitted</title><h1>Button submitted</h1>");
+      return;
+    }
+    if (pathname === "/submitted-enter") {
+      response.end("<!doctype html><title>Enter submitted</title><h1>Enter submitted</h1>");
       return;
     }
     response.statusCode = 404;
