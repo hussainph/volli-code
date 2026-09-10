@@ -1745,12 +1745,21 @@ function ChatTranscript({
 
   const sentinel = React.useRef<HTMLDivElement>(null);
   const hasEarlier = shown.earlier > 0;
+  // THE SENTINEL IS ARMED BY A READER, NOT BY A MOUNT, and that is not a nicety.
+  // A plane mounts with its scroller at the top and is moved to the bottom a
+  // frame later by the library's first resize — so for that one frame the
+  // sentinel is on screen, and an observer watching it pages in history nobody
+  // asked for, cascading until the whole transcript is mounted. Measured on the
+  // bench before this guard: a first mount drew every row it was supposed to be
+  // windowing. Leaving the bottom is the reader's own signal, and it is the only
+  // way to reach the sentinel anyway.
+  const [armed, setArmed] = React.useState(false);
   React.useEffect(() => {
     const node = sentinel.current;
     const scroller = control.scroller();
     // No observer in jsdom, and none needed: the button beside it is the
     // affordance, and a test that wants the earlier rows can press it.
-    if (!hasEarlier || node === null || scroller === null) return;
+    if (!armed || !hasEarlier || node === null || scroller === null) return;
     if (typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(
       (entries) => {
@@ -1760,7 +1769,7 @@ function ChatTranscript({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [control, hasEarlier]);
+  }, [armed, control, hasEarlier]);
 
   // Where the reader is, recorded as they move so a tab switch has an answer
   // without the unmount having to read the DOM on its way out. The same listener
@@ -1768,9 +1777,12 @@ function ChatTranscript({
   // leaves the bottom, so pressing "Show earlier" while already pinned (a
   // transcript shorter than its viewport) is never undone by the press itself.
   const anchorRef = React.useRef(anchorKey);
+  const topRow = React.useRef<string | null>(null);
   React.useLayoutEffect(() => {
     anchorRef.current = anchorKey;
-  }, [anchorKey]);
+    const first = mounted[0];
+    topRow.current = first === undefined ? null : transcriptRowKey(first);
+  }, [anchorKey, mounted]);
   React.useEffect(() => {
     const scroller = control.scroller();
     if (scroller === null) return;
@@ -1782,6 +1794,15 @@ function ChatTranscript({
       const pinned = distance <= PINNED_SLACK_PX;
       if (!pinned) {
         escaped.value = true;
+        setArmed(true);
+        // LEAVING THE BOTTOM PINS THE WINDOW. Measured from the end is right
+        // while the reader is watching the end — turns arrive, old ones leave the
+        // top, and nobody is looking there. The moment they are READING instead,
+        // that same rule walks the window backwards under them: a Session that
+        // streams sixty rows while they read would drop the row they were on. So
+        // the top row they can see becomes the anchor, and from here the window
+        // only grows.
+        if (anchorRef.current === null && topRow.current !== null) setAnchorKey(topRow.current);
         rememberTranscriptView(sessionId, {
           anchorKey: anchorRef.current,
           offset: scroller.scrollTop,
@@ -1793,8 +1814,11 @@ function ChatTranscript({
         return;
       }
       escaped.value = false;
-      // Back at the bottom: the revealed pages go, and what is recorded is the
-      // transcript as it will be mounted next time rather than as it was.
+      // Back at the bottom: the revealed pages go, the sentinel is out of reach
+      // again (disarming it is what stops the pages about to be dropped from
+      // being paged straight back in), and what is recorded is the transcript as
+      // it will be mounted next time rather than as it was.
+      setArmed(false);
       rememberTranscriptView(sessionId, { anchorKey: null, offset: null });
       setAnchorKey(null);
     };

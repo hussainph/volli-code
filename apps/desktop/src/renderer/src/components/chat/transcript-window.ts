@@ -118,8 +118,13 @@ export function rememberTranscriptView(sessionId: string, view: TranscriptView):
   views.delete(sessionId);
   views.set(sessionId, view);
   if (views.size <= VIEW_LIMIT) return;
-  const oldest = views.keys().next();
-  if (oldest.done !== true) views.delete(oldest.value);
+  // The first key in insertion order, and there is certainly one: the map just
+  // grew past a positive cap. Taken by walking rather than through the
+  // iterator's `done` flag, which would be a branch no run can ever take.
+  for (const oldest of views.keys()) {
+    views.delete(oldest);
+    break;
+  }
 }
 
 /** Forget every recorded position — for tests, which share one module instance. */
