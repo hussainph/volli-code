@@ -126,6 +126,32 @@ const AUTO_RETRY_LIMIT = 10;
 const AUTO_RETRY_BASE_MS = 500;
 const AUTO_RETRY_CEILING_MS = 8_000;
 const AUTO_RETRY_JITTER_MS = 100;
+const OPENCODE_GO_PROVIDER = "opencode-go";
+const OPENCODE_SESSION_HEADER = "x-opencode-session";
+
+/**
+ * Add OpenCode Go's required routing identity to every physical provider request.
+ *
+ * Pi already forwards `sessionId`, but its built-in affinity formats emit other
+ * header names. Caller headers are the one path all three Go adapters merge
+ * last, so the same opaque sidecar id reaches completions, responses and
+ * messages without changing unrelated providers.
+ */
+function withOpenCodeGoSessionHeader(
+  inner: AgentOptions["streamFn"],
+  sessionId: string,
+): AgentOptions["streamFn"] {
+  return (model, context, options) => {
+    if (model.provider !== OPENCODE_GO_PROVIDER) return inner(model, context, options);
+    return inner(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        [OPENCODE_SESSION_HEADER]: sessionId,
+      },
+    });
+  };
+}
 
 /** Exponential backoff to a ceiling, jittered so ten Sessions do not reconnect in lockstep. */
 export function autoRetryDelayMs(attempt: number): number {
@@ -1688,23 +1714,26 @@ async function attachSession(
         tools,
         messages: recoveredMessages,
       },
-      streamFn: instrumentStreamFn(models.streamSimple.bind(models), {
-        sink: host.observability,
-        runId,
-        now: host.now,
-        ...(host.usageLimits === undefined
-          ? {}
-          : {
-              // The passive half of the usage read: whatever windows this
-              // response's headers stated fold straight into the holder the
-              // next inspection reads. A sink that throws costs the capture.
-              usageLimits: {
-                record: (providerId, update) => {
-                  host.usageLimits?.holder.apply(providerId, update);
+      streamFn: withOpenCodeGoSessionHeader(
+        instrumentStreamFn(models.streamSimple.bind(models), {
+          sink: host.observability,
+          runId,
+          now: host.now,
+          ...(host.usageLimits === undefined
+            ? {}
+            : {
+                // The passive half of the usage read: whatever windows this
+                // response's headers stated fold straight into the holder the
+                // next inspection reads. A sink that throws costs the capture.
+                usageLimits: {
+                  record: (providerId, update) => {
+                    host.usageLimits?.holder.apply(providerId, update);
+                  },
                 },
-              },
-            }),
-      }),
+              }),
+        }),
+        sidecarMetadata.id,
+      ),
       sessionId: sidecarMetadata.id,
       toolExecution: "sequential",
       // Pi's harness converter, not the `Agent`'s default, and the difference is

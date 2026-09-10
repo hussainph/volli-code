@@ -2145,6 +2145,83 @@ describe("startSession", () => {
     await handle.close();
   });
 
+  it.each([
+    { api: "openai-completions" },
+    { api: "openai-responses" },
+    { api: "anthropic-messages" },
+  ] as const)(
+    "sends one stable OpenCode Go session header through $api and varies it between conversations",
+    async ({ api }) => {
+      const modelId = `go-${api}`;
+      const attachment = fixture({
+        model: { providerId: "opencode-go", modelId, reasoningLevel: "off" },
+      });
+      const sessionHeaders: Array<string | null | undefined> = [];
+      const stream: StreamFn = (model, context, options) => {
+        sessionHeaders.push(options?.headers?.["x-opencode-session"]);
+        // One fresh one-step script per call: only the request options are under
+        // test, while Pi's real Agent still drives every turn around it.
+        return scriptedStream([settles("done")])(model, context, options);
+      };
+      const faux = fauxProvider({
+        api,
+        provider: "opencode-go",
+        models: [{ id: modelId }],
+      });
+      const models = createModels();
+      models.setProvider({
+        ...faux.provider,
+        streamSimple: stream as typeof faux.provider.streamSimple,
+      });
+      const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+
+      const first = await runtime.startSession(attachment.spec);
+      await first.submitUserMessage("first request");
+      await first.submitUserMessage("second request");
+      const firstSessionId = first.recovery?.sessionId;
+      await first.close();
+
+      const second = await runtime.startSession({
+        ...attachment.spec,
+        identity: {
+          ...attachment.spec.identity,
+          sessionId: "session-2",
+          rootThreadId: "thread-2",
+          attachmentId: "attachment-2",
+        },
+      });
+      await second.submitUserMessage("another conversation");
+      const secondSessionId = second.recovery?.sessionId;
+      await second.close();
+
+      // The value is Pi's opaque sidecar id: the same identity this runtime
+      // already passes as `sessionId`, not prompt material or a credential.
+      expect(firstSessionId).toEqual(expect.any(String));
+      expect(secondSessionId).toEqual(expect.any(String));
+      expect(sessionHeaders).toEqual([firstSessionId, firstSessionId, secondSessionId]);
+      expect(secondSessionId).not.toBe(firstSessionId);
+    },
+  );
+
+  it("does not send the OpenCode Go session header to an unrelated provider", async () => {
+    const attachment = fixture();
+    const sessionHeaders: Array<string | null | undefined> = [];
+    const stream: StreamFn = (model, context, options) => {
+      sessionHeaders.push(options?.headers?.["x-opencode-session"]);
+      return scriptedStream([settles("done")])(model, context, options);
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream),
+    });
+
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("hello");
+    await handle.close();
+
+    expect(sessionHeaders).toEqual([undefined]);
+  });
+
   it("propagates an execution-environment factory rejection without observing it", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const stream = vi.fn(scriptedStream([]));
