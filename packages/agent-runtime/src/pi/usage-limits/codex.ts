@@ -32,6 +32,7 @@ import {
   finiteNumber,
   headerReader,
   percentOf,
+  recordOf,
   secondsFromNowToIso,
   windowShapeForMinutes,
   type HeaderMap,
@@ -67,21 +68,12 @@ export function codexHeadersToUpdate(
  * for a subscribed account, so a body without one is not this account's usage.
  */
 export function codexUsageFromEndpoint(body: unknown, checkedAt: number): UsageLimits {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return usageLimitsProbeFailed(checkedAt);
-  }
-  const rateLimit = (body as { rate_limit?: unknown }).rate_limit;
-  if (typeof rateLimit !== "object" || rateLimit === null) return usageLimitsProbeFailed(checkedAt);
+  const rateLimit = recordOf(recordOf(body)?.rate_limit);
+  if (rateLimit === undefined) return usageLimitsProbeFailed(checkedAt);
   const built: { minutes: number; window: UsageWindow }[] = [];
   for (const slot of SLOTS) {
-    const entry = (rateLimit as Record<string, unknown>)[`${slot}_window`];
-    if (typeof entry !== "object" || entry === null) continue;
-    const fields = entry as {
-      used_percent?: unknown;
-      limit_window_seconds?: unknown;
-      reset_after_seconds?: unknown;
-      reset_at?: unknown;
-    };
+    const fields = recordOf(rateLimit[`${slot}_window`]);
+    if (fields === undefined) continue;
     const usedPercent = percentOf(fields.used_percent);
     const seconds = finiteNumber(fields.limit_window_seconds);
     if (usedPercent === undefined || seconds === undefined || seconds <= 0) continue;
