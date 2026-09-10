@@ -5,6 +5,7 @@
 
 import type {
   CompactionReason,
+  CompactionWorkReason,
   ModelSelection,
   PromptResource,
   ReasoningDropCause,
@@ -435,6 +436,84 @@ export function sessionAwaitsUser(
   );
 }
 
+/**
+ * Why a Session's last turn ended by interruption, in the coarsest vocabulary
+ * that is honestly derivable from committed facts TODAY (VC-324).
+ *
+ * `stopped-by-runtime` is the runtime giving up on its transport: the retry
+ * budget ran out and it raised an `adapter_unrecoverable` /
+ * `adapter_disconnected` / `transport_retrying` Attention before writing the
+ * interruption. `crash-recovered` is the app finding the turn afterwards — the
+ * `partial_turn_interrupted` Attention recovery raises for a turn no process
+ * was left running. An interruption with no failure Attention is a deliberate
+ * cancellation or an incomplete record and does not enter the red listing
+ * state.
+ *
+ * Deliberately NOT a network/auth/provider vocabulary: which transport fault
+ * produced the dead end is classified inside the runtime and thrown away
+ * before the Attention is written, so a row that said "network" here would be
+ * guessing. Widening this vocabulary is a change to what the runtime RECORDS,
+ * not to what this function reads.
+ */
+export const SESSION_INTERRUPTION_REASONS = ["stopped-by-runtime", "crash-recovered"] as const;
+
+export type SessionInterruptionReason = (typeof SESSION_INTERRUPTION_REASONS)[number];
+
+/**
+ * The failure Attentions an interruption can be explained by, in the order
+ * they are asked — a list rather than a lookup, because an executor that both
+ * crashed and exhausted its retries leaves BOTH raised and the answer must not
+ * depend on which one the projection happens to hold first. `crash-recovered`
+ * leads: it is the more specific fact (a turn found dangling after the process
+ * died), and the transport Attentions are what any dead end raises.
+ */
+const INTERRUPTION_ATTENTIONS = [
+  ["partial_turn_interrupted", "crash-recovered"],
+  ["adapter_unrecoverable", "stopped-by-runtime"],
+  ["adapter_disconnected", "stopped-by-runtime"],
+  ["transport_retrying", "stopped-by-runtime"],
+] as const satisfies readonly (readonly [SessionAttentionKind, SessionInterruptionReason])[];
+
+/**
+ * Why this Session's LATEST turn ended by interruption, or `null` when it did
+ * not — the durable half of "the agent's turn died" (VC-324).
+ *
+ * Reads two committed facts and nothing else: `lastTurnOutcome`, which the fold
+ * sets from `turn.interrupted` and RESETS on `turn.started`, and `turnActive`.
+ * So "and nothing has started since" needs no history walk of its own — a
+ * Session that resumed is either mid-turn (`turnActive`) or carries the newer
+ * turn's own outcome. Silence is never read: a Session that has simply gone
+ * quiet has no `turn.interrupted` and is not this.
+ *
+ * The Attention only NAMES the interruption; it never creates one. A live
+ * `adapter_unrecoverable` on a Session whose turn completed is a failure the
+ * turn survived, and answering "interrupted" for it would be the Attention
+ * turning into a lifecycle fact it is explicitly not allowed to be.
+ */
+export function sessionInterruptionReason(
+  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+): SessionInterruptionReason | null {
+  if (projection.turnActive) return null;
+  if (projection.lastTurnOutcome !== "interrupted") return null;
+  for (const [kind, reason] of INTERRUPTION_ATTENTIONS) {
+    if (projection.attention.active.some((attention) => attention.kind === kind)) return reason;
+  }
+  return null;
+}
+
+/**
+ * Whether this Session's latest turn ended by interruption and nothing has
+ * started since — {@link sessionInterruptionReason} as the yes/no a listing
+ * asks. Exported beside {@link sessionAwaitsUser} for the same reason that one
+ * is: more than one surface says this word now (the chat listing row, the
+ * CLI's `session list`), and two hand-copies is how they come to disagree.
+ */
+export function sessionEndedInterrupted(
+  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+): boolean {
+  return sessionInterruptionReason(projection) !== null;
+}
+
 interface SessionAttentionBase {
   id: string;
   attachmentId: string | null;
@@ -537,6 +616,30 @@ export type SessionEventPayload =
       attachmentId: string;
       outcome: "completed" | "failed" | "interrupted";
     }
+  /**
+   * The process behind this attachment ended, and something watched it do so
+   * (VC-290): `exitCode` is the status it reported.
+   *
+   * A fact of its own, and product-owned, because `attachment.closed` cannot
+   * carry it. That event says an OUTCOME — completed, failed, interrupted —
+   * which is what Volli decided the ending meant, and the relaunch sweep
+   * writes one for every attachment whose process nobody was there to see.
+   * So a closed attachment with no exit fact is precisely "the code was never
+   * observed", and `0` is a value like any other rather than the shape an
+   * absence happens to take.
+   *
+   * Written ONLY where a real process status was read (a PTY exit today), never
+   * synthesized from an outcome — a fabricated `0` would report success for a
+   * process that may have crashed. Absent for every executor that has no
+   * process to report one, which is why it is a separate kind and not a field
+   * every close would have to answer for.
+   *
+   * NOT `attachment.native_referenced`: {@link SessionNativeReference} is
+   * adapter correlation, scrubbed on its way to a renderer, and a client that
+   * had to reparse an adapter's opaque payload to learn how a Session ended
+   * would be reimplementing one host's private encoding.
+   */
+  | { kind: "attachment.exited"; attachmentId: string; exitCode: number }
   | { kind: "run.started"; attachmentId: string; runId: string }
   | { kind: "run.completed"; attachmentId: string; runId: string }
   | { kind: "turn.started"; attachmentId: string; turnId: string }
@@ -555,19 +658,23 @@ export type SessionEventPayload =
   | {
       kind: "context.compacted";
       attachmentId: string;
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
       entryId: string;
       /** Measured before, estimated after — see `CompactionObservation`. */
       tokensBefore: number;
       tokensAfter: number;
     }
   /**
-   * Compaction was attempted and produced nothing.
+   * Compaction was attempted and produced nothing — or a compaction that had
+   * already happened stopped being usable.
    *
    * Recorded because the silence is what hurts: the turn that paid for the
    * attempt was delivered on the context that was already there, and the refusal
    * that may follow reads as arbitrary unless history says the summary was tried
-   * first. It is not an Attention — nothing is blocked and nobody can clear it.
+   * first. `reason: "checkpoint"` is the second story on this arm — a
+   * provider-native checkpoint this Session can no longer use, whose history
+   * was restored in its place. It is not an Attention — nothing is blocked and
+   * nobody can clear it.
    */
   | {
       kind: "context.compaction_failed";
@@ -732,6 +839,7 @@ type ObservedSessionEventKind =
   | "attachment.native_referenced"
   | "attachment.failed"
   | "attachment.closed"
+  | "attachment.exited"
   | "run.started"
   | "run.completed"
   | "turn.started"
@@ -830,6 +938,12 @@ export function observationPayload(
         kind: observation.kind,
         attachmentId: observation.attachmentId,
         outcome: observation.outcome,
+      };
+    case "attachment.exited":
+      return {
+        kind: observation.kind,
+        attachmentId: observation.attachmentId,
+        exitCode: observation.exitCode,
       };
     case "run.started":
     case "run.completed":
@@ -1171,6 +1285,17 @@ export interface SessionAttachmentProjection extends SessionAttachment {
   closedAt: number | null;
   outcome: "completed" | "failed" | "interrupted" | null;
   failure: SessionAttachmentFailure | null;
+  /**
+   * The status the executor's process reported, from `attachment.exited`, or
+   * `null` when nothing observed one (VC-290).
+   *
+   * The one projection of that fact, so no client re-derives it: `null` is
+   * "unobserved" and never "fine", and `0` is a clean exit somebody actually
+   * watched happen. It is deliberately independent of {@link
+   * SessionAttachmentProjection.outcome}, which is what Volli made of the
+   * ending rather than what the process said about it.
+   */
+  exitCode: number | null;
 }
 
 export interface SessionAttentionProjection {
@@ -1363,6 +1488,18 @@ export function projectSession(
         }
         break;
       }
+      // The process this attachment ran reported its status. Applied wherever
+      // the fact lands in the log — before or after the close it belongs to —
+      // because it is an append beside that close, not a rewrite of it, and a
+      // reader must not depend on which of two independent observations
+      // reached the ledger first.
+      case "attachment.exited": {
+        const existing = attachments.get(event.payload.attachmentId);
+        if (existing) {
+          attachments.set(existing.id, { ...existing, exitCode: event.payload.exitCode });
+        }
+        break;
+      }
       case "attachment.opened": {
         const { attachment } = event.payload;
         attachments.set(attachment.id, {
@@ -1372,6 +1509,9 @@ export function projectSession(
           closedAt: null,
           outcome: null,
           failure: null,
+          // A fresh process has reported nothing yet, and a re-attach must not
+          // inherit the code the previous one ended with.
+          exitCode: null,
         });
         // Work resuming ends a stop: the record stays in history, the state
         // does not (VC-86).
@@ -1388,6 +1528,8 @@ export function projectSession(
           closedAt: event.occurredAt,
           outcome: "failed",
           failure: event.payload.failure,
+          // It never opened, so no process of its own ever reported a status.
+          exitCode: null,
         });
         // A turn still open when its executor failed is a failed turn; one
         // that had already ended keeps its own outcome (the process ending is

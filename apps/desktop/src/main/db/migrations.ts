@@ -5,10 +5,23 @@
  * checkpoints the WAL and copies the db file to `<dbPath>.backup-v<from>`,
  * so a bad migration never destroys the pre-migration data. A brand-new
  * database (`user_version` starts at `0`) skips the backup step — there is
- * nothing to protect yet.
+ * nothing to protect yet. After success, an existing database may be compacted
+ * before exact-name retention deletes older migration copies while preserving
+ * the new rollback point.
  */
 import { copyFileSync } from "node:fs";
+import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import {
+  compactMigrationDatabase,
+  logMigrationCompaction,
+  skippedMigrationCompaction,
+} from "./migration-compaction";
+import {
+  assertSessionStorageContentUnchanged,
+  computeSessionStorageContentDigest,
+} from "./session-storage-digest.ts";
 
 export interface Migration {
   version: number;
@@ -1781,6 +1794,238 @@ UPDATE sessions
 
 const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
 
+/**
+ * Migration 042: compact replay-stable native observation ids and intern event
+ * provenance (VC-326).
+ *
+ * The implementation is code because the id derivation is the exact pure
+ * function used by the runtime and because logical before/after digests must be
+ * compared inside the runner's transaction. `sql` remains a truthful marker
+ * for schema inventories; the runner invokes `apply` instead.
+ */
+const MIGRATION_042_SESSION_EVENT_STORAGE = `
+-- Applied by applyMigration042SessionEventStorage: verified id rewrite and table rebuild.
+`;
+
+const MIGRATION_042_CREATE_PROVENANCES = `
+CREATE TABLE session_provenances (
+  id         INTEGER PRIMARY KEY,
+  provenance TEXT NOT NULL CHECK (json_valid(provenance))
+);
+CREATE INDEX session_provenances_value ON session_provenances(provenance);
+
+INSERT INTO session_provenances (id, provenance)
+SELECT ROW_NUMBER() OVER (ORDER BY provenance COLLATE BINARY), provenance
+  FROM (SELECT DISTINCT provenance FROM session_events)
+ ORDER BY provenance COLLATE BINARY;
+`;
+
+const MIGRATION_042_CREATE_SESSION_EVENTS = `
+CREATE TABLE session_events (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL CHECK (sequence > 0),
+  occurred_at   INTEGER NOT NULL,
+  recorded_at   INTEGER NOT NULL,
+  provenance_id INTEGER NOT NULL REFERENCES session_provenances(id) ON DELETE RESTRICT,
+  attachment_id TEXT,
+  command_id    TEXT,
+  payload       TEXT NOT NULL CHECK (json_valid(payload)),
+  UNIQUE (session_id, sequence),
+  UNIQUE (session_id, id),
+  FOREIGN KEY (session_id, attachment_id)
+    REFERENCES session_attachments(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_events_command ON session_events(command_id);
+CREATE INDEX session_events_attachment ON session_events(attachment_id);
+`;
+
+const MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS = `
+CREATE TABLE session_command_receipts (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  command_id  TEXT NOT NULL REFERENCES session_commands(id) ON DELETE CASCADE,
+  sequence    INTEGER NOT NULL CHECK (sequence > 0),
+  recorded_at INTEGER NOT NULL,
+  receipt     TEXT NOT NULL CHECK (json_valid(receipt)),
+  receipt_event_id TEXT,
+  UNIQUE (command_id, sequence),
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, receipt_event_id)
+    REFERENCES session_events(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_receipts_command_sequence ON session_command_receipts(command_id, sequence);
+CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
+`;
+
+/**
+ * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ *
+ * Deleting a worktree directory is a destructive product act, so it takes the
+ * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
+ * carrying the caller's UUID and the exact plan a person confirmed, immutable
+ * facts for what each item did, and receipts for local acceptance. Nothing here
+ * is ever UPDATEd — the previous design replaced one `app_state` JSON blob
+ * after every item, which is how an app that died mid-removal could come back
+ * and describe an already-deleted folder as work it never attempted.
+ *
+ * Three tables rather than one row because the fold needs order and identity:
+ * `rowid` is this ledger's provisional local order (rule 2, single writer at
+ * `cleanup-ledger.ts`) and is what the reads sort by — two facts can share a
+ * millisecond, and the fold's rules (a start before an outcome, the FIRST
+ * outcome wins) are about the order they were appended in. Every durable id is
+ * a UUID the core mints; the indexes below are for the filter, not the order.
+ *
+ * `ON DELETE RESTRICT` on both children, not CASCADE: a command that removed a
+ * directory must not become erasable by deleting its own row. Projects are NOT
+ * referenced at all — a cleanup's record has to outlive the project it ran in,
+ * and the plan already carries the project's id, path and name as they read at
+ * the moment of confirmation.
+ */
+const MIGRATION_043_WORKTREE_CLEANUP = `
+CREATE TABLE IF NOT EXISTS worktree_cleanup_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_facts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL CHECK (kind <> ''),
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_facts_command
+  ON worktree_cleanup_facts(command_id, created_at);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_receipts (
+  id          TEXT PRIMARY KEY,
+  command_id  TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  status      TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  code        TEXT,
+  detail      TEXT,
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
+  ON worktree_cleanup_receipts(command_id, recorded_at);
+`;
+
+/**
+ * Migration 044: durable opaque cursors for lossless waits on a SESSION.
+ *
+ * Migration 029's argument, one ledger over. `session_events` is unique on
+ * `(session_id, sequence)` only: the Session Engine assigns that sequence per
+ * Session, so it orders one Session's history and says nothing about the order
+ * two Sessions' facts were committed in. A wait over a fleet needs exactly
+ * that missing total order — "the first matching event after X, across these
+ * handles" is one question, not one question per handle.
+ *
+ * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
+ * commits can share a millisecond and a timestamp is metadata rather than
+ * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * cannot either — it may be reused after a cascading delete, and a Session
+ * delete cascades this whole table.
+ *
+ * So the same sidecar: an AUTOINCREMENT sequence per appended Session Event,
+ * host-private behind {@link encodeSessionEventCursor}'s opaque prefix, with
+ * session and kind repeated so a multi-handle/multi-kind replay is one
+ * indexed, bounded query rather than a fold over each Session's log. The
+ * trigger is what keeps `session-control/sqlite-ledger.ts` — the one durable
+ * Session Event writer — from having to remember a second insert.
+ *
+ * The backfill orders by `(session_id, sequence)` rather than by `rowid`.
+ * Ledger order between two Sessions that were interleaved before this table
+ * existed is not recoverable from anything in the schema, so the honest
+ * choice is a deterministic one: every Session's own history stays in its own
+ * order, which is the order any reader of one Session already believes. New
+ * appends are in true commit order from here on, and a cursor only ever
+ * promises "nothing after this point is missed".
+ *
+ * `session_events` has no `kind` column — the kind lives inside the JSON
+ * payload — so both the backfill and the trigger read it with `json_extract`.
+ * The immutability trigger guards `id` and `session_id`, the two values the
+ * sidecar copies verbatim, and deliberately NOT `payload`: nothing in the
+ * product ever updates a `session_events` row, and `sqlite-ledger.test.ts`
+ * rewrites a payload on purpose to prove the read path tolerates corruption.
+ * The `kind` copy is therefore what the event was COMMITTED as, which is the
+ * fact a wake reports.
+ */
+const MIGRATION_044_SESSION_EVENT_SEQUENCE = `
+CREATE TABLE session_event_sequence (
+  sequence   INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   TEXT NOT NULL UNIQUE REFERENCES session_events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL
+);
+INSERT INTO session_event_sequence (event_id, session_id, kind)
+SELECT id, session_id, json_extract(payload, '$.kind')
+  FROM session_events
+ ORDER BY session_id ASC, sequence ASC;
+CREATE INDEX session_event_sequence_match
+  ON session_event_sequence(session_id, kind, sequence);
+CREATE TRIGGER session_event_sequence_insert
+AFTER INSERT ON session_events
+BEGIN
+  INSERT INTO session_event_sequence (event_id, session_id, kind)
+  VALUES (NEW.id, NEW.session_id, json_extract(NEW.payload, '$.kind'));
+END;
+CREATE TRIGGER session_event_sequence_identity_immutable
+BEFORE UPDATE OF id, session_id ON session_events
+BEGIN
+  SELECT RAISE(ABORT, 'session event identity is immutable');
+END;
+`;
+
+/**
+ * Migration 045: the SPAWN LEDGER — every child Volli starts on a Session's
+ * behalf, written at spawn (VC-341).
+ *
+ * The leak this answers is not a missing kill; it is missing knowledge. Once a
+ * Session's executor releases, nothing on the machine knew that the `next dev`
+ * still holding 2.9 GB was ever that Session's, so no sweep could reason about
+ * it. Command lines cannot supply the answer — grepping argv for `node` finds
+ * JavaScript and misses a Gradle daemon or a `uvicorn --reload` — and a
+ * working directory only says where a process is standing. A row written at
+ * spawn says whose it is.
+ *
+ * `started_at` is beside `pid` for one reason: pids recycle. The pair is the
+ * identity every reap re-checks against the live process table before it
+ * signals anything (`ledgerEntryMatches`), so a row whose number has since been
+ * handed to the user's editor names a process this app will not touch.
+ *
+ * No foreign key to `sessions`. A row is a fact about a process that existed,
+ * and it has to outlive both the Session record and the launch that wrote it —
+ * a crash mid-turn is precisely the case the ledger is read after.
+ *
+ * THREE KINDS, AND NO `browser`. A CHECK constraint is frozen the moment it
+ * ships, so it lists only what something can actually write: the `execute`
+ * environment, background shells, and terminal PTYs. A Browser Tab is a
+ * `WebContentsView` inside this process (`browser/tab-host.ts`) — there is no
+ * child pid to record — so a fourth value would be dead vocabulary nothing
+ * could ever insert and nothing could later remove.
+ */
+const MIGRATION_045_SPAWN_LEDGER = `
+CREATE TABLE IF NOT EXISTS spawned_processes (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ticket_id  TEXT,
+  project_id TEXT,
+  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal')),
+  pid        INTEGER NOT NULL,
+  pgid       INTEGER,
+  started_at INTEGER NOT NULL,
+  cwd        TEXT NOT NULL,
+  command    TEXT NOT NULL,
+  exited_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS spawned_processes_open ON spawned_processes(exited_at, started_at);
+CREATE INDEX IF NOT EXISTS spawned_processes_session ON spawned_processes(session_id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -1992,7 +2237,246 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_041_SESSION_PARENT,
     apply: applyMigration041SessionParent,
   },
+  {
+    version: 42,
+    name: "session event storage — compact native ids and interned provenance",
+    sql: MIGRATION_042_SESSION_EVENT_STORAGE,
+    apply: applyMigration042SessionEventStorage,
+  },
+  {
+    version: 43,
+    name: "worktree cleanup — command ledger, immutable per-item facts, acceptance receipts",
+    sql: MIGRATION_043_WORKTREE_CLEANUP,
+  },
+  {
+    version: 44,
+    name: "session_event_sequence — durable opaque cursors for lossless waits on a Session",
+    sql: MIGRATION_044_SESSION_EVENT_SEQUENCE,
+    apply: applyMigration044SessionEventSequence,
+  },
+  {
+    version: 45,
+    name: "spawned_processes — the spawn ledger behind the orphan process sweep",
+    sql: MIGRATION_045_SPAWN_LEDGER,
+  },
 ];
+
+/**
+ * Migration 044's reconciler, probe-gated like 040's and 041's.
+ *
+ * `CREATE TABLE` is as un-idempotent as `ADD COLUMN` here: a database that is
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — must converge rather than fail
+ * on a duplicate object, and this file's own tests re-offer every version.
+ * One probe covers the whole block, because the table, its index and both
+ * triggers are created together or not at all.
+ */
+function applyMigration044SessionEventSequence(db: Database.Database): void {
+  const exists =
+    (db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_event_sequence'",
+      )
+      .get() as unknown) !== undefined;
+  if (exists) return;
+  db.exec(MIGRATION_044_SESSION_EVENT_SEQUENCE);
+}
+
+function countRows(db: Database.Database, sql: string): number {
+  return (db.prepare(sql).get() as { count: number }).count;
+}
+
+interface SessionUsageReferenceProblems {
+  missingEvents: number;
+  mismatchedSessions: number;
+}
+
+function sessionUsageReferenceProblems(db: Database.Database): SessionUsageReferenceProblems {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN e.id IS NULL THEN 1 ELSE 0 END), 0) AS missingEvents,
+              COALESCE(SUM(CASE
+                WHEN e.id IS NOT NULL AND e.session_id <> u.session_id THEN 1 ELSE 0
+              END), 0) AS mismatchedSessions
+         FROM session_usage u
+         LEFT JOIN session_events e ON e.id = u.event_id`,
+    )
+    .get() as SessionUsageReferenceProblems;
+}
+
+/** Migration 042's verified rewrite, run inside migrate's existing transaction. */
+function applyMigration042SessionEventStorage(db: Database.Database): void {
+  const eventColumns = db.pragma("table_info(session_events)") as { name: string }[];
+  const hasLegacyProvenance = eventColumns.some(({ name }) => name === "provenance");
+  const hasInternedProvenance = eventColumns.some(({ name }) => name === "provenance_id");
+  const provenanceTableExists =
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_provenances'")
+      .get() !== undefined;
+  // Probe-gated so a deliberately rewound user_version converges rather than
+  // trying to rebuild an already-v42 schema.
+  if (hasInternedProvenance && provenanceTableExists && !hasLegacyProvenance) return;
+  if (!hasLegacyProvenance || hasInternedProvenance || provenanceTableExists) {
+    throw new Error("Migration 42 found a partial Session event storage schema");
+  }
+
+  const before = computeSessionStorageContentDigest(db);
+  const usageReferencesBefore = sessionUsageReferenceProblems(db);
+  db.function(
+    "compact_native_observation_event_id_v42",
+    { deterministic: true },
+    compactNativeObservationEventId,
+  );
+  db.exec(`
+    CREATE TEMP TABLE session_event_id_map_v42 (
+      old_id TEXT PRIMARY KEY,
+      new_id TEXT NOT NULL
+    );
+    INSERT INTO session_event_id_map_v42 (old_id, new_id)
+    SELECT id, compact_native_observation_event_id_v42(id)
+      FROM session_events
+     WHERE id LIKE 'native-event:%'
+       AND id <> compact_native_observation_event_id_v42(id);
+  `);
+
+  const unverifiable = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42
+      WHERE new_id <> compact_native_observation_event_id_v42(old_id)`,
+  );
+  if (unverifiable !== 0) {
+    throw new Error(`Migration 42 found ${unverifiable} unverifiable compact event id(s)`);
+  }
+  const duplicate = db
+    .prepare(
+      `SELECT new_id
+         FROM session_event_id_map_v42
+        GROUP BY new_id
+       HAVING COUNT(*) > 1
+        LIMIT 1`,
+    )
+    .get() as { new_id: string } | undefined;
+  if (duplicate !== undefined) {
+    throw new Error(`Migration 42 compact event id collision: ${duplicate.new_id}`);
+  }
+  const collision = db
+    .prepare(
+      `SELECT ids.kind, ids.id
+         FROM session_event_id_map_v42 m
+         JOIN (
+           SELECT 'session' AS kind, id FROM sessions
+           UNION ALL SELECT 'attachment', id FROM session_attachments
+           UNION ALL SELECT 'command', id FROM session_commands
+           UNION ALL SELECT 'event', e.id
+             FROM session_events e
+            WHERE NOT EXISTS (
+              SELECT 1 FROM session_event_id_map_v42 mapped WHERE mapped.old_id = e.id
+            )
+           UNION ALL SELECT 'receipt', id FROM session_command_receipts
+         ) ids ON ids.id = m.new_id
+        LIMIT 1`,
+    )
+    .get() as { kind: string; id: string } | undefined;
+  if (collision !== undefined) {
+    throw new Error(
+      `Migration 42 compact event id collision with ${collision.kind} ${collision.id}`,
+    );
+  }
+
+  db.exec(MIGRATION_042_CREATE_PROVENANCES);
+  // Copy both sides of the receipt FK to SQLite's TEMP database, then drop the
+  // child before its parent. Creating the compact main tables only after the
+  // old ones are gone lets SQLite reuse their pages instead of permanently
+  // growing the profile by the size of a second event ledger. better-sqlite3's
+  // SQLITE_TEMP_STORE=1 compile default keeps the copy outside the main
+  // database and bounds heap use on large profiles; every object is still
+  // covered by migrate's one transaction.
+  db.exec(`
+    CREATE TEMP TABLE session_events_v41_copy AS
+    SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+           attachment_id, command_id, payload
+      FROM session_events;
+    CREATE TEMP TABLE session_command_receipts_v41_copy AS
+    SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+      FROM session_command_receipts;
+    DROP TABLE session_command_receipts;
+    DROP TABLE session_events;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_EVENTS);
+  db.exec(`
+    INSERT INTO session_events
+      (id, session_id, sequence, occurred_at, recorded_at, provenance_id,
+       attachment_id, command_id, payload)
+    SELECT COALESCE(m.new_id, e.id), e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+           p.id, e.attachment_id, e.command_id, e.payload
+      FROM session_events_v41_copy e
+      JOIN session_provenances p ON p.provenance = e.provenance
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = e.id
+     ORDER BY e.session_id COLLATE BINARY, e.sequence;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS);
+  db.exec(`
+    INSERT INTO session_command_receipts
+      (id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id)
+    SELECT r.id, r.session_id, r.command_id, r.sequence, r.recorded_at, r.receipt,
+           COALESCE(m.new_id, r.receipt_event_id)
+      FROM session_command_receipts_v41_copy r
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = r.receipt_event_id
+     ORDER BY r.command_id COLLATE BINARY, r.sequence;
+
+    UPDATE session_usage
+       SET event_id = (
+         SELECT m.new_id FROM session_event_id_map_v42 m WHERE m.old_id = session_usage.event_id
+       )
+     WHERE event_id IN (SELECT old_id FROM session_event_id_map_v42);
+
+    DROP TABLE session_command_receipts_v41_copy;
+    DROP TABLE session_events_v41_copy;
+  `);
+
+  const failedRewrites = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42 m
+       LEFT JOIN session_events e ON e.id = m.new_id
+      WHERE m.new_id <> compact_native_observation_event_id_v42(m.old_id)
+         OR e.id IS NULL`,
+  );
+  if (failedRewrites !== 0) {
+    throw new Error(`Migration 42 failed to verify ${failedRewrites} compact event id rewrite(s)`);
+  }
+  const usageReferencesAfter = sessionUsageReferenceProblems(db);
+  if (
+    usageReferencesAfter.missingEvents > usageReferencesBefore.missingEvents ||
+    usageReferencesAfter.mismatchedSessions > usageReferencesBefore.mismatchedSessions
+  ) {
+    throw new Error(
+      `Migration 42 increased broken usage references: missing events ${usageReferencesBefore.missingEvents}→${usageReferencesAfter.missingEvents}, mismatched Sessions ${usageReferencesBefore.mismatchedSessions}→${usageReferencesAfter.mismatchedSessions}`,
+    );
+  }
+  const danglingReceipts = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_command_receipts r
+       LEFT JOIN session_events e
+         ON e.id = r.receipt_event_id AND e.session_id = r.session_id
+      WHERE r.receipt_event_id IS NOT NULL AND e.id IS NULL`,
+  );
+  if (danglingReceipts !== 0) {
+    throw new Error(`Migration 42 left ${danglingReceipts} dangling receipt event reference(s)`);
+  }
+  const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `Migration 42 foreign-key check failed: ${JSON.stringify(foreignKeyViolations.slice(0, 3))}`,
+    );
+  }
+
+  const after = computeSessionStorageContentDigest(db);
+  assertSessionStorageContentUnchanged(before, after);
+  db.exec("DROP TABLE session_event_id_map_v42");
+}
 
 /** Migration 041's reconciler, probe-gated like 040's. */
 function applyMigration041SessionParent(db: Database.Database): void {
@@ -2146,13 +2630,36 @@ function applyMigration026Automations(db: Database.Database): void {
   db.exec(MIGRATION_026_AUTOMATIONS);
 }
 
+export interface MigrateOptions {
+  /**
+   * Stop after this `user_version` instead of walking to the newest migration.
+   *
+   * The one caller is a restore (VC-283), and the reason is that a bundle's
+   * rows are shaped for the schema they were read out of: a v39 bundle poured
+   * into a v41 database would be poured into columns that did not exist when
+   * it was written. Restore migrates a fresh database TO the bundle's version,
+   * writes the rows, and only then walks the remaining migrations — which is
+   * also what makes an app upgrade testable, since the second walk is the same
+   * one a real upgrade performs.
+   *
+   * A version newer than this build knows is not clamped silently; the caller
+   * checks compatibility first, because a bundle from a future build is a
+   * refusal, not a truncation.
+   */
+  toVersion?: number;
+}
+
 /** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
-export function migrate(db: Database.Database, dbPath: string): void {
+export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
-  const pending = MIGRATIONS.filter((migration) => migration.version > currentVersion).toSorted(
-    (a, b) => a.version - b.version,
-  );
-  if (pending.length === 0) return;
+  const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
+  const pending = MIGRATIONS.filter(
+    (migration) => migration.version > currentVersion && migration.version <= ceiling,
+  ).toSorted((a, b) => a.version - b.version);
+  if (pending.length === 0) {
+    logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
+    return;
+  }
 
   // Only an already-populated database needs a safety copy — a fresh
   // `user_version = 0` db has nothing pre-migration to protect.
@@ -2179,4 +2686,22 @@ export function migrate(db: Database.Database, dbPath: string): void {
     }
   });
   applyPendingMigrations();
+
+  // VACUUM cannot run inside the all-or-nothing migration transaction. Keep
+  // the starting version check here as well: a batch that began at version 0
+  // is fresh even though it now reports the final version. The safety copy for
+  // an existing database remains in place throughout this attempt.
+  const compactionReport =
+    currentVersion === 0
+      ? skippedMigrationCompaction(dbPath, "fresh database")
+      : compactMigrationDatabase(db, dbPath);
+  logMigrationCompaction(compactionReport);
+
+  // Retention is deliberately last, after the transaction committed, its
+  // foreign-key check passed, and compaction returned (including a reported
+  // failure). Fresh databases made no copy, so they do not participate.
+  if (currentVersion > 0) {
+    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
+    logMigrationBackupRetention(retentionReport);
+  }
 }

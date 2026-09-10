@@ -127,6 +127,8 @@ describe("homeSessionRows", () => {
     // Attachment is not a visual state. Both quiet rows use the same idle dot.
     expect(chatDot(chat({ activity: "idle", live: true }))).toBe("idle");
     expect(chatDot(chat({ activity: "idle", live: false }))).toBe("idle");
+    // A turn that died is not that quiet (VC-324): it keeps its own dot.
+    expect(chatDot(chat({ activity: "interrupted" }))).toBe("interrupted");
   });
 
   it("calls a terminal live only while a tab holds it and it has not ended", () => {
@@ -152,6 +154,22 @@ describe("homeSessionRows", () => {
 
   it("draws nothing for a project that has run nothing", () => {
     expect(homeSessionRows([], [], [], [])).toEqual([]);
+  });
+
+  it("leaves a Subagent Session out — it is reached from the chat that delegated it", () => {
+    const rows = homeSessionRows(
+      [
+        chat({ sessionId: "parent" }),
+        chat({ sessionId: "child", role: "subagent", parentSessionId: "parent" }),
+      ],
+      [],
+      // Promoted to a tab and still not a row: the page lists the project's own
+      // Sessions, and a child belongs to one turn of one of them.
+      ["child"],
+      [],
+    );
+
+    expect(rows.map((row) => row.id)).toEqual(["parent"]);
   });
 });
 

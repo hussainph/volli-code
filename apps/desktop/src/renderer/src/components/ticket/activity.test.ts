@@ -35,6 +35,10 @@ function comment(overrides: Partial<TicketComment> = {}): TicketComment {
   };
 }
 
+/** The trim line for one byte count — the only part of it under test here. */
+const bytesOf = (bytes: number): string | null =>
+  describeEvent({ kind: "worktree_trimmed", entries: 1, bytes, kept: 0 });
+
 describe("describeEvent", () => {
   it("phrases every property-change kind as a one-liner", () => {
     expect(describeEvent({ kind: "created", status: "backlog", title: "T" })).toBe(
@@ -169,6 +173,24 @@ describe("describeEvent", () => {
     expect(
       describeEvent({ kind: "worktree_reclaimed", branch: "volli/VC-113-x", daysInDone: 14 }),
     ).toBe("removed the worktree folder after 14 days in Done (branch volli/VC-113-x kept)");
+  });
+
+  it("accounts for a trimmed worktree, and for the config it kept", () => {
+    // VC-340: the kept count is the difference between this and `git clean -fdX`,
+    // so the line says it whenever there was one.
+    expect(
+      describeEvent({ kind: "worktree_trimmed", entries: 3, bytes: 1_610_612_736, kept: 2 }),
+    ).toBe("trimmed 3 ignored path(s) (1.5 GB) from the worktree, keeping 2");
+    expect(describeEvent({ kind: "worktree_trimmed", entries: 1, bytes: 2048, kept: 0 })).toBe(
+      "trimmed 1 ignored path(s) (2 KB) from the worktree",
+    );
+  });
+
+  it("says bytes in one unit, coarsely, whatever the scale", () => {
+    expect(bytesOf(512)).toContain("(512 B)");
+    // Past 100 the decimal is noise, and it never runs out of units.
+    expect(bytesOf(157_286_400)).toContain("(150 MB)");
+    expect(bytesOf(2 ** 60)).toContain("(1048576 TB)");
   });
 
   it("names both directions of a worktree scoping flip", () => {

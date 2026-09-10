@@ -9,9 +9,7 @@
 import type {
   ModelAccessModel,
   ModelAccessProvider,
-  RendererSessionInteraction,
   SessionAttention,
-  SessionInteractionPrompt,
   SessionInteractionResolution,
 } from "@volli/shared";
 import { COMPACT_VERB, COPY_VERB, LOGIN_VERB, SETTINGS_VERB } from "@volli/shared";
@@ -245,6 +243,7 @@ const ACTS: SessionBlockerActs = {
 function blockerInput(overrides: Partial<SessionBlockerInput> = {}): SessionBlockerInput {
   return {
     sessionError: null,
+    revealedAttentionId: null,
     attention: { active: [], primary: null },
     catalogState: "ready",
     catalogError: null,
@@ -299,6 +298,71 @@ function recorder(resolved: boolean) {
     },
   };
 }
+
+describe("a notification click that named an Attention (VC-295 round 3)", () => {
+  /**
+   * The row draws `attention.primary` — the newest active one — so a click on
+   * an alert about an OLDER live failure used to open the Session and select
+   * nothing: the person was interrupted, sent somewhere, and shown a different
+   * problem with no word about the one they were told.
+   */
+  const older = attention("adapter_disconnected");
+  const newer = attention("configuration_invalid");
+  const twoLive = (revealedAttentionId: string | null): SessionBlockerInput =>
+    blockerInput({
+      revealedAttentionId,
+      attention: { active: [older, newer], primary: newer },
+    });
+
+  it("shows the newest attention when no click named one", () => {
+    expect(sessionBlocker(twoLive(null), ACTS, false)?.message).toBe(
+      sessionBlocker(raised(newer), ACTS, false)?.message,
+    );
+  });
+
+  it("shows the attention the click named, even though it is not the primary", () => {
+    const revealed = sessionBlocker(twoLive(older.id), ACTS, false);
+
+    expect(revealed?.message).toBe(sessionBlocker(raised(older), ACTS, false)?.message);
+    expect(revealed?.message).not.toBe(sessionBlocker(raised(newer), ACTS, false)?.message);
+  });
+
+  it("falls back to the primary when the named attention is no longer live", () => {
+    // Nothing is invented and nothing is replayed: the row shows what IS
+    // wrong, and the click's own toast is what explains the absence.
+    expect(sessionBlocker(twoLive("attention-gone"), ACTS, false)?.message).toBe(
+      sessionBlocker(raised(newer), ACTS, false)?.message,
+    );
+  });
+
+  it("still lets a card hide the row a card answers", () => {
+    // A revealed `permission_required` with a card open is the card's own
+    // question: selecting the row over it would draw the same ask twice.
+    const asked = blockerInput({
+      revealedAttentionId: "attention-permission_required",
+      attention: {
+        active: [attention("permission_required")],
+        primary: attention("permission_required"),
+      },
+    });
+
+    expect(sessionBlocker(asked, ACTS, true)).toBeNull();
+  });
+
+  it("never lets a revealed attention speak over a dead stream", () => {
+    // `sessionError` outranks every attention: the failure that has the report
+    // in it must not be replaced by the one a notification happened to name.
+    const stream = blockerInput({
+      sessionError: "Lost the Session stream: socket hang up",
+      revealedAttentionId: older.id,
+      attention: { active: [older, newer], primary: newer },
+    });
+
+    expect(sessionBlocker(stream, ACTS, false)?.message).toBe(
+      "Lost the Session stream: socket hang up",
+    );
+  });
+});
 
 describe("sessionBlocker", () => {
   it("reports a failed delivery even while a card is still on screen", () => {
@@ -771,7 +835,7 @@ describe("answerInteraction", () => {
 });
 
 describe("withdrawInteraction", () => {
-  /** The card's controls, including Cancel request, share this in-flight latch. */
+  /** The card's controls, Withdraw question among them, share this in-flight latch. */
   it("holds the card's own in-flight latch for the whole round trip", async () => {
     const flags: [string, boolean][] = [];
     const acts: string[] = [];
@@ -812,6 +876,31 @@ describe("withdrawInteraction", () => {
       ["permission:1", false],
     ]);
   });
+
+  it("reports the cancellation's landing, not the interrupt's", async () => {
+    // The client never throws for a refusal — it toasts and resolves `false` —
+    // so this boolean is the only word the card gets. A refused cancel leaves
+    // the question standing, and a card that latched shut on "Withdrew
+    // question" over it would be claiming an act that did not happen, with
+    // nothing left on it to press.
+    const acts = { resolving: () => undefined };
+    await expect(
+      withdrawInteraction("question:1", {
+        ...acts,
+        interrupt: () => Promise.resolve(true),
+        cancel: () => Promise.resolve(false),
+      }),
+    ).resolves.toBe(false);
+    // And a turn that would not stop is not a question that would not go:
+    // the cancel is what ends the interaction, whatever the interrupt did.
+    await expect(
+      withdrawInteraction("question:1", {
+        ...acts,
+        interrupt: () => Promise.resolve(false),
+        cancel: () => Promise.resolve(true),
+      }),
+    ).resolves.toBe(true);
+  });
 });
 
 describe("resolvingWith", () => {
@@ -831,79 +920,32 @@ describe("resolvingWith", () => {
   });
 });
 
-function askPrompt(overrides: Partial<SessionInteractionPrompt> = {}): SessionInteractionPrompt {
-  return {
-    id: "prompt:0",
-    label: "Which branch should this land on?",
-    detail: null,
-    options: [{ id: "question:0:bWFpbg", label: "main", description: null }],
-    multiple: false,
-    custom: true,
-    ...overrides,
-  };
-}
-
-/** A model's own question: encoded ids, so none of them can read as a declared no. */
-function ask(prompts: readonly SessionInteractionPrompt[]): RendererSessionInteraction {
-  return {
-    id: "ask-user:call-7",
-    attachmentId: "attach-1",
-    kind: "question",
-    title: "Which branch should this land on?",
-    detail: null,
-    options: prompts.flatMap((prompt) => prompt.options),
-    multiple: false,
-    prompts,
-    native: { id: null, detail: null },
-  };
-}
-
 describe("composerPress", () => {
-  it("answers the open question with what was typed, under that question's id", () => {
-    // The dead end this closes: a press here used to be a message, and a
-    // message typed at a blocked turn joins a queue that only an idle Session
-    // drains — which this one cannot become until the question is answered.
-    expect(composerPress(ask([askPrompt()]), "the release branch")).toEqual({
-      kind: "answer",
-      interactionId: "ask-user:call-7",
-      submission: {
-        resolution: {
-          optionIds: [],
-          response: "the release branch",
-          answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
-        },
-        message: null,
-      },
-    });
+  it("is a message while a question is standing open above the box", () => {
+    // This press used to become the pending question's answer, which gave one
+    // question two answer fields and two submit paths — and let the same
+    // question be sent twice. The card above owns the answer; words typed here
+    // are the reader's own message and travel as one.
+    expect(composerPress("the release branch")).toEqual({ kind: "message" });
   });
 
   it("is an ordinary message while nothing is being asked", () => {
-    expect(composerPress(null, "ship it")).toEqual({ kind: "message" });
-  });
-
-  it("is an ordinary message wherever the request cannot take the words", () => {
-    // The rule and its reasons are `composerAnswer`'s; what is pinned here is
-    // that a press it refuses is never dropped — it falls back to the road it
-    // has always taken.
-    expect(composerPress(ask([askPrompt({ custom: false })]), "neither")).toEqual({
-      kind: "message",
-    });
-    expect(composerPress(ask([askPrompt()]), "   ")).toEqual({ kind: "message" });
+    expect(composerPress("ship it")).toEqual({ kind: "message" });
   });
 
   it("is a compaction when the whole draft is the verb", () => {
-    expect(composerPress(null, "/compact")).toEqual({
+    expect(composerPress("/compact")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: null,
     });
     // What the picker leaves in the box, and what someone types after it.
-    expect(composerPress(null, "/compact ")).toEqual({
+    expect(composerPress("/compact ")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: null,
     });
-    expect(composerPress(null, "/compact keep the API work")).toEqual({
+    expect(composerPress("/compact keep the API work")).toEqual({
       kind: "verb",
       verb: COMPACT_VERB,
       instructions: "keep the API work",
@@ -916,17 +958,17 @@ describe("composerPress", () => {
     // the picker's. `/settings` with words is still claimed — dropping them
     // silently to make it "just a settings open" is the trap the whole-draft
     // rule exists to prevent.
-    expect(composerPress(null, "/copy")).toEqual({
+    expect(composerPress("/copy")).toEqual({
       kind: "verb",
       verb: COPY_VERB,
       instructions: null,
     });
-    expect(composerPress(null, "/settings now")).toEqual({
+    expect(composerPress("/settings now")).toEqual({
       kind: "verb",
       verb: SETTINGS_VERB,
       instructions: "now",
     });
-    expect(composerPress(null, "/login")).toEqual({
+    expect(composerPress("/login")).toEqual({
       kind: "verb",
       verb: LOGIN_VERB,
       instructions: null,
@@ -937,15 +979,15 @@ describe("composerPress", () => {
     // The grammar and its reasons are `composer-verb.ts`'s. What is pinned
     // here is that a draft it refuses still goes somewhere: claiming this
     // would send nothing and silently drop the sentence around the verb.
-    expect(composerPress(null, "please /compact and carry on")).toEqual({ kind: "message" });
-    expect(composerPress(null, "/compacted")).toEqual({ kind: "message" });
+    expect(composerPress("please /compact and carry on")).toEqual({ kind: "message" });
+    expect(composerPress("/compacted")).toEqual({ kind: "message" });
   });
 
-  it("lets a standing question outrank the verb", () => {
-    // The surface has already said twice that this box is answering: it is
-    // renamed Answer and the `/` picker is shut. A Session waiting on a
-    // question is mid-turn anyway, where a compaction would be refused.
-    expect(composerPress(ask([askPrompt()]), "/compact")).toMatchObject({ kind: "answer" });
+  it("still reads a verb while a question waits, because it is not an answer", () => {
+    // A verb typed at a blocked turn is refused by the verb's own moment rule,
+    // in words that say why. What it must never be is an answer nobody meant to
+    // send to the question standing above the box.
+    expect(composerPress("/compact")).toMatchObject({ kind: "verb" });
   });
 });
 

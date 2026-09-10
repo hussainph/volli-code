@@ -110,6 +110,8 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffInput,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteInput,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
@@ -119,6 +121,10 @@ import type {
   WorktreeRecreateResult,
   WorktreeRemoveResult,
   WorktreeStatusResult,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsInput,
+  WorktreeTrimSettingsResult,
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
@@ -167,24 +173,36 @@ import {
 import { detectProjectBaseBranch } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
-import { orphanReport } from "./orphan-sweep";
+import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
 import { exportDatabase } from "./menu";
 import {
+  acquireDeletionLease,
   type AgentSiteReleaseReport,
   archiveAndClean,
+  busyRefusal,
+  busySiteWithin,
+  type BusyWorktreeSite,
+  type BusyWorktreeSites,
+  cleanupOrphans,
   commitTicketRemaining,
   ensure,
   getRetentionTtlDays,
   listBranches,
+  OrphanCleanupRefused,
   publishTicketBranch,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
   readVenue,
   readWorktreeDiff,
   readWorktreeStatus,
+  getTrimSettings,
   remove as removeWorktree,
   runNet,
+  scanTrimTargets,
   setRetentionTtlDays,
+  setTrimSettings,
+  trimAllWorktrees,
+  trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "./worktree";
 import { createCoalescer } from "./worktree/coalesce";
@@ -195,7 +213,7 @@ import {
   isInside as isInsideWorktreeHome,
 } from "./worktree/paths";
 import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
-import { worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
+import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
 
@@ -244,52 +262,12 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   return { projects, ticketsByProject, labelsByProject, appState };
 }
 
-/**
- * A directory something is doing work in right now, and which surface is doing
- * it. The surface travels with the directory because the refusal has to name an
- * action the user can actually reach, and stopping an agent and closing a
- * terminal are different doors.
- */
-export interface BusyWorktreeSite {
-  directory: string;
-  surface: "terminal" | "agent";
-}
-
-/**
- * The busy site sitting at or under `target`, or `null`. `isInside`
- * canonicalizes both operands, so a terminal running inside a worktree — or an
- * agent mid-turn in it — blocks a remove/orphan-delete that would pull the
- * directory out from under it.
- *
- * The supplier is already asked about one target, so this is a second filter
- * over an answer that should already be scoped: it is what makes the guard
- * independent of how carefully the supplier reads `target`, and terminals in
- * particular are reported unscoped because a live PTY holds its cwd whatever it
- * is doing.
- */
-function busySiteWithin(
-  target: string,
-  sites: readonly BusyWorktreeSite[],
-): BusyWorktreeSite | null {
-  return sites.find((site) => isInsideWorktreeHome(target, site.directory)) ?? null;
-}
-
-/**
- * Why a destructive worktree action was refused: one line, and one recovery the
- * user can reach from where they are. It never names the act it refused — every
- * caller already frames that ("Couldn't remove worktree: …") — so this says only
- * what is in the way and what clears it.
- *
- * It used to say "Close the live sessions running in this worktree", which named
- * an action that does not exist for a chat: there is no close, and the Session
- * it was talking about was routinely one nobody had ever sent a message to. A
- * chat is stopped (the composer's Stop, or Esc); a terminal is closed.
- */
-function busyRefusal(site: BusyWorktreeSite): string {
-  return site.surface === "agent"
-    ? "An agent is still running in this worktree. Stop it first."
-    : "A terminal is still running in this worktree. Close it first.";
-}
+// `BusyWorktreeSite`, `busySiteWithin` and `busyRefusal` moved into the worktree
+// module (`worktree/activity.ts`) when VC-284 gave the orphan cleanup the same
+// activity protection this file's manual Delete always had: one definition of
+// "something is running in there", asked by every destructive route. The type is
+// re-exported here because index.ts builds the supplier against it.
+export type { BusyWorktreeSite };
 
 /*
  * The renderer's Session listing rows are built by `session-control/listing-row.ts`,
@@ -478,6 +456,41 @@ export function registerDataIpcHandlers(
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
+  /**
+   * Trims a just-finished ticket's worktree (VC-340), beside the reply rather
+   * than inside it: enumerating and removing an ignored tree is a filesystem
+   * walk, and a board move must not wait on one.
+   *
+   * Fire-and-forget is the right shape for it, and the reason is the repo's own
+   * rule about failed mutations: nobody asked for this and nothing is waiting on
+   * it, so a refusal (a live agent, a changed tracked file) has no recovery to
+   * offer and stays in the log. What it does NOT do quietly is succeed — a trim
+   * writes `worktree_trimmed` into the ticket's History and broadcasts, so the
+   * card it belongs to can account for the files that went.
+   */
+  /**
+   * The sweep's deps: the worktree bundle plus the ONE busy question every
+   * destructive worktree route asks. Built per call, like `worktreeDeps(db)`
+   * everywhere else here, so nothing caches a stale db handle.
+   */
+  const busySeam = (): { busySites?: BusyWorktreeSites } =>
+    options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
+  const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
+
+  const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
+    void trimFinishedWorktree(
+      { worktree: worktreeDeps(db), now: () => Date.now(), ...busySeam() },
+      ticketId,
+    )
+      .then((outcome) => {
+        if (outcome.kind !== "trimmed") return;
+        broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
+      })
+      .catch((error: unknown) => {
+        console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+      });
+  };
+
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
@@ -605,13 +618,12 @@ export function registerDataIpcHandlers(
       return { ok: true, project };
     },
 
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     "volli:project-session-defaults": (input: ProjectSessionDefaultsInput): ProjectUpdateResult => {
-      const harness = input.harness === null ? null : input.harness.trim();
       const project = updateProjectSessionDefaults(
         db,
         input.id,
-        { harness: harness === "" ? null : harness, model: input.model },
+        { model: input.model },
         Date.now(),
       );
       if (!project) return { ok: false, error: "Unknown project" };
@@ -714,6 +726,17 @@ export function registerDataIpcHandlers(
       )();
 
       const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
+
+      // VC-340: a ticket that just landed in Done gives up its worktree's
+      // git-ignored content NOW rather than whenever the 60s retention poll next
+      // runs. Same act, same refusals, same durable event — the poll remains the
+      // backfill for everything already finished before this door existed.
+      for (const ticketId of ticketIds) {
+        const moved = after.get(ticketId);
+        if (moved === undefined || moved.status !== "done") continue;
+        if (before.get(ticketId)?.status === "done") continue;
+        trimFinishedInBackground(ticketId, moved.project_id);
+      }
       // Main owns armed-column arrivals. A group drop is one deliberate move
       // per selected Ticket, so every real column change reports independently
       // with the same Option-drag choice.
@@ -820,8 +843,24 @@ export function registerDataIpcHandlers(
       // the same split `volli:ticket-move` makes for its interrupt side effect.
       const switchedOn =
         before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
-      if (!switchedOn) return { ok: true, ticket };
-      return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
+      if (switchedOn) return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
+      // Switching OFF moves the ticket's Session destination too — from "an
+      // isolated worktree, not yet made" to the main checkout — with nothing
+      // async behind it. The same `worktree` broadcast the switch-on makes is
+      // what lets a ticket venue reader (the empty chat) stop waiting on a
+      // checkout that will never arrive and measure the one it now binds
+      // (VC-286). Only the transition broadcasts: re-asserting `false` moved
+      // nothing.
+      const switchedOff =
+        before !== undefined && before.uses_worktree !== 0 && ticket.usesWorktree === false;
+      if (switchedOff) {
+        broadcastDataChanged({
+          ticketId: input.ticketId,
+          projectId: ticket.projectId,
+          kind: "worktree",
+        });
+      }
+      return { ok: true, ticket };
     },
 
     "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {
@@ -836,9 +875,13 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
       const now = Date.now();
+      const ticket = getTicketRow(db, input.ticketId);
       withTicketWake(db, input.ticketId, () =>
         archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
       );
+      // An archive KEEPS the checkout, which makes an archived ticket the
+      // longest-lived carrier of a dead dependency tree in the app (VC-340).
+      trimFinishedInBackground(input.ticketId, ticket?.project_id);
       return { ok: true };
     },
 
@@ -1058,7 +1101,7 @@ export function registerDataIpcHandlers(
       // git in, and the drawing can never be of a tree the agent is not in.
       const read = await readVenue(worktreeDeps(db), input);
       if (!read.ok) return { ok: false, error: read.error };
-      return { ok: true, venue: read.value };
+      return { ok: true, reading: read.value };
     },
 
     "volli:session-rename": async (input: SessionRenameInput): Promise<SessionRenameResult> => {
@@ -1214,19 +1257,129 @@ export function registerDataIpcHandlers(
     "volli:worktree-orphans": async (
       opts?: WorktreeOrphansInput,
     ): Promise<WorktreeOrphansResult> => {
-      // The startup sweep is DESTRUCTIVE and runs once per launch (index.ts
-      // kicks it off after first paint); this returns that cached report so a
-      // renderer reload never re-sweeps and races the launch sweep. Only an
-      // explicit Settings → Worktrees rescan (`{ rescan: true }`) re-sweeps.
-      const rescan = opts?.rescan === true;
-      const report = await orphanReport(worktreeDeps(db), { rescan });
+      // READ-ONLY in every shape (VC-284). The launch scan is cached so a
+      // renderer reload doesn't re-walk every project, and `{ refresh: true }`
+      // — the Storage pane's Scan — simply asks again. Nothing here removes a
+      // directory or prunes git metadata; that is `worktree-orphan-cleanup`.
+      const refresh = opts?.refresh === true;
+      const report = await orphanScanReport(worktreeDeps(db), {
+        refresh,
+        // Read-only, and the same supplier the destructive paths use: an
+        // occupied checkout is reported as KEPT rather than proposed and then
+        // refused after the confirmation (review C5).
+        busyWorktreeSites: options.busyWorktreeSites,
+      });
+      // The durable history, so Storage can say who removed a directory and
+      // when — and show a run the app never finished. A record that cannot be
+      // read FAILS this channel rather than answering with an empty list: the
+      // old blob's "unreadable means no history" made a damaged record
+      // indistinguishable from an app that had never deleted anything, which is
+      // the one thing a deletion log must never do.
+      let runs;
+      try {
+        runs = await orphanCleanupEngine(db).recentRuns();
+      } catch (error) {
+        return {
+          ok: false,
+          error: `Couldn't read the cleanup history: ${errorMessage(error)}`,
+        };
+      }
       return {
         ok: true,
-        pruned: report.pruned,
-        removedClean: report.removedClean,
+        revision: report.revision,
+        scannedAt: report.scannedAt,
+        retentionDays: report.retentionDays,
+        prunable: report.prunable,
+        removable: report.removable,
         keptRecent: report.keptRecent,
+        keptMetadata: report.keptMetadata,
+        unreadableProjects: report.unreadableProjects,
         dirty: report.dirty,
+        runs,
       };
+    },
+
+    "volli:worktree-orphan-cleanup": async (
+      input: WorktreeOrphanCleanupInput,
+    ): Promise<WorktreeOrphanCleanupResult> => {
+      // The confirmed half, and a transport adapter over a command — nothing
+      // more (review S1). The renderer names a scan revision and item ids; main
+      // resolves them against the proposal IT minted, so no client can point
+      // this channel at a directory no completed scan offered (review C1).
+      const engine = orphanCleanupEngine(db);
+      // FIRST, before any live fact is consulted: has this exact command id
+      // already been answered? (VC-284 re-review S1, the rule
+      // `automations/service.ts` follows.) A completed cleanup invalidates the
+      // scan it ran against, so validating a retry against the CURRENT scan
+      // would tell a caller whose reply was lost that its command was
+      // superseded — a completed deletion reported as a failure, with a second
+      // deletion as the obvious next step. The durable record answers instead,
+      // and it needs no scan to do it.
+      const replayed = await engine.replay({
+        commandId: input.commandId,
+        scanRevision: input.scanRevision,
+        itemIds: input.itemIds,
+      });
+      if (replayed !== null) {
+        return replayed.ok
+          ? { ok: true, run: replayed.run, receipt: replayed.receipt }
+          : { ok: false, error: replayed.error, code: replayed.code };
+      }
+      const plan = await resolveCleanupPlan({
+        scanRevision: input.scanRevision,
+        itemIds: input.itemIds,
+      });
+      if (!plan.ok) {
+        // Refused requests are durable too: "something asked to delete against a
+        // scan we no longer hold" is exactly what an audit wants to find.
+        await engine.reject({
+          commandId: input.commandId,
+          scanRevision: input.scanRevision,
+          requestedItemIds: input.itemIds,
+          code: plan.code,
+          error: plan.error,
+        });
+        return { ok: false, error: plan.error, code: plan.code };
+      }
+      // `cleanupOrphans` re-checks ownership, the ticket link, dirtiness, age,
+      // and live work for each path immediately before it touches anything,
+      // holds a deletion lease across its awaits, and records every outcome.
+      let outcome;
+      try {
+        outcome = await cleanupOrphans(
+          {
+            worktree: worktreeDeps(db),
+            engine,
+            busyWorktreeSites: options.busyWorktreeSites,
+            releaseAgentSites: options.releaseAgentSites,
+          },
+          {
+            commandId: input.commandId,
+            scanRevision: input.scanRevision,
+            requestedItemIds: input.itemIds,
+            // The window the confirmation was MEASURED against, carried from the
+            // scan itself rather than re-read here: if the setting has moved
+            // since, the executor must skip rather than apply a policy nobody
+            // confirmed (review C1/C2).
+            retentionDays: plan.retentionDays,
+            items: plan.items,
+            source: "settings",
+          },
+        );
+      } catch (error) {
+        if (error instanceof OrphanCleanupRefused) {
+          return { ok: false, error: error.message, code: error.code };
+        }
+        throw error;
+      }
+      // The cached scan describes a world that no longer exists.
+      invalidateOrphanScan();
+      // Orphans are by definition unlinked from any live ticket, so there is no
+      // ticket to target — untargeted (everyone re-hydrates).
+      if (outcome.run.items.some((item) => item.state === "completed")) {
+        broadcastDataChanged({ kind: "worktree" });
+      }
+      return { ok: true, run: outcome.run, receipt: outcome.receipt };
     },
 
     "volli:worktree-orphan-delete": async (
@@ -1244,40 +1397,87 @@ export function registerDataIpcHandlers(
       if (!isOwnedWorktreePath(ownedContainers(db, worktreeHomeDir()), target)) {
         return { ok: false, error: "That path is outside this project's worktree folder." };
       }
-      // Re-verify RIGHT before the irreversible delete — the Settings report is
-      // a snapshot that can have gone stale since it was shown.
-      //   (b) never delete a worktree the DB still tracks (live OR archived —
-      //       listWorktreePaths includes archived rows by design), else a still-
-      //       linked ticket dead-ends at a vanished path.
-      // `isInside` returns true on equality too, so testing both directions
-      // covers target == a tracked path, target inside one, and target being an
-      // ancestor of one.
-      const knownPaths = listWorktreePaths(db);
-      if (
-        knownPaths.some(
-          (known) => isInsideWorktreeHome(target, known) || isInsideWorktreeHome(known, target),
-        )
-      ) {
-        return {
-          ok: false,
-          error: "This worktree is still linked to a ticket and can't be deleted here.",
-        };
+      // This is a destructive worktree act, so it takes the same lease the
+      // confirmed cleanup takes (VC-284 re-review C4). Without it, "serialized
+      // against every start" was only true of one of the two routes that
+      // delete a checkout — and two acts removing one directory, or a terminal
+      // being born inside this one mid-delete, were both still possible.
+      const lease = acquireDeletionLease(target);
+      if (lease === null) {
+        return { ok: false, error: "Something else is already changing this folder." };
       }
-      //   (c) never delete out from under work still in flight in it.
-      const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
-      if (busy !== null) return { ok: false, error: busyRefusal(busy) };
-      // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
-      // be bound to an orphan — end it here, in the same beat as the delete, the
-      // way `remove` does on the ticket paths. Nothing gates on the result: the
-      // Settings row that reached this channel printed the orphan's own
-      // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
-      await options.releaseAgentSites?.(target);
-      await rm(target, { recursive: true, force: true });
+      try {
+        // Re-verify RIGHT before the irreversible delete — the Settings report is
+        // a snapshot that can have gone stale since it was shown.
+        //   (b) never delete a worktree the DB still tracks (live OR archived —
+        //       listWorktreePaths includes archived rows by design), else a still-
+        //       linked ticket dead-ends at a vanished path.
+        // `isInside` returns true on equality too, so testing both directions
+        // covers target == a tracked path, target inside one, and target being an
+        // ancestor of one.
+        const knownPaths = listWorktreePaths(db);
+        if (
+          knownPaths.some(
+            (known) => isInsideWorktreeHome(target, known) || isInsideWorktreeHome(known, target),
+          )
+        ) {
+          return {
+            ok: false,
+            error: "This worktree is still linked to a ticket and can't be deleted here.",
+          };
+        }
+        //   (c) never delete out from under work still in flight in it.
+        const busy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
+        if (busy !== null) return { ok: false, error: busyRefusal(busy) };
+        // A ticket delete only nulls `sessions.ticket_id`, so a Session can still
+        // be bound to an orphan — end it here, in the same beat as the delete, the
+        // way `remove` does on the ticket paths. Nothing gates on the result: the
+        // Settings row that reached this channel printed the orphan's own
+        // dirtiness reason behind a confirm, and this is the ONLY way to clear one.
+        await options.releaseAgentSites?.(target);
+        // Asked once more after that await, for the same reason the cleanup
+        // asks: the release takes time, and the lease keeps new work out but
+        // says nothing about work that was already there.
+        const stillBusy = busySiteWithin(target, (await options.busyWorktreeSites?.(target)) ?? []);
+        if (stillBusy !== null) return { ok: false, error: busyRefusal(stillBusy) };
+        await rm(target, { recursive: true, force: true });
+      } finally {
+        lease.release();
+      }
+      // The cached scan still lists this directory; the next read must not.
+      invalidateOrphanScan();
       // A dirty orphan left the board's attention list. An orphan is by
       // definition unlinked from any live ticket, so there's no ticket to
       // target — untargeted (everyone re-hydrates).
       broadcastDataChanged({ kind: "worktree" });
       return { ok: true };
+    },
+
+    // ---- build artifacts (VC-340) ------------------------------------------
+
+    "volli:worktree-trim-scan": async (): Promise<WorktreeTrimScanResult> => {
+      const scan = await scanTrimTargets(trimSweepDeps());
+      return { ok: true, worktrees: scan.worktrees };
+    },
+
+    "volli:worktree-trim": async (): Promise<WorktreeTrimResult> => {
+      const report = await trimAllWorktrees(trimSweepDeps());
+      // Nothing about any ticket's identity moved — the checkouts are all still
+      // there, on the same branches, and git's own records are untouched — but
+      // the Settings table and any surface reading worktree state should re-read
+      // what is now on disk.
+      if (!report.dryRun && report.removedCount > 0) broadcastDataChanged({ kind: "worktree" });
+      return { ok: true, report };
+    },
+
+    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: getTrimSettings(db) };
+    },
+
+    "volli:worktree-trim-settings-set": (
+      input: WorktreeTrimSettingsInput,
+    ): WorktreeTrimSettingsResult => {
+      return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
     // ---- Done flow (docs/plans/done-flow.md) --------------------------------
@@ -1368,7 +1568,7 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:worktree-change-watch": (input: TicketIdInput, sender): Result => {
+    "volli:worktree-change-watch": async (input: TicketIdInput, sender): Promise<Result> => {
       const status = readWorktreeStatus(worktreeDeps(db), input.ticketId);
       switch (status.kind) {
         case "missing-ticket":
@@ -1381,6 +1581,12 @@ export function registerDataIpcHandlers(
           return changeWatchManager.watch(sender, input.ticketId, status.worktreePath);
       }
     },
+
+    "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
+      changeWatchManager.pause(sender, input.ticketId),
+
+    "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
+      changeWatchManager.resume(sender, input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
       changeWatchManager.unwatch(sender, input.ticketId);
@@ -1481,6 +1687,13 @@ export function registerDataIpcHandlers(
 
     "volli:retention-ttl-set": (input: RetentionTtlSetInput): RetentionTtlResult => {
       const stored = setRetentionTtlDays(db, input.days, Date.now());
+      // Every eligibility date the cached scan proposed was measured against the
+      // OLD window, so that proposal no longer describes this app's policy
+      // (VC-284 re-review C1/C6). Dropping it supersedes the revision: a
+      // confirmation still open from before the change is refused with
+      // `scan-superseded` rather than silently applying a window nobody
+      // reviewed, and the next read re-measures.
+      invalidateOrphanScan();
       // The TTL clock is GLOBAL — it moves every Done ticket's archive-readiness
       // at once, so this is untargeted: every retention surface must re-evaluate.
       broadcastDataChanged({ kind: "retention" });

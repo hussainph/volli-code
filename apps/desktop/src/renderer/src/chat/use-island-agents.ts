@@ -8,7 +8,7 @@
  *
  * WHICH ROWS ARE CHILDREN. The project's Session listing
  * (`stores/project-sessions.ts`), matched on the chat record's OWN fields —
- * `parentSessionId === sessionId && role === "subagent"` — and deliberately
+ * `parentSessionId === sessionId` and `isSubagentSession` — and deliberately
  * not on `childSessionIds`, the provenance helper the Browser Tab feed uses.
  * Provenance reads "started by a person" for every ticketless Session
  * (`readSessionProvenance` returns `PERSON_STARTED` when `ticketId === null`),
@@ -42,7 +42,7 @@ import * as React from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, isSubagentSession } from "@volli/shared";
 import type { ChatSessionRecord } from "@volli/shared";
 import type {
   ActivityIslandActions,
@@ -68,7 +68,7 @@ export function subagentsOf(
 ): readonly ChatSessionRecord[] {
   if (rows === undefined) return NO_RECORDS;
   return rows.chat.filter(
-    (record) => record.parentSessionId === sessionId && record.role === "subagent",
+    (record) => record.parentSessionId === sessionId && isSubagentSession(record),
   );
 }
 
@@ -81,17 +81,11 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
 }
 
 /**
- * The chip's four states from the two facts a row carries.
+ * The chip's five states from the two facts a row carries.
  *
- * `stopped` and `working` are the record's own words. The two the record
- * does not say directly:
+ * `stopped`, `working` and `waiting` are the record's own words. The one the
+ * record does not say directly:
  *
- *  • `waiting` FOLDS INTO `working` (VC-269 ruling). A VC-9 child holds no
- *    `ask_user` and no human-facing tool, so the waits it can reach are the
- *    narrow runtime trips (a permission prompt, expired auth); the arc stays
- *    honest as "not finished", and the peek overlay shows the real state.
- *    REOPEN when children gain an interactive trip a person must answer: add
- *    `waiting` to `IslandAgent["state"]` and give `AgentDot` a resting dot.
  *  • `idle` is `done` or `failed` by `outcome` (VC-269 ruling): a turn that
  *    completed is done; one that was interrupted or whose executor failed is
  *    failed. `outcome === null` on an idle row is the NEWBORN case (fix-first,
@@ -99,6 +93,10 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
  *    appearing and its first `turn.started` landing, before any turn has ever
  *    ended — that is "not finished yet", not "done", so it reads `working`
  *    rather than lying that a freshly delegated helper already finished.
+ *  • `interrupted` (VC-324) is `failed` — the same word an `idle` row with an
+ *    `interrupted` outcome already earned here. The chip's vocabulary is the
+ *    four the cluster draws, so the new activity state joins the presentation
+ *    it was already getting rather than adding a fifth chip.
  */
 export function islandAgentState(
   record: Pick<ChatSessionRecord, "activity" | "outcome">,
@@ -106,9 +104,23 @@ export function islandAgentState(
   switch (record.activity) {
     case "stopped":
       return "stopped";
+    case "interrupted":
+      return "failed";
     case "working":
-    case "waiting":
       return "working";
+    // THE CHIP DRAWS THE WAIT (VC-279 follow-up). VC-269 folded it into
+    // `working` on the reading that a VC-9 child holds no `ask_user`, so its
+    // waits are narrow runtime trips nobody is being asked about. Two of the
+    // three reasons a chat can wait are not that: `permission` and `auth` are
+    // errands only a person clears, and the child stops dead until they do.
+    // While a child still had a listing row that was survivable, because the
+    // navigator asked on its behalf. It has none since VC-279, and this
+    // cluster is the addressee `sessionWaitAudience` names, so folding here
+    // would leave a stalled child announced by nothing at all: no row, no
+    // ring, no notification (`run-attention.ts` notifies no Session a Run does
+    // not own). The peek overlay still holds WHICH errand it is.
+    case "waiting":
+      return "waiting";
     case "idle":
       if (record.outcome === null) return "working";
       return record.outcome === "interrupted" || record.outcome === "failed" ? "failed" : "done";
@@ -147,9 +159,20 @@ const NO_RECORDS: readonly ChatSessionRecord[] = [];
 const NO_AGENTS: readonly IslandAgent[] = [];
 const NO_TABS: readonly string[] = [];
 
-/** The event word for a state a row has just reached; `null` for one the channel does not announce. */
-const ENDED_EVENT: Record<IslandAgent["state"], string | null> = {
+/**
+ * The event word for a state a row has just reached; `null` for one the channel
+ * does not announce.
+ *
+ * `Needs you` is the one word here that is not a report of something finished,
+ * and it is the reason the map is no longer named for endings. A child that
+ * has stopped on a permission or a credential is the only state on this card a
+ * person can do anything about, and this cluster is the only surface that will
+ * ever say so (VC-279: no row, no ring, no notification). An announcement is
+ * cheap and a stalled delegation is not.
+ */
+const STATE_EVENT: Record<IslandAgent["state"], string | null> = {
   working: null,
+  waiting: "Needs you",
   done: "Done",
   failed: "Failed",
   stopped: "Stopped",
@@ -171,7 +194,7 @@ function diffAgents(
     if (before === undefined) {
       flash("Delegated", agent.label);
     } else if (before !== agent.state) {
-      const event = ENDED_EVENT[agent.state];
+      const event = STATE_EVENT[agent.state];
       if (event !== null) flash(event, agent.label);
     }
     next.set(agent.id, agent.state);

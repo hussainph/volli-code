@@ -162,6 +162,19 @@ export interface TerminalFocusTarget {
   sessionId: string;
 }
 
+/**
+ * Which saved Session record is being read (VC-290) — the address a closed
+ * terminal's sidebar row and its ⌘K row both hand over.
+ *
+ * Deliberately the durable pair and nothing else: the project the record lives
+ * in, and the Session it is. No tab id, because there is no tab; that absence
+ * is what stops this destination from quietly becoming "whatever is open".
+ */
+export interface SessionDetailAddress {
+  projectId: string;
+  sessionId: string;
+}
+
 export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
 }
@@ -351,6 +364,18 @@ interface UiState {
   dismissedEnvironmentFaults: SessionEnvironmentFaultKind[];
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
+  /**
+   * The closed Session whose saved record is open, or `null` (VC-290).
+   *
+   * Session-only, beside `newTicketOpen` and for the same reason: it is a place
+   * a person is LOOKING, not a preference they set. Relaunching into a dialog
+   * about a terminal that ended last week is not where anyone left off.
+   *
+   * Addressed by project AND Session id because that pair is what survives the
+   * PTY: the record is durable, the tab is not, and the whole point of this
+   * destination is that it never degrades into whatever tab happens to be open.
+   */
+  sessionDetail: SessionDetailAddress | null;
   setSidebarWidth(width: number): void;
   setRailWidth(width: number): void;
   stepUiScale(delta: 1 | -1): void;
@@ -376,6 +401,9 @@ interface UiState {
    */
   consumeSettingsSignIn(): void;
   setNewTicketOpen(open: boolean): void;
+  /** Show one closed Session's saved record. Replaces whichever was open. */
+  openSessionDetail(projectId: string, sessionId: string): void;
+  closeSessionDetail(): void;
   toggleWorkspaceRailHidden(): void;
   setWorkspaceRailHidden(hidden: boolean): void;
   setSidebarPinned(pinned: boolean): void;
@@ -468,6 +496,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsCategory: null,
         settingsSignInProviderId: null,
         newTicketOpen: false,
+        sessionDetail: null,
         workspaceRailHidden: false,
         sidebarPinned: true,
         railCollapsed: false,
@@ -493,6 +522,9 @@ export function createUiStore(storage?: StateStorage) {
           }),
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
+        openSessionDetail: (projectId, sessionId) =>
+          set({ sessionDetail: { projectId, sessionId } }),
+        closeSessionDetail: () => set({ sessionDetail: null }),
         toggleWorkspaceRailHidden: () =>
           set((state) => ({ workspaceRailHidden: !state.workspaceRailHidden })),
         setWorkspaceRailHidden: (hidden) => set({ workspaceRailHidden: hidden }),

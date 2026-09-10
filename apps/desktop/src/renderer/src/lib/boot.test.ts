@@ -1,9 +1,11 @@
 import type { BootstrapPayload } from "../../../ipc/contract";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { VenueSnapshot } from "@volli/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
+import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { boot, refreshPlanningData, type BootGateway, type BootStorage } from "./boot";
@@ -44,6 +46,31 @@ function fakeStorage(initial: Record<string, string> = {}): BootStorage {
       return data.size;
     },
   };
+}
+
+/** One measured venue, as main answers `venue.snapshot`. */
+function venue(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
+  return {
+    kind: "worktree",
+    path: "/worktrees/VC-286",
+    branch: "volli/VC-286-stale-checkout",
+    files: { committed: 1, modified: 0, added: 0, untracked: 0 },
+    diff: { added: 3, removed: 1, base: "main" },
+    ...over,
+  };
+}
+
+/** Stubs the venue door so the singleton store can be driven from these tests. */
+function stubVenueSnapshot(reading: unknown) {
+  const snapshot = vi.fn().mockResolvedValue({ ok: true, reading });
+  Object.assign(globalThis, { window: { api: { venue: { snapshot } } } });
+  return snapshot;
+}
+
+/** One ticket venue and one project venue, both already read — the state a materialization walks into. */
+async function seedVenues() {
+  await useVenueStore.getState().refresh("p1", "t1");
+  await useVenueStore.getState().refresh("p1", null);
 }
 
 describe("boot", () => {
@@ -434,6 +461,138 @@ describe("refreshPlanningData", () => {
     expect(await refreshPlanningData({}, failGateway)).toEqual({ ok: false, error: "db gone" });
     // A failed refresh hydrates nothing, so it must not bump the version either.
     expect(useBoardStore.getState().lastPlanningChange.version).toBe(before + 1);
+  });
+
+  /**
+   * VC-286. The empty chat used to caption a ticket `Main checkout` because
+   * nothing re-read its venue when the worktree it was waiting for arrived.
+   * This is the boundary that fixes it: one door, so every ticket venue reader
+   * updates at the same moment the board does.
+   */
+  describe("a worktree change", () => {
+    afterEach(() => {
+      useVenueStore.setState({ byScope: {} });
+      Reflect.deleteProperty(globalThis, "window");
+    });
+
+    it("discards the ticket's venue before the re-hydrate and re-reads it after", async () => {
+      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      const seen: unknown[] = [];
+      const gateway = fakeGateway({
+        bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => {
+          // Mid-refresh: the old reading is already gone, and the new one has
+          // not been asked for — asking before the board is current would read
+          // the checkout the ticket is leaving.
+          seen.push(useVenueStore.getState().byScope[venueKey("p1", "t1")]);
+          seen.push(snapshot.mock.calls.length);
+          return { ok: true, data: payload({}) };
+        }),
+      });
+
+      await refreshPlanningData({ ticketId: "t1", projectId: "p1", kind: "worktree" }, gateway);
+
+      expect(seen).toEqual([{ status: "loading" }, 2]);
+      // The re-read is not awaited by the refresh — a git status has no business
+      // delaying the board's own answer — so it lands a tick later.
+      await vi.waitFor(() => {
+        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+          status: "ready",
+          venue: venue(),
+        });
+      });
+      expect(snapshot).toHaveBeenLastCalledWith("p1", "t1");
+    });
+
+    it("leaves Home's project venue card measuring the main checkout", async () => {
+      stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      const gateway = fakeGateway();
+
+      await refreshPlanningData({ ticketId: "t1", projectId: "p1", kind: "worktree" }, gateway);
+
+      expect(useVenueStore.getState().byScope[venueKey("p1", null)]).toEqual({
+        status: "ready",
+        venue: venue(),
+      });
+    });
+
+    it("holds the ticket at resolving while the worktree is still being made", async () => {
+      stubVenueSnapshot({ state: "pending" });
+      await seedVenues();
+
+      await refreshPlanningData(
+        { ticketId: "t1", projectId: "p1", kind: "worktree" },
+        fakeGateway(),
+      );
+
+      await vi.waitFor(() => {
+        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+          status: "resolving",
+        });
+      });
+    });
+
+    it("discards every ticket's venue when the change names none", async () => {
+      stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      const gateway = fakeGateway({
+        bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => {
+          expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toEqual({
+            status: "loading",
+          });
+          return { ok: true, data: payload({}) };
+        }),
+      });
+
+      await refreshPlanningData({ kind: "worktree" }, gateway);
+
+      expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+          status: "ready",
+        });
+      });
+    });
+
+    it("leaves every venue alone for a change that is not about a checkout", async () => {
+      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      snapshot.mockClear();
+
+      await refreshPlanningData(
+        { ticketId: "t1", projectId: "p1", kind: "comment" },
+        fakeGateway(),
+      );
+
+      // A comment does not move a checkout, and blanking the caption to redraw
+      // the identical venue is a flicker with nothing behind it.
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+        status: "ready",
+      });
+    });
+
+    it("still re-reads the discarded venue when the re-hydrate itself fails", async () => {
+      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      snapshot.mockClear();
+      const gateway = fakeGateway({
+        bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: false, error: "db gone" })),
+      });
+
+      const result = await refreshPlanningData(
+        { ticketId: "t1", projectId: "p1", kind: "worktree" },
+        gateway,
+      );
+
+      // The failure is still the caller's answer, but the venue may not be left
+      // waiting on a read nobody will make.
+      expect(result).toEqual({ ok: false, error: "db gone" });
+      await vi.waitFor(() => {
+        expect(snapshot).toHaveBeenCalledWith("p1", "t1");
+      });
+    });
   });
 
   it("forwards the change scope (ticket/project) into lastPlanningChange, defaulting to untargeted", async () => {

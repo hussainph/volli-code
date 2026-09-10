@@ -31,6 +31,7 @@ import {
   sameCommandReceipt,
   UnknownSessionEventKindError,
 } from "@volli/shared";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
 
 type SqlRow = Record<string, unknown>;
 
@@ -350,9 +351,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     const row = this.db
       .prepare(
-        `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-                attachment_id, command_id, payload
-           FROM session_events WHERE id = ?`,
+        `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+                p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+           FROM session_events e
+           LEFT JOIN session_provenances p ON p.id = e.provenance_id
+          WHERE e.id = ?`,
       )
       .get(eventId) as unknown;
     if (row === undefined) return null;
@@ -383,12 +386,13 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     }
     this.insertAttachmentEvidence(event);
     this.assertEventForeignKeys(event);
+    const provenanceId = internSessionEventProvenance(this.db, encodeSessionJson(event.provenance));
     this.db
       .prepare(
         `INSERT INTO session_events
-           (id, session_id, sequence, occurred_at, recorded_at, provenance, attachment_id, command_id, payload)
+           (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES
-           (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenance, @attachmentId, @commandId, @payload)`,
+           (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, @commandId, @payload)`,
       )
       .run({
         id: event.id,
@@ -396,7 +400,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         sequence: event.sequence,
         occurredAt: event.occurredAt,
         recordedAt: event.recordedAt,
-        provenance: encodeSessionJson(event.provenance),
+        provenanceId,
         attachmentId: event.attachmentId ?? null,
         commandId: event.commandId ?? null,
         payload: encodeSessionJson(event.payload),
@@ -456,11 +460,12 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       throw new Error("Event pagination limit must be a non-negative integer");
     }
     const statement = this.db.prepare(
-      `SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
-              attachment_id, command_id, payload
-         FROM session_events
-        WHERE session_id = @sessionId AND sequence > @afterSequence
-        ORDER BY sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+              p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
+         FROM session_events e
+         LEFT JOIN session_provenances p ON p.id = e.provenance_id
+        WHERE e.session_id = @sessionId AND e.sequence > @afterSequence
+        ORDER BY e.sequence ASC${query.limit === undefined ? "" : " LIMIT @limit"}`,
     );
     const decoded: SessionEvent[] = [];
     let dropped = 0;
@@ -795,6 +800,9 @@ function decodeReceiptRow(row: unknown, context: string): CommandReceipt {
 
 function decodeEvent(row: unknown, context: string): SessionEvent {
   const value = asRecord(row, context);
+  if (value.provenance === null) {
+    throw new Error(`${context} is missing its referenced provenance row`);
+  }
   const attachmentId = readNullableString(value.attachment_id, `${context}.attachment_id`);
   const commandId = readNullableString(value.command_id, `${context}.command_id`);
   const event: SessionEvent = {

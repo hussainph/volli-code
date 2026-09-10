@@ -106,15 +106,16 @@ export type FileRefCompletion =
  * The ranking itself, with nothing of `@`'s grammar in it: score every indexed
  * file against `query`, drop the misses, best first, bounded.
  *
- * Exported because quick-open (VC-190) ranks the same index for the same
- * question — "which file did they mean?" — and a second matcher beside this one
- * would be two answers to it. What quick-open must NOT inherit is the caller's
- * side of {@link rankFileRefCompletions}: the `isExpressibleRefPath` filter is
- * about what the `@` grammar can WRITE, and a file named `design notes.md` is
- * perfectly openable even though no ref can name it. So the filter stays at the
- * call site that needs it and the ranking lives here.
+ * This is the `@` picker's alone. Quick-open shared it from VC-190 until
+ * VC-299: `scoreFileMatch`'s +1000 artifact bonus is deliberate for a ref being
+ * written into a message (artifacts are force-included context, decision #3)
+ * and wrong for ⌘P, where it put a design-audit artifact above the root
+ * `README.md`. ⌘P now ranks through `@volli/shared`'s `rankQuickOpenFiles`,
+ * which tiers exact names above scattered path hits; the two still share the
+ * `subsequenceScore` matcher underneath, so "fuzzy" means one thing in this
+ * app. Unexported for that reason — the last caller outside this module left.
  */
-export function rankIndexedFiles(input: {
+function rankIndexedFiles(input: {
   query: string;
   index: readonly IndexedFile[];
   /** Result ceiling; defaults to {@link MAX_PICKER_RESULTS}. */

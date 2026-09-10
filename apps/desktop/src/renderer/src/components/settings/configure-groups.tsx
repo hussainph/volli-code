@@ -2,10 +2,9 @@
  * The Configure rail: two groups, seven categories, this project always.
  *
  * AGENT CONFIG LANDS HERE because agent config *is* project-scoped — which
- * skills a repo's agents can reach, which commands it defines, which harness
- * its sessions start on. Putting it in Settings was the original surface's
- * central confusion: the same words appeared on both pages with no way to tell
- * which one won.
+ * skills a repo's agents can reach and which commands it defines. Putting it
+ * in Settings was the original surface's central confusion: the same words
+ * appeared on both pages with no way to tell which one won.
  *
  * Project is the rest: how this repo's sessions, theming and worktrees behave.
  */
@@ -117,7 +116,13 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             // it — `settings-search-smoke.mjs` walks every visible label and
             // holds this list to that contract.
             "rule enforcement",
-            "who judges the rest",
+            // The whole label, em dash included, because the rail matches a
+            // lowercased SUBSTRING of a stored term: "decision mode" alone
+            // could not be found by someone typing what the row says. VC-285
+            // renamed this row from "Who judges the rest" and the old term
+            // went with it — a keyword for a label nobody can see finds
+            // nothing and hides the one that is missing.
+            "decision mode \u2014 not active yet",
             "ask me after",
             "or after, in total",
             "you can read",
@@ -137,14 +142,12 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           label: "Sessions",
           icon: CpuIcon,
           keywords: [
-            "harness",
+            "chat",
             "model",
-            "claude code",
-            "codex",
             "agents.md",
             "claude.md",
             "instructions",
-            "new sessions",
+            "new chats",
             "precedence",
             "override",
           ],

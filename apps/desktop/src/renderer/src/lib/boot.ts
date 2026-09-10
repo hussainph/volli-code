@@ -10,6 +10,7 @@ import { sanitizeLegacyProjects } from "@volli/shared";
 import type {
   BootstrapPayload,
   BootstrapResult,
+  DataChangeKind,
   LegacyImportRequest,
   LegacyImportResult,
 } from "../../../ipc/contract";
@@ -26,6 +27,7 @@ import { useBoardStore } from "@renderer/stores/board";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
+import { useVenueStore } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 const LEGACY_PROJECTS_KEY = "volli:projects";
@@ -61,28 +63,47 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  * wholesale (the recovery guarantee), but the scope is published so per-ticket
  * surfaces can skip a refetch when the change provably targets a different
  * ticket — see `useBoardStore().lastPlanningChange`.
+ *
+ * IT IS ALSO THE VENUE BOUNDARY (VC-286). A `worktree` change is the one kind
+ * that moves WHERE a ticket's Session runs — materialized, removed, recreated,
+ * or a creation that failed — so the ticket's cached venue reading is discarded
+ * on the way in and read again on the way out. Both halves matter and so does
+ * their order: discarding first takes the old checkout off screen at the moment
+ * it stopped being true, and re-reading only after the hydrate means the new
+ * reading is of the checkout the board now names. Every other kind leaves the
+ * venue alone; a comment does not move a checkout, and blanking a caption to
+ * redraw the identical venue is a flicker with nothing behind it.
  */
 export async function refreshPlanningData(
-  change: { ticketId?: string; projectId?: string } = {},
+  change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
   gateway: Pick<BootGateway, "bootstrap"> = defaultGateway,
 ): Promise<BootResult> {
-  const result = await gateway.bootstrap();
-  if (!result.ok) return result;
-  const { projects, ticketsByProject, labelsByProject } = result.data;
-  const previousSelection = useProjectsStore.getState().selectedProjectId;
-  const selectedProjectId = projects.some(({ id }) => id === previousSelection)
-    ? previousSelection
-    : (projects[0]?.id ?? null);
-  useProjectsStore.getState().hydrate(projects, selectedProjectId);
-  useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
-  // Signal per-ticket surfaces (the Activity feed, retention badge, Done-flow
-  // rail) to refetch data not carried in the board slices — events/comments,
-  // retention/git state — so a socket-originated change shows up in an
-  // already-open ticket. Carries the change's scope so a surface for another
-  // ticket can stand down. Published only on refresh, never at boot (surfaces
-  // mount fresh there).
-  useBoardStore.getState().notePlanningChange(change);
-  return { ok: true };
+  const movedCheckout = change.kind === "worktree";
+  if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
+  try {
+    const result = await gateway.bootstrap();
+    if (!result.ok) return result;
+    const { projects, ticketsByProject, labelsByProject } = result.data;
+    const previousSelection = useProjectsStore.getState().selectedProjectId;
+    const selectedProjectId = projects.some(({ id }) => id === previousSelection)
+      ? previousSelection
+      : (projects[0]?.id ?? null);
+    useProjectsStore.getState().hydrate(projects, selectedProjectId);
+    useBoardStore.getState().hydrate(ticketsByProject, labelsByProject);
+    // Signal per-ticket surfaces (the Activity feed, retention badge, Done-flow
+    // rail) to refetch data not carried in the board slices — events/comments,
+    // retention/git state — so a socket-originated change shows up in an
+    // already-open ticket. Carries the change's scope so a surface for another
+    // ticket can stand down. Published only on refresh, never at boot (surfaces
+    // mount fresh there).
+    useBoardStore.getState().notePlanningChange(change);
+    return { ok: true };
+  } finally {
+    // In a `finally` because a failed hydrate is not a reason to leave a
+    // discarded venue waiting on a read nobody will make: the checkout moved
+    // whatever SQLite just said about the board.
+    if (movedCheckout) void useVenueStore.getState().refreshStale();
+  }
 }
 
 /** Unwraps a zustand-persist envelope (`{state,version}`) into its `state`, or `undefined` for anything else. */

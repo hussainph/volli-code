@@ -22,6 +22,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   Appearance,
   Canvas,
+  AutoReapPolicy,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
@@ -34,6 +35,8 @@ import type {
   // Imported for `typeof` only — see the Session RPC door below. `import type`
   // of a const is legal and fully erased, which is exactly why these three can
   // be named here at all.
+  NotificationEvent,
+  NotificationTarget,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
@@ -144,6 +147,13 @@ import type {
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
   PickFolderResult,
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanReclaimResult,
+  PiSessionOrphanScanResult,
+  OrphanProcessReapInput,
+  OrphanProcessReapResult,
+  OrphanProcessPolicyResult,
+  OrphanProcessScanResult,
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
@@ -198,6 +208,9 @@ import type {
   TicketStatusEntriesResult,
   TicketUpdateInput,
   TicketsResult,
+  NotificationPendingActivationResult,
+  NotificationSettingsResult,
+  NotificationSettingsView,
   UiZoomCommand,
   UnsavedDocumentsReport,
   UpdateChannel,
@@ -222,8 +235,14 @@ import type {
   WorktreeCommitResult,
   WorktreeDiffMode,
   WorktreeDiffResult,
+  WorktreeOrphanCleanupInput,
+  WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
   WorktreeOrphansInput,
+  WorktreeTrimResult,
+  WorktreeTrimScanResult,
+  WorktreeTrimSettingsInput,
+  WorktreeTrimSettingsResult,
   WorktreeOrphansResult,
   WorktreePhaseEvent,
   WorktreePushPrResult,
@@ -388,6 +407,24 @@ const api = {
   /** Reads the database size or runs one main-owned action without exposing its path. */
   database: (action?: DatabaseAction): Promise<DatabaseResult> =>
     action === undefined ? invoke("volli:database") : invoke("volli:database", action),
+  /** Read-only Pi sidecar inventory and its separately confirmed cleanup. */
+  piSessions: {
+    scanOrphans: (): Promise<PiSessionOrphanScanResult> => invoke("volli:pi-session-orphans-scan"),
+    reclaimOrphans: (input: PiSessionOrphanReclaimInput): Promise<PiSessionOrphanReclaimResult> =>
+      invoke("volli:pi-session-orphans-reclaim", input),
+  },
+  /**
+   * Running processes no live Session owns (VC-341). The scan is read-only; a
+   * reap names only items from the revision it was shown under, and main
+   * re-proves each one's identity before it signals anything.
+   */
+  orphanProcesses: {
+    scan: (): Promise<OrphanProcessScanResult> => invoke("volli:orphan-processes-scan"),
+    reap: (input: OrphanProcessReapInput): Promise<OrphanProcessReapResult> =>
+      invoke("volli:orphan-processes-reap", input),
+    setPolicy: (policy: AutoReapPolicy): Promise<OrphanProcessPolicyResult> =>
+      invoke("volli:orphan-processes-policy", policy),
+  },
   /**
    * The Browser Tab door: chrome commands in, chrome snapshots out. Every
    * operation names Volli's opaque tab id — no Chromium index, partition,
@@ -465,7 +502,7 @@ const api = {
     /** Replaces this project's per-skill rules wholesale — the Configure Skills table (VC-111). */
     setSkillModes: (input: ProjectSkillModesInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-skill-modes", input),
-    /** Replaces this project's harness/model defaults for new Sessions (VC-111). */
+    /** Replaces this project's Chat model default (VC-111). */
     setSessionDefaults: (input: ProjectSessionDefaultsInput): Promise<ProjectUpdateResult> =>
       invoke("volli:project-session-defaults", input),
     /**
@@ -1078,15 +1115,41 @@ const api = {
     branches: (projectId: string): Promise<WorktreeBranchesResult> =>
       invoke("volli:worktree-branches", { projectId }),
     /**
-     * The launch's cached orphan report — the destructive sweep runs once per
-     * launch (main), so this never re-sweeps. Pass `{ rescan: true }` for the
-     * explicit Settings → Worktrees rescan, which forces a fresh sweep.
+     * The launch's cached orphan SCAN — read-only in every shape (VC-284), so
+     * calling it costs a walk and never a deletion. Pass `{ refresh: true }`
+     * for the Storage pane's Scan, which asks git again.
      */
     orphans: (opts?: WorktreeOrphansInput): Promise<WorktreeOrphansResult> =>
       invoke("volli:worktree-orphans", opts ?? {}),
+    /**
+     * The confirmed cleanup, as a command: the caller's UUID, the revision of
+     * the scan whose proposal was confirmed, and the ids of the items selected
+     * out of it. Main owns the paths — a client cannot name a directory no scan
+     * offered — re-checks every target immediately before it acts, and answers
+     * with the acceptance receipt plus the durable run.
+     */
+    cleanupOrphans: (input: WorktreeOrphanCleanupInput): Promise<WorktreeOrphanCleanupResult> =>
+      invoke("volli:worktree-orphan-cleanup", input),
     /** User-confirmed deletion of one dirty orphan dir; main re-validates it lives inside the worktree home. */
     deleteOrphan: (path: string): Promise<WorktreeOrphanDeleteResult> =>
       invoke("volli:worktree-orphan-delete", { path }),
+    /**
+     * Build artifacts (VC-340). `trimScan` reads which owned worktrees carry
+     * git-ignored content and which are off limits; `trim` removes that content
+     * across every non-active one.
+     *
+     * It removes ignored CONTENT and nothing else: git's own records are
+     * untouched, because `git worktree prune` acts on a whole repository and so
+     * belongs to the confirmed orphan cleanup that reviews a set before taking it
+     * (`cleanupOrphans` above), never to this action running it blind.
+     */
+    trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
+    trim: (): Promise<WorktreeTrimResult> => invoke("volli:worktree-trim"),
+    /** The preserved-configuration allowlist and the automatic-trim opt-out. */
+    trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
+      invoke("volli:worktree-trim-settings-get"),
+    setTrimSettings: (input: WorktreeTrimSettingsInput): Promise<WorktreeTrimSettingsResult> =>
+      invoke("volli:worktree-trim-settings-set", input),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */
     status: (ticketId: string): Promise<WorktreeStatusResult> =>
       invoke("volli:worktree-status", { ticketId }),
@@ -1110,6 +1173,10 @@ const api = {
     /** Debounced recursive watch on the ticket worktree; pair with `unwatchChangeSet` on leave. */
     watchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-watch", { ticketId }),
+    pauseChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-pause", { ticketId }),
+    resumeChangeSet: (ticketId: string): Promise<Result> =>
+      invoke("volli:worktree-change-watch-resume", { ticketId }),
     unwatchChangeSet: (ticketId: string): Promise<Result> =>
       invoke("volli:worktree-change-unwatch", { ticketId }),
     /** Subscribes to debounced worktree filesystem changes for Change Set refresh. */
@@ -1210,6 +1277,50 @@ const api = {
       ipcRenderer.on("volli:update-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:update-state" satisfies VolliIpcEvent, listener);
+    },
+  },
+  /**
+   * Notification preferences and the click that comes back (VC-295).
+   *
+   * `setActiveTarget` is a `send`, not an invoke: it flips on every navigation,
+   * needs no reply, and main's copy is advisory — a report that never arrives
+   * costs one duplicate alert, which is the harmless direction of that trade.
+   */
+  notifications: {
+    /** The preferences plus what this machine knows about delivery. */
+    settings: (): Promise<NotificationSettingsResult> => invoke("volli:notifications-get"),
+    /** One switch move; `event: null` is the master switch. Answers with the stored view. */
+    set: (event: NotificationEvent | null, enabled: boolean): Promise<NotificationSettingsResult> =>
+      invoke("volli:notifications-set", { event, enabled }),
+    /**
+     * The view moved behind the page: a write in another window, or a delivery
+     * failure that landed (or was retired) while Settings was open. The whole
+     * view every time.
+     */
+    onSettingsChanged: (callback: (view: NotificationSettingsView) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, view: NotificationSettingsView) =>
+        callback(view);
+      ipcRenderer.on("volli:notification-settings" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:notification-settings" satisfies VolliIpcEvent, listener);
+    },
+    /** What this window is showing, so main can suppress an alert for it. */
+    setActiveTarget: (target: NotificationTarget | null): void => {
+      ipcRenderer.send("volli:notification-active-target" satisfies VolliIpcChannel, target);
+    },
+    /** The target of a click that arrived before this window existed, taken once. */
+    pendingActivation: (): Promise<NotificationPendingActivationResult> =>
+      invoke("volli:notifications-pending-activation"),
+    /** A native alert was clicked; the payload is where it points. */
+    onActivated: (callback: (target: NotificationTarget) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, target: NotificationTarget) =>
+        callback(target);
+      ipcRenderer.on("volli:notification-activated" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          "volli:notification-activated" satisfies VolliIpcEvent,
+          listener,
+        );
     },
   },
   fs: {

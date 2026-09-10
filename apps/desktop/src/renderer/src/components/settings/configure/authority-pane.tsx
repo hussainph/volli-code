@@ -28,6 +28,33 @@
  * PRESERVED across every write from this pane rather than dropped — see
  * `patch` — so a document that states them survives a person changing the
  * enforcement dial.
+ *
+ * ── WHAT VC-285 CHANGED, AND WHY IT IS COPY RATHER THAN BEHAVIOUR ─────────
+ * Nothing below writes, resolves or pins differently than it did. What changed
+ * is that the pane stopped keeping its consequences in popovers:
+ *
+ *  - **The outcome is beside the control.** "Observe" beside "Ask me" read as
+ *    active protection, while Observe refuses nothing at all. Each posture now
+ *    says what it does to a call, in the row, unopened.
+ *  - **Observe is a POLICY record, not a call record.** It saves the Snapshot
+ *    this attachment ran under; it does not record each allowed or refused
+ *    call. Saying "record only" would promise VC-28's work.
+ *  - **The inactive controls look inactive.** Under Off and Observe nothing is
+ *    ever refused, so no denial can accumulate toward a threshold: the two
+ *    limits are disabled and say why, while keeping their values — they are
+ *    still what the next enforcing attachment would run under. `judgmentMode`
+ *    has no runtime reader at all until VC-28, and its row says so rather than
+ *    naming a judge that is not judging.
+ *  - **Units live in the boxes.** `3` and `20` are not settings anyone can
+ *    read; "3 denials in a row" and "20 denials total" are.
+ *  - **The attachment is named where the change is made.** An edit here reaches
+ *    the next attachment, never the one running — which was true before this
+ *    ticket and invisible.
+ *
+ * CLAUDE.md forbids explanatory prose under a control, and `PrefRow.description`
+ * is its own carve-out for a trust boundary. This is one: whether a Session's
+ * calls can be refused at all is not a preference, and a person cannot consent
+ * to a boundary they have to open a popover to find.
  */
 import * as React from "react";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
@@ -71,6 +98,22 @@ const ENFORCEMENT_LABELS: Record<AuthorityEnforcement, string> = {
   enforce: "Enforce",
 };
 
+/**
+ * The same three postures as OUTCOMES — the sentence the row shows without
+ * being opened.
+ *
+ * Each one is the runtime seam said in a person's words. `off` builds no
+ * Snapshot, so no check runs. `observe` builds and saves one and installs no
+ * gate, so every call is allowed — and what is saved is THIS ATTACHMENT'S
+ * POLICY, not a record of what it did. `enforce` installs the gate, and a rule
+ * violation is blocked before anybody is asked about anything.
+ */
+const ENFORCEMENT_OUTCOMES: Record<AuthorityEnforcement, string> = {
+  off: "Off \u2014 no authority checks.",
+  observe: "Observe \u2014 save this attachment’s policy; allow calls.",
+  enforce: "Enforce \u2014 block rule violations.",
+};
+
 const JUDGMENT_LABELS: Record<JudgmentMode, string> = {
   ask: "Ask me",
   auto: "Classifier",
@@ -94,6 +137,10 @@ const ACTOR_HINTS: Record<AuthorityActorKind, string> = {
   session: "An agent running inside one of this project's Sessions.",
   unauthenticated: "A caller on the agent socket that has not proved who it is.",
 };
+
+function denialCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "denial" : "denials"}`;
+}
 
 export function AuthorityPane({ project }: { project: Project }) {
   const adoptProject = useProjectsStore((store) => store.adoptProject);
@@ -196,15 +243,20 @@ export function AuthorityPane({ project }: { project: Project }) {
   // find out why it is unavailable rather than wonder where it went.
   const classifierAvailable = effective.classifierModel !== null;
 
+  // The one question every row below is qualified by: while calls are allowed,
+  // no call is ever denied, so nothing can count toward a denial limit.
+  const enforcing = effective.enforcement === "enforce";
+
   return (
     <PrefSection
       title="Authority"
       icon={ShieldCheckIcon}
       hint={
         <>
-          What this project&rsquo;s Sessions are allowed to do. Each Session is pinned to this
-          policy when it attaches, so a change here reaches the next Session rather than one already
-          running.
+          What this project&rsquo;s Sessions are allowed to do. An attachment pins this policy when
+          it opens and keeps it for its whole life, so a change here reaches the next attachment
+          rather than one already running — and one Session can hold two attachments that ran under
+          different policies.
         </>
       }
     >
@@ -212,11 +264,26 @@ export function AuthorityPane({ project }: { project: Project }) {
         label="Rule enforcement"
         htmlFor="authority-enforcement"
         testId="authority-enforcement"
+        align="start"
+        description={
+          <>
+            {/* The consequence, in the row. Emphasized against the line below
+                it because it is the thing being chosen; the attachment note is
+                the qualification on when the choice lands. */}
+            <span className="text-foreground">{ENFORCEMENT_OUTCOMES[effective.enforcement]}</span>
+            {enforcing ? " Ask after the limits below." : null}
+            <span className="mt-1 block">
+              Applies to new attachments — the live connection a Session runs on.
+            </span>
+          </>
+        }
         hint={
           <>
-            <strong>Off</strong> runs no rule checks at all. <strong>Observe</strong> records what a
-            Session was governed by without refusing anything. <strong>Enforce</strong> refuses what
-            the rules deny and asks you about the rest.
+            <strong>Off</strong> builds no policy record and runs no rule checks.{" "}
+            <strong>Observe</strong> saves the policy this attachment ran under and refuses nothing;
+            it does not record each call. <strong>Enforce</strong> blocks what the rules deny, and
+            brings a person in once the denial limits below are reached — a hard rule stays refused
+            either way.
           </>
         }
       >
@@ -245,23 +312,34 @@ export function AuthorityPane({ project }: { project: Project }) {
         </OverrideControl>
       </PrefRow>
 
+      {/*
+       * The row the audit read as protection. `judgmentMode` is durable policy
+       * — it is copied into every Snapshot and pinned there — and NOTHING reads
+       * it to decide a call: neither "Ask me" nor "Classifier" judges anything
+       * until VC-28. So it stays settable, because what it sets is real and
+       * pinned, and the label refuses to let it be read as today's guard.
+       */}
       <PrefRow
-        label="Who judges the rest"
+        label="Decision mode — not active yet"
         htmlFor="authority-judgment"
         testId="authority-judgment"
         hint={
           classifierAvailable ? (
-            <>Who rules on a call the deterministic rules cannot settle.</>
+            <>
+              Who will rule on a call the deterministic rules cannot settle. Saved with each
+              attachment&rsquo;s policy and pinned to it; nothing reads it to decide a call yet.
+            </>
           ) : (
             <>
-              Who rules on a call the deterministic rules cannot settle. No classifier is
-              configured, so every such call comes to you.
+              Who will rule on a call the deterministic rules cannot settle. Saved with each
+              attachment&rsquo;s policy and pinned to it; nothing reads it to decide a call yet. No
+              classifier is configured either, so that choice is unavailable.
             </>
           )
         }
       >
         <OverrideControl
-          label="Who judges the rest"
+          label="Decision mode"
           inheritedValue={JUDGMENT_LABELS[defaults.judgmentMode]}
           overridden={override?.judgmentMode !== undefined}
           onRevert={() => void patch({ judgmentMode: undefined })}
@@ -289,29 +367,43 @@ export function AuthorityPane({ project }: { project: Project }) {
         </OverrideControl>
       </PrefRow>
 
+      {/*
+       * Both limits count DENIALS, which is why both go inert above: a posture
+       * that refuses nothing produces no denials, so a live-looking limit here
+       * would be a control counting something that cannot happen. The values
+       * stay on screen because they remain this project's policy — the next
+       * enforcing attachment pins exactly these numbers.
+       */}
       <PrefRow
         label="Ask me after"
         htmlFor="authority-consecutive"
         testId="authority-consecutive-denials"
+        description={
+          enforcing
+            ? `Asks a person when a call would reach ${denialCountLabel(effective.fallback.consecutiveDenials)} in a row.`
+            : "Not active while calls are allowed."
+        }
         hint={
           <>
-            Consecutive refusals before a Session stops and asks you. A Session that keeps hitting
+            Consecutive denials before a Session stops and asks you. A Session that keeps hitting
             the same wall is a Session that needs a person.
           </>
         }
       >
         <OverrideControl
           label="Ask me after"
-          inheritedValue={`${defaults.fallback.consecutiveDenials} refusals in a row`}
+          inheritedValue={`${defaults.fallback.consecutiveDenials} denials in a row`}
           overridden={override?.fallback?.consecutiveDenials !== undefined}
+          disabled={saving || !enforcing}
           onRevert={() => void commitThreshold("consecutiveDenials")("")}
         >
           <CommitField
             id="authority-consecutive"
             type="number"
             width="sm"
+            suffix="denials in a row"
             value={String(effective.fallback.consecutiveDenials)}
-            disabled={saving}
+            disabled={saving || !enforcing}
             onCommit={commitThreshold("consecutiveDenials")}
           />
         </OverrideControl>
@@ -321,20 +413,27 @@ export function AuthorityPane({ project }: { project: Project }) {
         label="Or after, in total"
         htmlFor="authority-session"
         testId="authority-session-denials"
-        hint={<>Refusals across the whole Session, however far apart, before it asks you.</>}
+        description={
+          enforcing
+            ? `Asks a person when a call would reach ${denialCountLabel(effective.fallback.sessionDenials)} across the Session.`
+            : "Not active while calls are allowed."
+        }
+        hint={<>Denials across the whole Session, however far apart, before it asks you.</>}
       >
         <OverrideControl
           label="Or after, in total"
-          inheritedValue={`${defaults.fallback.sessionDenials} refusals`}
+          inheritedValue={`${defaults.fallback.sessionDenials} denials total`}
           overridden={override?.fallback?.sessionDenials !== undefined}
+          disabled={saving || !enforcing}
           onRevert={() => void commitThreshold("sessionDenials")("")}
         >
           <CommitField
             id="authority-session"
             type="number"
             width="sm"
+            suffix="denials total"
             value={String(effective.fallback.sessionDenials)}
-            disabled={saving}
+            disabled={saving || !enforcing}
             onCommit={commitThreshold("sessionDenials")}
           />
         </OverrideControl>

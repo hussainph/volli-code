@@ -1,6 +1,16 @@
 /**
  * Does the memoized transcript still need windowing?
  *
+ * IT DID, and VC-338 answered yes: the app's plane now mounts a tail of rows and
+ * pages the rest (`transcript-window.ts`), because memoizing a row does nothing
+ * about the cost of the row EXISTING — a thousand turns of parsed markdown and
+ * per-token spans is the document, not the render. This scratch deliberately
+ * still mounts every turn: it is the unwindowed upper bound the window is
+ * measured against, and the render-cost questions below (a token, a `working`
+ * flip, an open fence) are about what one frame costs with the rows present.
+ * The windowed figures live in `e2e/chat-window-bench.mjs`, which measures the
+ * real `ChatPlane` in a real renderer.
+ *
  * The perf pass (incremental projection cache, `React.memo(ChatTurn)` plus
  * stable-identity wrappers, collapsed detail no longer mounting, cached adapter
  * hashes) removed the per-token ceiling. What it could not remove was the cost

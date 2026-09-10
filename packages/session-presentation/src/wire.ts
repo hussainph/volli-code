@@ -12,7 +12,7 @@ import type {
   SessionStreamOverlay,
   TranscriptDelta,
 } from "@volli/session-engine";
-import { COMPACTION_REASONS, parseRendererSessionEvent } from "@volli/shared";
+import { COMPACTION_WORK_REASONS, parseRendererSessionEvent } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { ChatSessionFrame } from "./transcript";
@@ -96,7 +96,7 @@ export function chatSessionCompactionProgress(
     typeof value.sessionId !== "string" ||
     typeof value.throughSequence !== "number" ||
     (value.state !== "started" && value.state !== "finished") ||
-    !isCompactionReason(value.reason)
+    !isCompactionWorkReason(value.reason)
   ) {
     return null;
   }
@@ -109,8 +109,13 @@ export function chatSessionCompactionProgress(
   };
 }
 
-function isCompactionReason(value: unknown): value is (typeof COMPACTION_REASONS)[number] {
-  return typeof value === "string" && COMPACTION_REASONS.some((reason) => reason === value);
+/**
+ * A live progress marker names work in flight, so it takes the narrower list:
+ * `checkpoint` reports a compaction that stopped being usable and spends no
+ * wait a spinner could describe.
+ */
+function isCompactionWorkReason(value: unknown): value is (typeof COMPACTION_WORK_REASONS)[number] {
+  return typeof value === "string" && COMPACTION_WORK_REASONS.some((reason) => reason === value);
 }
 
 function chatTranscriptDelta(value: unknown): TranscriptDelta | null {

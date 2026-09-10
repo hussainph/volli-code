@@ -56,6 +56,11 @@ export function ChatEmptyState({
   // you see right after starting a Session, and the tree it is standing in has
   // been moving while nobody was asking. Whatever was last read stays on screen
   // until this answers.
+  //
+  // Nothing more is subscribed to here (VC-286). A ticket that GAINS a worktree
+  // while this chat is open is not this surface's event to notice: the store is
+  // told at the one boundary every ticket venue reader shares (`lib/boot.ts`,
+  // on a `worktree` data-changed), and this redraws because it reads the store.
   React.useEffect(() => {
     void refreshVenue(projectId, ticketId);
   }, [projectId, ticketId, refreshVenue]);
@@ -87,6 +92,12 @@ export function ChatEmptyState({
  * somebody is about to type into; the rail is where a failure has room to be
  * named. A zeroed bar would be worse than either: it is a measurement, and it
  * would be a false one.
+ *
+ * A ticket still RESOLVING its checkout draws the same waiting shape, and that
+ * is the whole of VC-286's fix on this surface: the alternative it replaces was
+ * a complete, believable drawing of the main checkout — branch, path and change
+ * count — for a Session that will never run there. `data-venue-state` puts the
+ * state on the element so the wait is legible while it lasts.
  */
 function VenueDrawing({ venue }: { venue: VenueEntry | undefined }) {
   if (venue?.status === "ready") return <VenueVisual venue={venue.venue} />;
@@ -94,7 +105,11 @@ function VenueDrawing({ venue }: { venue: VenueEntry | undefined }) {
   // somebody measured once: an empty track and an invisible caption reserve
   // exactly what the drawing will take, and stay right when it changes.
   return (
-    <div className="flex w-80 flex-col gap-3" aria-hidden>
+    <div
+      className="flex w-80 flex-col gap-3"
+      aria-hidden
+      data-venue-state={venue?.status ?? "loading"}
+    >
       <div className="h-8 rounded-control bg-muted" />
       <div className="invisible flex items-baseline justify-center gap-3">
         <span className="text-title">0</span>

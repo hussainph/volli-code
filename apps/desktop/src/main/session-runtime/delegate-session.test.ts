@@ -78,6 +78,7 @@ const OPEN_ATTACHMENT = (id: string): SessionProjection["attachments"][number] =
   closedAt: null,
   outcome: null,
   failure: null,
+  exitCode: null,
 });
 
 function projection(id: string, overrides: Partial<SessionProjection> = {}): SessionProjection {
@@ -457,12 +458,30 @@ describe("delegate — the child is a real Session, and the parent keeps working
       sessionId: PARENT,
       command: { kind: "message.submit", delivery: "steer" },
     });
+    // The structured half of the same facts (VC-330): what the chat surface
+    // reads to draw the notice as its own row instead of a user-style bubble.
+    expect(delivered[0]?.command).toMatchObject({
+      kind: "message.submit",
+      message: {
+        metadata: {
+          kind: "session-host-notice",
+          notice: {
+            kind: "subagent",
+            childSessionId: CHILD,
+            title: "Find where the auth token is refreshed",
+            state: "completed",
+            reason: null,
+          },
+        },
+      },
+    });
     const text = noticeText(h.commands, `${PARENT}:tc-1`);
     expect(text).toBe(
       subagentNotice({
         childSessionId: CHILD,
         title: "Find where the auth token is refreshed",
         state: "completed",
+        reason: null,
       }),
     );
     // The door to the answer, and the trust line around it.
@@ -723,6 +742,24 @@ describe("recover — delegations a relaunch left unanswered (VC-9)", () => {
     expect(answer).toContain(`volli session answer ${FINISHED.slice(0, 8)}`);
     const report = noticeText(h.commands, `${PARENT}:tc-2`);
     expect(report).toMatch(/mid-turn when Volli relaunched/);
+    // Recovery marks the message exactly as a live settle would (VC-330).
+    const recoveredNotice = h.commands.find(
+      (command) => command.commandId === `${PARENT}:tc-2${DELEGATION_ID_SUFFIXES.notice}`,
+    );
+    expect(recoveredNotice?.command).toMatchObject({
+      kind: "message.submit",
+      message: {
+        metadata: {
+          kind: "session-host-notice",
+          notice: {
+            kind: "subagent",
+            childSessionId: CUT_SHORT,
+            state: "interrupted",
+            reason: "app-relaunched",
+          },
+        },
+      },
+    });
     expect(noticeText(h.commands, `${PARENT}:tc-3`)).toBeNull();
     // Nothing is watched afterwards: recovery reports and lets go.
     expect(h.delegations.liveChildren(PARENT)).toEqual([]);

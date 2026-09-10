@@ -48,6 +48,8 @@
  * its own; a strip with no surface above it is exactly the strip it was.
  */
 import * as React from "react";
+import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import {
   closestCenter,
@@ -73,15 +75,29 @@ import type { TabOrder } from "@volli/shared";
 // drift the field's size apart again — which is exactly what they had done
 // (`h-5 w-40 text-ui` against `h-5 w-32 text-sm`). The field owns that size now,
 // so a strip states only its width.
+import { Button } from "@renderer/components/ui/button";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { TitleReveal } from "@renderer/components/ui/title-reveal";
-import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@renderer/components/ui/tooltip";
+import { useClippedReveal } from "@renderer/components/ui/value-reveal";
+import { prefersReducedMotion, useReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { cn } from "@renderer/lib/utils";
 
 import { movedTabIndex, successorTabIndex, tabFocusMove, type TabFocusMove } from "./tab-focus";
 import { tabDropOrder } from "./tab-reorder";
-import { scrollTabsWithWheel } from "./tab-scroll";
+import {
+  scrollTabsWithWheel,
+  tabOverflow,
+  tabScrollLeftFor,
+  tabScrollStep,
+  type TabOverflow,
+} from "./tab-scroll";
 
 export type TabVariant = "folder" | "pill";
 
@@ -158,6 +174,71 @@ function moveTabFocus(from: HTMLElement, move: TabFocusMove): void {
 }
 
 /**
+ * Scroll `tab` into view inside its own strip (VC-288).
+ *
+ * `scrollIntoView` is what this would normally be, and it is not usable here:
+ * it walks EVERY scrollable ancestor, so revealing a tab in a pane's strip also
+ * scrolls the transcript, the rail and the window behind it — a tab selected
+ * from a chord would take the whole plane with it. The travel is computed
+ * against this one scroller instead (`tab-scroll.ts`) and written to it alone.
+ *
+ * The tab's offset is read from the two rectangles rather than from
+ * `offsetLeft`, which answers relative to the nearest positioned ancestor and
+ * would be measured from a different origin the day a strip grows one.
+ */
+function revealTab(tab: HTMLElement, smooth: boolean): void {
+  const scroller = tab.closest<HTMLElement>('[data-slot="tab-scroll"]');
+  if (scroller === null) return;
+  const box = tab.getBoundingClientRect();
+  const port = scroller.getBoundingClientRect();
+  const at = tabScrollLeftFor(scroller, {
+    left: box.left - port.left + scroller.scrollLeft,
+    width: box.width,
+  });
+  if (at === null) return;
+  scrollTabsTo(scroller, at, smooth);
+}
+
+/**
+ * Reveal the tab this strip is currently ABOUT — after something moved that is
+ * neither a selection nor a focus (VC-288 review).
+ *
+ * The keyboard's tab wins over the selected one: if focus is inside this strip
+ * then that is the tab a person is working with, and the two differ for the
+ * whole of a walk along the strip with the arrow keys.
+ *
+ * Never smooth. This is called from a resize — the chevrons mounting, a divider
+ * drag, a rail opening — where the layout has already jumped, and a 300ms glide
+ * chasing a drag that is still moving reads as the strip lagging the pointer.
+ */
+function revealCurrentTab(scroller: HTMLElement): void {
+  const focused = document.activeElement;
+  const focusedTab =
+    focused instanceof HTMLElement && scroller.contains(focused)
+      ? focused.closest<HTMLElement>('[role="tab"]')
+      : null;
+  const tab =
+    focusedTab ?? scroller.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (tab !== null) revealTab(tab, false);
+}
+
+/**
+ * Write a scroll position, gliding where the platform can and the reader has
+ * not asked it not to.
+ *
+ * `scrollTo` is guarded because jsdom has none: a test environment that
+ * measures nothing still has to be able to observe the position this lands on,
+ * and `scrollLeft` is the assignment every browser also honours.
+ */
+function scrollTabsTo(scroller: HTMLElement, at: number, smooth: boolean): void {
+  if (smooth && typeof scroller.scrollTo === "function") {
+    scroller.scrollTo({ left: at, behavior: "smooth" });
+    return;
+  }
+  scroller.scrollLeft = at;
+}
+
+/**
  * Hand focus to the tab that will survive this close.
  *
  * Called from inside the × that is about to unmount, BEFORE the close lands, so
@@ -231,6 +312,10 @@ export function TabStrip({
   // A surface above us already owns the gesture — see TabStripSurfaceContext.
   const inSurface = React.useContext(TabStripSurfaceContext);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
+  // The box the tabs have to fit, chevrons or no chevrons. Measured instead of
+  // the scroller because the scroller's width is something the chevrons change
+  // — see {@link TabOverflowMeasure}.
+  const areaRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -247,66 +332,259 @@ export function TabStrip({
     return () => scroller.removeEventListener("wheel", onWheel);
   }, []);
 
+  // WHAT IS OUT OF VIEW, AND WHICH WAY (VC-288). Three things move this and
+  // only one of them is a scroll: the strip itself resizing (a split, a rail
+  // opening, the window), its CONTENT resizing (a tab opened or closed), and
+  // the person travelling. The observer watches all three boxes for that
+  // reason — a strip that only measured itself would keep offering a chevron to
+  // a tab that had since been closed — and it is also why the subscription does
+  // not follow `children`: the tablist's own box IS that fact, and a strip whose
+  // tabs are composed from scratch on every render (both of them are, and both
+  // re-render on every streamed chat token — see {@link useSteadyIds}) would
+  // otherwise tear the observer and the listener down and build them again
+  // once per token, to observe the element it was already observing.
+  const [overflow, setOverflow] = React.useState<TabOverflow>(NO_TAB_OVERFLOW);
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    const area = areaRef.current;
+    if (scroller === null || area === null) return;
+    // Same measurement in, same object out. This runs on every scroll event of
+    // a travel — animation-frame rate for the whole of a Shift+wheel — and a
+    // fresh object each time is a fresh state value, so every tab in the strip
+    // would re-render to say that nothing about the ends had changed.
+    // `sidebar/sidebar-scroll.tsx` bails on its own edge state for exactly this.
+    const measure = (): void =>
+      setOverflow((current) => {
+        const next = tabOverflow({
+          areaWidth: area.clientWidth,
+          clientWidth: scroller.clientWidth,
+          scrollWidth: scroller.scrollWidth,
+          scrollLeft: scroller.scrollLeft,
+        });
+        return current.overflowing === next.overflowing &&
+          current.atStart === next.atStart &&
+          current.atEnd === next.atEnd
+          ? current
+          : next;
+      });
+    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters
+    // was put in view against the width the strip had at the time; the chevrons
+    // mounting, a divider drag, a rail opening and a window resize all hand it a
+    // different one, and none of them is a selection or a focus, so nothing else
+    // in this file would look again.
+    const remeasure = (): void => {
+      measure();
+      revealCurrentTab(scroller);
+    };
+    measure();
+    scroller.addEventListener("scroll", measure, { passive: true });
+    // Guarded because jsdom ships no `ResizeObserver`, and half the surfaces in
+    // this app draw a strip: a component that threw on mount without one would
+    // make all of them untestable to buy nothing. Measured once either way, so
+    // a strip in that environment still knows whether it overflows at mount.
+    //
+    // The tablist belongs here too. Content can move the focused/selected tab
+    // without changing either viewport box — a preceding title grows, a tab
+    // opens or closes — and the promise is about keeping that tab visible, not
+    // merely about keeping the chevrons accurate.
+    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
+    resize?.observe(area);
+    resize?.observe(scroller);
+    const tablist = scroller.firstElementChild;
+    if (tablist !== null) resize?.observe(tablist);
+    return () => {
+      resize?.disconnect();
+      scroller.removeEventListener("scroll", measure);
+    };
+  }, []);
+
+  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288 review). Mounting two
+  // 24px controls at the ends of the strip takes that width out of the
+  // scroller, which can put the tab that was just revealed back under one of
+  // them. A browser reports that as a second `ResizeObserver` callback and the
+  // effect above would catch it — but only a frame later and only where an
+  // observer exists at all, so the strip says it here, in the commit that
+  // changed the layout, rather than waiting to be told about its own edit.
+  React.useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller !== null) revealCurrentTab(scroller);
+  }, [overflow.overflowing]);
+
+  // The motion preference is read at the press rather than during the render
+  // (`prefersReducedMotion`): this strip is drawn to a string by a good deal of
+  // the test suite, and `matchMedia` does not exist there — a flag a component
+  // only needs while it is moving has no business being a subscription.
+  const travel = (towards: "prev" | "next") => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    scrollTabsTo(scroller, tabScrollStep(scroller, towards), !prefersReducedMotion());
+  };
+
   const strip = (
-    <div
-      data-slot="tab-strip"
-      data-variant={variant}
-      className={cn(
-        "flex shrink-0 border-b border-border bg-rail",
-        // A folder strip is only as tall as its tabs plus the 4px above them,
-        // because the tabs ARE its bottom edge. A pill strip centres its tabs
-        // in a band of its own.
-        folder ? "items-end pt-1" : "h-9 items-center gap-1 px-2",
-        className,
-      )}
-      {...props}
-    >
+    // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
+    // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
+    // but a strip is also rendered on its own by a good deal of the test suite
+    // and by the fixture gallery, and a Radix tooltip with no provider above it
+    // throws. Nesting is allowed and costs one context; what it changes is that
+    // a sweep along THIS strip is its own skip-delay group, which is what a row
+    // of tabs is anyway.
+    <TooltipProvider>
       <div
-        ref={scrollerRef}
-        data-slot="tab-scroll"
+        data-slot="tab-strip"
+        data-variant={variant}
         className={cn(
-          "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          folder ? "items-end px-2" : "items-center",
+          // `@container/tab-strip`: what a tab may stop drawing is decided by the
+          // width of THIS strip, never the window's. A split puts two of these in
+          // one window, and a media query cannot tell them apart.
+          "@container/tab-strip flex shrink-0 border-b border-border bg-rail",
+          // A folder strip is only as tall as its tabs plus the 4px above them,
+          // because the tabs ARE its bottom edge. A pill strip centres its tabs
+          // in a band of its own.
+          folder ? "items-end pt-1" : "h-9 items-center gap-1 px-2",
+          className,
         )}
+        {...props}
       >
+        {/* THE ROOM THE TABS HAVE, and the one box in here whose width does not
+          answer to what is drawn inside it. `flex-1 min-w-0` against the actions
+          cluster beside it means this is the strip's width minus that cluster,
+          full stop — a chevron mounting cannot change it, which is what lets the
+          chevrons be decided from it without deciding themselves (VC-288
+          review, `tabOverflow`). */}
         <div
-          role="tablist"
-          aria-label={label}
-          aria-orientation="horizontal"
-          className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+          ref={areaRef}
+          data-slot="tab-scroll-area"
+          className={cn("flex min-w-0 flex-1", folder ? "items-end" : "items-center gap-1")}
         >
-          <TabVariantContext.Provider value={variant}>
-            {reorder === undefined ? (
-              children
-            ) : (
-              // Inside the tablist, where the tabs are; the sensors and the
-              // DndContext sit outside it (below) so dnd-kit's two hidden
-              // announcement nodes are not children of a `role="tablist"`.
-              <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+          {/* THE POINTER'S WAY TO A CLIPPED TAB, and the discoverable one. The
+            gesture was Shift+wheel and nothing else: a convention a mouse user
+            has to already know, on a strip whose scrollbar is deliberately
+            hidden. The keyboard's way is the arrows it always had — what VC-288
+            added there is that focus now drags the strip along with it.
+
+            Both ends stay mounted while the strip overflows, with the arrived
+            one disabled rather than removed: a chevron that vanishes at the end
+            of a travel re-lays the tabs out under the pointer pressing it. */}
+          {overflow.overflowing ? (
+            <TabScrollAffordance
+              towards="prev"
+              folder={folder}
+              disabled={overflow.atStart}
+              onTravel={() => travel("prev")}
+            />
+          ) : null}
+          <div
+            ref={scrollerRef}
+            data-slot="tab-scroll"
+            className={cn(
+              "flex min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              folder ? "items-end px-2" : "items-center",
             )}
-          </TabVariantContext.Provider>
+          >
+            <div
+              role="tablist"
+              aria-label={label}
+              aria-orientation="horizontal"
+              className={cn("flex gap-1", folder ? "items-end" : "items-center")}
+            >
+              <TabVariantContext.Provider value={variant}>
+                {reorder === undefined ? (
+                  children
+                ) : (
+                  // Inside the tablist, where the tabs are; the sensors and the
+                  // DndContext sit outside it (below) so dnd-kit's two hidden
+                  // announcement nodes are not children of a `role="tablist"`.
+                  <SortableTabs ids={reorder.ids}>{children}</SortableTabs>
+                )}
+              </TabVariantContext.Provider>
+            </div>
+          </div>
+          {overflow.overflowing ? (
+            <TabScrollAffordance
+              towards="next"
+              folder={folder}
+              disabled={overflow.atEnd}
+              onTravel={() => travel("next")}
+            />
+          ) : null}
         </div>
+        {actions !== undefined ? (
+          // The divider is half the separation; vertical alignment is the rest.
+          // Tabs sit on the strip's bottom edge because they fuse with the plane
+          // below, so a control spanning the band's full height cannot be
+          // mistaken for one however it is styled. `-mt-1` cancels the strip's
+          // own top pad so the column reaches the true top edge.
+          <div
+            // Named because it is the one part of a strip that does NOT belong
+            // to the strip's own pane: these controls act on the surface, so a
+            // split main bar has to be able to exclude them when it decides
+            // whether a press landed "in" a pane (`split-view-tab-bar.tsx`).
+            data-slot="tab-actions"
+            className={cn(
+              "flex shrink-0 border-l border-border/70",
+              folder ? "-mt-1 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
+            )}
+          >
+            {actions}
+          </div>
+        ) : null}
       </div>
-      {actions !== undefined ? (
-        // The divider is half the separation; vertical alignment is the rest.
-        // Tabs sit on the strip's bottom edge because they fuse with the plane
-        // below, so a control spanning the band's full height cannot be
-        // mistaken for one however it is styled. `-mt-1` cancels the strip's
-        // own top pad so the column reaches the true top edge.
-        <div
-          className={cn(
-            "flex shrink-0 border-l border-border/70",
-            folder ? "-mt-1 items-stretch self-stretch pr-1 pl-2" : "items-center pl-2",
-          )}
-        >
-          {actions}
-        </div>
-      ) : null}
-    </div>
+    </TooltipProvider>
   );
 
   if (reorder === undefined || inSurface) return strip;
   return <TabStripDnd reorder={reorder}>{strip}</TabStripDnd>;
+}
+
+/** A strip that has not been measured yet reaches for nothing. */
+const NO_TAB_OVERFLOW: TabOverflow = { overflowing: false, atStart: true, atEnd: true };
+
+/**
+ * One end of an overflowing strip, as a control.
+ *
+ * `aria-label` says the DIRECTION IN TABS — "Earlier tabs", "Later tabs" —
+ * rather than in pixels or in glyphs. "Scroll left" names the mechanism; what a
+ * person is reaching for is the tab that is not on screen, and on a strip that
+ * can also be dragged into a new order "left" is a word about the current
+ * arrangement rather than about the list.
+ *
+ * Outside the `role="tablist"`, deliberately: inside it these would join the
+ * roving tabindex and be counted by every arrow key as two more tabs.
+ */
+function TabScrollAffordance({
+  towards,
+  folder,
+  disabled,
+  onTravel,
+}: {
+  towards: "prev" | "next";
+  folder: boolean;
+  disabled: boolean;
+  onTravel(): void;
+}) {
+  const Icon = towards === "prev" ? CaretLeftIcon : CaretRightIcon;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      data-slot="tab-scroll-affordance"
+      data-towards={towards}
+      aria-label={towards === "prev" ? "Earlier tabs" : "Later tabs"}
+      disabled={disabled}
+      onClick={onTravel}
+      // A folder strip's tabs stand on its bottom edge; a control that spanned
+      // the band would read as one of them, so it sits on the same baseline.
+      // Flush against that edge rather than lifted off it: `mb-0.5` was 2px
+      // from nowhere on `docs/DESIGN.md`'s ladder, and the next rung up (4px)
+      // would float the caret above the tabs it belongs to.
+      className={cn("shrink-0", folder ? "self-end" : "self-center")}
+    >
+      {/* `bold` is the ≤12px tier (CLAUDE.md): a caret at this size draws
+          lighter than the tab labels beside it at regular. */}
+      <Icon weight="bold" className="size-3" />
+    </Button>
+  );
 }
 
 /** The sortable list itself, and the flag that tells a tab it may register. */
@@ -588,125 +866,191 @@ function TabShell({
   const variant = React.useContext(TabVariantContext);
   const folder = variant === "folder";
   const renamingNow = renaming !== null && renaming !== undefined;
+  // Composed rather than assigned: `props.ref` is already dnd-kit's node ref
+  // joined with Radix's context-menu one, and a second `ref` on the element
+  // would silently replace both.
+  const shellRef = React.useRef<HTMLDivElement>(null);
+  const setShell = useComposedTabRef(
+    React.useCallback((node: HTMLElement | null) => {
+      shellRef.current = node as HTMLDivElement | null;
+    }, []),
+    props.ref,
+  );
+  // A SELECTED TAB IS BROUGHT INTO VIEW (VC-288). A strip narrower than its
+  // tabs could hold the selection off-screen indefinitely — open a file from
+  // the palette in a split pane and the tab that opened was simply not there.
+  // A layout effect, so the travel is part of the frame the selection lands on
+  // rather than a jump after it; keyed on `active` alone, because a tab that is
+  // already selected must not re-centre itself on every streamed re-render
+  // under a person who has scrolled the strip somewhere else.
+  React.useLayoutEffect(() => {
+    if (!active) return;
+    const shell = shellRef.current;
+    if (shell !== null) revealTab(shell, !prefersReducedMotion());
+  }, [active]);
   // The close is hidden mid-rename on purpose: the only two exits from an
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
+  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
+  // capped at `max-w-40` and truncates, and until now the rest of it lived in
+  // `aria-label` alone — an answer for a screen reader and for nothing else,
+  // on tabs that do not all carry a `title` either. The reveal rides the tab
+  // itself rather than bringing a stop of its own, because a tab IS focusable
+  // and a control nested in one is a second press between a person and the
+  // place they were going. It opens only when the run is actually clipped:
+  // over a strip of short names it would be noise.
+  const labelRef = React.useRef<HTMLSpanElement>(null);
+  const reveal = useClippedReveal(labelRef);
+  const name = hint === undefined ? label : `${label} · ${hint}`;
 
   return (
-    <div
-      {...props}
-      data-slot="tab"
-      role="tab"
-      aria-label={label}
-      aria-selected={active}
-      tabIndex={tabStop ? 0 : -1}
-      onClick={onActivate}
-      // dnd-kit's pointer activator, composed over whatever the caller already
-      // listens for here (Radix's context menu uses this event for its
-      // long-press). A drag that actually engages stops the click that would
-      // follow it, so arranging a tab never also selects it.
-      onPointerDown={(event) => {
-        props.onPointerDown?.(event);
-        drag?.listeners?.onPointerDown?.(event);
-      }}
-      onKeyDown={(event) => {
-        // A keyboard drag in flight belongs entirely to dnd-kit's own document
-        // listener: arrows move the tab, Space drops it, Escape cancels. The
-        // strip's roving focus has to stand down for the duration, or an arrow
-        // would walk focus off the very tab being carried.
-        if (drag?.dragging === true) return;
-        const move = tabFocusMove(event.key);
-        if (move !== null) {
-          event.preventDefault();
-          moveTabFocus(event.currentTarget, move);
-          return;
-        }
-        if (event.key === "Enter" || event.key === " ") {
-          // Activation only when the tab ITSELF has the key: the close × is a
-          // real button inside this div, and swallowing its Enter here would
-          // select the tab the user was trying to close. Arrows stay unguarded
-          // above — roving out of the × is exactly what they are for.
-          if (event.target !== event.currentTarget) return;
-          // ON A STRIP THAT ARRANGES, SPACE PICKS THE TAB UP and Enter stays
-          // the activation. dnd-kit's keyboard sensor claims both keys, a tab
-          // needs one of them to select with, and this is the same split the
-          // board card makes for the same reason (`ticket-card.tsx`). It is
-          // what keeps reorder off the pointer-only list; the sensor's own
-          // hidden instructions say "press space", and they are what this tab
-          // points its `aria-describedby` at.
-          if (event.key === " " && drag?.listeners?.onKeyDown !== undefined) {
-            drag.listeners.onKeyDown(event);
-            return;
-          }
-          event.preventDefault();
-          onActivate();
-        }
-      }}
-      className={cn(
-        // `scale` is in the transition list and `scale-100!` is the
-        // reduced-motion cancel — see the press note in `ui/button.tsx`.
-        //
-        // `transform` LEAVES that list under reduced motion, and it has to be
-        // said here rather than left to dnd-kit (VC-189): a sortable tab asks
-        // for no transition at all under the flag, but "no transition" means no
-        // INLINE one, and this class would then be what animates the sibling
-        // shift instead — the very motion the flag turned off. The board card
-        // needs no such line because its own transition list is `border-color`
-        // alone (`board/ticket-card.tsx`).
-        "group relative flex h-7 shrink-0 items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
-        folder ? "rounded-t-lg" : "rounded-md",
-        // A closable tab pays its right inset in the × instead of in padding.
-        folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
-        active
-          ? folder
-            ? // -mb-px pulls the active tab 1px past the strip's bottom border
-              // so its content-coloured fill covers that seam. `shadow-raised`
-              // is the halo that says "active" — carried here rather than by
-              // the `[role="tab"][aria-selected="true"]` rule globals.css used
-              // to hold, because a shadow you cannot see in the component is a
-              // shadow nobody can tell is live.
-              "-mb-px bg-background text-foreground shadow-raised"
-            : "bg-accent text-foreground shadow-raised"
-          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-        className,
-      )}
-    >
-      {/* 8px, not the 6px default: `ui/status-dot.tsx` sizes the dot by where it
-          sits, and a tab is the larger of its two homes. */}
-      {status !== undefined ? <StatusDot state={status} size="md" /> : null}
-      {leading}
-      {badge}
-      {renamingNow ? (
-        <InlineRename
-          value={renaming.value}
-          ariaLabel={`Rename ${label}`}
-          className="w-40"
-          onCommit={renaming.onCommit}
-          onCancel={renaming.onCancel}
-        />
-      ) : (
-        // A plain span, not a button: the tab div above is the `role="tab"`
-        // that click, Enter and Space activate, so there is no nested
-        // interactive control inside it.
-        <span className={cn("max-w-40 truncate", labelClassName)}>
-          {revealLabel ? <TitleReveal text={label} /> : label}
-        </span>
-      )}
-      {hint !== undefined && !renamingNow ? (
-        // Dimmer than the tab's own muted ink so it stays subordinate on an
-        // ACTIVE tab too, where the label is at full strength. It used to be a
-        // step smaller instead; at one type size for the whole tab, weight of
-        // colour is what is left to say it with.
-        <span
-          data-testid="tab-hint"
-          className="max-w-28 shrink-0 truncate text-muted-foreground/70"
+    <Tooltip {...reveal}>
+      <TooltipTrigger asChild>
+        <div
+          {...props}
+          ref={setShell}
+          data-slot="tab"
+          role="tab"
+          // The hint rides the NAME as well as the row (VC-288). It is the
+          // disambiguator between two tabs called `app.ts`, and a narrow strip
+          // stops drawing it — so a name that was the basename alone would leave
+          // both the screen reader and the collapsed strip with two identical tabs.
+          aria-label={name}
+          aria-selected={active}
+          tabIndex={tabStop ? 0 : -1}
+          onClick={onActivate}
+          // Focus follows the arrows through the roving tabindex, and the strip
+          // follows focus. On the element rather than in `moveTabFocus` so it also
+          // covers the ways focus arrives that no arrow key touched: Tab into the
+          // strip, a successor inheriting focus from a close, a caller's own
+          // `.focus()`.
+          onFocus={(event) => {
+            props.onFocus?.(event);
+            revealTab(event.currentTarget, !prefersReducedMotion());
+          }}
+          // dnd-kit's pointer activator, composed over whatever the caller already
+          // listens for here (Radix's context menu uses this event for its
+          // long-press). A drag that actually engages stops the click that would
+          // follow it, so arranging a tab never also selects it.
+          onPointerDown={(event) => {
+            props.onPointerDown?.(event);
+            drag?.listeners?.onPointerDown?.(event);
+          }}
+          onKeyDown={(event) => {
+            // A keyboard drag in flight belongs entirely to dnd-kit's own document
+            // listener: arrows move the tab, Space drops it, Escape cancels. The
+            // strip's roving focus has to stand down for the duration, or an arrow
+            // would walk focus off the very tab being carried.
+            if (drag?.dragging === true) return;
+            const move = tabFocusMove(event.key);
+            if (move !== null) {
+              event.preventDefault();
+              moveTabFocus(event.currentTarget, move);
+              return;
+            }
+            if (event.key === "Enter" || event.key === " ") {
+              // Activation only when the tab ITSELF has the key: the close × is a
+              // real button inside this div, and swallowing its Enter here would
+              // select the tab the user was trying to close. Arrows stay unguarded
+              // above — roving out of the × is exactly what they are for.
+              if (event.target !== event.currentTarget) return;
+              // ON A STRIP THAT ARRANGES, SPACE PICKS THE TAB UP and Enter stays
+              // the activation. dnd-kit's keyboard sensor claims both keys, a tab
+              // needs one of them to select with, and this is the same split the
+              // board card makes for the same reason (`ticket-card.tsx`). It is
+              // what keeps reorder off the pointer-only list; the sensor's own
+              // hidden instructions say "press space", and they are what this tab
+              // points its `aria-describedby` at.
+              if (event.key === " " && drag?.listeners?.onKeyDown !== undefined) {
+                drag.listeners.onKeyDown(event);
+                return;
+              }
+              event.preventDefault();
+              onActivate();
+            }
+          }}
+          className={cn(
+            // `scale` is in the transition list and `scale-100!` is the
+            // reduced-motion cancel — see the press note in `ui/button.tsx`.
+            //
+            // `transform` LEAVES that list under reduced motion, and it has to be
+            // said here rather than left to dnd-kit (VC-189): a sortable tab asks
+            // for no transition at all under the flag, but "no transition" means no
+            // INLINE one, and this class would then be what animates the sibling
+            // shift instead — the very motion the flag turned off. The board card
+            // needs no such line because its own transition list is `border-color`
+            // alone (`board/ticket-card.tsx`).
+            "group relative flex h-7 shrink-0 items-center gap-1 text-ui font-medium outline-none transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-[color,background-color,box-shadow] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+            folder ? "rounded-t-lg" : "rounded-md",
+            // A closable tab pays its right inset in the × instead of in padding.
+            folder ? (closable ? "pr-1 pl-3" : "px-3") : closable ? "pr-1 pl-2" : "px-2.5",
+            active
+              ? folder
+                ? // -mb-px pulls the active tab 1px past the strip's bottom border
+                  // so its content-coloured fill covers that seam. `shadow-raised`
+                  // is the halo that says "active" — carried here rather than by
+                  // the `[role="tab"][aria-selected="true"]` rule globals.css used
+                  // to hold, because a shadow you cannot see in the component is a
+                  // shadow nobody can tell is live.
+                  "-mb-px bg-background text-foreground shadow-raised"
+                : "bg-accent text-foreground shadow-raised"
+              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+            className,
+          )}
         >
-          {hint}
-        </span>
-      ) : null}
-      {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
-    </div>
+          {/* 8px, not the 6px default: `ui/status-dot.tsx` sizes the dot by where it
+          sits, and a tab is the larger of its two homes. */}
+          {status !== undefined ? <StatusDot state={status} size="md" /> : null}
+          {leading}
+          {badge}
+          {renamingNow ? (
+            <InlineRename
+              value={renaming.value}
+              ariaLabel={`Rename ${label}`}
+              className="w-40"
+              onCommit={renaming.onCommit}
+              onCancel={renaming.onCancel}
+            />
+          ) : (
+            // A plain span, not a button: the tab div above is the `role="tab"`
+            // that click, Enter and Space activate, so there is no nested
+            // interactive control inside it. It is also the element the reveal
+            // measures, which is why it is named.
+            <span
+              ref={labelRef}
+              data-slot="tab-label"
+              className={cn("max-w-40 truncate", labelClassName)}
+            >
+              {revealLabel ? <TitleReveal text={label} /> : label}
+            </span>
+          )}
+          {hint !== undefined && !renamingNow ? (
+            // Dimmer than the tab's own muted ink so it stays subordinate on an
+            // ACTIVE tab too, where the label is at full strength. It used to be a
+            // step smaller instead; at one type size for the whole tab, weight of
+            // colour is what is left to say it with.
+            // AND IT GIVES WAY BY THE STRIP'S WIDTH, not the window's (VC-288):
+            // `@container/tab-strip` is on the strip itself, so a pane narrow
+            // enough to be clipping tabs spends its room on the labels rather than
+            // on the qualifier after them. The word survives in the tab's own
+            // accessible name, which is the whole reason it may be dropped here.
+            <span
+              data-testid="tab-hint"
+              className="hidden max-w-28 shrink-0 truncate text-muted-foreground/70 @min-[420px]/tab-strip:inline"
+            >
+              {hint}
+            </span>
+          ) : null}
+          {showClose ? <TabClose label={label} dirty={dirty} onClose={onClose} /> : null}
+        </div>
+      </TooltipTrigger>
+      {/* The hint travels with it: on a strip narrow enough to be clipping the
+          label, the qualifier that tells two `app.ts` apart has already been
+          collapsed by the container query below, so a reveal without it would
+          answer half the question. */}
+      <TooltipContent side="bottom">{name}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -731,19 +1075,24 @@ export function TabDragGhost({ label }: { label: string }) {
     // folder strips, so a variant prop would be a knob nothing turns. The strip
     // that first joins a split surface wearing the pill drawing gets to add it.
     <TabVariantContext.Provider value="folder">
-      <TabShell
-        // Hidden from AT: the strip the tab came from still lists it, and
-        // dnd-kit narrates the drag itself through its own live region — a
-        // second `role="tab"` outside any tablist would be a third voice.
-        aria-hidden
-        data-testid="tab-drag-ghost"
-        label={label}
-        active
-        tabStop={false}
-        closable={false}
-        className="scale-[1.02] cursor-grabbing shadow-overlay"
-        onActivate={noop}
-      />
+      {/* The ghost draws a tab, and a tab carries a tooltip — so it needs the
+          same provider a strip mounts. It will never open one: nothing hovers
+          or focuses a thing that is following the pointer. */}
+      <TooltipProvider>
+        <TabShell
+          // Hidden from AT: the strip the tab came from still lists it, and
+          // dnd-kit narrates the drag itself through its own live region — a
+          // second `role="tab"` outside any tablist would be a third voice.
+          aria-hidden
+          data-testid="tab-drag-ghost"
+          label={label}
+          active
+          tabStop={false}
+          closable={false}
+          className="scale-[1.02] cursor-grabbing shadow-overlay"
+          onActivate={noop}
+        />
+      </TooltipProvider>
     </TabVariantContext.Provider>
   );
 }

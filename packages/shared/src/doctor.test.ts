@@ -39,6 +39,7 @@ function facts(overrides: Partial<DoctorFacts> = {}): DoctorFacts {
     liveSessionIds: ["s-1"],
     reporting: [{ harnessId: "claude-code", declared: 8, verified: 8 }],
     skillConflicts: [],
+    orphanProcesses: { total: 0, reapable: 0 },
     ...overrides,
   };
 }
@@ -412,6 +413,33 @@ describe("runDoctorChecks — other findings", () => {
       "reporting-cursor",
     );
     expect(check.status).toBe("ok");
+  });
+
+  it("reports how many running processes no live Session owns", () => {
+    // VC-341: the audit that opened the ticket found ten of these, and nothing
+    // on the machine could name a single one of them.
+    expect(
+      find(doctorChecks(observation(), facts({ orphanProcesses: undefined })), "orphan-processes"),
+    ).toMatchObject({ status: "warn", detail: "the process sweep did not run this launch" });
+    expect(find(doctorChecks(observation(), facts()), "orphan-processes")).toMatchObject({
+      status: "ok",
+      detail: "none",
+    });
+    // Listed but none of them Volli's: a person's own shell in a worktree is
+    // context, not a fault.
+    expect(
+      find(
+        doctorChecks(observation(), facts({ orphanProcesses: { total: 2, reapable: 0 } })),
+        "orphan-processes",
+      ),
+    ).toMatchObject({ status: "ok", detail: "2 still running, none of them Volli's to reap" });
+    const found = find(
+      doctorChecks(observation(), facts({ orphanProcesses: { total: 10, reapable: 7 } })),
+      "orphan-processes",
+    );
+    expect(found.status).toBe("warn");
+    expect(found.detail).toBe("10 still running, 7 of them Volli's");
+    expect(found.remedy).toContain("Settings");
   });
 
   it("mentions skill conflicts only when there are some", () => {

@@ -60,6 +60,7 @@ const projection: SessionPresentationProjection = {
   session: SESSION,
   status: "open",
   liveExecutor: null,
+  authority: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,

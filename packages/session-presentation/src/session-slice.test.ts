@@ -37,6 +37,7 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     session: SESSION,
     status: "open",
     liveExecutor: attachmentId === null ? null : { id: attachmentId },
+    authority: attachmentId === null ? null : { attachmentId, snapshot: null },
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,

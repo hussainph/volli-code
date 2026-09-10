@@ -77,6 +77,43 @@ function persistedFilesInclude(files, relPath) {
   );
 }
 
+/**
+ * How much room the diff pane has, and what that buys (VC-288).
+ *
+ * `diff-fit.ts` gives two columns only to a pane at least 640 CSS px wide and
+ * draws inline below that, whatever the segmented control says — the pane
+ * publishes which of the two it is doing as `data-diff-fit`. A CI display is
+ * narrower than a desk one, so a check that assumed two columns was really
+ * asserting the runner's screen size; this reads the app's own answer instead.
+ */
+async function readDiffFit(page) {
+  return page.evaluate(() => {
+    const pane = document.querySelector("[data-diff-fit]");
+    return {
+      fit: pane?.getAttribute("data-diff-fit") ?? null,
+      width: pane === null ? 0 : Math.round(pane.getBoundingClientRect().width),
+    };
+  });
+}
+
+/**
+ * Ask the window for room, so the check exercises two columns wherever the
+ * display allows it. Best effort by design: a runner whose screen cannot hold
+ * the request leaves the pane narrow, and the check below then asserts the
+ * fallback the app really draws rather than failing on the furniture.
+ */
+async function widenWindow(app) {
+  await app
+    .evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win === undefined) return;
+      const [x, y] = win.getPosition();
+      win.setBounds({ x, y, width: 1600, height: 1000 });
+    })
+    .catch(() => {});
+  await sleep(400);
+}
+
 async function readDiffMonaco(page) {
   return page.evaluate(() => {
     const host = document.querySelector("[data-monaco-diff-status]");
@@ -620,18 +657,33 @@ async function main() {
       const beforeTabs = await readTicketTabs(page, ticketId);
       const before = await readDiffMonaco(page);
 
+      await widenWindow(app);
       await presentation.getByRole("button", { name: "Side by side" }).click();
+      // WHAT THE PRESS PROMISES depends on the pane, and that is the product
+      // rule rather than a concession to CI: the CHOICE is always taken (the
+      // control shows it pressed, and it is app-wide and durable), while two
+      // COLUMNS are drawn only where they would be readable. So the press is
+      // asserted against the pane's own published fit — columns where it fits,
+      // the named inline fallback where it does not.
+      const fit = await readDiffFit(page);
+      const wantsColumns = fit.fit === "chosen";
       const sided = await waitUntil(
-        "side-by-side presentation applied",
+        `side-by-side presentation applied (fit=${fit.fit} width=${fit.width})`,
         async () => {
           const state = await readDiffMonaco(page);
           const pressed =
             (await presentation
               .getByRole("button", { name: "Side by side" })
               .getAttribute("aria-pressed")) === "true";
-          return state.presentation === "side-by-side" && state.sideBySideClass && pressed
-            ? state
-            : null;
+          if (!pressed) return null;
+          if (wantsColumns) {
+            return state.presentation === "side-by-side" && state.sideBySideClass ? state : null;
+          }
+          // Too narrow for two columns: the diff stays inline and the pane says
+          // so. A press that silently drew columns here would be the truncated
+          // pair VC-288 measured.
+          const narrow = (await readDiffFit(page)).fit === "narrow";
+          return narrow && state.presentation === "inline" && !state.sideBySideClass ? state : null;
         },
         { timeout: 10000 },
       );
@@ -659,7 +711,7 @@ async function main() {
 
       return {
         ok: !!sided && !!inlined && sameTab && before.presentation === "inline",
-        detail: `before=${before.presentation} sided=${sided?.presentation}/${sided?.sideBySideClass} inlined=${inlined?.presentation} sameTab=${sameTab} active=${afterTabs?.active}`,
+        detail: `before=${before.presentation} fit=${fit.fit}/${fit.width}px sided=${sided?.presentation}/${sided?.sideBySideClass} inlined=${inlined?.presentation} sameTab=${sameTab} active=${afterTabs?.active}`,
       };
     });
 
@@ -674,22 +726,30 @@ async function main() {
 
     await attempt("shot-side", "screenshot diff-side-by-side.png", async () => {
       const presentation = page.getByTestId("ticket-diff-presentation");
+      let fit = { fit: null, width: 0 };
       if ((await presentation.count()) === 1) {
+        await widenWindow(app);
         await presentation.getByRole("button", { name: "Side by side" }).click();
-        await waitUntil(
-          "side-by-side for shot",
-          async () => {
-            const state = await readDiffMonaco(page);
-            return state.presentation === "side-by-side" && state.sideBySideClass ? state : null;
-          },
-          { timeout: 8000 },
-        );
+        fit = await readDiffFit(page);
+        // Only wait for columns where the pane can hold them. A shot of the
+        // inline fallback is still a true picture of this app on this display,
+        // and the check above is the one that judges the toggle.
+        if (fit.fit === "chosen") {
+          await waitUntil(
+            "side-by-side for shot",
+            async () => {
+              const state = await readDiffMonaco(page);
+              return state.presentation === "side-by-side" && state.sideBySideClass ? state : null;
+            },
+            { timeout: 8000 },
+          );
+        }
       }
       await sleep(300);
       const path = join(SHOT_DIR, "diff-side-by-side.png");
       await page.screenshot({ path, fullPage: false });
       const stat = await fs.stat(path);
-      return { ok: stat.size > 1000, detail: path };
+      return { ok: stat.size > 1000, detail: `${path} fit=${fit.fit}/${fit.width}px` };
     });
   } finally {
     await app.close().catch(() => {});

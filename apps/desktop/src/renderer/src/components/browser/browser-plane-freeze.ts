@@ -15,8 +15,10 @@ export const APP_ROOT_ID = "root";
 /**
  * Overlays that live in the portal layer. Matching these ANYWHERE was the
  * VC-251 bug: `[role="listbox"]` also describes a permanent list, and the
- * Ticket Change Set renders one (`ticket-changes-panel.tsx`), so a Browser Tab
- * beside it detached its plane forever and never came back. A floating overlay
+ * Ticket Change Set rendered one until VC-311 gave it a plain `list`, so a
+ * Browser Tab beside it detached its plane forever and never came back. The
+ * rule outlived that particular list — a composer's completion menu is a real
+ * listbox, and Settings draws permanent ones. A floating overlay
  * is distinguished by WHERE it renders, not by its role alone — Radix portals
  * to `document.body`, outside the app root — so the role list only decides
  * what counts once the element is already outside the tree.

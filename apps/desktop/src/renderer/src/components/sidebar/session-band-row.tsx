@@ -30,7 +30,6 @@ import {
   sessionProvenanceHoverLine,
   TICKET_STATUS_LABELS,
   type ChatWaitingReason,
-  type SessionActivityState,
   type Ticket,
 } from "@volli/shared";
 
@@ -44,18 +43,17 @@ import { SessionProvenanceMark } from "@renderer/components/sessions/session-pro
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
+import {
+  SESSION_ACTIVITY_LABEL,
+  sessionActivityDotState,
+} from "@renderer/components/ui/session-activity-status";
 import { StatusDot } from "@renderer/components/ui/status-dot";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
-const ACTIVITY_LABEL: Record<SessionActivityState, string> = {
-  working: "Working",
-  waiting: "Waiting for you",
-  idle: "Idle",
-  parked: "Parked",
-  exited: "Exited",
-  stopped: "Stopped",
-};
+// `SESSION_ACTIVITY_LABEL` in `ui/session-activity-status.ts` is this map —
+// the fourth copy of it is the drift the review called, so the words live with
+// the mapping they annotate.
 
 /**
  * What a waiting chat is waiting FOR, as the one thing the reader can do about
@@ -160,7 +158,9 @@ function sessionRowDragPayload(
   projectId: string,
 ): SplitDragPayload | null {
   const target = row.target;
-  if (target === null) return null;
+  // A closed terminal's saved record is not draggable: a pane holds a live
+  // surface, and this Session no longer has one (VC-290).
+  if (target === null || target.kind === "session-detail") return null;
   const ticketId = row.ticket?.id ?? null;
   const origin =
     ticketId === null
@@ -232,7 +232,7 @@ function stateLine(row: ActiveSessionRow): string {
   // would only be guessing at. Every other row keeps its activity word: a Known
   // harness never promised to report, so inference there is not news.
   if (row.activitySource === "silent") return `${placeLine(row)} · Not reporting`;
-  return `${placeLine(row)} · ${ACTIVITY_LABEL[row.activity]}`;
+  return `${placeLine(row)} · ${SESSION_ACTIVITY_LABEL[row.activity]}`;
 }
 
 /**
@@ -298,7 +298,12 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
             the gap BETWEEN rows and the two lines stop reading as one entity,
             which is the whole shape of this band. Screenshot-verified against
             the collapse; anything that moves them has to look at the band. */}
-        <StatusDot state={needsYou ? "waiting" : working ? "working" : "idle"} className="mt-1.5" />
+        <StatusDot
+          // The mapping is `ui/session-activity-status.ts`'s, not this row's:
+          // attention outranks, `interrupted` survives, the rest rest.
+          state={sessionActivityDotState(row.activity, { attention: needsYou })}
+          className="mt-1.5"
+        />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
             <span className="session-row-dim session-title-sweep text-ui">
@@ -408,6 +413,16 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
             dim/promote pairing to join — and that class also names the Active
             row's meta line for the smokes' contrast checks. */}
         {row.cleaned ? <span className="sr-only">Cleaned up</span> : null}
+        {/* An interrupted chat stays interrupted in Previous — the record's
+            activity is durable, so the relaunch did not end it (VC-324). The
+            dot is the same destructive state the Active band draws; the words
+            ride out of band, as this row's size demands. */}
+        {row.activity === "interrupted" ? (
+          <>
+            <span className="sr-only">Interrupted</span>
+            <StatusDot state="interrupted" />
+          </>
+        ) : null}
         <KindGlyph kind={row.kind} />
         {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
         {/* Same slot as the Active row's — after the identity, before the title

@@ -26,13 +26,20 @@ import {
 import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
+import { useExternalApps } from "./external-app-discovery";
+
 export type ExternalAppTarget =
   | { kind: "file"; projectId: string; ticketId?: string; relPath: string }
   | { kind: "worktree"; projectId: string; ticketId: string };
 
 export type ExternalAppMenuEntry = { kind: "app"; app: ExternalApp } | { kind: "finder" };
 
-/** The empty state is Finder alone — no unavailable-app placeholder or error copy. */
+/**
+ * The empty state is Finder alone — no unavailable-app placeholder or error
+ * copy. That holds for a scan that found nothing AND for one that could not
+ * run: Files falls back to Finder, and Integrations carries the failure and
+ * its retry (see `external-app-discovery.tsx`).
+ */
 export function externalAppMenuEntries(
   apps: readonly ExternalApp[],
 ): readonly ExternalAppMenuEntry[] {
@@ -46,45 +53,6 @@ export function preferredExternalApp(
 ): ExternalApp | null {
   if (defaultExternalAppId === null) return null;
   return apps.find((app) => app.id === defaultExternalAppId) ?? null;
-}
-
-const NO_EXTERNAL_APPS: readonly ExternalApp[] = [];
-const ExternalAppsContext = React.createContext<readonly ExternalApp[]>(NO_EXTERNAL_APPS);
-
-/**
- * Detect once after the app is ready, reconcile a stale default, then let every
- * Files surface render the same truthful menu. An empty list is normal — Finder
- * remains the one action.
- */
-export function ExternalAppsProvider({
-  children,
-  initialApps = NO_EXTERNAL_APPS,
-}: {
-  children: React.ReactNode;
-  /** Fixture/lab seed; production refreshes it from main after mount. */
-  initialApps?: readonly ExternalApp[];
-}) {
-  const [apps, setApps] = React.useState<readonly ExternalApp[]>(initialApps);
-
-  React.useEffect(() => {
-    let current = true;
-    void window.api.files
-      .listExternalApps()
-      .then((result) => {
-        if (current && result.ok) {
-          useUiStore.getState().reconcileDefaultExternalApp(result.apps);
-          setApps(result.apps);
-        }
-      })
-      .catch(() => {
-        // No editor is a state, not a warning. Finder stays available below.
-      });
-    return () => {
-      current = false;
-    };
-  }, []);
-
-  return <ExternalAppsContext.Provider value={apps}>{children}</ExternalAppsContext.Provider>;
 }
 
 function AppGlyph({ app }: { app: ExternalApp }) {
@@ -147,7 +115,9 @@ export function ExternalAppContextMenu({
   target: ExternalAppTarget;
   label?: string;
 }) {
-  const apps = React.useContext(ExternalAppsContext);
+  // A failed scan leaves the last confirmed apps here rather than an empty
+  // menu: recovery is Integrations' single Try again, not one per menu.
+  const apps = useExternalApps();
   const defaultExternalAppId = useUiStore((store) => store.defaultExternalAppId);
   const defaultApp = preferredExternalApp(apps, defaultExternalAppId);
   const selectableApps =
@@ -215,7 +185,7 @@ export function ExternalAppDropdownMenu({
   target: ExternalAppTarget;
   label?: string;
 }) {
-  const apps = React.useContext(ExternalAppsContext);
+  const apps = useExternalApps();
   const defaultExternalAppId = useUiStore((store) => store.defaultExternalAppId);
   const defaultApp = preferredExternalApp(apps, defaultExternalAppId);
   const selectableApps =

@@ -5,12 +5,7 @@
  * stage connects — so nothing in here reaches for a process-global.
  */
 import type Database from "better-sqlite3";
-import type {
-  DirtyWorktreeOrphan,
-  KeptWorktreeOrphan,
-  RemovedWorktreeOrphan,
-  WorktreePhase,
-} from "../../ipc/contract";
+import type { WorktreePhase } from "../../ipc/contract";
 
 import type { RunGit } from "../project-base-branch";
 
@@ -61,9 +56,10 @@ export interface WorktreeDeps {
   statMtimeMs?: StatMtimeMs;
   home?: string;
   /**
-   * The clock the sweep's dwell-time gate reads (VC-113). Injected for the same
-   * reason every other seam here is: a test that has to wait 14 real days to
-   * observe a deletion is not a test. Omitted callers get `Date.now`.
+   * The clock the orphan scan's and cleanup's dwell-time gate reads (VC-113).
+   * Injected for the same reason every other seam here is: a test that has to
+   * wait 14 real days to observe a deletion is not a test. Omitted callers get
+   * `Date.now`.
    */
   now?: () => number;
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
@@ -84,23 +80,6 @@ export function ok<T>(value: T): WorktreeResult<T> {
 
 export function err<T>(error: string): WorktreeResult<T> {
   return { ok: false, error };
-}
-
-/**
- * The report `sweepOrphans` returns (§7): `pruned` lists the project ids whose
- * metadata was pruned, `removedClean` what was auto-removed (branch retained),
- * `keptRecent` the clean orphans spared because they were touched inside the
- * retention window, and `dirty` the orphans left in place for the user to
- * resolve. The three orphan shapes are the IPC contract's (the renderer
- * consumes them over `volli:worktree-orphans`) — `removedClean` says what a
- * deletion took rather than only that one happened, because a sweep the user
- * cannot audit is how VC-113 stayed invisible for 44 directories.
- */
-export interface SweepReport {
-  pruned: string[];
-  removedClean: RemovedWorktreeOrphan[];
-  keptRecent: KeptWorktreeOrphan[];
-  dirty: DirtyWorktreeOrphan[];
 }
 
 export type { Database };

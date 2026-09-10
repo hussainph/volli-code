@@ -1,8 +1,12 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
+
 export default defineConfig({
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339).
+    ...SHARED_MACHINE_TEST_WORKERS,
     coverage: {
       // The gate travelled here with the modules from apps/desktop's vite
       // config (VC-169) and keeps its bar: these files are the pure logic
@@ -19,17 +23,36 @@ export default defineConfig({
         // can reach the empty rule — a pill drawn over the composer with
         // nothing to say is the failure that rule exists to refuse.
         "src/activity-island.ts",
+        // What a running Session says it is governed by (VC-285). In the gate
+        // because the wrong answer here is a false statement about authority:
+        // the chip must read the live attachment's SAVED Snapshot, and the
+        // no-Snapshot state must read as the runtime defaults rather than as
+        // whatever the project happens to be set to today.
+        "src/authority.ts",
         "src/client.ts",
         "src/compaction-boundary.ts",
         "src/composer-effort.ts",
+        // Host-authored transcript messages must never fall back to the
+        // person's voice, including for historical data and version skew.
+        "src/host-notice.ts",
         "src/interaction.ts",
         "src/markdown-source.ts",
         "src/message-projection.ts",
         "src/registry.ts",
         "src/session-model.ts",
         "src/session-slice.ts",
+        "src/session-source.ts",
         "src/surface-store.ts",
+        // What a CLOSED terminal's saved record says, and which controls it
+        // makes meaningful (VC-290). In the gate because every branch here is a
+        // refusal to guess: an exit nobody observed must not read as success, a
+        // deleted ticket must not read as a project session, and a scope that
+        // no longer exists must offer no recreation. A missed branch is a
+        // confident sentence about a Session nothing actually observed.
+        "src/terminal-history.ts",
         "src/transcript.ts",
+        // The complete portable row union, including the host-notice decision.
+        "src/transcript-rows.ts",
         "src/wire.ts",
       ],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },

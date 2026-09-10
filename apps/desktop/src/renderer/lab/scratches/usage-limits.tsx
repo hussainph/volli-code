@@ -1,5 +1,5 @@
 /**
- * VC-263's usage windows, at every state the row has to survive.
+ * VC-263's usage windows, including VC-271's three new readers, at every state the row has to survive.
  *
  * The question this scratch answers is not "is it pretty" but "does the
  * notation still say the right thing when the numbers get awkward". Three
@@ -36,9 +36,9 @@ import type { UsageLimits } from "@volli/shared";
 
 import { ModelAccessUsage } from "@renderer/components/pages/model-access-usage";
 
-export const title = "Usage limits (VC-263)";
+export const title = "Usage limits (VC-263 · VC-271)";
 export const note =
-  "Remaining bar, elapsed hairline, tone by colour — healthy, ahead, spent, unsupported";
+  "Remaining bar, elapsed hairline, tone by colour — including Copilot, Kimi Code, and xAI";
 
 /** One moment, so every countdown and pace reading is exact. */
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -205,6 +205,58 @@ const CODEX: UsageLimits = {
   ],
 };
 
+/** A paid Copilot seat: unlimited classes are absent, leaving its monthly meter. */
+const GITHUB_COPILOT: UsageLimits = {
+  checkedAt: NOW - 3 * 60_000,
+  windows: [
+    {
+      id: "premium_interactions",
+      kind: "monthly",
+      label: "Premium requests",
+      usedPercent: 68.83,
+      resetsAt: iso(NOW + 30 * DAY + 12 * HOUR),
+      windowDurationMins: 31 * 1_440,
+    },
+  ],
+};
+
+/** Kimi states a five-hour span and a plan counter whose duration is not on the wire. */
+const KIMI: UsageLimits = {
+  checkedAt: NOW - 30_000,
+  windows: [
+    {
+      id: "session",
+      kind: "session",
+      label: "Session",
+      usedPercent: 63.33333333333333,
+      resetsAt: iso(NOW + 1 * HOUR + 52 * 60_000),
+      windowDurationMins: 300,
+    },
+    {
+      id: "usage",
+      kind: "other",
+      label: "Plan",
+      usedPercent: 12,
+      resetsAt: iso(NOW + 4 * DAY + 2 * HOUR),
+    },
+  ],
+};
+
+/** xAI states one shared seven-day period across its products. */
+const XAI: UsageLimits = {
+  checkedAt: NOW - 90_000,
+  windows: [
+    {
+      id: "weekly",
+      kind: "weekly",
+      label: "Weekly",
+      usedPercent: 96,
+      resetsAt: iso(NOW + 2 * DAY + 6 * HOUR),
+      windowDurationMins: 10_080,
+    },
+  ],
+};
+
 export default function UsageLimitsScratch() {
   return (
     <div className="grid gap-6 md:grid-cols-2">
@@ -216,6 +268,15 @@ export default function UsageLimitsScratch() {
       </Frame>
       <Frame label="Healthy · Codex">
         <ModelAccessUsage limits={CODEX} now={NOW} />
+      </Frame>
+      <Frame label="Monthly meter · GitHub Copilot">
+        <ModelAccessUsage limits={GITHUB_COPILOT} now={NOW} />
+      </Frame>
+      <Frame label="Counts, not percents · Kimi Code">
+        <ModelAccessUsage limits={KIMI} now={NOW} />
+      </Frame>
+      <Frame label="Single shared period · xAI">
+        <ModelAccessUsage limits={XAI} now={NOW} />
       </Frame>
       <Frame label="Three windows · OpenCode Go">
         <ModelAccessUsage limits={OPENCODE_GO} now={NOW} />

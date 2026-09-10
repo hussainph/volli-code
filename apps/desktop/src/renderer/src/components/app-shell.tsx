@@ -6,6 +6,7 @@ import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-d
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
+import { SessionDetailDialog } from "@renderer/components/sessions/session-detail-dialog";
 import {
   armRevealClock,
   CLOSE_MS,
@@ -27,6 +28,7 @@ import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectRootsSync } from "@renderer/hooks/use-project-roots-sync";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useNotificationTargetReport } from "@renderer/hooks/use-notification-target";
 import { useBootNotice, useCliLaunchNotice } from "@renderer/hooks/use-startup-notices";
 import { useZoomCommands } from "@renderer/hooks/use-zoom-commands";
 import { cn } from "@renderer/lib/utils";
@@ -135,6 +137,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useZoomCommands();
   useBootNotice();
   useCliLaunchNotice();
+  // What this window is showing, reported to main so an alert for a Session or
+  // ticket already in front of the person is not also posted by the OS (VC-295).
+  useNotificationTargetReport();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const pinChoice = useUiStore((state) => state.sidebarPinned);
@@ -618,6 +623,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           fires with no renderer open. */}
       <ArmedRunWindows />
       <NewTicketDialog />
+      {/* Window-level beside the other app-wide dialogs (VC-290): a closed
+          Session's record is reachable from the sidebar and from ⌘K, and both
+          of those outlive whatever page is in front. It opens OVER the current
+          surface and takes nothing over, which is the whole point — reading
+          what a terminal did must not cost you the tab you were in. */}
+      <SessionDetailDialog />
       <HarnessTrustDialog />
       <UpdateInstallDialog />
     </SidebarProvider>

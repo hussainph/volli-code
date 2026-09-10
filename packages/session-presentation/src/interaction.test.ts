@@ -10,8 +10,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askFieldOpen,
   canSubmitInteraction,
-  composerAnswer,
-  composerAnswerPrompt,
+  createSubmissionLatch,
+  describeInteractionSent,
   indexOpenedInteractions,
   readInteractionResolutionMessage,
   describeInteractionResolution,
@@ -45,6 +45,7 @@ import {
   interactionSubmission,
   selectOption,
   setPromptResponse,
+  withdrawLabel,
 } from "./interaction";
 
 const PERMISSION_OPTIONS = [
@@ -888,11 +889,13 @@ describe("receipt", () => {
   });
 
   it("reads back the words a person typed, not only the options they clicked", () => {
-    // The receipt is the whole of what an answer leaves in the transcript, and
-    // the composer is where those words are now typed — so a line naming only
-    // the untyped half reads as a paragraph that went nowhere.
+    // The receipt is the whole of what an answer leaves in the transcript, so a
+    // line naming only the untyped half reads as a paragraph that went nowhere.
     const interaction = question([prompt({ custom: true })]);
-    const typed = composerAnswer(interaction, "cut a patch instead");
+    const typed = interactionSubmission(
+      interaction,
+      setPromptResponse(emptyInteractionDraft(interaction), "prompt:0", "cut a patch instead"),
+    );
     expect(typed).not.toBeNull();
     expect(describeInteractionResolution(interaction, typed!.resolution).trailer).toBe(
       "cut a patch instead",
@@ -1205,75 +1208,182 @@ describe("the box beside an ask-user question's options", () => {
   });
 });
 
-describe("what the composer's own words do while a request is open", () => {
-  it("answers the question where the harness left free text open", () => {
-    // `allowOther` defaults to true and the runtime writes `custom` from it, so
-    // this is the ordinary ask_user question rather than a special case.
-    const asked = question([prompt({ custom: true })]);
-    expect(composerAnswerPrompt(asked)?.id).toBe("prompt:0");
-    expect(composerAnswer(asked, "the release branch")).toEqual({
-      resolution: {
-        optionIds: [],
-        response: "the release branch",
-        answers: [{ promptId: "prompt:0", optionIds: [], response: "the release branch" }],
-      },
-      message: null,
+describe("the one submission latch a question is answered through", () => {
+  it("lets exactly one press through while a delivery is in flight", async () => {
+    // The failure this exists for: `resolving` is React state, so two presses
+    // inside one tick both read it as false and both call the resolver. The
+    // latch is taken synchronously, before the act it guards begins.
+    const latch = createSubmissionLatch();
+    const delivery = Promise.withResolvers<boolean>();
+    const calls: string[] = [];
+
+    const first = latch.run("question:q1", () => {
+      calls.push("send answer");
+      return delivery.promise;
+    });
+    const second = latch.run("question:q1", () => {
+      calls.push("send answer again");
+      return delivery.promise;
+    });
+
+    expect(calls).toEqual(["send answer"]);
+    expect(second).toBeNull();
+    expect(latch.held("question:q1")).toBe(true);
+    delivery.resolve(true);
+    await expect(first).resolves.toBe(true);
+  });
+
+  it("blocks a competing decline or withdrawal until the first act settles", async () => {
+    // Every path is the same latch: the answer, the refusal and the withdrawal
+    // are three ways to end one question, and only the first of them happens.
+    const latch = createSubmissionLatch();
+    const delivery = Promise.withResolvers<boolean>();
+    const calls: string[] = [];
+
+    const answering = latch.run("question:q1", () => {
+      calls.push("answer");
+      return delivery.promise;
+    });
+    expect(
+      latch.run("question:q1", () => {
+        calls.push("decline");
+      }),
+    ).toBeNull();
+    expect(
+      latch.run("question:q1", () => {
+        calls.push("withdraw");
+      }),
+    ).toBeNull();
+    expect(calls).toEqual(["answer"]);
+
+    delivery.resolve(true);
+    await answering;
+    // Landed, so the card is answered and the latch stays held: the harness's
+    // own verdict is what clears it, not a second press.
+    expect(latch.held("question:q1")).toBe(true);
+    expect(
+      latch.run("question:q1", () => {
+        calls.push("decline");
+      }),
+    ).toBeNull();
+  });
+
+  it("releases a delivery that did not land, so the same draft can be retried", async () => {
+    const latch = createSubmissionLatch();
+    const refused = latch.run("question:q1", () => Promise.resolve(false));
+    await expect(refused).resolves.toBe(false);
+    expect(latch.held("question:q1")).toBe(false);
+
+    const threw = latch.run("question:q1", () => Promise.reject(new Error("offline")));
+    await expect(threw).resolves.toBe(false);
+    expect(latch.held("question:q1")).toBe(false);
+
+    // And the retry is an ordinary press again.
+    const retried = latch.run("question:q1", () => Promise.resolve(true));
+    await expect(retried).resolves.toBe(true);
+  });
+
+  it("releases an act that threw before it ever got as far as a promise", async () => {
+    // A handler that throws on the spot decided nothing, so the card must come
+    // back rather than latching shut on a press that never left the renderer.
+    const latch = createSubmissionLatch();
+    await expect(
+      latch.run("question:q1", () => {
+        throw new Error("no resolver");
+      }),
+    ).resolves.toBe(false);
+    expect(latch.held("question:q1")).toBe(false);
+  });
+
+  it("takes an act that reports nothing at its word", async () => {
+    // A caller with no landing to report — the withdrawal the plane fires and
+    // forgets — is not a failure, so the latch stays held rather than
+    // re-opening a card whose request is already going away.
+    const latch = createSubmissionLatch();
+    await expect(latch.run("question:q1", () => undefined)).resolves.toBe(true);
+    expect(latch.held("question:q1")).toBe(true);
+  });
+
+  it("holds one interaction at a time, by its own id", () => {
+    // Several requests can be open at once — a subagent's beside the parent's —
+    // and answering one must not gate the other.
+    const latch = createSubmissionLatch();
+    latch.run("question:q1", () => new Promise<boolean>(() => undefined));
+    expect(latch.held("question:q1")).toBe(true);
+    expect(latch.held("question:q2")).toBe(false);
+    expect(latch.run("question:q2", () => undefined)).not.toBeNull();
+  });
+});
+
+describe("the receipt a question leaves the moment it is answered", () => {
+  it("names what was sent, not merely that something was", () => {
+    // `Sent: Detailed` — the answer read back at the point it was given, so a
+    // card that has gone quiet is a card that says why.
+    const asked = question([prompt()]);
+    const chosen = selectOption({}, prompt(), "question:0:bWFpbg");
+    const receipt = describeInteractionSent(
+      asked,
+      "answered",
+      interactionSubmission(asked, chosen),
+    );
+    expect(receipt).toEqual({ kind: "answered", lead: "Sent", value: "main", line: "Sent: main" });
+  });
+
+  it("reads written words back the same way", () => {
+    const asked = question([prompt({ options: [], custom: true })]);
+    const written = setPromptResponse({}, "prompt:0", "cut a patch instead");
+    expect(
+      describeInteractionSent(asked, "answered", interactionSubmission(asked, written)).line,
+    ).toBe("Sent: cut a patch instead");
+  });
+
+  it("gives a decline and a withdrawal receipts of their own", () => {
+    // Three different ends to one question, and a reader has to be able to tell
+    // which one happened from the card alone.
+    const asked = question([prompt()]);
+    expect(describeInteractionSent(asked, "declined", refusalSubmission(asked, {}))).toEqual({
+      kind: "declined",
+      lead: "Declined to answer",
+      value: null,
+      line: "Declined to answer",
+    });
+    expect(describeInteractionSent(asked, "withdrawn", null)).toEqual({
+      kind: "withdrawn",
+      lead: "Withdrew question",
+      value: null,
+      line: "Withdrew question",
     });
   });
 
-  it("sends exactly what the card's own control would send", () => {
-    // The pin on `composerAnswer` building its submission rather than asking
-    // for one: the two must not be able to drift into two readings of the same
-    // words, one of them landing on the wire and the other in the transcript.
-    const asked = question([prompt({ custom: true })]);
-    const typed = setPromptResponse(emptyInteractionDraft(asked), "prompt:0", "the release branch");
-    expect(composerAnswer(asked, "the release branch")).toEqual(
-      interactionSubmission(asked, typed),
+  it("quotes the words a refusal sent on after it", () => {
+    // A redirection refuses the ask and travels as the next message; the
+    // receipt says so rather than reporting an empty decline.
+    const asked = question([prompt({ custom: false, options: [] })]);
+    const written = setPromptResponse({}, "prompt:0", "none of these — cut a patch");
+    const submission = interactionSubmission(asked, written);
+    expect(describeInteractionSent(asked, "answered", submission).line).toBe(
+      "Sent: none of these — cut a patch",
+    );
+    expect(describeInteractionSent(asked, "declined", refusalSubmission(asked, written)).line).toBe(
+      "Declined to answer: none of these — cut a patch",
     );
   });
 
-  it("chooses nothing on a question that also listed options", () => {
-    // Free text beside options is an answer of its own, not a vote for whatever
-    // happened to be on the card.
-    const asked = question([prompt({ custom: true })]);
-    expect(composerAnswer(asked, "neither — cut a patch")?.resolution.optionIds).toEqual([]);
+  it("names withdrawal for the thing being withdrawn", () => {
+    // One footer serves both cards, and an `ask_user` that declared its own yes
+    // and no is drawn on the verdict one — so the word follows the interaction.
+    expect(withdrawLabel(question([prompt()]))).toBe("Withdraw question");
+    expect(withdrawLabel(permission())).toBe("Withdraw request");
+    expect(withdrawLabel(escalation())).toBe("Withdraw question");
   });
 
-  it("leaves a permission to be pressed rather than typed", () => {
-    // A verdict inferred from prose is a grant nobody gave.
-    expect(composerAnswerPrompt(permission())).toBeNull();
-    expect(composerAnswer(permission(), "go ahead")).toBeNull();
-  });
-
-  it("leaves a sandbox escalation alone too, question though it is", () => {
-    expect(composerAnswerPrompt(escalation())).toBeNull();
-  });
-
-  it("stays a message where the model asked for one of its listed answers", () => {
-    // The reply has no slot for words a prompt without `custom` never declared,
-    // so answering with them would be accepting words an adapter then drops.
-    const closed = question([prompt({ custom: false })]);
-    expect(composerAnswerPrompt(closed)).toBeNull();
-    expect(composerAnswer(closed, "neither")).toBeNull();
-  });
-
-  it("stays a message on a request that asked more than one thing", () => {
-    // The card walks those with a counter; the composer has no position in the
-    // walk, so its words could only be stamped onto a question nobody named.
-    const several = question([
-      prompt({ custom: true }),
-      prompt({ id: "prompt:1", label: "And after that?", custom: true }),
-    ]);
-    expect(composerAnswerPrompt(several)).toBeNull();
-  });
-
-  it("stays a message on a request that declares no questions at all", () => {
-    expect(composerAnswerPrompt(question([]))).toBeNull();
-  });
-
-  it("never answers with nothing, which is what a refusal is", () => {
-    const asked = question([prompt({ custom: true })]);
-    expect(composerAnswer(asked, "   ")).toBeNull();
+  it("says only that it was sent where there is nothing to quote", () => {
+    expect(describeInteractionSent(question([]), "answered", null)).toEqual({
+      kind: "answered",
+      lead: "Sent",
+      value: null,
+      line: "Sent",
+    });
   });
 });
 
@@ -1369,12 +1479,11 @@ describe("the stepped question flow", () => {
     expect(interactionStep(question([prompt()]), {}, 0)?.skippable).toBe(false);
   });
 
-  it("leaves a single choice to the click that makes it", () => {
-    expect(interactionStep(walk(), {}, 0)?.advanceLabel).toBeNull();
-  });
-
-  it("gives several answers a control to move on with", () => {
-    expect(interactionStep(walk(), {}, 2)?.advanceLabel).not.toBeNull();
+  it("always offers a control, because a choice is chosen and never sent", () => {
+    // A single choice used to send on the click that made it, so the step in
+    // view had no control at all. Selecting is selecting: the reader says when
+    // the answer goes, and the control saying so stands on every step.
+    expect(interactionStep(walk(), {}, 0)?.advanceLabel).toBe("Next");
     const middle = question([
       prompt({ id: "prompt:0", multiple: true }),
       prompt({ id: "prompt:1" }),
@@ -1382,27 +1491,31 @@ describe("the stepped question flow", () => {
     expect(interactionStep(middle, {}, 0)?.advanceLabel).toBe("Next");
   });
 
-  it("gives written words a deliberate commit even beside a single choice", () => {
+  it("names the send by its effect at the end of the walk", () => {
+    // One name for the act that ends the question, whatever it is answered
+    // with — a chosen row, several of them, or a paragraph. "Choose", "Answer",
+    // "Submit" and "Send" were four words for one press.
+    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Send answer");
+    expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Send answer");
+    expect(
+      interactionStep(question([prompt({ options: [], custom: true })]), {}, 0)?.advanceLabel,
+    ).toBe("Send answer");
+  });
+
+  it("sends from any step once words have refused the whole request", () => {
+    // A redirection outranks the walk it was going to finish, so the control
+    // stops offering to step past questions its words have already answered.
     const draft = setPromptResponse({}, "prompt:0", "the release branch, actually");
-    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Send");
+    expect(interactionStep(walk(), draft, 0)?.advanceLabel).toBe("Send answer");
     const written = question([
       prompt({ id: "prompt:0", custom: true }),
       prompt({ id: "prompt:1" }),
     ]);
+    // `custom` words travel on the resolution itself, so they refuse nothing
+    // and the walk still has a question left to visit.
     expect(
       interactionStep(written, setPromptResponse({}, "prompt:0", "neither"), 0)?.advanceLabel,
     ).toBe("Next");
-  });
-
-  it("names the act rather than the step at the end of the walk", () => {
-    // The card's own submit vocabulary, not a second one: several questions
-    // have a counter to say what is left, so the control stays neutral; one
-    // question has nothing else that could, so it names what it waits for.
-    expect(interactionStep(walk(), {}, 2)?.advanceLabel).toBe("Submit");
-    expect(interactionStep(question([prompt()]), {}, 0)?.advanceLabel).toBe("Choose");
-    expect(
-      interactionStep(question([prompt({ options: [], custom: true })]), {}, 0)?.advanceLabel,
-    ).toBe("Answer");
   });
 });
 

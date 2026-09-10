@@ -37,6 +37,7 @@
 
 import {
   COMPACTION_REASONS,
+  COMPACTION_WORK_REASONS,
   REASONING_DROP_CAUSES,
   REASONING_LEVELS,
   SESSION_ROLES,
@@ -263,6 +264,18 @@ const codecs = {
     }),
     scrub: (payload) => payload,
   },
+  // The observed process status (VC-290). Product vocabulary, so it crosses to
+  // the renderer whole — unlike the adapter's native reference, which is
+  // scrubbed. `readInteger` rather than a nullable read: an exit fact with no
+  // number is not a weaker fact, it is a fact nobody should have written.
+  "attachment.exited": {
+    decode: (record, context) => ({
+      kind: "attachment.exited",
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      exitCode: readInteger(record.exitCode, `${context}.exitCode`),
+    }),
+    scrub: (payload) => payload,
+  },
   "run.started": {
     decode: (record, context) => ({
       kind: "run.started",
@@ -312,7 +325,10 @@ const codecs = {
     decode: (record, context) => ({
       kind: "context.compacted",
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-      reason: enumValue(record.reason, COMPACTION_REASONS, `${context}.reason`),
+      // The narrower list: a compaction that HAPPENED cannot have happened
+      // because a checkpoint could not be read, so a stored event claiming so
+      // is read as loudly as any other malformed field.
+      reason: enumValue(record.reason, COMPACTION_WORK_REASONS, `${context}.reason`),
       entryId: readString(record.entryId, `${context}.entryId`),
       tokensBefore: readInteger(record.tokensBefore, `${context}.tokensBefore`),
       tokensAfter: readInteger(record.tokensAfter, `${context}.tokensAfter`),
@@ -490,11 +506,56 @@ export interface RendererSessionNativeReference {
  * field there before something displays it invites a client to depend on a shape
  * that has never been designed. VC-44 makes the Snapshot durable; showing it is
  * a later, deliberate act.
+ *
+ * VC-285 is that act, and it does NOT undo this line. What a surface needed was
+ * the answer to one question — what is the live attachment governed by — and
+ * that answer is {@link RendererSessionAuthority}, derived by
+ * {@link scrubSessionAuthority} and carried on the projection. The attachment
+ * shape stays as it is: an event stream that suddenly carried policy on every
+ * `attachment.opened` would publish the Snapshot's remainder (the frozen tool
+ * surface, the classifier, the tree it runs in) to buy one chip.
  */
 export type RendererSessionAttachment = Omit<
   SessionAttachment,
   "adapterId" | "native" | "authority"
 >;
+
+/**
+ * What the live attachment was pinned to, as much of it as a surface may say.
+ *
+ * THREE FIELDS, and each one is here because the chip cannot be truthful
+ * without it:
+ *
+ *  - `attachmentId`, because the pinned unit is an attachment and not a Session.
+ *    One Session can hold two attachments that opened under different policies,
+ *    and a summary that named only the Session could not say which one this is.
+ *  - `enforcement`, because that is the outcome: `observe` saved this
+ *    attachment's policy and allowed every call, `enforce` installed the gate.
+ *  - `rulePackId` / `rulePackHash`, because a Snapshot has no policy version
+ *    field and the pack's hash is the only version there is. A denial read back
+ *    after the pack moved is only interpretable against the pack that produced
+ *    it.
+ *
+ * `snapshot: null` is a REAL answer and the reason this is not three nullable
+ * fields: an attachment that opened under `enforcement: "off"` was handed no
+ * Snapshot, and neither was any attachment written before VC-44. The two are
+ * deliberately indistinguishable in durable history, so the null carries both
+ * and a reader is told the truth — runtime defaults — instead of being invited
+ * to guess today's project setting.
+ *
+ * What is NOT here is the rest of the Snapshot: `tools`, `classifierModel`,
+ * `fallback`, `location`, `judgmentMode`, and the internal `mode: "auto"`. None
+ * of them is the user-facing outcome, and a wider shape would be a second
+ * contract to keep rather than one fact to render.
+ */
+export interface RendererSessionAuthority {
+  attachmentId: string;
+  snapshot: {
+    enforcement: AuthoritySnapshot["enforcement"];
+    rulePackId: string;
+    rulePackHash: string;
+  } | null;
+}
 
 export type RendererSessionAttachmentFailure = Omit<SessionAttachmentFailure, "diagnostic"> & {
   diagnostic: null;
@@ -584,6 +645,39 @@ export function scrubSessionAttachment(attachment: SessionAttachment): RendererS
     ...presentation
   } = attachment;
   return presentation;
+}
+
+/**
+ * The live attachment's pinned policy, reduced to what a surface may show.
+ *
+ * Takes the ATTACHMENT rather than the Snapshot, and takes `null` for "nothing
+ * is attached", because those are two different absences a chip has to tell
+ * apart: no live attachment means there is nothing to say at all, while a live
+ * attachment holding no Snapshot means this Session is genuinely running at the
+ * runtime's own defaults. Collapsing them would draw "runtime defaults" over a
+ * Session that has not attached yet.
+ *
+ * It reads nothing but the attachment it is handed. A summary that fell back to
+ * the project's CURRENT policy would be the exact lie this ticket exists to
+ * remove: policy is pinned when an attachment opens, and an edit made since
+ * then reaches the next attachment, not this one.
+ */
+export function scrubSessionAuthority(
+  attachment: SessionAttachment | null,
+): RendererSessionAuthority | null {
+  if (attachment === null) return null;
+  const snapshot = attachment.authority;
+  return {
+    attachmentId: attachment.id,
+    snapshot:
+      snapshot === null
+        ? null
+        : {
+            enforcement: snapshot.enforcement,
+            rulePackId: snapshot.rulePackId,
+            rulePackHash: snapshot.rulePackHash,
+          },
+  };
 }
 
 export function scrubSessionAttachmentFailure(
@@ -794,6 +888,17 @@ export interface SessionPresentationProjection extends Pick<
   attention: RendererSessionAttentionProjection;
   interactions: RendererSessionInteractionProjection;
   liveExecutor: { id: string } | null;
+  /**
+   * What the live attachment is governed by (VC-285), or `null` while nothing
+   * is attached.
+   *
+   * Beside `liveExecutor` rather than inside it, because the two answer
+   * different questions and one of them is derived: `liveExecutor` is the
+   * attachment's identity, this is the durable policy that attachment opened
+   * under. Both are read from the same attachment, so they cannot disagree
+   * about which one is live.
+   */
+  authority: RendererSessionAuthority | null;
 }
 
 /**

@@ -59,6 +59,7 @@ function openAttachment(
     native: null,
     authority: null,
     status: "open",
+    exitCode: null,
     openedAt: 1,
     closedAt: null,
     outcome: null,
@@ -495,7 +496,7 @@ describe("sendSessionMessageOperation", () => {
     // has returned a durable accepted receipt.
     expect(settled).toBe(false);
 
-    delivery.resolve({ receipt: { status: "accepted" } });
+    delivery.resolve({ receipt: { status: "accepted" }, delivery: "steer" });
     const outcome = await sending;
 
     expect(outcome).toMatchObject({ handle: TARGET.slice(0, 8), midTurn: true });
@@ -572,6 +573,60 @@ describe("sendSessionMessageOperation", () => {
       "non-empty",
     );
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it("settles on the turn opening and reports that a new turn was opened", async () => {
+    const command = vi.fn(async () => ({
+      receipt: { status: "accepted" },
+      delivery: "prompt" as const,
+      turnOpened: true,
+    }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    const outcome = await sendSessionMessageOperation(p, sendInput());
+
+    expect(outcome).toMatchObject({ midTurn: false, turnOpened: true });
+    expect(command).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ delivery: "steer", settle: "opened" }),
+      }),
+    );
+  });
+
+  it("reports the runtime's mid-turn delivery even when the earlier projection was idle", async () => {
+    const command = vi.fn(async () => ({
+      receipt: { status: "accepted" },
+      delivery: "steer" as const,
+    }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
+      midTurn: true,
+      turnOpened: false,
+    });
+  });
+
+  it("treats a queued delivery as joining work already in flight", async () => {
+    const command = vi.fn(async () => ({
+      receipt: { status: "accepted" },
+      delivery: "queue" as const,
+    }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
+      midTurn: true,
+      turnOpened: false,
+    });
+  });
+
+  it("reports an unknown landing when the runtime did not answer the question", async () => {
+    const command = vi.fn(async () => ({ receipt: { status: "accepted" } }));
+    const { ports: p } = ports([projection({ attachments: [openAttachment()] })], { command });
+
+    await expect(sendSessionMessageOperation(p, sendInput())).resolves.toMatchObject({
+      midTurn: null,
+      turnOpened: false,
+    });
   });
 
   it("is a SuperviseSessionError for every refusal, so the door can word it", async () => {

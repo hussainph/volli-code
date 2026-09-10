@@ -17,6 +17,7 @@
  * `TMPDIR`, `LANG`, the `XDG_*` roots, `PATH`, and every credential — survives
  * untouched. This drops names; it never adds or rewrites one.
  */
+import { VOLLI_CONCURRENCY_HINT_ENV } from "../concurrency-budget";
 import {
   VOLLI_ARTIFACTS_DIR_ENV,
   VOLLI_PROJECT_DIR_ENV,
@@ -44,6 +45,13 @@ import type { HarnessAdapter } from "./types";
  * prove itself to be the outer Volli's Session — the exact cross-session
  * confusion the token was minted to defeat, arriving through the one channel
  * the token cannot inspect. A fresh attachment mints its own or has none.
+ *
+ * `VOLLI_CONCURRENCY_HINT` is here because it is an answer about THIS machine
+ * at THIS moment (VC-339): the outer Volli divided its cores by the Sessions
+ * IT had working, and that number is stale the instant this app computes its
+ * own. Dropping it is also what keeps the no-clobber rule honest — the budget
+ * is only ever skipped for a value a person set, never for one Volli itself
+ * exported a launch ago.
  */
 const VOLLI_SESSION_CONTRACT: readonly string[] = [
   VOLLI_SESSION_ENV,
@@ -53,6 +61,7 @@ const VOLLI_SESSION_CONTRACT: readonly string[] = [
   VOLLI_ARTIFACTS_DIR_ENV,
   VOLLI_PROJECT_DIR_ENV,
   VOLLI_BIN_DIR_ENV,
+  VOLLI_CONCURRENCY_HINT_ENV,
 ];
 
 /**

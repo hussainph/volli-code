@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  mergeSessionUsageSummaries,
   summarizeSessionUsage,
   type SessionUsage,
 } from "./session-usage";
@@ -139,5 +140,121 @@ describe("summarizeSessionUsage", () => {
     ]);
     expect(summary.requestCount).toBe(3);
     expect(summary.knownCostUsd).toBe(7);
+  });
+});
+
+describe("mergeSessionUsageSummaries", () => {
+  it("reports nothing measured for nothing merged", () => {
+    expect(mergeSessionUsageSummaries([])).toEqual(EMPTY_SESSION_USAGE_SUMMARY);
+  });
+
+  it("says exactly what summarizing the same operations in one pass says", () => {
+    // The property that makes the fold safe: a caller may summarize per Session
+    // and add the summaries, or summarize the lot, and must not get two
+    // different reports of one Ticket's spend.
+    const operations = [
+      measured({ costUsd: 0.1, inputTokens: 10, cacheReadTokens: 90, outputTokens: 5 }),
+      measured({ costUsd: 0.2, inputTokens: 20, cacheReadTokens: 80, outputTokens: 7 }),
+      measured({ costUsd: null, inputTokens: 5, cacheReadTokens: 0, outputTokens: 1 }),
+    ];
+    expect(
+      mergeSessionUsageSummaries([
+        summarizeSessionUsage(operations.slice(0, 1)),
+        summarizeSessionUsage(operations.slice(1)),
+      ]),
+    ).toEqual(summarizeSessionUsage(operations));
+  });
+
+  it("adds money at the same precision, so a fold prints no float noise", () => {
+    expect(
+      mergeSessionUsageSummaries([
+        summarizeSessionUsage([measured({ costUsd: 0.1 })]),
+        summarizeSessionUsage([measured({ costUsd: 0.2 })]),
+      ]).knownCostUsd,
+    ).toBe(0.3);
+  });
+
+  it("keeps an unmeasured Session unmeasured rather than free", () => {
+    const merged = mergeSessionUsageSummaries([
+      EMPTY_SESSION_USAGE_SUMMARY,
+      EMPTY_SESSION_USAGE_SUMMARY,
+    ]);
+    expect(merged.knownCostUsd).toBeNull();
+    expect(merged.costCoverage).toBe("unavailable");
+    expect(merged.costBasis).toBe("unavailable");
+  });
+
+  it("lets an unpriced Session cast no basis vote", () => {
+    // Otherwise every parent that ever delegated to a Session Volli could not
+    // price would report `mixed`, and `mixed` is what stops a surface printing
+    // an exact figure.
+    expect(
+      mergeSessionUsageSummaries([
+        summarizeSessionUsage([measured({ costUsd: 1, costBasis: "provider-reported" })]),
+        EMPTY_SESSION_USAGE_SUMMARY,
+      ]).costBasis,
+    ).toBe("provider-reported");
+  });
+
+  it("reports two bases as mixed, whichever side carried which", () => {
+    const provider = summarizeSessionUsage([
+      measured({ costUsd: 1, costBasis: "provider-reported" }),
+    ]);
+    const catalog = summarizeSessionUsage([
+      measured({ costUsd: 2, costBasis: "catalog-estimate" }),
+    ]);
+    expect(mergeSessionUsageSummaries([provider, catalog]).costBasis).toBe("mixed");
+    expect(mergeSessionUsageSummaries([catalog, provider]).costBasis).toBe("mixed");
+  });
+
+  it("carries a side that was already mixed through the fold", () => {
+    const mixed = summarizeSessionUsage([
+      measured({ costUsd: 1, costBasis: "provider-reported" }),
+      measured({ costUsd: 2, costBasis: "catalog-estimate" }),
+    ]);
+    expect(mixed.costBasis).toBe("mixed");
+    expect(
+      mergeSessionUsageSummaries([mixed, summarizeSessionUsage([measured({ costUsd: 3 })])])
+        .costBasis,
+    ).toBe("mixed");
+  });
+
+  it("turns a complete side partial once an unpriced request joins it", () => {
+    expect(
+      mergeSessionUsageSummaries([
+        summarizeSessionUsage([measured({ costUsd: 1 })]),
+        summarizeSessionUsage([measured({ costUsd: null })]),
+      ]).costCoverage,
+    ).toBe("partial");
+  });
+
+  it("re-measures the cached share over the merged prompt rather than averaging two", () => {
+    // The two sides sit at 0.9 and 0 on their own; the honest answer for the
+    // pair is neither of those and is not their mean.
+    const merged = mergeSessionUsageSummaries([
+      summarizeSessionUsage([
+        measured({ inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 0 }),
+      ]),
+      summarizeSessionUsage([
+        measured({ inputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+      ]),
+    ]);
+    expect(merged.cachedInputShare).toBe(0.45);
+  });
+
+  it("has no cached share when neither side reported a prompt token", () => {
+    expect(
+      mergeSessionUsageSummaries([EMPTY_SESSION_USAGE_SUMMARY, EMPTY_SESSION_USAGE_SUMMARY])
+        .cachedInputShare,
+    ).toBeNull();
+  });
+
+  it("does not care what order the rows arrive in", () => {
+    const one = summarizeSessionUsage([measured({ costUsd: 1, inputTokens: 3 })]);
+    const two = summarizeSessionUsage([measured({ costUsd: null, inputTokens: 4 })]);
+    const three = summarizeSessionUsage([measured({ costUsd: 2, inputTokens: 5 })]);
+    expect(mergeSessionUsageSummaries([one, two, three])).toEqual(
+      mergeSessionUsageSummaries([three, two, one]),
+    );
   });
 });

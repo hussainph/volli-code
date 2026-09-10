@@ -61,6 +61,15 @@ export interface AgentShellPortOptions {
   identity: PiSessionEnvIdentity;
   /** The PATH prefixes the `execute` tool's environment gets; the same list. */
   pathPrefixes: readonly string[];
+  /**
+   * This Session's concurrency budget (VC-339), asked for at each start rather
+   * than captured here: a background shell is the long-running heavy thing on
+   * the machine — a test run, a watch build — so the number it self-limits by
+   * should be the one that was true when it started, not when the Session
+   * attached. Omitted by a caller that has no budget to state, which leaves
+   * every toolchain on its own default.
+   */
+  concurrencyEnv?: () => Promise<Record<string, string>>;
 }
 
 export function createAgentShellPort(options: AgentShellPortOptions): AgentShellPort {
@@ -97,6 +106,7 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
       const env = sessionCommandEnvironment(process.env, {
         identity: options.identity,
         pathPrefixes: options.pathPrefixes,
+        environment: (await options.concurrencyEnv?.()) ?? {},
       });
       const started = await options.host.start(owner, {
         command: input.command,

@@ -23,6 +23,8 @@ docs/ROADMAP.md
 .claude/scheduled_tasks.lock
 vite.config.ts.timestamp-*.mjs
 volli.db*
+# The chat-window bench's built page (VC-338) — rebuilt by its runner on demand.
+apps/desktop/e2e/bench/**/dist/
 
 # VC-291 investigation evidence (screenshots, OCR sidecars, matrix JSON)
 /evidence/

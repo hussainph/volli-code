@@ -5,7 +5,7 @@ import type {
   SessionEvent,
   SessionLedgerIds,
 } from "@volli/shared";
-import { sessionPersonNeed } from "@volli/shared";
+import { nativeObservationEventId, sessionPersonNeed } from "@volli/shared";
 import type { UIMessage } from "ai";
 import {
   createInMemorySessionLedger,
@@ -2586,13 +2586,13 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   /**
-   * The durable id, composed end to end and spelled out.
+   * The durable id, composed end to end from all four stable inputs.
    *
    * Every relaunch re-derives these from live data and the ledger dedupes them
    * by exact string match on a primary key, so a changed derivation does not
    * fail — it writes a second copy of every fact in the Session's history. The
-   * dedupe case below proves the derivation is *stable*; this one is what makes
-   * a change to it loud.
+   * dedicated id suite pins the compact hash bytes; this assertion proves the
+   * runtime actually uses that shared derivation.
    */
   it("composes a durable observation id from the adapter, the Session, and the attachment", async () => {
     const { runtime, adapter } = composition();
@@ -2605,7 +2605,7 @@ describe("SessionRuntime native adapter contract", () => {
       ({ event }) => event.payload.kind === "turn.started",
     );
     expect(started?.event.id).toBe(
-      `native-event:fake:${sessionId}:${attachmentId}:fake:turn:turn-1:started`,
+      nativeObservationEventId("fake", sessionId, attachmentId, "fake:turn:turn-1:started"),
     );
   });
 
@@ -2958,6 +2958,50 @@ describe("SessionRuntime native adapter contract", () => {
         }),
       ]),
     );
+  });
+
+  it("carries a settle mode to the adapter and answers which turn the delivery landed in", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    const plain = await runtime.command({
+      commandId: "settle-default",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("default-settle") },
+    });
+    expect(adapter.commands.at(-1)).not.toHaveProperty("settle");
+    expect(plain).not.toHaveProperty("turnOpened");
+
+    adapter.dispatchReceipt = {
+      commandId: "settle-opened",
+      status: "accepted",
+      acceptedAt: 200,
+      native: null,
+      delivery: "prompt",
+      turnOpened: true,
+    };
+    const opened = await runtime.command({
+      commandId: "settle-opened",
+      sessionId,
+      command: {
+        kind: "message.submit",
+        message: userMessage("opened-settle"),
+        delivery: "steer",
+        settle: "opened",
+      },
+    });
+
+    expect(adapter.commands.at(-1)).toMatchObject({
+      kind: "message.submit",
+      delivery: "steer",
+      settle: "opened",
+    });
+    expect(opened).toMatchObject({ delivery: "prompt", turnOpened: true });
+    // The durable Receipt still says only that the runtime accepted the
+    // Command; how the delivery landed is transport detail (VC-324).
+    expect(opened.receipt).toMatchObject({ status: "accepted" });
+    expect(opened.receipt).not.toHaveProperty("delivery");
+    expect(opened.receipt).not.toHaveProperty("turnOpened");
   });
 
   it("returns previously recorded receipts and rejects commands with no live route", async () => {

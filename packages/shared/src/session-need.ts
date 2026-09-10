@@ -61,9 +61,11 @@
 
 import {
   sessionAwaitsUser,
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
   type SessionAttentionKind,
   type SessionProjection,
 } from "./session-ledger";
+import { NO_SESSION_NOTIFICATION_ITEM, type SessionNotificationItem } from "./notification-catalog";
 
 /**
  * The Attention kinds that mean the Session's own plumbing failed — VC-112's
@@ -136,4 +138,134 @@ export function sessionPersonNeed(
   );
   if (failing) return "error";
   return sessionAwaitsUser(projection) ? "waiting" : null;
+}
+
+/**
+ * WHICH thing in a Session needs the person right now (VC-295).
+ *
+ * ── ONE DERIVATION, THREE READERS ─────────────────────────────────────────
+ * A notification names the item it is about so a click can land on it; a window
+ * reports the item it is showing so an alert about that exact item is not
+ * shouted twice; and the chat plane draws that item. All three have to agree,
+ * or a click opens a Session and selects nothing while the window claims it was
+ * already showing the thing.
+ *
+ * ── SO THE RULE IS THE SURFACE'S RULE ─────────────────────────────────────
+ * Round 3's correction. This used to scan for the first qualifying attention,
+ * while the blocker row draws `attention.primary` — which the ledger defines as
+ * the NEWEST active attention. With two live attentions the two disagreed, and
+ * both failures follow from that: a deep link to a card nothing draws, and a
+ * window reporting an attention nobody can see as "already visible", which
+ * suppressed the alert for it.
+ *
+ * So the order below is the order the plane resolves in:
+ *
+ *  1. **A stopped Session names nothing.** Its work was ended on purpose.
+ *  2. **The primary attention, when it is a failure** — `sessionBlocker`'s
+ *     third source, and the one it never lets a card hide.
+ *  3. **Otherwise the open question**, because an open card takes the place of
+ *     the `input_required` / `permission_required` row it is the answer to.
+ *  4. **Otherwise the primary attention, when a person is what it is blocked
+ *     on** — the same row, with no card in front of it.
+ *  5. **Otherwise nothing.** Including the case where a newer attention nobody
+ *     can act on (a rate limit, a retry) has covered an older failure: that
+ *     failure is not on screen anywhere, so naming it would send a click to a
+ *     card the app is not drawing. The alert still fires — `sessionPersonNeed`
+ *     still answers `error` — it simply opens the Session and no more.
+ *
+ * ── THE SHAPE IT ASKS FOR ─────────────────────────────────────────────────
+ * Structural, and deliberately narrower than a whole `SessionProjection`: main
+ * hands it the durable projection, while a window hands it the renderer's
+ * presentation projection, which carries no `stopped` at all. Absent reads the
+ * same as `null` — a shape that cannot express a stop is a shape that never
+ * reports one, and the two callers must not answer differently about the same
+ * Session merely because they hold different views of it. `primary` is READ
+ * rather than recomputed, so this cannot drift from the fold that produced it.
+ */
+/**
+ * The Attention a notification click asked to be shown, while it is still live
+ * (VC-295 round 4).
+ *
+ * THE one answer to "which Attention is that row drawing", asked by the chat
+ * plane's blocker and by the window reporting what it shows. Two derivations of
+ * it is precisely how round 3 shipped a row displaying one problem while the
+ * window told main a different one was visible — which suppressed the alert for
+ * the problem that was NOT on screen.
+ *
+ * `null` for "no click named one" and for "the one it named has cleared" alike:
+ * both mean the caller falls back to what it would have drawn anyway.
+ */
+export function revealedSessionAttention<T extends { id: string }>(
+  active: readonly T[],
+  revealedAttentionId: string | null,
+): T | null {
+  if (revealedAttentionId === null) return null;
+  return active.find((attention) => attention.id === revealedAttentionId) ?? null;
+}
+
+/**
+ * What a Session is showing right now, given the item a click asked it to show.
+ *
+ * {@link sessionNotificationItem} answers for the resting case — the row draws
+ * `primary`, the foot draws the first open question. This wraps it with the
+ * one override the plane has: a click can ask for an older live Attention, or
+ * for a question other than the first, and while that stands, that is what is
+ * on screen.
+ *
+ * The override never changes WHICH KIND of item is showing, only which one of
+ * that kind. With a card open the blocker stands down for the kind the card
+ * answers, so a revealed Attention changes nothing there; and a revealed
+ * question does not displace a failure row, because the row is drawn above the
+ * card either way. Each override applies only while its item is still live —
+ * one that has cleared falls back to what the plane would draw anyway (round 5
+ * extended this from Attentions to questions).
+ */
+export function shownSessionNotificationItem(
+  projection: {
+    interactions: { active: readonly { id: string }[] };
+    attention: {
+      active: readonly { id: string; kind: SessionAttentionKind }[];
+      primary: { id: string; kind: SessionAttentionKind } | null;
+    };
+    stopped?: SessionProjection["stopped"];
+  },
+  revealed: SessionNotificationItem | null,
+): SessionNotificationItem {
+  const base = sessionNotificationItem(projection);
+  if (revealed === null) return base;
+  if (base.attentionId !== null) {
+    const attention = revealedSessionAttention(projection.attention.active, revealed.attentionId);
+    return attention === null ? base : { interactionId: null, attentionId: attention.id };
+  }
+  if (base.interactionId !== null && revealed.interactionId !== null) {
+    const question = projection.interactions.active.find(({ id }) => id === revealed.interactionId);
+    return question === undefined ? base : { interactionId: question.id, attentionId: null };
+  }
+  return base;
+}
+
+export function sessionNotificationItem(projection: {
+  interactions: { active: readonly { id: string }[] };
+  attention: {
+    active: readonly { id: string; kind: SessionAttentionKind }[];
+    primary: { id: string; kind: SessionAttentionKind } | null;
+  };
+  stopped?: SessionProjection["stopped"];
+}): SessionNotificationItem {
+  if (projection.stopped != null) return NO_SESSION_NOTIFICATION_ITEM;
+  const primary = projection.attention.primary;
+  const isFailure =
+    primary !== null &&
+    (SESSION_FAILURE_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(primary.kind);
+  if (primary !== null && isFailure) return { interactionId: null, attentionId: primary.id };
+  const question = projection.interactions.active[0];
+  if (question !== undefined) return { interactionId: question.id, attentionId: null };
+  const asking =
+    primary !== null &&
+    (SESSION_USER_BLOCKING_ATTENTION_KINDS as readonly SessionAttentionKind[]).includes(
+      primary.kind,
+    );
+  return asking && primary !== null
+    ? { interactionId: null, attentionId: primary.id }
+    : NO_SESSION_NOTIFICATION_ITEM;
 }
