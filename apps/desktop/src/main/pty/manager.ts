@@ -29,12 +29,16 @@ import type {
   TerminalExitEvent,
   TerminalIoResult,
   TerminalParkStateEvent,
+  SpawnLedgerPort,
 } from "@volli/shared";
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
+import { listProjects } from "../db/projects-repo";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
+import { readSessionConcurrencyEnv } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
+import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
 import { ensureProjectArtifactsDir } from "../volli-fs";
 import {
@@ -241,6 +245,10 @@ export class PtyManager {
    *                   (never used in production; `registerTerminalIpcHandlers`
    *                   always resolves the real path) so existing tests/callers
    *                   that never seed attachments need not pass it.
+   * @param spawnLedger where each spawned shell is recorded so a sweep after a
+   *                   crash can still say whose process it is (VC-341).
+   *                   Defaults to the ledger that remembers nothing, which is
+   *                   what every test that is not about the ledger wants.
    */
   constructor(
     private readonly db: Database.Database | null,
@@ -250,6 +258,7 @@ export class PtyManager {
     private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
     private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
+    private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
     // The controller shares this manager's live session map and mutates each
@@ -330,6 +339,33 @@ export class PtyManager {
    */
   private loadNodePty(): Promise<NodePty> {
     return import("node-pty") as unknown as Promise<NodePty>;
+  }
+
+  /**
+   * This session's concurrency budget as environment variables (VC-339), or
+   * nothing at all when the fleet cannot be counted — an unbudgeted terminal
+   * is a busier machine, a terminal that failed to open is a person unable to
+   * work, and the rules live in `session-concurrency.ts` where they are tested
+   * against a stated environment.
+   *
+   * Every project's Sessions, because load is a fact about the machine: a
+   * build in another project's Session competes for the same cores. This is
+   * the same read `volli session list` makes.
+   */
+  private async sessionConcurrencyEnv(
+    sessionId: string,
+    inheritedEnv: Readonly<Record<string, string | undefined>>,
+  ): Promise<Record<string, string>> {
+    const db = this.db;
+    const sessionEngine = this.sessionEngine;
+    if (db === null || sessionEngine === null) return {};
+    return readSessionConcurrencyEnv(
+      {
+        listProjectIds: () => listProjects(db).map((project) => project.id),
+        listSessions: (projectId) => sessionEngine.listSessions({ projectId, scope: "all" }),
+      },
+      { excludeSessionId: sessionId, environment: inheritedEnv },
+    );
   }
 
   async create(
@@ -607,6 +643,20 @@ export class PtyManager {
             },
           )
         : scope.env;
+      // What this session inherits from the user's own environment, resolved
+      // before the spawn because the concurrency budget below has to consult
+      // it: a variable the user set is never overwritten.
+      const inheritedEnv = scrubInheritedSessionEnv(
+        process.env,
+        this.agentRuntime?.adapters ?? harnessAdapters,
+      );
+      // This session's share of the machine (VC-339). Every heavy toolchain
+      // defaults its parallelism to the core count and assumes it is alone;
+      // here it is one of however many Sessions are working, so the budget
+      // goes into the variables those toolchains already read. Computed at
+      // start, from the same listing `volli session list` reads, and never
+      // over a name the user's environment already carries.
+      const concurrencyEnv = await this.sessionConcurrencyEnv(sessionId, inheritedEnv);
       const pty = nodePty.spawn(file, args, {
         name: "xterm-256color",
         cwd,
@@ -626,15 +676,36 @@ export class PtyManager {
         // falling back to the built-ins for the same reason {@link adapterFor}
         // does: a session can be created before the harness runtime regenerates.
         env: {
-          ...scrubInheritedSessionEnv(process.env, this.agentRuntime?.adapters ?? harnessAdapters),
+          ...inheritedEnv,
           TERM: "xterm-256color",
+          // Under the agent contract, over nothing: every name here was absent
+          // from the inherited environment by construction.
+          ...concurrencyEnv,
           ...sessionEnv,
         },
+      });
+      // The spawn ledger row (VC-341). A terminal's shell is the process most
+      // likely to still be holding a worktree hours after everyone forgot about
+      // it, and node-pty gives us the pid: the shell leads its own session, so
+      // its pid is also the group a reap would signal. Written before the
+      // window race below, because a row for a shell that is about to be killed
+      // is harmless (the kill marks it exited) while a missing row is not.
+      const ledgerId = this.spawnLedger.recordSpawn({
+        sessionId,
+        ticketId: scope.ticketId,
+        projectId: scope.projectId,
+        kind: "terminal",
+        pid: pty.pid,
+        pgid: pty.pid,
+        startedAt: now,
+        cwd,
+        command: file,
       });
       // Same race, other side of the spawn: never register against a window
       // whose `destroyed` event already fired.
       if (webContents.isDestroyed()) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         await recordAttachmentFailure(
           new Error("Window was closed before the terminal could start"),
           cwd,
@@ -664,6 +735,7 @@ export class PtyManager {
         });
       } catch (error) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         await recordAttachmentFailure(error, cwd);
         return { ok: false, error: errorMessage(error) };
       }
@@ -791,6 +863,10 @@ export class PtyManager {
         // Flush buffered output first so the renderer never sees the exit
         // event ahead of the shell's final bytes.
         session.output.flush();
+        // The one exit the ledger can observe. A shell this app never sees die
+        // — because the app itself was killed — leaves the row open, which is
+        // exactly the state the orphan sweep reads.
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         // A shell dying with the setup run still armed means the sentinel never
         // printed — the subshell wrapper contains a setup's own `exit`, but a
         // crash or an `exec` can still take the shell down. Without this the
@@ -821,6 +897,7 @@ export class PtyManager {
       const record = projection === null ? null : terminalSessionRecord(projection);
       if (record === null) {
         pty.kill();
+        if (ledgerId !== null) this.spawnLedger.markExited(ledgerId);
         return { ok: false, error: "Session was not found after terminal attachment opened" };
       }
       return { ok: true, sessionId, session: record };

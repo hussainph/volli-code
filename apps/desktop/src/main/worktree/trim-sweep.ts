@@ -38,7 +38,7 @@
 import type { WorktreeTrimScanEntry, WorktreeTrimSweepReport } from "../../ipc/contract";
 
 import { listProjects } from "../db/projects-repo";
-import { listWorktreePathOwners } from "../db/tickets-repo";
+import { listWorktreeRefs } from "../db/tickets-repo";
 import { isOwnedWorktreeLeaf, ownedContainers } from "./containers";
 import { parseWorktreeList, runGitCapturingAsync } from "./git";
 import { homeDir } from "./home";
@@ -78,8 +78,11 @@ function ownedWorktrees(deps: TrimSweepDeps): OwnedWorktree[] {
       container,
     ]),
   );
+  // VC-341's own path→Ticket read, rather than a second query saying the same
+  // thing: it lands after this branch was written and answers exactly the
+  // question here (git reports directories; the table names tickets).
   const ticketByPath = new Map(
-    listWorktreePathOwners(db).map((owner) => [canonicalize(owner.worktreePath), owner.ticketId]),
+    listWorktreeRefs(db).map((ref) => [canonicalize(ref.path), ref.ticketId]),
   );
 
   const found: OwnedWorktree[] = [];

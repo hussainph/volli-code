@@ -75,6 +75,10 @@ export interface NotificationProducerTargets {
   "harness-input-needed": SessionNotificationTarget;
   "pull-request-merged": TicketNotificationTarget;
   "worktree-reclaimed": TicketNotificationTarget;
+  // No target: one reap can take processes from several Tickets at once, and
+  // an alert that opened whichever one happened to be first would spend the
+  // interruption taking a person somewhere arbitrary.
+  "orphan-processes-reaped": null;
   "worktree-record-failed": TicketNotificationTarget;
   "ticket-moved-to-doing": TicketNotificationTarget;
   "update-ready": UpdateNotificationTarget;

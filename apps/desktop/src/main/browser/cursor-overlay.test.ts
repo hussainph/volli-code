@@ -438,7 +438,13 @@ describe("createCursorOverlay", () => {
     h.host.hold("tab-a", { kind: "person" });
     h.host.emit({ kind: "released", tabId: "tab-a", holder: A, why: "takeover" });
     expect(h.pushed.at(-1)).toMatchObject({ present: false, handoff: true });
-    h.host.emit({ kind: "person-took", tabId: "tab-a", displaced: A });
+    h.host.emit({
+      kind: "person-took",
+      tabId: "tab-a",
+      tabTitle: "",
+      tabHostname: "",
+      displaced: A,
+    });
     await vi.advanceTimersByTimeAsync(300);
     expect(h.attached()).toBe(false);
   });
@@ -448,7 +454,7 @@ describe("createCursorOverlay", () => {
     h.host.emit({ kind: "taken", tabId: "tab-a", holder: A });
     h.host.emit({ kind: "released", tabId: "tab-a", holder: A, why: "closed" });
     h.host.emit({ kind: "person-handed-back", tabId: "tab-a" });
-    h.host.emit({ kind: "ask-to-leave", tabId: "tab-a", holder: A });
+    h.host.emit({ kind: "ask-to-leave", tabId: "tab-a", tabTitle: "", tabHostname: "", holder: A });
     expect(h.pushed).toHaveLength(0);
     expect(h.attached()).toBe(false);
   });

@@ -1,0 +1,13 @@
+/**
+ * The bench's stylesheet: the app's real one, plus this folder registered as a
+ * Tailwind source — `lab.css`'s argument, for the same reason. Tailwind v4
+ * detects sources relative to the stylesheet that imports it, and `globals.css`
+ * lives in `src/renderer/src/`, so nothing under `e2e/` is scanned without this.
+ *
+ * A bench that lies about layout measures nothing: the transcript's height per
+ * row is the input to every number here, and an absent `pb-[calc(...)]` or
+ * `min-h-0` changes it.
+ */
+@import "../../../src/renderer/src/globals.css";
+@source "./";
+@source "../../../node_modules/streamdown/dist/*.js";

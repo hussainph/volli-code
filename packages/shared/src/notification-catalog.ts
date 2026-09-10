@@ -65,6 +65,8 @@ export const NOTIFICATION_PRODUCERS = [
   "pull-request-merged",
   /** The retention watch reclaimed a stale worktree directory (VC-113). */
   "worktree-reclaimed",
+  /** The automatic sweep reaped processes no live Session owned (VC-341). */
+  "orphan-processes-reaped",
   /** A downloaded update is staged and installs on quit (VC-24, VC-59). */
   "update-ready",
   /** A ticket entered Doing over the agent socket rather than at the keyboard. */
@@ -114,6 +116,11 @@ export const NOTIFICATION_PRODUCER_POLICY: Record<NotificationProducer, Notifica
   "harness-input-needed": { kind: "preference", event: "needs-you" },
   "pull-request-merged": { kind: "preference", event: "finished" },
   "worktree-reclaimed": { kind: "preference", event: "swept" },
+  // Same switch as the worktree reclaim, and the same act one layer down:
+  // unattended maintenance taking back a resource nobody is using. A person who
+  // does not want to hear about a folder being reclaimed does not want to hear
+  // about the `next dev` inside it either.
+  "orphan-processes-reaped": { kind: "preference", event: "swept" },
   "update-ready": { kind: "preference", event: "update" },
   "ticket-moved-to-doing": {
     kind: "operational",

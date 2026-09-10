@@ -88,6 +88,7 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { readSessionConcurrencyEnv } from "./session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -99,7 +100,13 @@ import {
   listRunsForTicket,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
-import { getTicket, getTicketBrief, getTicketRow } from "./db/tickets-repo";
+import {
+  getTicket,
+  getTicketBrief,
+  getTicketRow,
+  listWorktreeHoldersForSessions,
+  listWorktreeRefs,
+} from "./db/tickets-repo";
 import { listMaterializableLinks } from "./db/blobs-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
@@ -304,13 +311,18 @@ import { blobProtocolResponse } from "./blob-protocol";
 import { blobsRoot } from "./blob-store";
 import { getBlob } from "./db/blobs-repo";
 import { BROWSER_DEFAULT_BOUNDS, BrowserTabHost } from "./browser/tab-host";
+import { getAutoReapPolicy } from "./process/auto-reap-settings";
+import { createAutoReapWatch } from "./process/auto-reap-watch";
+import { registerOrphanProcessIpcHandlers } from "./process/ipc";
+import { OrphanProcessService } from "./process/orphan-processes";
+import { SpawnLedger } from "./process/spawn-ledger";
 import { BackgroundShellHost } from "./shell/background-shell-host";
 import { createAgentShellPort } from "./shell/agent-port";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
 import { createAttachmentIdentities } from "./session-runtime/attachment-identity";
 import { registerBrowserTabIpcHandlers } from "./browser/ipc";
 import { desktopBrowserPort } from "./browser/agent-port";
-import { relayHoldNotices } from "./browser/hold-notices";
+import { holdNoticeMessage, relayHoldNotices } from "./browser/hold-notices";
 import {
   CURSOR_OVERLAY_PARTITION,
   createCursorOverlay,
@@ -1083,6 +1095,14 @@ app.whenReady().then(async () => {
     : null;
   agentObservability?.start();
   /**
+   * The spawn ledger (VC-341): every child Volli starts on a Session's behalf,
+   * recorded at spawn so that a sweep after a crash — or after a Session ended
+   * without its processes noticing — can say whose a running process is
+   * without guessing from its command line. One instance, shared by every
+   * spawn door, and a no-op when the database never opened.
+   */
+  const spawnLedger = new SpawnLedger(dbHandle.ok ? dbHandle.db : null);
+  /**
    * The Agent Tool Surface's door into main (VC-162) — the same application
    * handler the socket's `session.start` reaches, entered with a caller main
    * bound rather than one a request claimed.
@@ -1136,7 +1156,35 @@ app.whenReady().then(async () => {
   const backgroundShells = new BackgroundShellHost({
     publishState: (started) => publishBackgroundShellEvent({ shell: started }),
     publishRemoved: (removedShellId) => publishBackgroundShellEvent({ removedShellId }),
+    // One row per started shell (VC-341). A background shell is the door a
+    // model most often uses to start a dev server, and the one whose child can
+    // outlive both the Session and this launch.
+    ledger: spawnLedger,
   });
+
+  /**
+   * One structured Session's share of the machine (VC-339), in the variables
+   * `cargo`, `make`, `cmake`, `go`, `pytest`, gradle and vitest already read —
+   * the same budget a spawned PTY gets in `pty/manager.ts`, so a Session's
+   * builds self-limit whichever door they run through.
+   *
+   * `process.env` is the no-clobber reference: a value the user exported in
+   * their own shell is never overwritten. Answers `{}` when there is no
+   * database to count the fleet with, which leaves every toolchain on its own
+   * default rather than blocking the Session.
+   */
+  const sessionConcurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {
+    if (!dbHandle.ok || sessionEngine === null) return {};
+    const db = dbHandle.db;
+    const engine = sessionEngine;
+    return readSessionConcurrencyEnv(
+      {
+        listProjectIds: () => listProjects(db).map((project) => project.id),
+        listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
+      },
+      { excludeSessionId: sessionId, environment: process.env },
+    );
+  };
 
   let agentToolDoor: AgentToolDoor | null = null;
   const piSessionsDirectory = join(app.getPath("userData"), "pi-sessions");
@@ -1187,6 +1235,10 @@ app.whenReady().then(async () => {
             return piExecutionEnv(workspacePath, {
               pathPrefixes: [runtimePaths.binDir],
               identity: attachmentIdentities.resolve(identity),
+              // This Session's concurrency budget (VC-339), computed at attach
+              // from the Sessions working now — under the identity above, which
+              // is what keeps a machine fact from ever posing as who is running.
+              environment: await sessionConcurrencyEnvFor(identity.sessionId),
               // The execution environment is owned by this attachment and its
               // cleanup runs on every close path. Revoke there so a copied
               // token cannot outlive the structured attachment that held it.
@@ -1208,6 +1260,11 @@ app.whenReady().then(async () => {
                 ticketId: scope.ticketId,
               }),
               pathPrefixes: [runtimePaths.binDir],
+              // Asked for at each start rather than captured at attach: a
+              // background shell IS the long-running heavy thing on the
+              // machine, so it self-limits by the budget that is true when it
+              // starts (VC-339).
+              concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
             }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
@@ -2244,6 +2301,36 @@ app.whenReady().then(async () => {
   // no scan and no deletion. The read-only inventory must run before its
   // confirmed reclaim can name any main-owned item ids.
   registerPiSessionOrphanIpcHandlers(dbHandle, piSessionsDirectory);
+  // The orphan PROCESS sweep (VC-341), the same explicit shape one directory
+  // over: registration scans nothing and signals nothing. Its liveness inputs
+  // are read at CALL time — a Session that ends between two scans has to change
+  // the answer — and the terminal manager is reached through the ref the
+  // worktree guards already use, because this registration runs before it
+  // exists.
+  const orphanProcesses = dbHandle.ok
+    ? new OrphanProcessService({
+        ledger: spawnLedger,
+        worktrees: () => listWorktreeRefs(dbHandle.db),
+        // A writing caller is live exactly while its attachment token is valid,
+        // which is the same fact `volli doctor` reports as the Session check.
+        liveSessionIds: () => sessionTokens.liveSessionIds(),
+        liveWorktrees: () =>
+          listWorktreeHoldersForSessions(dbHandle.db, sessionTokens.liveSessionIds()),
+        // A terminal tab standing in a worktree is a person looking at it.
+        openTerminalCwds: () => ptyManagerRef?.liveSessionCwds() ?? [],
+        policy: () => getAutoReapPolicy(dbHandle.db),
+        // Through the one door (VC-295), under the same switch as the worktree
+        // reclaim: this is that act one layer down.
+        notify: (title, message) =>
+          notifications.deliver({
+            producer: "orphan-processes-reaped",
+            title,
+            body: message,
+            target: null,
+          }),
+      })
+    : null;
+  registerOrphanProcessIpcHandlers(dbHandle, orphanProcesses);
   // Global-artifacts + @file fs plumbing (file index/read/write, artifact
   // create, reveal, per-tab watch) plus the composer `/` picker's prompt
   // templates; same degraded-DB stance as registerDataIpcHandlers.
@@ -2774,15 +2861,18 @@ app.whenReady().then(async () => {
   // the Session does not have to learn a takeover by failing on it.
   if (sessionRuntime !== null) {
     relayHoldNotices(browserTabs, {
-      steer: async ({ sessionId, text }) => {
+      // The notice rides as a marked user message (VC-330): the metadata is
+      // what lets the chat draw Volli's line as its own quiet row rather
+      // than a bubble in the person's voice.
+      steer: async (notice) => {
         const commandId = randomUUID();
         const delivered = await sessionRuntime.command({
           commandId,
-          sessionId,
+          sessionId: notice.sessionId,
           command: {
             kind: "message.submit",
             delivery: "steer",
-            message: { id: `${commandId}:message`, role: "user", parts: [{ type: "text", text }] },
+            message: holdNoticeMessage(notice, `${commandId}:message`),
           },
         });
         const status = delivered.receipt?.status;
@@ -2930,6 +3020,14 @@ app.whenReady().then(async () => {
     const retention = getRetentionWatcher(db, { busyWorktreeSites, releaseAgentSites });
     mainWindow.webContents.once("did-finish-load", () => retention.start());
     app.on("browser-window-focus", () => retention.triggerNow());
+
+    // The opt-in automatic reap (VC-341), on the same after-first-paint terms.
+    // With the setting off — the default — a tick reads one `app_state` row and
+    // stops, so a machine that never turns this on pays nothing for it.
+    if (orphanProcesses !== null) {
+      const autoReap = createAutoReapWatch(orphanProcesses);
+      mainWindow.webContents.once("did-finish-load", () => autoReap.start());
+    }
   }
 
   // Auto-update (VC-24): packaged builds poll GitHub Releases ~30s after
@@ -3468,6 +3566,23 @@ app.whenReady().then(async () => {
             // deliberately does not do: a diagnostic must not write to the
             // user's dotfiles as a side effect of being asked a question.
             skillConflicts: [],
+            // The orphan process count (VC-341). Read from the latest sweep
+            // when it is recent enough to still be true, and swept afresh
+            // otherwise: `doctor` may cost a `ps` and an `lsof`, but two
+            // doctors in a row must not cost two. A launch with no sweep
+            // leaves this undefined, which the check reports as unknown
+            // rather than as a healthy zero.
+            ...(orphanProcesses === null
+              ? {}
+              : {
+                  orphanProcesses: await orphanProcesses
+                    .freshInventory()
+                    .then((inventory) => ({
+                      total: inventory.candidates.length,
+                      reapable: inventory.reapableCount,
+                    }))
+                    .catch(() => undefined),
+                }),
           }),
           doctorRepair: repairSessionEnvironment,
         }).execute

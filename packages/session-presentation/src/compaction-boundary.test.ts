@@ -7,12 +7,13 @@
  * surface was built around lives entirely in a string: the measured count is
  * drawn and the estimated one is not, and nothing but a test can hold that.
  */
+import { sessionHostNoticeMetadata } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
 import { compactionBoundaryCopy } from "./compaction-boundary";
 import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
-import { weaveContextNotices } from "./transcript-rows";
+import { projectTranscriptRows } from "./transcript-rows";
 
 function message(id: string, role: UIMessage["role"] = "assistant"): UIMessage {
   return { id, role, parts: [{ type: "text", text: id }] };
@@ -56,20 +57,18 @@ function shape(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
 ) {
-  return weaveContextNotices(turns, compactions, []).map((row) =>
-    row.kind === "turn"
-      ? row.messages.map((held) => held.id).join("+")
-      : row.kind === "compaction"
-        ? `—${row.compaction.sequence}—`
-        : `!${row.drop.sequence}!`,
-  );
+  return projectTranscriptRows(turns, compactions, []).map((row) => {
+    if (row.kind === "turn") return row.messages.map((held) => held.id).join("+");
+    if (row.kind === "host-notice") return `host:${row.notice.kind}`;
+    return row.kind === "compaction" ? `—${row.compaction.sequence}—` : `!${row.drop.sequence}!`;
+  });
 }
 
-describe("weaveContextNotices", () => {
+describe("projectTranscriptRows", () => {
   it("draws nothing extra for a Session that has never compacted", () => {
     const turns = [[message("m1")], [message("m2")]];
 
-    const rows = weaveContextNotices(turns, [], []);
+    const rows = projectTranscriptRows(turns, [], []);
 
     expect(rows).toEqual([
       { kind: "turn", messages: turns[0] },
@@ -77,6 +76,68 @@ describe("weaveContextNotices", () => {
     ]);
     // The very array it was handed, so the turn's own memo still holds.
     expect(rows[0]).toMatchObject({ messages: turns[0] });
+  });
+
+  it("projects a host-authored message as a first-class row", () => {
+    const notice: UIMessage = {
+      id: "notice-1",
+      role: "user",
+      metadata: sessionHostNoticeMetadata({
+        kind: "browser-hold",
+        tabId: "tab-1",
+        tabTitle: "Example",
+        tabHostname: "example.com",
+        action: "person-took",
+      }),
+      parts: [{ type: "text", text: "Volli told the Session about the hold." }],
+    };
+
+    expect(projectTranscriptRows([[notice]], [], [])).toEqual([
+      {
+        kind: "host-notice",
+        messageId: "notice-1",
+        notice: {
+          kind: "browser-hold",
+          tabId: "tab-1",
+          label: "Example",
+          action: "person-took",
+        },
+      },
+    ]);
+  });
+
+  it("keeps a context boundary anchored after a host-notice row", () => {
+    const notice: UIMessage = {
+      id: "notice-1",
+      role: "user",
+      metadata: sessionHostNoticeMetadata({
+        kind: "browser-hold",
+        tabId: "tab-1",
+        tabTitle: "Example",
+        tabHostname: "example.com",
+        action: "person-took",
+      }),
+      parts: [{ type: "text", text: "Volli told the Session about the hold." }],
+    };
+
+    expect(shape([[notice], [message("m1")]], [compacted(9, "notice-1")])).toEqual([
+      "host:browser-hold",
+      "—9—",
+      "m1",
+    ]);
+  });
+
+  it("keeps a multi-message turn intact instead of classifying one message inside it", () => {
+    const marked = message("marked", "user");
+    marked.metadata = sessionHostNoticeMetadata({
+      kind: "browser-hold",
+      tabId: "tab-1",
+      tabTitle: "Example",
+      tabHostname: "example.com",
+      action: "person-took",
+    });
+
+    expect(shape([[marked, message("assistant")]], [])).toEqual(["marked+assistant"]);
   });
 
   it("lands a boundary after the turn its anchor belongs to", () => {
@@ -108,25 +169,29 @@ describe("weaveContextNotices", () => {
     ).toEqual(["m1", "—3—", "—4—", "m2"]);
   });
 
-  it("draws a boundary whose anchor no turn claims rather than losing it", () => {
+  it("draws context notices whose anchor no turn claims rather than losing them", () => {
     expect(shape([[message("m1")]], [compacted(9, "gone")])).toEqual(["m1", "—9—"]);
+    expect(projectTranscriptRows([[message("m1")]], [], [drop(10, "gone")])).toEqual([
+      { kind: "turn", messages: [message("m1")] },
+      { kind: "reasoning-drop", drop: drop(10, "gone") },
+    ]);
   });
 
   it("weaves provider recovery notices with compactions in durable sequence order", () => {
-    const rows = weaveContextNotices(
+    const rows = projectTranscriptRows(
       [[message("m1")], [message("m2")]],
       [compacted(4, "m1")],
       [drop(3, "m1"), drop(5, "m2")],
     );
 
     expect(
-      rows.map((row) =>
-        row.kind === "turn"
-          ? row.messages[0]!.id
-          : row.kind === "compaction"
-            ? `compaction:${row.compaction.sequence}`
-            : `drop:${row.drop.sequence}`,
-      ),
+      rows.map((row) => {
+        if (row.kind === "turn") return row.messages[0]!.id;
+        if (row.kind === "host-notice") return `host:${row.notice.kind}`;
+        return row.kind === "compaction"
+          ? `compaction:${row.compaction.sequence}`
+          : `drop:${row.drop.sequence}`;
+      }),
     ).toEqual(["m1", "drop:3", "compaction:4", "m2", "drop:5"]);
   });
 });

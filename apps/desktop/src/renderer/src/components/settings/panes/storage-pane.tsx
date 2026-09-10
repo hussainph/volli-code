@@ -89,6 +89,7 @@ import { Switch } from "@renderer/components/ui/switch";
 import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
+import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
 
@@ -106,6 +107,13 @@ export function StoragePane() {
   return (
     <>
       <RetentionSection onDays={setRetentionDays} />
+      {/* Processes come before the two file sweeps: a running `next dev` is
+          costing memory right now, while an orphaned folder is costing disk
+          nobody is waiting on (VC-341). */}
+      <RunningProcessesSection />
+      {/* Then the artifacts a finished worktree is still carrying (VC-340):
+          bigger than the orphan list and cheaper to act on, since a trim keeps
+          every checkout where it is. */}
       <BuildArtifactsSection />
       <PiSessionLogsSection />
       <OrphansSection retentionDays={retentionDays} />

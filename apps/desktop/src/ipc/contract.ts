@@ -16,7 +16,9 @@ import type { ExternalAppId } from "../external-app-ids";
 import type {
   Appearance,
   ArchivedTicket,
+  AutoReapPolicy,
   BrowserTabHolder,
+  OrphanProcessCandidate,
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
@@ -485,6 +487,12 @@ export interface WorktreeOrphanDeleteInput {
 
 /** The explicit Pi cleanup names only items from one main-owned inventory. */
 export interface PiSessionOrphanReclaimInput {
+  scanRevision: string;
+  itemIds: string[];
+}
+
+/** A reap names only processes from one main-owned scan revision (VC-341). */
+export interface OrphanProcessReapInput {
   scanRevision: string;
   itemIds: string[];
 }
@@ -2395,11 +2403,33 @@ export interface VolliPiSessionOrphanIpcContract {
 
 export type PiSessionOrphanIpcChannel = keyof VolliPiSessionOrphanIpcContract;
 
+/**
+ * The orphan PROCESS sweep (VC-341), separate from both of the above for the
+ * same reason they are separate from each other: scanning is read-only, and
+ * only a second call, naming the revision it was shown under, may signal
+ * anything. The policy door is a third channel because turning automatic
+ * reaping on is a preference, not a scan and not a kill.
+ */
+export interface VolliOrphanProcessIpcContract {
+  "volli:orphan-processes-scan": { args: []; result: OrphanProcessScanResult };
+  "volli:orphan-processes-reap": {
+    args: [input: OrphanProcessReapInput];
+    result: OrphanProcessReapResult;
+  };
+  "volli:orphan-processes-policy": {
+    args: [policy: AutoReapPolicy];
+    result: OrphanProcessPolicyResult;
+  };
+}
+
+export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
     VolliPiSessionOrphanIpcContract,
+    VolliOrphanProcessIpcContract,
     VolliFileIpcContract,
     VolliHarnessIpcContract,
     VolliCliIpcContract,
@@ -3476,6 +3506,40 @@ export interface PiSessionOrphanReclaimReport {
 
 export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
 export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;
+
+/**
+ * The exact list of running processes a person is shown before any of them may
+ * be signalled (VC-341). `candidates` carries both sources — the spawn ledger's
+ * owned children and the cwd sweep's double-forkers — and the stance that says
+ * which of them Volli is prepared to kill.
+ */
+export interface OrphanProcessInventory {
+  revision: string;
+  scannedAt: number;
+  candidates: OrphanProcessCandidate[];
+  /** How many of them carry a Reap; the rest are listed for context only. */
+  reapableCount: number;
+}
+
+/** One candidate a reap declined, with what was found instead. */
+export interface OrphanProcessKept {
+  candidate: OrphanProcessCandidate;
+  reason: string;
+}
+
+/** What one explicit reap actually did. */
+export interface OrphanProcessReapReport {
+  reaped: OrphanProcessCandidate[];
+  kept: OrphanProcessKept[];
+  reapedCount: number;
+}
+
+export type OrphanProcessScanResult = Result<{
+  inventory: OrphanProcessInventory;
+  policy: AutoReapPolicy;
+}>;
+export type OrphanProcessReapResult = Result<{ report: OrphanProcessReapReport }>;
+export type OrphanProcessPolicyResult = Result<{ policy: AutoReapPolicy }>;
 
 /**
  * A `volli:worktree-recreate` ack (VC-113): the path the checkout was put back
