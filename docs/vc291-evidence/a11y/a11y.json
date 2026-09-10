@@ -1,222 +1,772 @@
 {
   "meta": {
-    "startedAt": "2026-09-09T19:59:19.949Z",
-    "referenceFile": "/tmp/volli-reflow-1788983974.txt",
-    "consoleErrors": []
+    "ticket": "VC-291 a11y/copy/find",
+    "startedAt": "2026-09-10T13:03:30.244Z",
+    "commit": "596a76cfa6c001c4c797301ef378f87c3b833135",
+    "commitShort": "596a76cf",
+    "branch": "volli/VC-291-investigate-terminal-reflow-line-loss-and-access",
+    "treeDirty": true,
+    "appVersion": "0.2.0-canary.4",
+    "electron": "^44.0.0",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "hardware": "Apple M1",
+    "displays": [
+      {
+        "name": "Color LCD",
+        "resolution": "1440 x 900 @ 60.00Hz",
+        "main": true,
+        "connection": "spdisplays_internal",
+        "virtual": false
+      },
+      {
+        "name": "DELL E2422HS",
+        "resolution": "1920 x 1080 @ 60.00Hz",
+        "main": false,
+        "connection": null,
+        "virtual": false
+      }
+    ],
+    "displayCount": 2,
+    "externalMonitorAttached": true,
+    "node": "v24.18.0",
+    "fontWorkaround": "queryLocalFonts stubbed with real /System/Library/Fonts/SFNSMono.ttf bytes (VC-347)",
+    "backend": {
+      "webgpu": true,
+      "webgl2": false,
+      "navigatorGpu": true,
+      "contexts": 3
+    },
+    "appPid": 4547,
+    "referenceFile": "/tmp/volli-reflow-a11ymtvjg1nj-1789045425.txt",
+    "seedVerification": {
+      "ok": true,
+      "lineCount": 63,
+      "shortsSeen": 30,
+      "longsSeen": 30,
+      "pwd": "/tmp/vc291-a11y-O597w8/worktree-home/.volli/worktrees/project-0kTtsR-vc291-pr/VC-1-vc-291-a11y-probe",
+      "problems": []
+    },
+    "consoleByLevel": {
+      "warning": 4
+    },
+    "contextMessages": [],
+    "consoleErrors": [],
+    "required": {
+      "seed": {
+        "gathered": true,
+        "why": "the seed must be the intended 63-line sequence before anything is measured"
+      },
+      "a11y-dom-unsplit": {
+        "gathered": true,
+        "why": "the terminal host's DOM semantics"
+      },
+      "a11y-keyboard-exit-unsplit": {
+        "gathered": true,
+        "why": "whether keyboard focus can leave the pane"
+      },
+      "a11y-ax-dump-unsplit": {
+        "gathered": true,
+        "why": "the macOS AX value dump VoiceOver would read"
+      },
+      "a11y-ax-dump-usable-unsplit": {
+        "gathered": true,
+        "why": "a non-empty macOS AX value dump; an empty one cannot distinguish 'no terminal text' from 'the query read nothing at all'"
+      },
+      "a11y-voiceover-unsplit": {
+        "gathered": true,
+        "why": "VoiceOver toggle + navigation attempt, captured or precisely refused"
+      },
+      "copy-unsplit": {
+        "gathered": true,
+        "why": "a selection + ⌘C attempt with a sentinel"
+      },
+      "keyboard-select-unsplit": {
+        "gathered": true,
+        "why": "a keyboard-selection attempt with a sentinel"
+      },
+      "find-unsplit": {
+        "gathered": true,
+        "why": "a ⌘F attempt with the terminal focused"
+      },
+      "cycle": {
+        "gathered": true,
+        "why": "the split+focus+hide/show transition"
+      },
+      "a11y-dom-after-cycle": {
+        "gathered": true,
+        "why": "the terminal host's DOM semantics"
+      },
+      "a11y-keyboard-exit-after-cycle": {
+        "gathered": true,
+        "why": "whether keyboard focus can leave the pane"
+      },
+      "a11y-ax-dump-after-cycle": {
+        "gathered": true,
+        "why": "the macOS AX value dump VoiceOver would read"
+      },
+      "a11y-ax-dump-usable-after-cycle": {
+        "gathered": true,
+        "why": "a non-empty macOS AX value dump; an empty one cannot distinguish 'no terminal text' from 'the query read nothing at all'"
+      },
+      "a11y-voiceover-after-cycle": {
+        "gathered": true,
+        "why": "VoiceOver toggle + navigation attempt, captured or precisely refused"
+      },
+      "copy-after-cycle": {
+        "gathered": true,
+        "why": "a selection + ⌘C attempt with a sentinel"
+      },
+      "keyboard-select-after-cycle": {
+        "gathered": true,
+        "why": "a keyboard-selection attempt with a sentinel"
+      },
+      "find-after-cycle": {
+        "gathered": true,
+        "why": "a ⌘F attempt with the terminal focused"
+      }
+    },
+    "finishedAt": "2026-09-10T13:06:45.438Z"
   },
   "checks": [
     {
-      "id": "A1-dom-terminal",
-      "at": 1788983975429,
+      "id": "A1-dom-unsplit",
+      "at": 1789045426810,
       "host": {
         "tag": "div",
         "role": null,
         "ariaLabel": null,
         "ariaRoleDescription": null,
+        "ariaHidden": null,
         "tabIndex": null,
         "title": null,
         "textContentLength": 8
       },
-      "hostChildren": [
-        "restty-search-ui-root restty-pane-root"
-      ],
       "canvas": {
         "tag": "canvas",
         "role": null,
         "ariaLabel": null,
         "ariaRoleDescription": null,
+        "ariaHidden": null,
         "tabIndex": "0",
         "title": null,
         "textContentLength": 0
       },
-      "innerTextOfHost": 0
-    },
-    {
-      "id": "A2-focus-after-click",
-      "at": 1788983975689,
-      "activeElement": "TEXTAREA",
-      "activeClass": "pane-ime-input restty-pane-ime-input",
-      "activeRole": "",
-      "activeAria": ""
-    },
-    {
-      "id": "A3-tab-walk",
-      "at": 1788983976607,
-      "walk": [
+      "imeTextarea": {
+        "tag": "textarea",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "ariaHidden": null,
+        "tabIndex": "-1",
+        "title": null,
+        "textContentLength": 0
+      },
+      "hostChildren": [
+        "restty-search-ui-root restty-pane-root"
+      ],
+      "innerTextOfHost": 0,
+      "focusableInsidePane": [
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "canvas",
+          "cls": "pane-canvas restty-native-scroll-canvas",
+          "tabIndex": "0"
         },
         {
-          "tag": "TEXTAREA",
+          "tag": "textarea",
           "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tabIndex": "-1"
         },
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "input",
+          "cls": "restty-pane-search-input",
+          "tabIndex": null
         },
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
         },
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
         },
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
         },
         {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
-        },
-        {
-          "tag": "TEXTAREA",
-          "cls": "pane-ime-input restty-pane-ime-input",
-          "aria": ""
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
         }
       ]
     },
     {
-      "id": "A4-chromium-ax",
-      "at": 1788983976607,
-      "available": false
+      "id": "A2-focus-after-click-unsplit",
+      "at": 1789045427070,
+      "activeElement": "TEXTAREA",
+      "activeClass": "pane-ime-input restty-pane-ime-input",
+      "activeTabIndex": "-1",
+      "activeAria": ""
     },
     {
-      "id": "A5-system-events-window",
-      "at": 1788983977797,
-      "result": "standard window | missing value || group:"
-    },
-    {
-      "id": "A6-system-events-entire-contents",
-      "at": 1788983978211,
-      "bytes": 19,
-      "containsREFLOW": false,
-      "refused": false
-    },
-    {
-      "id": "A7-voiceover-cursor",
-      "at": 1788983982930,
-      "voText": "refused: Command failed: osascript -e tell application \"VoiceOver\" to get the description of the cursor"
-    },
-    {
-      "id": "A7-voiceover-toggle",
-      "at": 1788983984847,
-      "result": "toggled; VoiceOver pid=19031"
-    },
-    {
-      "id": "B0-grid",
-      "at": 1788983986990,
-      "grid": "51 86",
-      "rowsUsed": 51
-    },
-    {
-      "id": "B-selection-geometry-unsplit",
-      "at": 1788983988161,
-      "rows": 51,
-      "rowH": 14,
-      "startRow": 5,
-      "ocrLines": 59
-    },
-    {
-      "id": "B-copy-unsplit",
-      "at": 1788983989798,
-      "clipboardBytes": 355,
-      "changedFromBefore": true,
-      "containsShort01": true,
-      "containsLongStart": true,
-      "containsLongEnd": false,
-      "xRunLength": 240,
-      "first160": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    },
-    {
-      "id": "B-keyboard-select-unsplit",
-      "at": 1788983991327,
-      "clipboardChanged": false,
-      "clipboardPreview": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    },
-    {
-      "id": "B-cycle-navigation",
-      "at": 1788983996390,
-      "ok": true
-    },
-    {
-      "id": "B0-grid",
-      "at": 1788984005490,
-      "grid": "25 86",
-      "rowsUsed": 25
-    },
-    {
-      "id": "B-selection-geometry-after-cycle",
-      "at": 1788984006176,
-      "rows": 25,
-      "rowH": 14,
-      "startRow": 5,
-      "ocrLines": 29
-    },
-    {
-      "id": "B-copy-after-cycle",
-      "at": 1788984007661,
-      "clipboardBytes": 355,
-      "changedFromBefore": false,
-      "containsShort01": true,
-      "containsLongStart": true,
-      "containsLongEnd": false,
-      "xRunLength": 240,
-      "first160": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    },
-    {
-      "id": "B-keyboard-select-after-cycle",
-      "at": 1788984009221,
-      "clipboardChanged": false,
-      "clipboardPreview": "REFLOW-SHORT-01\nREFLOW-LONG-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    },
-    {
-      "id": "C1-cmd-f-terminal-focused",
-      "at": 1788984010427,
-      "dialogs": 0,
-      "findbars": [
-        "Find in scrollback"
+      "id": "A3-keyboard-exit-unsplit",
+      "at": 1789045429067,
+      "tabEverLeaves": false,
+      "shiftTabEverLeaves": false,
+      "escapeThenTabLeaves": false,
+      "tabWalk": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        }
+      ],
+      "shiftTabWalk": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        }
       ]
     },
     {
-      "id": "C1b-find-REFLOW-SHORT-01",
-      "at": 1788984012956,
-      "typed": true,
-      "barReports": [],
-      "paneShowsQuery": true,
-      "scrollTop": 70,
-      "scrollMax": 2534,
-      "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-REFLOWSHORT01.png"
+      "id": "A4-chromium-ax-unsplit",
+      "at": 1789045429067,
+      "available": false,
+      "bytes": 0,
+      "mentionsSeededText": null
     },
     {
-      "id": "C1b-find-REFLOW-PWD-",
-      "at": 1788984017330,
-      "typed": true,
-      "barReports": [],
-      "paneShowsQuery": true,
-      "scrollTop": 2534,
-      "scrollMax": 2534,
-      "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-REFLOWPWD.png"
+      "id": "A5-ax-window-unsplit",
+      "at": 1789045429884,
+      "pid": 4547,
+      "result": "dialog | missing value | title=Volli Code || group:close button:close buttonfull screen button:full screen buttonminimize button:minimize button"
     },
     {
-      "id": "C2-quickopen",
-      "at": 1788984021624,
-      "mentionsREFLOW": false,
+      "id": "A6-ax-entire-contents-unsplit",
+      "at": 1789045433936,
+      "bytes": 421,
+      "retried": false,
+      "exposesAppChrome": true,
+      "containsSeededText": false,
+      "containsShort01": false,
+      "refused": false
+    },
+    {
+      "id": "A7-voiceover-unsplit",
+      "at": 1789045484506,
+      "state": "unsplit",
+      "attempted": true,
+      "wasRunningBefore": false,
+      "toggleOn": "ok",
+      "pidAfterToggle": "5723",
+      "started": true,
+      "navigation": [
+        {
+          "step": 1,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 2,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 3,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 4,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 5,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        }
+      ],
+      "announcementsCaptured": false,
+      "whyUnavailable": "VoiceOver AppleScript control is disabled by default (\"Allow VoiceOver to be controlled with AppleScript\", VoiceOver Utility → General). The harness can start and drive VoiceOver but cannot read back what it spoke.",
+      "stoppedAfterwards": true
+    },
+    {
+      "id": "grid-copy-unsplit",
+      "at": 1789045499511,
+      "grid": "51 86",
+      "rows": 51,
+      "cols": 86
+    },
+    {
+      "id": "B-copy-unsplit",
+      "at": 1789045502566,
+      "sentinel": "VC291-SENTINEL-unsplit-mtvjhzar",
+      "replacedSentinel": true,
+      "clipboardBytes": 278,
+      "grid": {
+        "rows": 51,
+        "cols": 86
+      },
+      "startRow": 5,
+      "logicalLines": 2,
+      "firstLogicalLine": "REFLOW-SHORT-01",
+      "matchesReferenceExactly": true,
+      "contiguity": {
+        "ok": true,
+        "startsAtReferenceLine": 2,
+        "lines": 2
+      },
+      "longLineExact": true,
+      "longLineHasEndTail": true,
+      "longLineFill": 240,
+      "longLineExpectedFill": 240,
+      "longLineActualPreview": "REFLOW-LONG-01-xxxxxxxxx…xxxxxxxx-END"
+    },
+    {
+      "id": "B-keyboard-select-unsplit",
+      "at": 1789045503845,
+      "sentinel": "VC291-KEYBOARD-unsplit-mtvji0yj",
+      "clipboardStillSentinel": true,
+      "copiedAnything": false,
+      "preview": "VC291-KEYBOARD-unsplit-mtvji0yj"
+    },
+    {
+      "id": "C1-cmd-f-unsplit",
+      "at": 1789045505053,
+      "dialogs": 0,
+      "visibleFields": [
+        "Find in scrollback"
+      ],
+      "findInScrollbackFieldPresent": true
+    },
+    {
+      "id": "C2-find-queries-unsplit",
+      "at": 1789045513217,
+      "results": [
+        {
+          "query": "REFLOW-SHORT-01",
+          "typed": true,
+          "scrollBefore": "0/1596",
+          "scrollAfter": "70/1596",
+          "viewportMoved": true,
+          "matchVisibleInPane": true,
+          "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-unsplit-REFLOWSHORT01.png"
+        },
+        {
+          "query": "REFLOW-PWD-",
+          "typed": true,
+          "scrollBefore": "70/1596",
+          "scrollAfter": "1596/1596",
+          "viewportMoved": true,
+          "matchVisibleInPane": true,
+          "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-unsplit-REFLOWPWD.png"
+        }
+      ]
+    },
+    {
+      "id": "C3-quickopen-unsplit",
+      "at": 1789045515477,
+      "mentionsSeededText": false,
       "optionCount": 0
     },
     {
-      "id": "C3-dom-search-uis",
-      "at": 1788984021996,
-      "count": 18
+      "id": "B-cycle-navigation",
+      "at": 1789045522752,
+      "focus": true,
+      "hideShow": true,
+      "split": true
+    },
+    {
+      "id": "A1-dom-after-cycle",
+      "at": 1789045522761,
+      "host": {
+        "tag": "div",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "ariaHidden": null,
+        "tabIndex": null,
+        "title": null,
+        "textContentLength": 11
+      },
+      "canvas": {
+        "tag": "canvas",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "ariaHidden": null,
+        "tabIndex": "0",
+        "title": null,
+        "textContentLength": 0
+      },
+      "imeTextarea": {
+        "tag": "textarea",
+        "role": null,
+        "ariaLabel": null,
+        "ariaRoleDescription": null,
+        "ariaHidden": null,
+        "tabIndex": "-1",
+        "title": null,
+        "textContentLength": 0
+      },
+      "hostChildren": [
+        "restty-search-ui-root restty-pane-root"
+      ],
+      "innerTextOfHost": 0,
+      "focusableInsidePane": [
+        {
+          "tag": "canvas",
+          "cls": "pane-canvas restty-native-scroll-canvas",
+          "tabIndex": "0"
+        },
+        {
+          "tag": "textarea",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "tabIndex": "-1"
+        },
+        {
+          "tag": "input",
+          "cls": "restty-pane-search-input",
+          "tabIndex": null
+        },
+        {
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
+        },
+        {
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
+        },
+        {
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
+        },
+        {
+          "tag": "button",
+          "cls": "restty-pane-search-button",
+          "tabIndex": null
+        }
+      ]
+    },
+    {
+      "id": "A2-focus-after-click-after-cycle",
+      "at": 1789045523028,
+      "activeElement": "TEXTAREA",
+      "activeClass": "pane-ime-input restty-pane-ime-input",
+      "activeTabIndex": "-1",
+      "activeAria": ""
+    },
+    {
+      "id": "A3-keyboard-exit-after-cycle",
+      "at": 1789045524999,
+      "tabEverLeaves": false,
+      "shiftTabEverLeaves": false,
+      "escapeThenTabLeaves": false,
+      "tabWalk": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        }
+      ],
+      "shiftTabWalk": [
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "cls": "pane-ime-input restty-pane-ime-input",
+          "insideTerminal": true
+        }
+      ]
+    },
+    {
+      "id": "A4-chromium-ax-after-cycle",
+      "at": 1789045524999,
+      "available": false,
+      "bytes": 0,
+      "mentionsSeededText": null
+    },
+    {
+      "id": "A5-ax-window-after-cycle",
+      "at": 1789045525525,
+      "pid": 4547,
+      "result": "dialog | missing value | title=Volli Code || group:close button:close buttonfull screen button:full screen buttonminimize button:minimize button"
+    },
+    {
+      "id": "A6-ax-entire-contents-after-cycle",
+      "at": 1789045529712,
+      "bytes": 444,
+      "retried": false,
+      "exposesAppChrome": true,
+      "containsSeededText": false,
+      "containsShort01": false,
+      "refused": false
+    },
+    {
+      "id": "A7-voiceover-after-cycle",
+      "at": 1789045580322,
+      "state": "after-cycle",
+      "attempted": true,
+      "wasRunningBefore": true,
+      "toggleOn": "ok",
+      "pidAfterToggle": "6814",
+      "started": true,
+      "navigation": [
+        {
+          "step": 1,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 2,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 3,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 4,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        },
+        {
+          "step": 5,
+          "moved": "ok",
+          "spoken": "unreadable: spawnSync osascript ETIMEDOUT"
+        }
+      ],
+      "announcementsCaptured": false,
+      "whyUnavailable": "VoiceOver AppleScript control is disabled by default (\"Allow VoiceOver to be controlled with AppleScript\", VoiceOver Utility → General). The harness can start and drive VoiceOver but cannot read back what it spoke.",
+      "stoppedAfterwards": true
+    },
+    {
+      "id": "grid-copy-after-cycle",
+      "at": 1789045589368,
+      "grid": "25 86",
+      "rows": 25,
+      "cols": 86
+    },
+    {
+      "id": "B-copy-after-cycle",
+      "at": 1789045591791,
+      "sentinel": "VC291-SENTINEL-after-cycle-mtvjjw5o",
+      "replacedSentinel": true,
+      "clipboardBytes": 278,
+      "grid": {
+        "rows": 25,
+        "cols": 86
+      },
+      "startRow": 5,
+      "logicalLines": 2,
+      "firstLogicalLine": "REFLOW-SHORT-01",
+      "matchesReferenceExactly": true,
+      "contiguity": {
+        "ok": true,
+        "startsAtReferenceLine": 2,
+        "lines": 2
+      },
+      "longLineExact": true,
+      "longLineHasEndTail": true,
+      "longLineFill": 240,
+      "longLineExpectedFill": 240,
+      "longLineActualPreview": "REFLOW-LONG-01-xxxxxxxxx…xxxxxxxx-END"
+    },
+    {
+      "id": "B-keyboard-select-after-cycle",
+      "at": 1789045593049,
+      "sentinel": "VC291-KEYBOARD-after-cycle-mtvjjxt0",
+      "clipboardStillSentinel": true,
+      "copiedAnything": false,
+      "preview": "VC291-KEYBOARD-after-cycle-mtvjjxt0"
+    },
+    {
+      "id": "C1-cmd-f-after-cycle",
+      "at": 1789045594238,
+      "dialogs": 0,
+      "visibleFields": [
+        "Find in scrollback"
+      ],
+      "findInScrollbackFieldPresent": true
+    },
+    {
+      "id": "C2-find-queries-after-cycle",
+      "at": 1789045602875,
+      "results": [
+        {
+          "query": "REFLOW-SHORT-01",
+          "typed": true,
+          "scrollBefore": "0/2114",
+          "scrollAfter": "70/2114",
+          "viewportMoved": true,
+          "matchVisibleInPane": true,
+          "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-after-cycle-REFLOWSHORT01.png"
+        },
+        {
+          "query": "REFLOW-PWD-",
+          "typed": true,
+          "scrollBefore": "70/2114",
+          "scrollAfter": "2114/2114",
+          "viewportMoved": true,
+          "matchVisibleInPane": true,
+          "screenshot": "/Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-291-investigate-terminal-reflow-line-loss-and-access/evidence/a11y/find-after-cycle-REFLOWPWD.png"
+        }
+      ]
+    },
+    {
+      "id": "C3-quickopen-after-cycle",
+      "at": 1789045605123,
+      "mentionsSeededText": false,
+      "optionCount": 0
     }
   ]
 }

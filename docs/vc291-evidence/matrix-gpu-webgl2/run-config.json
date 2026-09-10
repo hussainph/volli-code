@@ -1,20 +1,55 @@
 {
   "ticket": "VC-291 reflow matrix",
-  "startedAt": "2026-09-09T19:51:48.701Z",
-  "commit": "645beb5c4871a7d78c896bca1a5d688d3d337ec0",
+  "startedAt": "2026-09-10T12:35:25.324Z",
+  "commit": "596a76cfa6c001c4c797301ef378f87c3b833135",
+  "commitShort": "596a76cf",
+  "branch": "volli/VC-291-investigate-terminal-reflow-line-loss-and-access",
+  "treeDirty": true,
   "appVersion": "0.2.0-canary.4",
+  "electron": "^44.0.0",
   "macOS": "26.5.1",
   "macOSBuild": "25F80",
-  "displays": "Graphics/Displays:\n\n    Apple M1:\n\n      Chipset Model: Apple M1\n      Type: GPU\n      Bus: Built-In\n      Total Number of Cores: 8\n      Vendor: Apple (0x106b)\n      Metal Support: Metal 4\n      Displays:\n        Color LCD:\n          Display Type: Built-In Retina LCD\n          Resolution: 2560 x 1600 Retina\n          Main Display: Yes\n          Mirror: Off\n          Online: Yes\n          Automatically Adjust Brightness: Yes\n          Connection Type: Internal\n        DELL E2422HS:\n          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)\n          UI Looks like: 1920 x 1080 @ 60.00Hz\n          Mirror: Off\n          Online: Yes\n          Rotation: Supported\n        Sidecar Display:\n          Resolution: 2732 x 2048\n          UI Looks like: 1366 x 1024 @ 60.00Hz\n          Framebuffer Depth: 24-Bit Color (ARGB8888)\n          Mirror: Off\n          Connection Type: AirPlay\n          Virtual Device: Yes",
+  "hardware": "Apple M1",
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1440 x 900 @ 60.00Hz",
+      "main": true,
+      "connection": "spdisplays_internal",
+      "virtual": false
+    },
+    {
+      "name": "DELL E2422HS",
+      "resolution": "1920 x 1080 @ 60.00Hz",
+      "main": false,
+      "connection": null,
+      "virtual": false
+    }
+  ],
+  "displayCount": 2,
   "externalMonitorAttached": true,
-  "shell": "unknown",
-  "forcedBackend": "webgl2 (navigator.gpu stubbed via init script)",
+  "node": "v24.18.0",
   "cases": [
     "focus",
     "hideshow"
   ],
-  "runsPerCase": 3,
-  "surface": "ticket",
-  "node": "v24.18.0",
-  "fontWorkaround": "queryLocalFonts stubbed to serve real SFNSMono.ttf bytes (Local Font Access hangs under automation on this macOS/Electron combo; see harness header)"
+  "runsPerCase": 1,
+  "surface": "home",
+  "panesPerRun": 16,
+  "expectBackend": "webgl2",
+  "minLiveTerminals": 17,
+  "forcedBackend": "webgl2 (navigator.gpu hidden by an init script — harness-only lever, VC-348)",
+  "fontWorkaround": "queryLocalFonts stubbed with real /System/Library/Fonts/SFNSMono.ttf bytes (VC-347)",
+  "window": {
+    "x": 20,
+    "y": 31,
+    "width": 1280,
+    "height": 811,
+    "scaleFactor": 2,
+    "displayId": 1,
+    "displaySize": {
+      "width": 1440,
+      "height": 900
+    }
+  }
 }

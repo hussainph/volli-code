@@ -1,0 +1,47 @@
+Toggle project switcher
+Toggle Sidebar
+Back
+Forward
+Search tickets and sessions
+⌘K
+Add Project
+Enter terminal focus
+0
+1
+Chat
+1
+Now
+0
+0
+0
+No changes
+master
+volli/VC-1-vc-291-a11y-probe
+Create draft PR
+Todo
+Medium
+2
+AUTOMATIONS
+Run once
+No automations in this project yet.
+2
+SESSIONS
+Chat
+Session 1
+Working
+VC291
+VC
+Home
+Automations
+Configure
+ACTIVE
+1
+Session 1
+VC-1
+Todo · Working
+last 
+now
+PREVIOUS
+0
+Nothing yet
+Settings

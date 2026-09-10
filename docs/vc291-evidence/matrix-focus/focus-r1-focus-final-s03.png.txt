@@ -1,20 +1,4 @@
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy.
-REFLOW-SHORT-22
-REFLOW-LONG-22-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-EN
-REFLOW-SHORT-23
-REFLOW-LONG-23-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-EN
-REFLOW-SHORT-24
-REFLOW-LONG-24-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-EN
-REFLOW-SHORT-25
-REFLOW-LONG-25-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-EN
 REFLOW-SHORT-26
 REFLOW-LONG-26-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -35,7 +19,31 @@ REFLOW-SHORT-30
 REFLOW-LONG-30-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-EN
-REFLOW-PWD-/private/tmp/vc291-matrix-zDQkqd/pro j ect-Jd6yFg
+REFLOW-PWD-/tmp/vc291-matrix-37aTVc/worktree-home/. volli/worktrees/pro j ect-FG8PYX-vc29
+l-pr/VC-l-vc-291-ref low-matrix
 REFLOW-END
-REFLOW-BASELINE=/tmp/volli-ref low-f ocuslmtvigm13-1789043757. txt
-phalasiya@IE-A6-F2-0E-E2-FB pro j ect-Jd6yFg %
+REFLOW-BASELINE=/tmp/volli-ref low-f ocuslmtvf aten-1789038448. txt
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-seed
+post,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-
+investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-seedpost
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-cl-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-cl-in
+54 169
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix % echo REFLOW-CHECK-f ocus-l-f ocu
+s-return-I,' stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/V
+C-291-investigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-prob
+e.txt
+REFLOW-CHECK-f ocus-l-f ocus-return-I
+51 86
+phalasiya@IE-A6-F2-0E-E2-FB VC-l-vc-291-ref low-matrix A echo REFLOW-CHECK-f ocus-l-c2-i
+stty size | tee
+/Users/phalasiya/. volli/worktrees/volli-code-f 3732f 45/VC-291-inv
+estigate-terminal-ref low-line-loss-and-access/evidence/matrix-f ocus/stty-probe. txt
+REFLOW-CHECK-f ocus-l-c2-in

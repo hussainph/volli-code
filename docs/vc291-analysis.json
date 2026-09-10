@@ -1,4 +1,5 @@
 {
+  "ok": false,
   "rows": [
     {
       "dir": "matrix-control",
@@ -7,14 +8,39 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2016/2016",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1554/1554",
+      "scrollLast": "1722/1722",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 1,
+      "requiredBoundaries": 1,
+      "referencePath": "/tmp/volli-reflow-control1mtvf48mm-1789038141.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980321.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "post10s",
+          "anchored": true,
+          "top": 1638,
+          "max": 1638
+        },
+        {
+          "t": "final",
+          "anchored": true,
+          "top": 1722,
+          "max": 1722
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -24,14 +50,39 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2016/2016",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "1694/1694",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 1,
+      "requiredBoundaries": 1,
+      "referencePath": "/tmp/volli-reflow-control2mtvf4smf-1789038167.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980321.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "post10s",
+          "anchored": true,
+          "top": 1610,
+          "max": 1610
+        },
+        {
+          "t": "final",
+          "anchored": true,
+          "top": 1694,
+          "max": 1694
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -41,14 +92,39 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2016/2016",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "1694/1694",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 1,
+      "requiredBoundaries": 1,
+      "referencePath": "/tmp/volli-reflow-control3mtvf5cbf-1789038192.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980344.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "post10s",
+          "anchored": true,
+          "top": 1610,
+          "max": 1610
+        },
+        {
+          "t": "final",
+          "anchored": true,
+          "top": 1694,
+          "max": 1694
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -58,14 +134,93 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1960/1960",
-      "scrollLast": "1372/3430",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1554/1554",
+      "scrollLast": "826/3164",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 10,
+      "requiredBoundaries": 10,
+      "referencePath": "/tmp/volli-reflow-focus1mtvfaten-1789038448.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983038.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "focus-return-1",
+          "anchored": false,
+          "top": 1148,
+          "max": 1694
+        },
+        {
+          "t": "focus-return-2",
+          "anchored": false,
+          "top": 1106,
+          "max": 1848
+        },
+        {
+          "t": "focus-return-3",
+          "anchored": false,
+          "top": 1078,
+          "max": 2002
+        },
+        {
+          "t": "focus-return-4",
+          "anchored": false,
+          "top": 1036,
+          "max": 2156
+        },
+        {
+          "t": "focus-return-5",
+          "anchored": false,
+          "top": 1008,
+          "max": 2310
+        },
+        {
+          "t": "focus-return-6",
+          "anchored": false,
+          "top": 966,
+          "max": 2464
+        },
+        {
+          "t": "focus-return-7",
+          "anchored": false,
+          "top": 938,
+          "max": 2618
+        },
+        {
+          "t": "focus-return-8",
+          "anchored": false,
+          "top": 896,
+          "max": 2772
+        },
+        {
+          "t": "focus-return-9",
+          "anchored": false,
+          "top": 868,
+          "max": 2926
+        },
+        {
+          "t": "focus-return-10",
+          "anchored": false,
+          "top": 826,
+          "max": 3080
+        },
+        {
+          "t": "focus-final",
+          "anchored": false,
+          "top": 826,
+          "max": 3164
+        }
+      ],
+      "firstUnanchored": "focus-return-1",
+      "unanchoredCount": 11,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -75,14 +230,93 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1316/1316",
-      "scrollLast": "1400/3430",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "798/3136",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 10,
+      "requiredBoundaries": 10,
+      "referencePath": "/tmp/volli-reflow-focus2mtvfcdml-1789038521.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983038.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "focus-return-1",
+          "anchored": false,
+          "top": 1120,
+          "max": 1666
+        },
+        {
+          "t": "focus-return-2",
+          "anchored": false,
+          "top": 1078,
+          "max": 1820
+        },
+        {
+          "t": "focus-return-3",
+          "anchored": false,
+          "top": 1050,
+          "max": 1974
+        },
+        {
+          "t": "focus-return-4",
+          "anchored": false,
+          "top": 1008,
+          "max": 2128
+        },
+        {
+          "t": "focus-return-5",
+          "anchored": false,
+          "top": 980,
+          "max": 2282
+        },
+        {
+          "t": "focus-return-6",
+          "anchored": false,
+          "top": 938,
+          "max": 2436
+        },
+        {
+          "t": "focus-return-7",
+          "anchored": false,
+          "top": 910,
+          "max": 2590
+        },
+        {
+          "t": "focus-return-8",
+          "anchored": false,
+          "top": 868,
+          "max": 2744
+        },
+        {
+          "t": "focus-return-9",
+          "anchored": false,
+          "top": 840,
+          "max": 2898
+        },
+        {
+          "t": "focus-return-10",
+          "anchored": false,
+          "top": 798,
+          "max": 3052
+        },
+        {
+          "t": "focus-final",
+          "anchored": false,
+          "top": 798,
+          "max": 3136
+        }
+      ],
+      "firstUnanchored": "focus-return-1",
+      "unanchoredCount": 11,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -92,162 +326,349 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1652/1652",
-      "scrollLast": "1540/3416",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "798/3094",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 10,
+      "requiredBoundaries": 10,
+      "referencePath": "/tmp/volli-reflow-focus3mtvfdw3f-1789038591.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983094.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "focus-return-1",
+          "anchored": false,
+          "top": 1120,
+          "max": 1666
+        },
+        {
+          "t": "focus-return-2",
+          "anchored": false,
+          "top": 1078,
+          "max": 1820
+        },
+        {
+          "t": "focus-return-3",
+          "anchored": false,
+          "top": 1050,
+          "max": 1974
+        },
+        {
+          "t": "focus-return-4",
+          "anchored": false,
+          "top": 1008,
+          "max": 2128
+        },
+        {
+          "t": "focus-return-5",
+          "anchored": false,
+          "top": 980,
+          "max": 2282
+        },
+        {
+          "t": "focus-return-6",
+          "anchored": false,
+          "top": 938,
+          "max": 2436
+        },
+        {
+          "t": "focus-return-7",
+          "anchored": false,
+          "top": 910,
+          "max": 2590
+        },
+        {
+          "t": "focus-return-8",
+          "anchored": false,
+          "top": 868,
+          "max": 2744
+        },
+        {
+          "t": "focus-return-9",
+          "anchored": false,
+          "top": 840,
+          "max": 2898
+        },
+        {
+          "t": "focus-return-10",
+          "anchored": false,
+          "top": 798,
+          "max": 3052
+        },
+        {
+          "t": "focus-final",
+          "anchored": false,
+          "top": 798,
+          "max": 3094
+        }
+      ],
+      "firstUnanchored": "focus-return-1",
+      "unanchoredCount": 11,
+      "failures": [],
       "verdict": "PASS"
     },
     {
       "dir": "matrix-gpu-webgl2",
       "case": "focus",
       "run": 1,
-      "surface": "ticket",
+      "surface": "home",
       "backend": "WebGL2",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "1358/3416",
-      "seedMarkers": 7,
-      "finalMarkers": 0,
-      "lost": [
-        "begin",
-        "short01",
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
-      ],
+      "scrollFirst": "1540/1540",
+      "scrollLast": "756/3038",
+      "seedFound": 7,
+      "finalFound": 0,
+      "required": 7,
+      "boundaries": 10,
+      "requiredBoundaries": 10,
+      "referencePath": "/tmp/volli-reflow-focus1mtvigm13-1789043757.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983543.txt",
-      "verdict": "FAIL"
-    },
-    {
-      "dir": "matrix-gpu-webgl2",
-      "case": "focus",
-      "run": 2,
-      "surface": "ticket",
-      "backend": "WebGL2",
-      "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "1358/3416",
-      "seedMarkers": 7,
-      "finalMarkers": 0,
-      "lost": [
-        "begin",
-        "short01",
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1540,
+          "max": 1540
+        },
+        {
+          "t": "focus-return-1",
+          "anchored": false,
+          "top": 1078,
+          "max": 1694
+        },
+        {
+          "t": "focus-return-2",
+          "anchored": false,
+          "top": 1036,
+          "max": 1834
+        },
+        {
+          "t": "focus-return-3",
+          "anchored": false,
+          "top": 1008,
+          "max": 1974
+        },
+        {
+          "t": "focus-return-4",
+          "anchored": false,
+          "top": 966,
+          "max": 2114
+        },
+        {
+          "t": "focus-return-5",
+          "anchored": false,
+          "top": 938,
+          "max": 2254
+        },
+        {
+          "t": "focus-return-6",
+          "anchored": false,
+          "top": 896,
+          "max": 2394
+        },
+        {
+          "t": "focus-return-7",
+          "anchored": false,
+          "top": 868,
+          "max": 2534
+        },
+        {
+          "t": "focus-return-8",
+          "anchored": false,
+          "top": 826,
+          "max": 2674
+        },
+        {
+          "t": "focus-return-9",
+          "anchored": false,
+          "top": 798,
+          "max": 2814
+        },
+        {
+          "t": "focus-return-10",
+          "anchored": false,
+          "top": 756,
+          "max": 2954
+        },
+        {
+          "t": "focus-final",
+          "anchored": false,
+          "top": 756,
+          "max": 3038
+        }
       ],
-      "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983543.txt",
-      "verdict": "FAIL"
-    },
-    {
-      "dir": "matrix-gpu-webgl2",
-      "case": "focus",
-      "run": 3,
-      "surface": "ticket",
-      "backend": "WebGL2",
-      "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "1358/3416",
-      "seedMarkers": 7,
-      "finalMarkers": 0,
-      "lost": [
-        "begin",
-        "short01",
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
+      "firstUnanchored": "focus-return-1",
+      "unanchoredCount": 11,
+      "failures": [
+        "final checkpoint is missing expected line(s): begin,short01,short15,short30,long15,pwd,end"
       ],
-      "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983608.txt",
       "verdict": "FAIL"
     },
     {
       "dir": "matrix-gpu-webgl2",
       "case": "hideshow",
       "run": 1,
-      "surface": "ticket",
+      "surface": "home",
       "backend": "WebGL2",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 7,
-      "finalMarkers": 0,
-      "lost": [
-        "begin",
-        "short01",
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
-      ],
+      "scrollFirst": "1512/1512",
+      "scrollLast": "3136/3136",
+      "seedFound": 7,
+      "finalFound": 0,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow1mtviii9a-1789043845.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983668.txt",
-      "verdict": "FAIL"
-    },
-    {
-      "dir": "matrix-gpu-webgl2",
-      "case": "hideshow",
-      "run": 2,
-      "surface": "ticket",
-      "backend": "WebGL2",
-      "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 7,
-      "finalMarkers": 0,
-      "lost": [
-        "begin",
-        "short01",
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1512,
+          "max": 1512
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1582,
+          "max": 1582
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1666,
+          "max": 1666
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1750,
+          "max": 1750
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1834,
+          "max": 1834
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1918,
+          "max": 1918
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2002,
+          "max": 2002
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2086,
+          "max": 2086
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2170,
+          "max": 2170
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2254,
+          "max": 2254
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2338,
+          "max": 2338
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2422,
+          "max": 2422
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2492,
+          "max": 2492
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2562,
+          "max": 2562
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2632,
+          "max": 2632
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2702,
+          "max": 2702
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2772,
+          "max": 2772
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2842,
+          "max": 2842
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 2912,
+          "max": 2912
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 2982,
+          "max": 2982
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3052,
+          "max": 3052
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3136,
+          "max": 3136
+        }
       ],
-      "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983730.txt",
-      "verdict": "FAIL"
-    },
-    {
-      "dir": "matrix-gpu-webgl2",
-      "case": "hideshow",
-      "run": 3,
-      "surface": "ticket",
-      "backend": "WebGL2",
-      "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 5,
-      "finalMarkers": 0,
-      "lost": [
-        "short15",
-        "long15",
-        "end15",
-        "pwd",
-        "end"
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [
+        "final checkpoint is missing expected line(s): begin,short01,short15,short30,long15,pwd,end"
       ],
-      "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983811.txt",
       "verdict": "FAIL"
     },
     {
@@ -257,14 +678,153 @@
       "surface": "home",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1932/1932",
-      "scrollLast": "2072/2072",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1540/1540",
+      "scrollLast": "3290/3290",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow1mtvhsuwm-1789042649.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788981107.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1540,
+          "max": 1540
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1610,
+          "max": 1610
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1694,
+          "max": 1694
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1778,
+          "max": 1778
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1862,
+          "max": 1862
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1946,
+          "max": 1946
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2030,
+          "max": 2030
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2114,
+          "max": 2114
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2198,
+          "max": 2198
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2282,
+          "max": 2282
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2366,
+          "max": 2366
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2450,
+          "max": 2450
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2534,
+          "max": 2534
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2618,
+          "max": 2618
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2702,
+          "max": 2702
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2786,
+          "max": 2786
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2870,
+          "max": 2870
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2954,
+          "max": 2954
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3038,
+          "max": 3038
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3122,
+          "max": 3122
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3206,
+          "max": 3206
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3290,
+          "max": 3290
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -274,14 +834,153 @@
       "surface": "home",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1932/1932",
-      "scrollLast": "2212/2212",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1512/1512",
+      "scrollLast": "3262/3262",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow2mtvhvmnm-1789042778.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788981107.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1512,
+          "max": 1512
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1582,
+          "max": 1582
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1666,
+          "max": 1666
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1750,
+          "max": 1750
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1834,
+          "max": 1834
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1918,
+          "max": 1918
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2002,
+          "max": 2002
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2086,
+          "max": 2086
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2170,
+          "max": 2170
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2254,
+          "max": 2254
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2338,
+          "max": 2338
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2422,
+          "max": 2422
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2506,
+          "max": 2506
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2590,
+          "max": 2590
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2674,
+          "max": 2674
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2758,
+          "max": 2758
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2842,
+          "max": 2842
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2926,
+          "max": 2926
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3010,
+          "max": 3010
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3094,
+          "max": 3094
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3178,
+          "max": 3178
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3262,
+          "max": 3262
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -291,14 +990,153 @@
       "surface": "home",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1932/1932",
-      "scrollLast": "2352/2352",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1512/1512",
+      "scrollLast": "3262/3262",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow3mtvhye0m-1789042907.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788981143.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1512,
+          "max": 1512
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1582,
+          "max": 1582
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1666,
+          "max": 1666
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1750,
+          "max": 1750
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1834,
+          "max": 1834
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1918,
+          "max": 1918
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2002,
+          "max": 2002
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2086,
+          "max": 2086
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2170,
+          "max": 2170
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2254,
+          "max": 2254
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2338,
+          "max": 2338
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2422,
+          "max": 2422
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2506,
+          "max": 2506
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2590,
+          "max": 2590
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2674,
+          "max": 2674
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2758,
+          "max": 2758
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2842,
+          "max": 2842
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2926,
+          "max": 2926
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3010,
+          "max": 3010
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3094,
+          "max": 3094
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3178,
+          "max": 3178
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3262,
+          "max": 3262
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -308,14 +1146,153 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1554/1554",
+      "scrollLast": "3318/3318",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow1mtvhjeia-1789042208.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983367.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1638,
+          "max": 1638
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1722,
+          "max": 1722
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1806,
+          "max": 1806
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1890,
+          "max": 1890
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1974,
+          "max": 1974
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2058,
+          "max": 2058
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2142,
+          "max": 2142
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2226,
+          "max": 2226
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2310,
+          "max": 2310
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2394,
+          "max": 2394
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2478,
+          "max": 2478
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2562,
+          "max": 2562
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2646,
+          "max": 2646
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2730,
+          "max": 2730
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2814,
+          "max": 2814
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2898,
+          "max": 2898
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2982,
+          "max": 2982
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3066,
+          "max": 3066
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3150,
+          "max": 3150
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3234,
+          "max": 3234
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3318,
+          "max": 3318
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -325,14 +1302,153 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "3290/3290",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow2mtvhmbet-1789042344.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983367.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1610,
+          "max": 1610
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1694,
+          "max": 1694
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1778,
+          "max": 1778
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1862,
+          "max": 1862
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1946,
+          "max": 1946
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2030,
+          "max": 2030
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2114,
+          "max": 2114
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2198,
+          "max": 2198
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2282,
+          "max": 2282
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2366,
+          "max": 2366
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2450,
+          "max": 2450
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2534,
+          "max": 2534
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2618,
+          "max": 2618
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2702,
+          "max": 2702
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2786,
+          "max": 2786
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2870,
+          "max": 2870
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2954,
+          "max": 2954
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3038,
+          "max": 3038
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3122,
+          "max": 3122
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3206,
+          "max": 3206
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3290,
+          "max": 3290
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -342,14 +1458,153 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86",
-      "gridChanged": false,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2114/2114",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "3290/3290",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 20,
+      "requiredBoundaries": 20,
+      "referencePath": "/tmp/volli-reflow-hideshow3mtvhp70g-1789042478.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788983419.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "board-return-1",
+          "anchored": true,
+          "top": 1610,
+          "max": 1610
+        },
+        {
+          "t": "board-return-2",
+          "anchored": true,
+          "top": 1694,
+          "max": 1694
+        },
+        {
+          "t": "board-return-3",
+          "anchored": true,
+          "top": 1778,
+          "max": 1778
+        },
+        {
+          "t": "board-return-4",
+          "anchored": true,
+          "top": 1862,
+          "max": 1862
+        },
+        {
+          "t": "board-return-5",
+          "anchored": true,
+          "top": 1946,
+          "max": 1946
+        },
+        {
+          "t": "board-return-6",
+          "anchored": true,
+          "top": 2030,
+          "max": 2030
+        },
+        {
+          "t": "board-return-7",
+          "anchored": true,
+          "top": 2114,
+          "max": 2114
+        },
+        {
+          "t": "board-return-8",
+          "anchored": true,
+          "top": 2198,
+          "max": 2198
+        },
+        {
+          "t": "board-return-9",
+          "anchored": true,
+          "top": 2282,
+          "max": 2282
+        },
+        {
+          "t": "board-return-10",
+          "anchored": true,
+          "top": 2366,
+          "max": 2366
+        },
+        {
+          "t": "tab-return-1",
+          "anchored": true,
+          "top": 2450,
+          "max": 2450
+        },
+        {
+          "t": "tab-return-2",
+          "anchored": true,
+          "top": 2534,
+          "max": 2534
+        },
+        {
+          "t": "tab-return-3",
+          "anchored": true,
+          "top": 2618,
+          "max": 2618
+        },
+        {
+          "t": "tab-return-4",
+          "anchored": true,
+          "top": 2702,
+          "max": 2702
+        },
+        {
+          "t": "tab-return-5",
+          "anchored": true,
+          "top": 2786,
+          "max": 2786
+        },
+        {
+          "t": "tab-return-6",
+          "anchored": true,
+          "top": 2870,
+          "max": 2870
+        },
+        {
+          "t": "tab-return-7",
+          "anchored": true,
+          "top": 2954,
+          "max": 2954
+        },
+        {
+          "t": "tab-return-8",
+          "anchored": true,
+          "top": 3038,
+          "max": 3038
+        },
+        {
+          "t": "tab-return-9",
+          "anchored": true,
+          "top": 3122,
+          "max": 3122
+        },
+        {
+          "t": "tab-return-10",
+          "anchored": true,
+          "top": 3206,
+          "max": 3206
+        },
+        {
+          "t": "hideshow-final",
+          "anchored": true,
+          "top": 3290,
+          "max": 3290
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -358,15 +1613,106 @@
       "run": 1,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 25 86 → 12 86 → 37 86",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2352/3220",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 12 86 → 25 86 → 38 86",
+      "scrollFirst": "1554/1554",
+      "scrollLast": "2058/3010",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-hsplit1mtvfg4zj-1789038696.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980665.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": false,
+          "top": 1974,
+          "max": 2184
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 1988,
+          "max": 2086
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 1988,
+          "max": 1988
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 2058,
+          "max": 2254
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": false,
+          "top": 2044,
+          "max": 2520
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2058,
+          "max": 2422
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": false,
+          "top": 2072,
+          "max": 2324
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2058,
+          "max": 2590
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": false,
+          "top": 2044,
+          "max": 2856
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2058,
+          "max": 2758
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": false,
+          "top": 2072,
+          "max": 2660
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2058,
+          "max": 2926
+        },
+        {
+          "t": "split-final",
+          "anchored": false,
+          "top": 2058,
+          "max": 3010
+        }
+      ],
+      "firstUnanchored": "drag-c1-25",
+      "unanchoredCount": 12,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -375,15 +1721,106 @@
       "run": 2,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 25 86 → 12 86 → 37 86",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2394/3220",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 12 86 → 25 86 → 38 86",
+      "scrollFirst": "1526/1526",
+      "scrollLast": "2044/2982",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-hsplit2mtvfio4w-1789038814.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980665.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": false,
+          "top": 1946,
+          "max": 2156
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 1974,
+          "max": 2058
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 1960,
+          "max": 1960
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 2030,
+          "max": 2226
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": false,
+          "top": 2016,
+          "max": 2492
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2394
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": false,
+          "top": 2058,
+          "max": 2296
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2562
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": false,
+          "top": 2030,
+          "max": 2828
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2730
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": false,
+          "top": 2058,
+          "max": 2632
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2898
+        },
+        {
+          "t": "split-final",
+          "anchored": false,
+          "top": 2044,
+          "max": 2982
+        }
+      ],
+      "firstUnanchored": "drag-c1-25",
+      "unanchoredCount": 12,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -392,15 +1829,106 @@
       "run": 3,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 25 86 → 12 86 → 37 86",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2394/3220",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 12 86 → 25 86 → 38 86",
+      "scrollFirst": "1526/1526",
+      "scrollLast": "2030/2982",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-hsplit3mtvfl6zo-1789038932.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980703.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": false,
+          "top": 1946,
+          "max": 2156
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 1974,
+          "max": 2058
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 1960,
+          "max": 1960
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": false,
+          "top": 2030,
+          "max": 2226
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": false,
+          "top": 2016,
+          "max": 2492
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2030,
+          "max": 2394
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": false,
+          "top": 2058,
+          "max": 2296
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2562
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": false,
+          "top": 2030,
+          "max": 2828
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2044,
+          "max": 2730
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": false,
+          "top": 2058,
+          "max": 2632
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": false,
+          "top": 2030,
+          "max": 2898
+        },
+        {
+          "t": "split-final",
+          "anchored": false,
+          "top": 2030,
+          "max": 2982
+        }
+      ],
+      "firstUnanchored": "drag-c1-25",
+      "unanchoredCount": 12,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -410,14 +1938,75 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86 → 51 160 → 51 40",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2506/2506",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1554/1554",
+      "scrollLast": "2184/2184",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 7,
+      "requiredBoundaries": 7,
+      "referencePath": "/tmp/volli-reflow-resize1mtvf6kcu-1789038249.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788982055.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "resize-wide1",
+          "anchored": true,
+          "top": 728,
+          "max": 728
+        },
+        {
+          "t": "resize-narrow1",
+          "anchored": true,
+          "top": 3206,
+          "max": 3206
+        },
+        {
+          "t": "resize-wide2",
+          "anchored": true,
+          "top": 840,
+          "max": 840
+        },
+        {
+          "t": "resize-narrow2",
+          "anchored": true,
+          "top": 3458,
+          "max": 3458
+        },
+        {
+          "t": "resize-wide3",
+          "anchored": true,
+          "top": 938,
+          "max": 938
+        },
+        {
+          "t": "resize-narrow3",
+          "anchored": true,
+          "top": 3710,
+          "max": 3710
+        },
+        {
+          "t": "resize-restore",
+          "anchored": true,
+          "top": 2114,
+          "max": 2114
+        },
+        {
+          "t": "resize-final",
+          "anchored": true,
+          "top": 2184,
+          "max": 2184
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -427,14 +2016,75 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86 → 51 160 → 51 40",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2506/2506",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "2156/2156",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 7,
+      "requiredBoundaries": 7,
+      "referencePath": "/tmp/volli-reflow-resize2mtvf7nwv-1789038301.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788982055.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "resize-wide1",
+          "anchored": true,
+          "top": 716,
+          "max": 716
+        },
+        {
+          "t": "resize-narrow1",
+          "anchored": true,
+          "top": 3136,
+          "max": 3136
+        },
+        {
+          "t": "resize-wide2",
+          "anchored": true,
+          "top": 812,
+          "max": 812
+        },
+        {
+          "t": "resize-narrow2",
+          "anchored": true,
+          "top": 3388,
+          "max": 3388
+        },
+        {
+          "t": "resize-wide3",
+          "anchored": true,
+          "top": 910,
+          "max": 910
+        },
+        {
+          "t": "resize-narrow3",
+          "anchored": true,
+          "top": 3640,
+          "max": 3640
+        },
+        {
+          "t": "resize-restore",
+          "anchored": true,
+          "top": 2086,
+          "max": 2086
+        },
+        {
+          "t": "resize-final",
+          "anchored": true,
+          "top": 2156,
+          "max": 2156
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -444,14 +2094,75 @@
       "surface": "ticket",
       "backend": "WebGPU",
       "grids": "51 86 → 51 160 → 51 40",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "2506/2506",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "scrollFirst": "1526/1526",
+      "scrollLast": "2156/2156",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 7,
+      "requiredBoundaries": 7,
+      "referencePath": "/tmp/volli-reflow-resize3mtvf8xoc-1789038360.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788982089.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "resize-wide1",
+          "anchored": true,
+          "top": 716,
+          "max": 716
+        },
+        {
+          "t": "resize-narrow1",
+          "anchored": true,
+          "top": 3136,
+          "max": 3136
+        },
+        {
+          "t": "resize-wide2",
+          "anchored": true,
+          "top": 812,
+          "max": 812
+        },
+        {
+          "t": "resize-narrow2",
+          "anchored": true,
+          "top": 3388,
+          "max": 3388
+        },
+        {
+          "t": "resize-wide3",
+          "anchored": true,
+          "top": 910,
+          "max": 910
+        },
+        {
+          "t": "resize-narrow3",
+          "anchored": true,
+          "top": 3640,
+          "max": 3640
+        },
+        {
+          "t": "resize-restore",
+          "anchored": true,
+          "top": 2086,
+          "max": 2086
+        },
+        {
+          "t": "resize-final",
+          "anchored": true,
+          "top": 2156,
+          "max": 2156
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -460,15 +2171,106 @@
       "run": 1,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 51 42 → 51 20 → 51 63",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "5558/5558",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 51 20 → 51 42 → 51 63",
+      "scrollFirst": "1554/1554",
+      "scrollLast": "4564/4564",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-vsplit1mtvfoe1r-1789039081.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980812.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1554,
+          "max": 1554
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": true,
+          "top": 5978,
+          "max": 5978
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3178,
+          "max": 3178
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 2254,
+          "max": 2254
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3430,
+          "max": 3430
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": true,
+          "top": 6972,
+          "max": 6972
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3682,
+          "max": 3682
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": true,
+          "top": 2632,
+          "max": 2632
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3934,
+          "max": 3934
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": true,
+          "top": 7966,
+          "max": 7966
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4186,
+          "max": 4186
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": true,
+          "top": 2982,
+          "max": 2982
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4438,
+          "max": 4438
+        },
+        {
+          "t": "split-final",
+          "anchored": true,
+          "top": 4564,
+          "max": 4564
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -477,15 +2279,106 @@
       "run": 2,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 51 42 → 51 20 → 51 63",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "5558/5558",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 51 20 → 51 42 → 51 63",
+      "scrollFirst": "1526/1526",
+      "scrollLast": "4508/4508",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-vsplit2mtvfqnkj-1789039187.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980812.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": true,
+          "top": 5852,
+          "max": 5852
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3122,
+          "max": 3122
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 2212,
+          "max": 2212
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3374,
+          "max": 3374
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": true,
+          "top": 6846,
+          "max": 6846
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3626,
+          "max": 3626
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": true,
+          "top": 2590,
+          "max": 2590
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3878,
+          "max": 3878
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": true,
+          "top": 7840,
+          "max": 7840
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4130,
+          "max": 4130
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": true,
+          "top": 2940,
+          "max": 2940
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4382,
+          "max": 4382
+        },
+        {
+          "t": "split-final",
+          "anchored": true,
+          "top": 4508,
+          "max": 4508
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     },
     {
@@ -494,19 +2387,2722 @@
       "run": 3,
       "surface": "ticket",
       "backend": "WebGPU",
-      "grids": "51 86 → 51 42 → 51 20 → 51 63",
-      "gridChanged": true,
-      "scrollFirst": "1946/1946",
-      "scrollLast": "5558/5558",
-      "seedMarkers": 7,
-      "finalMarkers": 7,
-      "lost": [],
+      "grids": "51 86 → 51 20 → 51 42 → 51 63",
+      "scrollFirst": "1526/1526",
+      "scrollLast": "4508/4508",
+      "seedFound": 7,
+      "finalFound": 7,
+      "required": 7,
+      "boundaries": 12,
+      "requiredBoundaries": 12,
+      "referencePath": "/tmp/volli-reflow-vsplit3mtvfsuqv-1789039289.txt",
+      "referenceLines": 63,
       "shellResponded": true,
-      "reference": "/tmp/volli-reflow-1788980850.txt",
+      "anchorSeries": [
+        {
+          "t": "seedpost",
+          "anchored": true,
+          "top": 1526,
+          "max": 1526
+        },
+        {
+          "t": "drag-c1-25",
+          "anchored": true,
+          "top": 5852,
+          "max": 5852
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3122,
+          "max": 3122
+        },
+        {
+          "t": "drag-c1-75",
+          "anchored": true,
+          "top": 2212,
+          "max": 2212
+        },
+        {
+          "t": "drag-c1-50",
+          "anchored": true,
+          "top": 3374,
+          "max": 3374
+        },
+        {
+          "t": "drag-c2-25",
+          "anchored": true,
+          "top": 6846,
+          "max": 6846
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3626,
+          "max": 3626
+        },
+        {
+          "t": "drag-c2-75",
+          "anchored": true,
+          "top": 2590,
+          "max": 2590
+        },
+        {
+          "t": "drag-c2-50",
+          "anchored": true,
+          "top": 3878,
+          "max": 3878
+        },
+        {
+          "t": "drag-c3-25",
+          "anchored": true,
+          "top": 7840,
+          "max": 7840
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4130,
+          "max": 4130
+        },
+        {
+          "t": "drag-c3-75",
+          "anchored": true,
+          "top": 2940,
+          "max": 2940
+        },
+        {
+          "t": "drag-c3-50",
+          "anchored": true,
+          "top": 4382,
+          "max": 4382
+        },
+        {
+          "t": "split-final",
+          "anchored": true,
+          "top": 4508,
+          "max": 4508
+        }
+      ],
+      "firstUnanchored": null,
+      "unanchoredCount": 0,
+      "failures": [],
       "verdict": "PASS"
     }
   ],
   "notes": [
-    "a11y: no matrix.json"
+    "matrix-gpu-webgl2: 19 GPU context/device message(s), e.g. \"WARNING: Too many active WebGL contexts. Oldest context will be lost.\""
+  ],
+  "problems": [],
+  "passed": 21,
+  "failed": 2,
+  "total": 23,
+  "byDir": [
+    {
+      "dir": "matrix-control",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 6
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-control",
+          "case": "control",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "1722/1722",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 1,
+          "requiredBoundaries": 1,
+          "referencePath": "/tmp/volli-reflow-control1mtvf48mm-1789038141.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "post10s",
+              "anchored": true,
+              "top": 1638,
+              "max": 1638
+            },
+            {
+              "t": "final",
+              "anchored": true,
+              "top": 1722,
+              "max": 1722
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-control",
+          "case": "control",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "1694/1694",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 1,
+          "requiredBoundaries": 1,
+          "referencePath": "/tmp/volli-reflow-control2mtvf4smf-1789038167.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "post10s",
+              "anchored": true,
+              "top": 1610,
+              "max": 1610
+            },
+            {
+              "t": "final",
+              "anchored": true,
+              "top": 1694,
+              "max": 1694
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-control",
+          "case": "control",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "1694/1694",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 1,
+          "requiredBoundaries": 1,
+          "referencePath": "/tmp/volli-reflow-control3mtvf5cbf-1789038192.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "post10s",
+              "anchored": true,
+              "top": 1610,
+              "max": 1610
+            },
+            {
+              "t": "final",
+              "anchored": true,
+              "top": 1694,
+              "max": 1694
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-focus",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 6
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-focus",
+          "case": "focus",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "826/3164",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 10,
+          "requiredBoundaries": 10,
+          "referencePath": "/tmp/volli-reflow-focus1mtvfaten-1789038448.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "focus-return-1",
+              "anchored": false,
+              "top": 1148,
+              "max": 1694
+            },
+            {
+              "t": "focus-return-2",
+              "anchored": false,
+              "top": 1106,
+              "max": 1848
+            },
+            {
+              "t": "focus-return-3",
+              "anchored": false,
+              "top": 1078,
+              "max": 2002
+            },
+            {
+              "t": "focus-return-4",
+              "anchored": false,
+              "top": 1036,
+              "max": 2156
+            },
+            {
+              "t": "focus-return-5",
+              "anchored": false,
+              "top": 1008,
+              "max": 2310
+            },
+            {
+              "t": "focus-return-6",
+              "anchored": false,
+              "top": 966,
+              "max": 2464
+            },
+            {
+              "t": "focus-return-7",
+              "anchored": false,
+              "top": 938,
+              "max": 2618
+            },
+            {
+              "t": "focus-return-8",
+              "anchored": false,
+              "top": 896,
+              "max": 2772
+            },
+            {
+              "t": "focus-return-9",
+              "anchored": false,
+              "top": 868,
+              "max": 2926
+            },
+            {
+              "t": "focus-return-10",
+              "anchored": false,
+              "top": 826,
+              "max": 3080
+            },
+            {
+              "t": "focus-final",
+              "anchored": false,
+              "top": 826,
+              "max": 3164
+            }
+          ],
+          "firstUnanchored": "focus-return-1",
+          "unanchoredCount": 11,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-focus",
+          "case": "focus",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "798/3136",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 10,
+          "requiredBoundaries": 10,
+          "referencePath": "/tmp/volli-reflow-focus2mtvfcdml-1789038521.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "focus-return-1",
+              "anchored": false,
+              "top": 1120,
+              "max": 1666
+            },
+            {
+              "t": "focus-return-2",
+              "anchored": false,
+              "top": 1078,
+              "max": 1820
+            },
+            {
+              "t": "focus-return-3",
+              "anchored": false,
+              "top": 1050,
+              "max": 1974
+            },
+            {
+              "t": "focus-return-4",
+              "anchored": false,
+              "top": 1008,
+              "max": 2128
+            },
+            {
+              "t": "focus-return-5",
+              "anchored": false,
+              "top": 980,
+              "max": 2282
+            },
+            {
+              "t": "focus-return-6",
+              "anchored": false,
+              "top": 938,
+              "max": 2436
+            },
+            {
+              "t": "focus-return-7",
+              "anchored": false,
+              "top": 910,
+              "max": 2590
+            },
+            {
+              "t": "focus-return-8",
+              "anchored": false,
+              "top": 868,
+              "max": 2744
+            },
+            {
+              "t": "focus-return-9",
+              "anchored": false,
+              "top": 840,
+              "max": 2898
+            },
+            {
+              "t": "focus-return-10",
+              "anchored": false,
+              "top": 798,
+              "max": 3052
+            },
+            {
+              "t": "focus-final",
+              "anchored": false,
+              "top": 798,
+              "max": 3136
+            }
+          ],
+          "firstUnanchored": "focus-return-1",
+          "unanchoredCount": 11,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-focus",
+          "case": "focus",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "798/3094",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 10,
+          "requiredBoundaries": 10,
+          "referencePath": "/tmp/volli-reflow-focus3mtvfdw3f-1789038591.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "focus-return-1",
+              "anchored": false,
+              "top": 1120,
+              "max": 1666
+            },
+            {
+              "t": "focus-return-2",
+              "anchored": false,
+              "top": 1078,
+              "max": 1820
+            },
+            {
+              "t": "focus-return-3",
+              "anchored": false,
+              "top": 1050,
+              "max": 1974
+            },
+            {
+              "t": "focus-return-4",
+              "anchored": false,
+              "top": 1008,
+              "max": 2128
+            },
+            {
+              "t": "focus-return-5",
+              "anchored": false,
+              "top": 980,
+              "max": 2282
+            },
+            {
+              "t": "focus-return-6",
+              "anchored": false,
+              "top": 938,
+              "max": 2436
+            },
+            {
+              "t": "focus-return-7",
+              "anchored": false,
+              "top": 910,
+              "max": 2590
+            },
+            {
+              "t": "focus-return-8",
+              "anchored": false,
+              "top": 868,
+              "max": 2744
+            },
+            {
+              "t": "focus-return-9",
+              "anchored": false,
+              "top": 840,
+              "max": 2898
+            },
+            {
+              "t": "focus-return-10",
+              "anchored": false,
+              "top": 798,
+              "max": 3052
+            },
+            {
+              "t": "focus-final",
+              "anchored": false,
+              "top": 798,
+              "max": 3094
+            }
+          ],
+          "firstUnanchored": "focus-return-1",
+          "unanchoredCount": 11,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-gpu-webgl2",
+      "backend": "WebGL2",
+      "consoleByLevel": {
+        "warning": 89
+      },
+      "contextWarnings": 19,
+      "contextWarningSample": [
+        "WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "WARNING: Too many active WebGL contexts. Oldest context will be lost.",
+        "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      ],
+      "rows": [
+        {
+          "dir": "matrix-gpu-webgl2",
+          "case": "focus",
+          "run": 1,
+          "surface": "home",
+          "backend": "WebGL2",
+          "grids": "51 86",
+          "scrollFirst": "1540/1540",
+          "scrollLast": "756/3038",
+          "seedFound": 7,
+          "finalFound": 0,
+          "required": 7,
+          "boundaries": 10,
+          "requiredBoundaries": 10,
+          "referencePath": "/tmp/volli-reflow-focus1mtvigm13-1789043757.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1540,
+              "max": 1540
+            },
+            {
+              "t": "focus-return-1",
+              "anchored": false,
+              "top": 1078,
+              "max": 1694
+            },
+            {
+              "t": "focus-return-2",
+              "anchored": false,
+              "top": 1036,
+              "max": 1834
+            },
+            {
+              "t": "focus-return-3",
+              "anchored": false,
+              "top": 1008,
+              "max": 1974
+            },
+            {
+              "t": "focus-return-4",
+              "anchored": false,
+              "top": 966,
+              "max": 2114
+            },
+            {
+              "t": "focus-return-5",
+              "anchored": false,
+              "top": 938,
+              "max": 2254
+            },
+            {
+              "t": "focus-return-6",
+              "anchored": false,
+              "top": 896,
+              "max": 2394
+            },
+            {
+              "t": "focus-return-7",
+              "anchored": false,
+              "top": 868,
+              "max": 2534
+            },
+            {
+              "t": "focus-return-8",
+              "anchored": false,
+              "top": 826,
+              "max": 2674
+            },
+            {
+              "t": "focus-return-9",
+              "anchored": false,
+              "top": 798,
+              "max": 2814
+            },
+            {
+              "t": "focus-return-10",
+              "anchored": false,
+              "top": 756,
+              "max": 2954
+            },
+            {
+              "t": "focus-final",
+              "anchored": false,
+              "top": 756,
+              "max": 3038
+            }
+          ],
+          "firstUnanchored": "focus-return-1",
+          "unanchoredCount": 11,
+          "failures": [
+            "final checkpoint is missing expected line(s): begin,short01,short15,short30,long15,pwd,end"
+          ],
+          "verdict": "FAIL"
+        },
+        {
+          "dir": "matrix-gpu-webgl2",
+          "case": "hideshow",
+          "run": 1,
+          "surface": "home",
+          "backend": "WebGL2",
+          "grids": "51 86",
+          "scrollFirst": "1512/1512",
+          "scrollLast": "3136/3136",
+          "seedFound": 7,
+          "finalFound": 0,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow1mtviii9a-1789043845.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1512,
+              "max": 1512
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1582,
+              "max": 1582
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1666,
+              "max": 1666
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1750,
+              "max": 1750
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1834,
+              "max": 1834
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1918,
+              "max": 1918
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2002,
+              "max": 2002
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2086,
+              "max": 2086
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2170,
+              "max": 2170
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2254,
+              "max": 2254
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2338,
+              "max": 2338
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2422,
+              "max": 2422
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2492,
+              "max": 2492
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2562,
+              "max": 2562
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2632,
+              "max": 2632
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2702,
+              "max": 2702
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2772,
+              "max": 2772
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2842,
+              "max": 2842
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 2912,
+              "max": 2912
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 2982,
+              "max": 2982
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3052,
+              "max": 3052
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3136,
+              "max": 3136
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [
+            "final checkpoint is missing expected line(s): begin,short01,short15,short30,long15,pwd,end"
+          ],
+          "verdict": "FAIL"
+        }
+      ],
+      "notes": [
+        "matrix-gpu-webgl2: 19 GPU context/device message(s), e.g. \"WARNING: Too many active WebGL contexts. Oldest context will be lost.\""
+      ],
+      "problems": [],
+      "ok": false
+    },
+    {
+      "dir": "matrix-hideshow-home",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 12
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-hideshow-home",
+          "case": "hideshow",
+          "run": 1,
+          "surface": "home",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1540/1540",
+          "scrollLast": "3290/3290",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow1mtvhsuwm-1789042649.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1540,
+              "max": 1540
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1610,
+              "max": 1610
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1694,
+              "max": 1694
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1778,
+              "max": 1778
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1862,
+              "max": 1862
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1946,
+              "max": 1946
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2030,
+              "max": 2030
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2114,
+              "max": 2114
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2198,
+              "max": 2198
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2282,
+              "max": 2282
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2366,
+              "max": 2366
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2450,
+              "max": 2450
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2534,
+              "max": 2534
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2618,
+              "max": 2618
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2702,
+              "max": 2702
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2786,
+              "max": 2786
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2870,
+              "max": 2870
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2954,
+              "max": 2954
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3038,
+              "max": 3038
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3122,
+              "max": 3122
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3206,
+              "max": 3206
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3290,
+              "max": 3290
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hideshow-home",
+          "case": "hideshow",
+          "run": 2,
+          "surface": "home",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1512/1512",
+          "scrollLast": "3262/3262",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow2mtvhvmnm-1789042778.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1512,
+              "max": 1512
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1582,
+              "max": 1582
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1666,
+              "max": 1666
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1750,
+              "max": 1750
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1834,
+              "max": 1834
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1918,
+              "max": 1918
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2002,
+              "max": 2002
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2086,
+              "max": 2086
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2170,
+              "max": 2170
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2254,
+              "max": 2254
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2338,
+              "max": 2338
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2422,
+              "max": 2422
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2506,
+              "max": 2506
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2590,
+              "max": 2590
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2674,
+              "max": 2674
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2758,
+              "max": 2758
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2842,
+              "max": 2842
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2926,
+              "max": 2926
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3010,
+              "max": 3010
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3094,
+              "max": 3094
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3178,
+              "max": 3178
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3262,
+              "max": 3262
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hideshow-home",
+          "case": "hideshow",
+          "run": 3,
+          "surface": "home",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1512/1512",
+          "scrollLast": "3262/3262",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow3mtvhye0m-1789042907.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1512,
+              "max": 1512
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1582,
+              "max": 1582
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1666,
+              "max": 1666
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1750,
+              "max": 1750
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1834,
+              "max": 1834
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1918,
+              "max": 1918
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2002,
+              "max": 2002
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2086,
+              "max": 2086
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2170,
+              "max": 2170
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2254,
+              "max": 2254
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2338,
+              "max": 2338
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2422,
+              "max": 2422
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2506,
+              "max": 2506
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2590,
+              "max": 2590
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2674,
+              "max": 2674
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2758,
+              "max": 2758
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2842,
+              "max": 2842
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2926,
+              "max": 2926
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3010,
+              "max": 3010
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3094,
+              "max": 3094
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3178,
+              "max": 3178
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3262,
+              "max": 3262
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-hideshow-ticket",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 12
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-hideshow-ticket",
+          "case": "hideshow",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "3318/3318",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow1mtvhjeia-1789042208.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1638,
+              "max": 1638
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1722,
+              "max": 1722
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1806,
+              "max": 1806
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1890,
+              "max": 1890
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1974,
+              "max": 1974
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2058,
+              "max": 2058
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2142,
+              "max": 2142
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2226,
+              "max": 2226
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2310,
+              "max": 2310
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2394,
+              "max": 2394
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2478,
+              "max": 2478
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2562,
+              "max": 2562
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2646,
+              "max": 2646
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2730,
+              "max": 2730
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2814,
+              "max": 2814
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2898,
+              "max": 2898
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2982,
+              "max": 2982
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3066,
+              "max": 3066
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3150,
+              "max": 3150
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3234,
+              "max": 3234
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3318,
+              "max": 3318
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hideshow-ticket",
+          "case": "hideshow",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "3290/3290",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow2mtvhmbet-1789042344.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1610,
+              "max": 1610
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1694,
+              "max": 1694
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1778,
+              "max": 1778
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1862,
+              "max": 1862
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1946,
+              "max": 1946
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2030,
+              "max": 2030
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2114,
+              "max": 2114
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2198,
+              "max": 2198
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2282,
+              "max": 2282
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2366,
+              "max": 2366
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2450,
+              "max": 2450
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2534,
+              "max": 2534
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2618,
+              "max": 2618
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2702,
+              "max": 2702
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2786,
+              "max": 2786
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2870,
+              "max": 2870
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2954,
+              "max": 2954
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3038,
+              "max": 3038
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3122,
+              "max": 3122
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3206,
+              "max": 3206
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3290,
+              "max": 3290
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hideshow-ticket",
+          "case": "hideshow",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "3290/3290",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 20,
+          "requiredBoundaries": 20,
+          "referencePath": "/tmp/volli-reflow-hideshow3mtvhp70g-1789042478.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "board-return-1",
+              "anchored": true,
+              "top": 1610,
+              "max": 1610
+            },
+            {
+              "t": "board-return-2",
+              "anchored": true,
+              "top": 1694,
+              "max": 1694
+            },
+            {
+              "t": "board-return-3",
+              "anchored": true,
+              "top": 1778,
+              "max": 1778
+            },
+            {
+              "t": "board-return-4",
+              "anchored": true,
+              "top": 1862,
+              "max": 1862
+            },
+            {
+              "t": "board-return-5",
+              "anchored": true,
+              "top": 1946,
+              "max": 1946
+            },
+            {
+              "t": "board-return-6",
+              "anchored": true,
+              "top": 2030,
+              "max": 2030
+            },
+            {
+              "t": "board-return-7",
+              "anchored": true,
+              "top": 2114,
+              "max": 2114
+            },
+            {
+              "t": "board-return-8",
+              "anchored": true,
+              "top": 2198,
+              "max": 2198
+            },
+            {
+              "t": "board-return-9",
+              "anchored": true,
+              "top": 2282,
+              "max": 2282
+            },
+            {
+              "t": "board-return-10",
+              "anchored": true,
+              "top": 2366,
+              "max": 2366
+            },
+            {
+              "t": "tab-return-1",
+              "anchored": true,
+              "top": 2450,
+              "max": 2450
+            },
+            {
+              "t": "tab-return-2",
+              "anchored": true,
+              "top": 2534,
+              "max": 2534
+            },
+            {
+              "t": "tab-return-3",
+              "anchored": true,
+              "top": 2618,
+              "max": 2618
+            },
+            {
+              "t": "tab-return-4",
+              "anchored": true,
+              "top": 2702,
+              "max": 2702
+            },
+            {
+              "t": "tab-return-5",
+              "anchored": true,
+              "top": 2786,
+              "max": 2786
+            },
+            {
+              "t": "tab-return-6",
+              "anchored": true,
+              "top": 2870,
+              "max": 2870
+            },
+            {
+              "t": "tab-return-7",
+              "anchored": true,
+              "top": 2954,
+              "max": 2954
+            },
+            {
+              "t": "tab-return-8",
+              "anchored": true,
+              "top": 3038,
+              "max": 3038
+            },
+            {
+              "t": "tab-return-9",
+              "anchored": true,
+              "top": 3122,
+              "max": 3122
+            },
+            {
+              "t": "tab-return-10",
+              "anchored": true,
+              "top": 3206,
+              "max": 3206
+            },
+            {
+              "t": "hideshow-final",
+              "anchored": true,
+              "top": 3290,
+              "max": 3290
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-hsplit",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 12
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-hsplit",
+          "case": "hsplit",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 12 86 → 25 86 → 38 86",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "2058/3010",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-hsplit1mtvfg4zj-1789038696.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": false,
+              "top": 1974,
+              "max": 2184
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 1988,
+              "max": 2086
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 1988,
+              "max": 1988
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 2058,
+              "max": 2254
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": false,
+              "top": 2044,
+              "max": 2520
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2058,
+              "max": 2422
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": false,
+              "top": 2072,
+              "max": 2324
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2058,
+              "max": 2590
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": false,
+              "top": 2044,
+              "max": 2856
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2058,
+              "max": 2758
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": false,
+              "top": 2072,
+              "max": 2660
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2058,
+              "max": 2926
+            },
+            {
+              "t": "split-final",
+              "anchored": false,
+              "top": 2058,
+              "max": 3010
+            }
+          ],
+          "firstUnanchored": "drag-c1-25",
+          "unanchoredCount": 12,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hsplit",
+          "case": "hsplit",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 12 86 → 25 86 → 38 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "2044/2982",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-hsplit2mtvfio4w-1789038814.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": false,
+              "top": 1946,
+              "max": 2156
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 1974,
+              "max": 2058
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 1960,
+              "max": 1960
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 2030,
+              "max": 2226
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": false,
+              "top": 2016,
+              "max": 2492
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2394
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": false,
+              "top": 2058,
+              "max": 2296
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2562
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": false,
+              "top": 2030,
+              "max": 2828
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2730
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": false,
+              "top": 2058,
+              "max": 2632
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2898
+            },
+            {
+              "t": "split-final",
+              "anchored": false,
+              "top": 2044,
+              "max": 2982
+            }
+          ],
+          "firstUnanchored": "drag-c1-25",
+          "unanchoredCount": 12,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-hsplit",
+          "case": "hsplit",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 12 86 → 25 86 → 38 86",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "2030/2982",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-hsplit3mtvfl6zo-1789038932.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": false,
+              "top": 1946,
+              "max": 2156
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 1974,
+              "max": 2058
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 1960,
+              "max": 1960
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": false,
+              "top": 2030,
+              "max": 2226
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": false,
+              "top": 2016,
+              "max": 2492
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2030,
+              "max": 2394
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": false,
+              "top": 2058,
+              "max": 2296
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2562
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": false,
+              "top": 2030,
+              "max": 2828
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2044,
+              "max": 2730
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": false,
+              "top": 2058,
+              "max": 2632
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": false,
+              "top": 2030,
+              "max": 2898
+            },
+            {
+              "t": "split-final",
+              "anchored": false,
+              "top": 2030,
+              "max": 2982
+            }
+          ],
+          "firstUnanchored": "drag-c1-25",
+          "unanchoredCount": 12,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-resize",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 6
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-resize",
+          "case": "resize",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 160 → 51 40",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "2184/2184",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 7,
+          "requiredBoundaries": 7,
+          "referencePath": "/tmp/volli-reflow-resize1mtvf6kcu-1789038249.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "resize-wide1",
+              "anchored": true,
+              "top": 728,
+              "max": 728
+            },
+            {
+              "t": "resize-narrow1",
+              "anchored": true,
+              "top": 3206,
+              "max": 3206
+            },
+            {
+              "t": "resize-wide2",
+              "anchored": true,
+              "top": 840,
+              "max": 840
+            },
+            {
+              "t": "resize-narrow2",
+              "anchored": true,
+              "top": 3458,
+              "max": 3458
+            },
+            {
+              "t": "resize-wide3",
+              "anchored": true,
+              "top": 938,
+              "max": 938
+            },
+            {
+              "t": "resize-narrow3",
+              "anchored": true,
+              "top": 3710,
+              "max": 3710
+            },
+            {
+              "t": "resize-restore",
+              "anchored": true,
+              "top": 2114,
+              "max": 2114
+            },
+            {
+              "t": "resize-final",
+              "anchored": true,
+              "top": 2184,
+              "max": 2184
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-resize",
+          "case": "resize",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 160 → 51 40",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "2156/2156",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 7,
+          "requiredBoundaries": 7,
+          "referencePath": "/tmp/volli-reflow-resize2mtvf7nwv-1789038301.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "resize-wide1",
+              "anchored": true,
+              "top": 716,
+              "max": 716
+            },
+            {
+              "t": "resize-narrow1",
+              "anchored": true,
+              "top": 3136,
+              "max": 3136
+            },
+            {
+              "t": "resize-wide2",
+              "anchored": true,
+              "top": 812,
+              "max": 812
+            },
+            {
+              "t": "resize-narrow2",
+              "anchored": true,
+              "top": 3388,
+              "max": 3388
+            },
+            {
+              "t": "resize-wide3",
+              "anchored": true,
+              "top": 910,
+              "max": 910
+            },
+            {
+              "t": "resize-narrow3",
+              "anchored": true,
+              "top": 3640,
+              "max": 3640
+            },
+            {
+              "t": "resize-restore",
+              "anchored": true,
+              "top": 2086,
+              "max": 2086
+            },
+            {
+              "t": "resize-final",
+              "anchored": true,
+              "top": 2156,
+              "max": 2156
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-resize",
+          "case": "resize",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 160 → 51 40",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "2156/2156",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 7,
+          "requiredBoundaries": 7,
+          "referencePath": "/tmp/volli-reflow-resize3mtvf8xoc-1789038360.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "resize-wide1",
+              "anchored": true,
+              "top": 716,
+              "max": 716
+            },
+            {
+              "t": "resize-narrow1",
+              "anchored": true,
+              "top": 3136,
+              "max": 3136
+            },
+            {
+              "t": "resize-wide2",
+              "anchored": true,
+              "top": 812,
+              "max": 812
+            },
+            {
+              "t": "resize-narrow2",
+              "anchored": true,
+              "top": 3388,
+              "max": 3388
+            },
+            {
+              "t": "resize-wide3",
+              "anchored": true,
+              "top": 910,
+              "max": 910
+            },
+            {
+              "t": "resize-narrow3",
+              "anchored": true,
+              "top": 3640,
+              "max": 3640
+            },
+            {
+              "t": "resize-restore",
+              "anchored": true,
+              "top": 2086,
+              "max": 2086
+            },
+            {
+              "t": "resize-final",
+              "anchored": true,
+              "top": 2156,
+              "max": 2156
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    },
+    {
+      "dir": "matrix-vsplit",
+      "backend": "WebGPU",
+      "consoleByLevel": {
+        "warning": 12
+      },
+      "contextWarnings": 0,
+      "contextWarningSample": [],
+      "rows": [
+        {
+          "dir": "matrix-vsplit",
+          "case": "vsplit",
+          "run": 1,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 20 → 51 42 → 51 63",
+          "scrollFirst": "1554/1554",
+          "scrollLast": "4564/4564",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-vsplit1mtvfoe1r-1789039081.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1554,
+              "max": 1554
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": true,
+              "top": 5978,
+              "max": 5978
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3178,
+              "max": 3178
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 2254,
+              "max": 2254
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3430,
+              "max": 3430
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": true,
+              "top": 6972,
+              "max": 6972
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3682,
+              "max": 3682
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": true,
+              "top": 2632,
+              "max": 2632
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3934,
+              "max": 3934
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": true,
+              "top": 7966,
+              "max": 7966
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4186,
+              "max": 4186
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": true,
+              "top": 2982,
+              "max": 2982
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4438,
+              "max": 4438
+            },
+            {
+              "t": "split-final",
+              "anchored": true,
+              "top": 4564,
+              "max": 4564
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-vsplit",
+          "case": "vsplit",
+          "run": 2,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 20 → 51 42 → 51 63",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "4508/4508",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-vsplit2mtvfqnkj-1789039187.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": true,
+              "top": 5852,
+              "max": 5852
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3122,
+              "max": 3122
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 2212,
+              "max": 2212
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3374,
+              "max": 3374
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": true,
+              "top": 6846,
+              "max": 6846
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3626,
+              "max": 3626
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": true,
+              "top": 2590,
+              "max": 2590
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3878,
+              "max": 3878
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": true,
+              "top": 7840,
+              "max": 7840
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4130,
+              "max": 4130
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": true,
+              "top": 2940,
+              "max": 2940
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4382,
+              "max": 4382
+            },
+            {
+              "t": "split-final",
+              "anchored": true,
+              "top": 4508,
+              "max": 4508
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        },
+        {
+          "dir": "matrix-vsplit",
+          "case": "vsplit",
+          "run": 3,
+          "surface": "ticket",
+          "backend": "WebGPU",
+          "grids": "51 86 → 51 20 → 51 42 → 51 63",
+          "scrollFirst": "1526/1526",
+          "scrollLast": "4508/4508",
+          "seedFound": 7,
+          "finalFound": 7,
+          "required": 7,
+          "boundaries": 12,
+          "requiredBoundaries": 12,
+          "referencePath": "/tmp/volli-reflow-vsplit3mtvfsuqv-1789039289.txt",
+          "referenceLines": 63,
+          "shellResponded": true,
+          "anchorSeries": [
+            {
+              "t": "seedpost",
+              "anchored": true,
+              "top": 1526,
+              "max": 1526
+            },
+            {
+              "t": "drag-c1-25",
+              "anchored": true,
+              "top": 5852,
+              "max": 5852
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3122,
+              "max": 3122
+            },
+            {
+              "t": "drag-c1-75",
+              "anchored": true,
+              "top": 2212,
+              "max": 2212
+            },
+            {
+              "t": "drag-c1-50",
+              "anchored": true,
+              "top": 3374,
+              "max": 3374
+            },
+            {
+              "t": "drag-c2-25",
+              "anchored": true,
+              "top": 6846,
+              "max": 6846
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3626,
+              "max": 3626
+            },
+            {
+              "t": "drag-c2-75",
+              "anchored": true,
+              "top": 2590,
+              "max": 2590
+            },
+            {
+              "t": "drag-c2-50",
+              "anchored": true,
+              "top": 3878,
+              "max": 3878
+            },
+            {
+              "t": "drag-c3-25",
+              "anchored": true,
+              "top": 7840,
+              "max": 7840
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4130,
+              "max": 4130
+            },
+            {
+              "t": "drag-c3-75",
+              "anchored": true,
+              "top": 2940,
+              "max": 2940
+            },
+            {
+              "t": "drag-c3-50",
+              "anchored": true,
+              "top": 4382,
+              "max": 4382
+            },
+            {
+              "t": "split-final",
+              "anchored": true,
+              "top": 4508,
+              "max": 4508
+            }
+          ],
+          "firstUnanchored": null,
+          "unanchoredCount": 0,
+          "failures": [],
+          "verdict": "PASS"
+        }
+      ],
+      "notes": [],
+      "problems": [],
+      "ok": true
+    }
   ]
 }
