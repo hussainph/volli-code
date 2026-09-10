@@ -87,7 +87,9 @@ const MIN_REVEAL_MS = 90;
 /** Reduced motion keeps a cross-fade, and keeps it short. */
 const REDUCED_REVEAL_MS = 120;
 
-/** The arming strip, on the canvas gutter the framed card already leaves bare. */
+/** The arming strip, on the canvas gutter the framed card already leaves bare.
+ * The shell widens it by one shell inset when the workspace rail is down
+ * (app-shell.tsx) — the bare window edge at 8px is a target nobody can find. */
 export const ZONE_WIDTH = 8;
 /** Dead band under the chrome bar — see the pointer-intent note in the header. */
 export const ZONE_TOP_DEAD_BAND = 24;
