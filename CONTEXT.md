@@ -187,12 +187,27 @@ the Session can continue past the model's window. It is linear and additive: the
 summary is appended, the history before it stays in durable local history, and
 only what the model is sent changes. It happens for one of three reasons — a
 reserve threshold, an overflow the provider refused, or an explicit request —
-and each one is a Session Event. Only the threshold is policy: one app-wide
-switch decides whether a Session compacts before it is asked to, and every
-Session runs on the executor's own reserve (per-model reserves retired,
-VC-155). Switching the threshold off never withholds the recovery an overflow
-triggers.
-_Avoid_: truncation, trimming history, pruning the transcript
+and each one is a Session Event. A fourth reason exists on the FAILED arm only:
+a provider-native checkpoint the Session can no longer use, whose history is
+restored in its place. It is a reason a person sees rather than a silent
+recovery, because their context just grew back and the next turn may compact
+again for a threshold they did not watch fill. Only the threshold is policy: one app-wide
+switch decides whether a Session compacts before it is asked to. Nobody
+configures a reserve: per-model reserve budgets were retired with the policy
+that carried them (VC-155) and there is no setting to bring them back. The
+threshold itself is the larger of the executor's own reserve and a fixed share
+of the model's window — not a preference, an arithmetic fact about windows: one
+flat allowance is sensible at 200k and a rounding error at 1M, where it leaves
+less than one dense tool result of room and a single unmeasured round can carry
+a Session past the window before the next check (VC-331). The occupancy it is
+measured against is the provider's last reported usage plus a model-aware
+estimate of everything unmeasured since — incoming messages and tool results
+included — and it is checked before each provider request, not only ahead of an
+idle prompt. The summary's own output allowance stays on the executor's smaller
+reserve: a 1M-window model has no reason to write an 80,000-token summary.
+Switching the threshold off never withholds the recovery an overflow triggers.
+_Avoid_: truncation, trimming history, pruning the transcript, per-model reserve
+(a retired setting, not this window-proportional threshold)
 
 **Agent Runtime**:
 The product-aware execution package that hosts Volli's agent loop. It receives a

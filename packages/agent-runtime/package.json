@@ -24,6 +24,7 @@
     "@earendil-works/pi-ai": "0.85.0",
     "@mozilla/readability": "^0.6.0",
     "@volli/shared": "workspace:*",
+    "gpt-tokenizer": "^4.0.0",
     "jsdom": "^30.0.1",
     "proper-lockfile": "4.1.2",
     "sharp": "0.35.4",

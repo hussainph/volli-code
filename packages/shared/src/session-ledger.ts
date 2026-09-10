@@ -5,6 +5,7 @@
 
 import type {
   CompactionReason,
+  CompactionWorkReason,
   ModelSelection,
   PromptResource,
   ReasoningDropCause,
@@ -657,19 +658,23 @@ export type SessionEventPayload =
   | {
       kind: "context.compacted";
       attachmentId: string;
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
       entryId: string;
       /** Measured before, estimated after — see `CompactionObservation`. */
       tokensBefore: number;
       tokensAfter: number;
     }
   /**
-   * Compaction was attempted and produced nothing.
+   * Compaction was attempted and produced nothing — or a compaction that had
+   * already happened stopped being usable.
    *
    * Recorded because the silence is what hurts: the turn that paid for the
    * attempt was delivered on the context that was already there, and the refusal
    * that may follow reads as arbitrary unless history says the summary was tried
-   * first. It is not an Attention — nothing is blocked and nobody can clear it.
+   * first. `reason: "checkpoint"` is the second story on this arm — a
+   * provider-native checkpoint this Session can no longer use, whose history
+   * was restored in its place. It is not an Attention — nothing is blocked and
+   * nobody can clear it.
    */
   | {
       kind: "context.compaction_failed";

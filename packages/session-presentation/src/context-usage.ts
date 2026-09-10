@@ -11,11 +11,26 @@
  *    is the only total shown.
  *  - **Estimated.** How that total divides between the things on screen — your
  *    messages, the replies, reasoning, tool traffic — is not reported by any
- *    provider. It is estimated from transcript text at ~4 characters per token
- *    and then scaled so the parts never claim more than the measured whole.
- *    Whatever the visible transcript cannot account for is the system bucket:
- *    the system prompt, tool definitions, and provider overhead that occupy
- *    context without ever being drawn.
+ *    provider. It is estimated from transcript text and then scaled so the
+ *    parts never claim more than the measured whole. Whatever the visible
+ *    transcript cannot account for is the system bucket: the system prompt,
+ *    tool definitions, and provider overhead that occupy context without ever
+ *    being drawn.
+ *
+ * **Why no real tokenizer here, and why that is not the tokenizer work.** This
+ * package is client presentation: a desktop renderer today, and whatever web
+ * or mobile client comes next reads the same projection. A published BPE
+ * vocabulary is megabytes of table per family and would be shipped to every
+ * one of them to move a hover label, so it stays where it belongs — in the
+ * Agent Runtime, which is the only place that knows the model, holds the
+ * provider's measurements, and decides anything (VC-331). Nothing here is a
+ * decision: the measured total, the costs and the bill all come from the
+ * provider, and this only apportions a number it was handed. A ratio between
+ * segments is a much weaker thing to be right about than a token count, so it
+ * is estimated with an encoding-aware heuristic rather than an exact one. If a
+ * future surface needs a model-aware split — per-segment occupancy of record
+ * rather than a hover breakdown — it is a runtime-computed fact crossing the
+ * Session boundary, not a tokenizer added to this package.
  *
  * Pure over its arguments, so the split is testable without a session — and so
  * the surface above can memoize on the durable message list and stay off the
@@ -60,8 +75,15 @@ const SEGMENT_ORDER: readonly ContextSegmentId[] = [
   "tools",
 ];
 
-/** The estimate's whole model of tokenization. Close enough for a share, never shown as a count of record. */
-const CHARS_PER_TOKEN = 4;
+/**
+ * ASCII characters per token, amortized.
+ *
+ * Deliberately below the prose average: code, JSON and tool arguments — most
+ * of what a coding transcript holds — tokenize denser than English, and this
+ * estimate has one job, which is not to flatter the segment a person is
+ * looking at.
+ */
+const ASCII_CHARS_PER_TOKEN = 3;
 
 /**
  * The Session's context usage as of its last metered reply, or null while no
@@ -240,8 +262,31 @@ function trimmed(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+/**
+ * One segment's share of the measured total, never a count of record.
+ *
+ * ASCII runs are amortized; everything else is counted by the bytes it takes
+ * in UTF-8, which is the cheap stand-in for "this character costs a provider
+ * more than an `a` does". Dividing UTF-16 length by four said a CJK sentence
+ * and an equally long English one were the same amount of context — they are
+ * not, by roughly a factor of three, and the difference did not stay in that
+ * segment: the split is normalized, so understating one bucket silently
+ * inflates every other bucket beside it.
+ */
 function estimateTokens(text: string): number {
-  return text.length === 0 ? 0 : Math.ceil(text.length / CHARS_PER_TOKEN);
+  if (text.length === 0) return 0;
+  let ascii = 0;
+  let bytes = 0;
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x80) {
+      ascii += 1;
+      bytes += 1;
+    } else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else bytes += 4;
+  }
+  return Math.ceil(ascii / ASCII_CHARS_PER_TOKEN) + (bytes - ascii);
 }
 
 function safeStringify(value: unknown): string {

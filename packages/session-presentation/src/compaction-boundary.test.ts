@@ -141,6 +141,29 @@ describe("compactionBoundaryCopy", () => {
       "you asked",
     );
     expect(compactionBoundaryCopy(failed(1, "m1")).reason).toBe("the provider refused this turn");
+    expect(compactionBoundaryCopy({ ...failed(1, "m1"), reason: "checkpoint" }).reason).toBe(
+      "the saved checkpoint could not be read",
+    );
+  });
+
+  it("says the context grew back, not that it was left alone, when a checkpoint is lost", () => {
+    // The other failure on the same arm: nothing was summarized here either,
+    // but the context did NOT stay as it was. Telling a person it did, while
+    // their window refills, is the sentence they would act on and be wrong
+    // about.
+    const copy = compactionBoundaryCopy({
+      ...failed(1, "m1", "The provider-native checkpoint could not be read."),
+      reason: "checkpoint",
+    });
+    expect(copy.headline).toBe("Compaction reverted");
+    expect(copy.note).toBe("The messages it had replaced are being sent to the model again.");
+    expect(copy.before).toBeNull();
+    expect(copy.description).toBe(
+      "Compaction reverted — the saved checkpoint could not be read. The messages it had replaced are being sent to the model again. The provider-native checkpoint could not be read.",
+    );
+    // The ordinary failure still says the opposite thing.
+    expect(compactionBoundaryCopy(failed(1, "m1")).note).toBe("The context was left as it was.");
+    expect(compactionBoundaryCopy(failed(1, "m1")).headline).toBe("Compaction failed");
   });
 
   it("draws the measured count and no estimate of what replaced it", () => {
