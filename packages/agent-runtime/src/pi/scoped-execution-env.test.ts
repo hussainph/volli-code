@@ -1271,4 +1271,76 @@ describe("ScopedExecutionEnv", () => {
       vi.useRealTimers();
     }
   });
+
+  it("records each spawned command in the spawn ledger and closes the row on close", async () => {
+    // VC-341: the row, not the command line, is what says whose a process is
+    // after the Session that asked for it has ended. `detached` makes the child
+    // its own group leader, so the pid recorded is also the group a reap would
+    // signal.
+    const { worktree } = roots();
+    const running = child();
+    const recorded: unknown[] = [];
+    const exited: string[] = [];
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => running) as never,
+      ledger: {
+        port: {
+          recordSpawn: (spawn) => {
+            recorded.push(spawn);
+            return "row-1";
+          },
+          markExited: (id) => exited.push(id),
+        },
+        owner: { sessionId: "session-1", ticketId: "ticket-1", projectId: "project-1" },
+      },
+    });
+
+    const execution = env.exec("pnpm dev");
+    await vi.waitFor(() => expect(recorded).toHaveLength(1));
+    expect(recorded[0]).toMatchObject({
+      sessionId: "session-1",
+      ticketId: "ticket-1",
+      projectId: "project-1",
+      kind: "execute",
+      pid: 1234,
+      pgid: 1234,
+      cwd: env.cwd,
+      command: "pnpm dev",
+    });
+    expect(exited).toEqual([]);
+
+    running.emit("close", 0);
+    await execution;
+    expect(exited).toEqual(["row-1"]);
+  });
+
+  it("records nothing for a spawn that produced no pid", async () => {
+    const { worktree } = roots();
+    const pidless = child();
+    // A host double that never forked: there is no process to name, and a row
+    // naming no process would be worse than no row.
+    Reflect.deleteProperty(pidless, "pid");
+    const recorded: unknown[] = [];
+    const env = await ScopedExecutionEnv.create(worktree, {
+      sandbox: sandbox(),
+      spawn: (() => pidless) as never,
+      ledger: {
+        port: {
+          recordSpawn: (spawn) => {
+            recorded.push(spawn);
+            return "row-1";
+          },
+          markExited: () => {},
+        },
+        owner: { sessionId: "session-1", ticketId: null, projectId: null },
+      },
+    });
+
+    const execution = env.exec("true");
+    await vi.waitFor(() => expect(pidless.listenerCount("close")).toBeGreaterThan(0));
+    pidless.emit("close", 0);
+    await execution;
+    expect(recorded).toEqual([]);
+  });
 });

@@ -306,6 +306,11 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     decision: "exclude",
     reason: "Local channel health timestamps; meaningless on another machine.",
   },
+  {
+    table: "spawned_processes",
+    decision: "exclude",
+    reason: "Process ids on THIS machine; a pid restored elsewhere would name a stranger.",
+  },
 ];
 
 /**

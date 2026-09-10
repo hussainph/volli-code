@@ -22,6 +22,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   Appearance,
   Canvas,
+  AutoReapPolicy,
   CreateTerminalSessionRequest,
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
@@ -149,6 +150,10 @@ import type {
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimResult,
   PiSessionOrphanScanResult,
+  OrphanProcessReapInput,
+  OrphanProcessReapResult,
+  OrphanProcessPolicyResult,
+  OrphanProcessScanResult,
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
@@ -403,6 +408,18 @@ const api = {
     scanOrphans: (): Promise<PiSessionOrphanScanResult> => invoke("volli:pi-session-orphans-scan"),
     reclaimOrphans: (input: PiSessionOrphanReclaimInput): Promise<PiSessionOrphanReclaimResult> =>
       invoke("volli:pi-session-orphans-reclaim", input),
+  },
+  /**
+   * Running processes no live Session owns (VC-341). The scan is read-only; a
+   * reap names only items from the revision it was shown under, and main
+   * re-proves each one's identity before it signals anything.
+   */
+  orphanProcesses: {
+    scan: (): Promise<OrphanProcessScanResult> => invoke("volli:orphan-processes-scan"),
+    reap: (input: OrphanProcessReapInput): Promise<OrphanProcessReapResult> =>
+      invoke("volli:orphan-processes-reap", input),
+    setPolicy: (policy: AutoReapPolicy): Promise<OrphanProcessPolicyResult> =>
+      invoke("volli:orphan-processes-policy", policy),
   },
   /**
    * The Browser Tab door: chrome commands in, chrome snapshots out. Every

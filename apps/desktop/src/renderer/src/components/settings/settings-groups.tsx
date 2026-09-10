@@ -233,6 +233,16 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "pi session logs",
             "orphaned logs",
             "orphaned pi logs",
+            // The orphan PROCESS sweep (VC-341). "memory" and "reap" are here
+            // because they are what a person actually types when a fan is loud
+            // and they are looking for what to stop.
+            "running processes",
+            "no session owns",
+            "reap",
+            "reap under memory pressure",
+            "memory",
+            "process",
+            "orphan process",
             "scan",
             "clean up",
             "database",

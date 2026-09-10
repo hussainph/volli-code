@@ -37,6 +37,7 @@ import type {
   IpcArgs,
   ModelAccessIpcChannel,
   NotificationIpcChannel,
+  OrphanProcessIpcChannel,
   PiSessionOrphanIpcChannel,
   ShellIpcChannel,
   ThemeIpcChannel,
@@ -363,6 +364,44 @@ export const PI_SESSION_ORPHAN_IPC: {
 export const PI_SESSION_ORPHAN_CHANNELS = Object.keys(
   PI_SESSION_ORPHAN_IPC,
 ) as readonly PiSessionOrphanIpcChannel[];
+
+// ---- orphan process descriptor table (VC-341) ---------------------------
+
+export const ORPHAN_PROCESS_IPC: {
+  readonly [C in OrphanProcessIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:orphan-processes-scan": {
+    guard: (args): args is [] => args.length === 0,
+    invalidError: "Invalid orphan process scan request",
+  },
+  "volli:orphan-processes-reap": {
+    guard: (args): args is IpcArgs<"volli:orphan-processes-reap"> => {
+      if (args.length !== 1 || !isRecord(args[0])) return false;
+      return (
+        typeof args[0]["scanRevision"] === "string" &&
+        isStringArray(args[0]["itemIds"]) &&
+        args[0]["itemIds"].length > 0
+      );
+    },
+    invalidError: "Invalid reap request",
+  },
+  "volli:orphan-processes-policy": {
+    guard: (args): args is IpcArgs<"volli:orphan-processes-policy"> => {
+      if (args.length !== 1 || !isRecord(args[0])) return false;
+      const hours = args[0]["minimumAgeHours"];
+      return (
+        typeof args[0]["enabled"] === "boolean" &&
+        typeof hours === "number" &&
+        Number.isFinite(hours)
+      );
+    },
+    invalidError: "Invalid automatic reaping setting",
+  },
+};
+
+export const ORPHAN_PROCESS_CHANNELS = Object.keys(
+  ORPHAN_PROCESS_IPC,
+) as readonly OrphanProcessIpcChannel[];
 
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is

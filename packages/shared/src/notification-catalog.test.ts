@@ -66,7 +66,12 @@ describe("producer catalog", () => {
       "harness-input-needed",
     ]);
     expect([...producersForNotificationEvent("finished")]).toEqual(["pull-request-merged"]);
-    expect([...producersForNotificationEvent("swept")]).toEqual(["worktree-reclaimed"]);
+    // Maintenance that takes back a resource nobody is using: the folder
+    // (VC-113), and the processes still running inside it (VC-341).
+    expect([...producersForNotificationEvent("swept")]).toEqual([
+      "worktree-reclaimed",
+      "orphan-processes-reaped",
+    ]);
     expect([...producersForNotificationEvent("update")]).toEqual(["update-ready"]);
   });
 

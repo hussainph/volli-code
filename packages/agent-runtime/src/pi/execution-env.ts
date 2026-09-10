@@ -328,6 +328,16 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
  *
+ * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
+ * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and
+ * exposes no child, no pid and no spawn hook — `exec` resolves only once the
+ * command has finished — so there is no honest moment at which this class could
+ * write `(pid, pgid, startTime)`. Inventing one from a process-table scan would
+ * be a guess written into a ledger whose whole value is that it is not a guess.
+ * `ScopedExecutionEnv`, which does own its spawn, takes the ledger port; what
+ * escapes from THIS path is covered by the cwd sweep, since a command started
+ * here stands in the Session's workspace, and by `execute`'s own group kill.
+ *
  * `identity` exists for the same caller: main hands in the Session's durable
  * id and its Ticket's display id, so `VOLLI_SESSION`/`VOLLI_TICKET` are set in
  * a structured Session's shell exactly as `agentSessionEnv` sets them in a
