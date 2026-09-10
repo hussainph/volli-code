@@ -779,11 +779,21 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             onDirtyChange={fileWorkspace.handleDirtyChange}
           />
         ) : null}
-        {chatSessionId !== null ? (
+        {chatSessionId !== null && visible ? (
           // Keyed by Session — the client, the fold and the queue are resident
           // (@volli/session-presentation's registry), so a remount costs nothing
           // and carries nothing over. Which is exactly why a chat may live in a
           // pane cell while a terminal may not.
+          //
+          // AND WHY IT LEAVES WITH THE SURFACE (VC-338). Home's box is hidden,
+          // not unmounted, so that no live terminal is ever torn down — but a
+          // chat plane standing behind Settings or another nav page is a
+          // transcript's worth of DOM that nobody can see, for every Home chat
+          // in front of a pane. Nothing is lost by dropping it: the stream, the
+          // fold and the queue are in the registry, the half-typed message is in
+          // `chat-drafts.ts`, and the reading position is in
+          // `transcript-window.ts`. A terminal has none of that and keeps its
+          // box; a chat is a projection and can be redrawn.
           <ChatPlane
             key={chatSessionId}
             sessionId={chatSessionId}

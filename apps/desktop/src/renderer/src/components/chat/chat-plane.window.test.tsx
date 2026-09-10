@@ -28,6 +28,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { ChatPlane } from "./chat-plane";
 import {
   forgetTranscriptViews,
@@ -167,8 +168,22 @@ async function unmountPlane() {
 }
 
 const turnRows = () => container?.querySelectorAll(".is-user, .is-assistant").length ?? 0;
+const composer = () => container?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
 const earlierButton = () => container?.querySelector("[data-transcript-earlier]") ?? null;
 const shows = (index: number) => container?.textContent?.includes(`turn number ${index}`) === true;
+
+/**
+ * Typing, as React sees it. Assigning `.value` and firing `input` is not enough:
+ * React's own value tracker has already recorded the assignment, so the event
+ * arrives looking like a no-op and `onChange` never runs. Going through the
+ * prototype's setter is what leaves the tracker out of date — which is the
+ * signal React uses to decide a change happened.
+ */
+function type(box: HTMLTextAreaElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  setter?.call(box, text);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+}
 
 function click(target: Element): void {
   act(() => {
@@ -262,6 +277,26 @@ describe("a chat plane holding a long transcript", () => {
     expect(shows(revealedTop)).toBe(true);
     expect(shows(revealedTop - 1)).toBe(false);
     expect(shows(TURNS + 29)).toBe(true);
+  });
+
+  it("comes back with the half-typed message a tab switch unmounted", async () => {
+    // The other half of VC-338's unmount: a background plane may be dropped only
+    // because nothing a person authored lives in it. The draft store is where
+    // the words are (`chat-drafts.ts`); this is the round trip that proves it.
+    useChatDraftsStore.setState({ drafts: {} });
+    const store = chatStore(transcript(12));
+    await mountPlane(store);
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => {
+      type(box, "half a thought about the window");
+    });
+
+    await unmountPlane();
+    expect(composer()).toBeNull();
+
+    await mountPlane(store);
+    expect(composer()?.value).toBe("half a thought about the window");
   });
 
   it("comes back to the rows the reader had revealed after a tab round-trip", async () => {
