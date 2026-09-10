@@ -29,7 +29,6 @@ import {
   contextWindowOf,
   conversationPath,
   estimatedContextTokens,
-  occupiedContextTokens,
   type ConversationReader,
 } from "./compaction";
 import { piContext } from "./pi-context";
@@ -165,35 +164,11 @@ describe("contextWindowOf", () => {
   });
 });
 
-describe("occupiedContextTokens", () => {
-  it("sums the four measured token fields of the newest reply", () => {
-    const path = [
-      messageEntry(assistant("older", { usage: usage({ input: 9_000 }) })),
-      messageEntry(user("between")),
-      messageEntry(assistant("newer", { usage: usage({ input: 1_000, totalTokens: 1_032 }) })),
-    ];
-    // 1000 input + 20 output + 5 cache read + 7 cache write — cached prompt
-    // tokens are context the model held, not a separate budget.
-    expect(occupiedContextTokens(path)).toBe(1_032);
-  });
-
-  it("has no answer for a path whose replies never reported usage", () => {
-    expect(occupiedContextTokens([messageEntry(user("only a question"))])).toBeUndefined();
-    expect(
-      occupiedContextTokens([
-        messageEntry(
-          assistant("failed", { stopReason: "error", usage: usage({ totalTokens: 5_000 }) }),
-        ),
-      ]),
-    ).toBeUndefined();
-  });
-});
-
 describe("estimatedContextTokens", () => {
+  const model = scriptedModels([]).getModel(PROVIDER_ID, MODEL_ID)!;
   it("counts what a context holds without asking what the model measured", () => {
-    // Pi's heuristic is four characters to the token, per message.
-    expect(estimatedContextTokens([user("a".repeat(400))])).toBe(100);
-    expect(estimatedContextTokens([])).toBe(0);
+    expect(estimatedContextTokens([user("a".repeat(400))], model)).toBeGreaterThan(0);
+    expect(estimatedContextTokens([], model)).toBeGreaterThanOrEqual(0);
   });
 
   it("ignores the stale usage a retained reply still carries", () => {
@@ -203,7 +178,7 @@ describe("estimatedContextTokens", () => {
     // `estimateContextTokens` would answer 200,000 here.
     const retained = assistant("short", { usage: usage({ input: 200_000, totalTokens: 200_000 }) });
 
-    expect(estimatedContextTokens([retained])).toBeLessThan(100);
+    expect(estimatedContextTokens([retained], model)).toBeLessThan(100);
   });
 });
 
@@ -302,6 +277,65 @@ describe("contextMessages", () => {
       user("tail of newer"),
       user("third"),
     ]);
+  });
+
+  it("prices a realistic opaque OpenAI checkpoint conservatively but bounded", () => {
+    // The failure this guards is specific: a 2 MB `encrypted_content` blob run
+    // through a tokenizer produces a number in the hundreds of thousands, and a
+    // request budget built on it concludes a freshly compacted Session has no
+    // room left — the exact outcome compaction exists to prevent.
+    const opaque = "A1b2C3d4+/".repeat(200_000); // ~2 MB of base64-shaped state
+    const retainedText = "the user asked about the parser bug. ".repeat(200);
+    const entry: CompactionEntry = {
+      type: "compaction",
+      id: "c1",
+      seq: 0,
+      parentId: null,
+      timestamp: 0,
+      summary: "Provider-native context checkpoint.",
+      retainedTail: [],
+      tokensBefore: 250_000,
+      details: {
+        providerCompaction: {
+          kind: "openai-responses",
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: retainedText }],
+            },
+            { type: "compaction", id: "cpt_1", encrypted_content: opaque },
+          ],
+          model: MODEL_ID,
+          compactedAt: 1,
+        },
+      } as unknown as JsonValue,
+      fromHook: false,
+    };
+    const model = scriptedModels([]).getModel(PROVIDER_ID, MODEL_ID)!;
+    const tokens = estimatedContextTokens(contextMessages([entry]), model);
+    // Conservative: the checkpoint is never free, and the real text OpenAI
+    // retained is counted rather than hidden behind a placeholder sentence.
+    expect(tokens).toBeGreaterThan(estimatedContextTokens([user(retainedText)], model));
+    // Bounded: well inside a small window, so the output ceiling and the
+    // compaction threshold both still have room to work with.
+    expect(tokens).toBeLessThan(100_000);
+    // A small checkpoint is priced on what it actually serializes, so the cap
+    // is a ceiling rather than a flat charge.
+    const small = contextMessages([
+      {
+        ...entry,
+        details: {
+          providerCompaction: {
+            kind: "openai-responses",
+            items: [{ type: "compaction", id: "cpt_1", encrypted_content: "short" }],
+            model: MODEL_ID,
+            compactedAt: 1,
+          },
+        } as unknown as JsonValue,
+      },
+    ]);
+    expect(estimatedContextTokens(small, model)).toBeLessThan(200);
   });
 
   it("does not replay a failed assistant message as conversation context", () => {
@@ -404,6 +438,14 @@ describe("contextMessages", () => {
       user("recent request"),
       {
         ...kept,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
         content: [
           { type: "text", text: "the recent answer" },
           { type: "toolCall", id: "tc-1", name: "read", arguments: { path: "a.ts" } },
@@ -416,6 +458,8 @@ describe("contextMessages", () => {
     // the tail exactly as Pi wrote it.
     expect(entry.retainedTail[1]).toBe(kept);
     expect((entry.retainedTail[1] as AssistantMessage).content[0]?.type).toBe("thinking");
+    expect((entry.retainedTail[1] as AssistantMessage).usage.totalTokens).toBe(132);
+    expect((messages[2] as AssistantMessage).usage.totalTokens).toBe(0);
   });
 
   it("elides the Brief and the Turn Reminder the first message carried", () => {

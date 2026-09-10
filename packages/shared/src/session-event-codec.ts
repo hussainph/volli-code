@@ -37,6 +37,7 @@
 
 import {
   COMPACTION_REASONS,
+  COMPACTION_WORK_REASONS,
   REASONING_DROP_CAUSES,
   REASONING_LEVELS,
   SESSION_ROLES,
@@ -324,7 +325,10 @@ const codecs = {
     decode: (record, context) => ({
       kind: "context.compacted",
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-      reason: enumValue(record.reason, COMPACTION_REASONS, `${context}.reason`),
+      // The narrower list: a compaction that HAPPENED cannot have happened
+      // because a checkpoint could not be read, so a stored event claiming so
+      // is read as loudly as any other malformed field.
+      reason: enumValue(record.reason, COMPACTION_WORK_REASONS, `${context}.reason`),
       entryId: readString(record.entryId, `${context}.entryId`),
       tokensBefore: readInteger(record.tokensBefore, `${context}.tokensBefore`),
       tokensAfter: readInteger(record.tokensAfter, `${context}.tokensAfter`),

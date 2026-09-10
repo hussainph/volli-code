@@ -43,6 +43,7 @@ import { COLUMN_VOCABULARY } from "./agent-surface";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { MAX_SESSION_AWAIT_TARGETS, SESSION_AWAIT_FOR } from "./session-await";
 import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
 import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
@@ -1053,7 +1054,7 @@ export const VERB_REGISTRY = [
     example: "volli session list --ticket VC-12",
     notes: [
       "Prints each session's title and short id; session peek takes either type.",
-      "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+      "Chat rows carry liveness: working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
       "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
     options: [
@@ -1189,6 +1190,7 @@ export const VERB_REGISTRY = [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
+        "Its receipt includes a Session cursor; pass that cursor to session_await so a fast completion between these calls is replayed rather than missed.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1899,7 +1901,8 @@ export const VERB_REGISTRY = [
       description: [
         "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
         "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
-        "The message is delivered marked as steering from this Session; it does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn and includes a Session cursor for a lossless later session_await.",
+        "It does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
         "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
       ].join(" "),
       input: [
@@ -1993,7 +1996,7 @@ export const VERB_REGISTRY = [
       // The last line is the same one every control-tier tool ends on.
       description: [
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll or wait for it. Several may run at once.",
+        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once.",
         "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
@@ -2036,6 +2039,86 @@ export const VERB_REGISTRY = [
           type: "enum",
           values: REASONING_LEVELS,
           description: "Reasoning level override; the chosen model must support it.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // The watch/wake tool over Sessions (VC-324 item 3), and the LAST entry in
+    // this file for the reason `session.stop` and `session.delegate` were
+    // appended rather than filed beside their siblings: registry declaration
+    // order IS the frozen tool order, so anything inserted earlier shifts every
+    // verb after it inside every already-frozen surface record, and a shifted
+    // tool array invalidates the Cache Prefix — including the system prompt,
+    // where the provider orders tools first.
+    //
+    // A separate tool rather than a `sessions` field on `ticket.await`, for the
+    // same arithmetic seen from the other side: appending a tool shifts
+    // nothing, while growing an existing tool's schema changes bytes for every
+    // Session already born — none of which could ever call the new field, since
+    // a Session's surface is frozen at birth.
+    //
+    // Tool-only and off the socket, exactly as `ticket.await` is: a CLI verb
+    // must never wait, and the socket's ten-second request timeout enforces
+    // that mechanically. Blocking belongs where the runtime can suspend the
+    // turn and wake it.
+    key: "session.await",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.await" },
+    listed: false,
+    group: "Session",
+    summary: "Block until a watched Session finishes a turn, signals, or is stopped.",
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+      ],
+      nonEffects: [
+        "No Session is contacted, steered or stopped: nothing is written and nothing moves.",
+        "Waiting costs no model turns; the Session is suspended until it wakes.",
+      ],
+    },
+    tool: {
+      name: "session_await",
+      // Written for the model, and mostly about when to stop doing something
+      // else: an orchestrator that cannot wait polls `session list`, and a poll
+      // is a full turn re-sending the whole conversation. The interruption line
+      // is load-bearing — the failure this tool was built for is a fleet that
+      // read `idle` in a listing while four of its members had been cut off.
+      description: [
+        "Wait until one of the named Sessions finishes or is interrupted mid-turn, signals done or blocked, or is stopped, then wake with that one event.",
+        "Use it after delegating or steering work: it replaces polling `volli session list` in a loop and sleeping in bash, both of which waste turns or wedge the session.",
+        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
+        "Begin with the Session cursor returned by session_start, session_send or session_delegate; every wake and timeout returns the next cursor to chain so nothing committed in between is missed.",
+        "A Board Session may await any Session in its project; a Ticket Session may await itself and the subagents it delegated. What may be awaited is project policy; a refusal names what the policy allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "sessions",
+          type: "string",
+          required: true,
+          description: `One to ${MAX_SESSION_AWAIT_TARGETS} short session ids in this project, as \`volli session list\` prints them, separated by spaces or commas, for example 'a1b2c3d4 e5f6a7b8'.`,
+        },
+        {
+          name: "for",
+          type: "enum",
+          values: SESSION_AWAIT_FOR,
+          description:
+            "What wakes the wait: a turn ending (completed or interrupted), a done/blocked signal, a stop, or any of the three. Defaults to any.",
+        },
+        {
+          name: "timeoutSeconds",
+          type: "number",
+          description:
+            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+        {
+          name: "cursor",
+          type: "string",
+          description:
+            "Wake immediately on the first matching event after this opaque cursor. Start with the cursor returned by session_start, session_send or session_delegate, then copy each wake or timeout cursor unchanged; omit it only to start watching from now.",
         },
       ],
     },

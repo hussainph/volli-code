@@ -1,4 +1,8 @@
-import { SESSION_USER_BLOCKING_ATTENTION_KINDS, sessionAwaitsUser } from "@volli/shared";
+import {
+  SESSION_USER_BLOCKING_ATTENTION_KINDS,
+  sessionAwaitsUser,
+  sessionEndedInterrupted,
+} from "@volli/shared";
 import type {
   ChatSessionRecord,
   ChatWaitingReason,
@@ -71,6 +75,20 @@ export function chatSessionRecord(
  * Working then needs a process-local executor binding as well as the turn, so
  * a durable turn and open attachment that survived relaunch read as what they
  * are — nothing running — instead of a Session that spins forever.
+ *
+ * Interrupted (VC-324) is asked LAST of the four, and only of a Session that
+ * is none of them: `stopped` > `waiting` > `working` > `interrupted` > `idle`.
+ *  - A stopped Session stays `stopped` even though its turn was interrupted on
+ *    the way down — the stop is the newer truth AND names who did it, which is
+ *    strictly more than the interruption says.
+ *  - A Session that resumed and is working says `working`; the predicate agrees
+ *    on its own, because a fresh `turn.started` resets the outcome it reads.
+ *  - Everything left is a Session that is quiet — and `interrupted` is the half
+ *    of that quiet whose turn DIED, which is exactly what `idle` used to hide.
+ *
+ * Transport Attentions still fold into `idle` for a person's row (see
+ * `WAITING_ON_BY_ATTENTION`): nobody is being asked to do anything. What
+ * changed is that the row no longer calls a dead turn quiet.
  */
 function chatActivity(
   projection: SessionProjection,
@@ -79,6 +97,7 @@ function chatActivity(
   if (projection.stopped !== null) return "stopped";
   if (sessionAwaitsUser(projection)) return "waiting";
   if (projection.turnActive && executorBound) return "working";
+  if (sessionEndedInterrupted(projection)) return "interrupted";
   return "idle";
 }
 

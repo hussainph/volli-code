@@ -145,7 +145,13 @@ function parseDoctorObservation(request: AgentRequest): DoctorObservation | null
   };
 }
 
-/** `volli notify` — a native notification to the user. */
+/**
+ * `volli notify` — a native notification to the user.
+ *
+ * Operational rather than preference-controlled (VC-295): an agent was told to
+ * say exactly these words, and Volli is the messenger. And free-form, so it
+ * carries no target — there is nothing here to open that would not be invented.
+ */
 export async function notifyVerb(
   context: AgentCommandContext,
   request: AgentRequest,
@@ -167,8 +173,51 @@ export async function notifyVerb(
     label: `Native notification ${JSON.stringify(title.trim())}`,
   });
   if (preview !== null) return preview;
-  options.notify?.(title, message);
+  // The OUTCOME, not the attempt (VC-295 round 2). This is an operation a
+  // caller asked for, so an alert the system would not show is a failed
+  // operation and has to read as one — `{ notified: true }` over a refused
+  // delivery is exactly the silent swallow CLAUDE.md forbids, and the caller is
+  // an agent that will believe it.
+  //
+  // No port at all is a different fact: nothing is wired to deliver here (a
+  // test service, a host without the seam), so there is no refusal to report.
+  const outcome = options.notify?.({
+    producer: "agent-notify",
+    title,
+    body: message,
+    target: null,
+  });
+  if (outcome !== undefined && !outcome.delivered) {
+    return failure(
+      "MUTATION_FAILED",
+      notifyRefusal(outcome.reason),
+      outcome.reason === "unsupported"
+        ? "This platform posts no native notifications; report the result in your own output instead."
+        : "Check that Volli Code is allowed to notify in System Settings → Notifications.",
+    );
+  }
   return { v: 1, ok: true, data: { notified: true } };
+}
+
+/**
+ * Why a notification did not reach the person, in the caller's terms.
+ *
+ * Exhaustive over the delivery path's own vocabulary rather than defaulting:
+ * `muted` and `focused-target` cannot reach this verb today (a `volli notify`
+ * is operational and carries no target), but a default arm would turn the day
+ * either becomes reachable into a wrong sentence instead of a compile error.
+ */
+function notifyRefusal(reason: "muted" | "unsupported" | "focused-target" | "failed"): string {
+  switch (reason) {
+    case "unsupported":
+      return "The notification was not shown: this system posts no native notifications.";
+    case "failed":
+      return "The notification was not shown: the system refused to deliver it.";
+    case "muted":
+      return "The notification was not shown: notifications are switched off on this machine.";
+    case "focused-target":
+      return "The notification was not shown: what it points at is already on screen.";
+  }
 }
 
 /** `volli doctor` — what the harness integration is actually doing here. */

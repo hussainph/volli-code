@@ -58,15 +58,8 @@ export interface Project {
    */
   skillModes?: SkillModes;
   /**
-   * This project's harness for new Sessions, or `null` to inherit the app-wide
-   * default ({@link DEFAULT_HARNESS_ID}). Not constrained to {@link HarnessId}:
-   * harnesses are user-registrable, so the legal set is a table at runtime.
-   */
-  sessionHarness?: string | null;
-  /**
-   * This project's model for new Sessions, or `null` to inherit Model Access's
-   * app-wide per-purpose default. Scoped separately from {@link sessionHarness}
-   * for migration 014's reason: overriding one must not clear the other.
+   * This project's model for new Chats, or `null` to inherit Model Access's
+   * app-wide per-purpose default.
    */
   sessionModel?: ModelSelection | null;
   /**

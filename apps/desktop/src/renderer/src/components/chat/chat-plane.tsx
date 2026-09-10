@@ -16,6 +16,7 @@
  * which cards have a decision in flight.
  */
 import * as React from "react";
+import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 
 import { toastError } from "@renderer/lib/toast";
@@ -33,6 +34,7 @@ import type {
   ModelAccessModel,
   ModelAccessProvider,
   SessionAttentionProjection,
+  SessionNotificationItem,
   RendererSessionInteraction,
 } from "@volli/shared";
 import {
@@ -73,12 +75,13 @@ import {
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
-  weaveContextNotices,
+  projectTranscriptRows,
   type ChatSegment,
   type ComposerIntent,
   type InteractionSubmission,
   type MessageDelivery,
   type QueuedMessage,
+  type TranscriptRow,
 } from "@volli/session-presentation";
 import {
   useSessionController,
@@ -137,7 +140,14 @@ import {
   InteractionCard,
   InteractionReceiptLine,
 } from "@renderer/components/chat/interaction-ui";
+import {
+  onSessionItemReveal,
+  preferRevealedInteraction,
+  releaseSessionItemReveal,
+  takeSessionItemReveal,
+} from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
@@ -282,6 +292,7 @@ export function ChatPlane({
   // off the plane's subtree rather than the document so a split with two
   // chats never hands focus to the other one's island.
   const planeRef = React.useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion() ?? false;
   const peekReturnFocus = React.useCallback(
     () => planeRef.current?.querySelector<HTMLElement>('[data-island-cluster="agents"]') ?? null,
     [],
@@ -437,6 +448,40 @@ export function ChatPlane({
     projection?.interactions.active ?? NO_INTERACTIONS,
     sameInteractionId,
   );
+
+  /**
+   * The question a notification click asked for (VC-295).
+   *
+   * Claimed on mount AND subscribed to, because a click lands in either order:
+   * the Session may be opening because of it, or it may already be in front. A
+   * reveal only reorders the card slot below — it never answers anything — so a
+   * request naming an item that has since resolved simply changes nothing, and
+   * the click's own toast is what explains the absence.
+   */
+  const [revealed, setRevealed] = React.useState<SessionNotificationItem | null>(null);
+  React.useEffect(() => {
+    const claim = () => {
+      const item = takeSessionItemReveal(sessionId);
+      if (item === null) return;
+      // A fresh object per claim, on purpose: a second click on the same alert
+      // is a second ask, and the scroll below keys on the claim, not its ids.
+      setRevealed({ ...item });
+      // A click naming a failure is a person asking to see it, and a dismissal
+      // is a view choice that has now been reversed by a louder one: the row
+      // comes back for the exact problem the alert was about (round 5). A
+      // question needs no such reset — cards are never dismissed.
+      if (item.attentionId !== null) setDismissedBlockerKey(null);
+    };
+    claim();
+    const off = onSessionItemReveal(sessionId, claim);
+    return () => {
+      off();
+      // The override describes what THIS plane is drawing; a plane that is gone
+      // must not go on describing the window (VC-295 round 4).
+      releaseSessionItemReveal(sessionId);
+      setRevealed(null);
+    };
+  }, [sessionId]);
 
   /**
    * The one road out of this surface for anything a person typed.
@@ -760,7 +805,15 @@ export function ChatPlane({
    * state, and a blocked Session is not streaming anything to compete with.
    */
   const pending =
-    interactions.length > 0 ? footInteraction(interactions, gatedToolCallIds(messages)) : null;
+    interactions.length > 0
+      ? footInteraction(
+          // The revealed question takes the slot, when it is still open: the
+          // card stack draws one at a time, so "select that question" is this
+          // ordering and nothing else.
+          preferRevealedInteraction(interactions, revealed?.interactionId ?? null),
+          gatedToolCallIds(messages),
+        )
+      : null;
 
   // The Session's most recent reply — what `/copy` copies. Held in a ref as
   // well as a value for the same reason `pendingRef` above is: `onSubmit` is a
@@ -1007,12 +1060,12 @@ export function ChatPlane({
     React.useMemo(() => groupTurns(messages), [messages]),
     sameMessages,
   );
-  // The turns with durable context notices laid between them. Every input is
-  // held to its identity — the turn list by `useStableList`, the notice lists
-  // by folds that replace an array only when one lands — so this recomputes
-  // when the conversation moves and not once per frame.
+  // The portable Session Surface Model: ordinary Turns, host-authored notices,
+  // and durable context notices in their transcript order. Every input is held
+  // to its identity, so this recomputes when the conversation moves and not
+  // once per streamed frame.
   const rows = React.useMemo(
-    () => weaveContextNotices(turns, session.compactions, session.reasoningDrops),
+    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
     [session.compactions, session.reasoningDrops, turns],
   );
   // Identity, not an index. A boundary between the turns means a turn's place in
@@ -1020,6 +1073,27 @@ export function ChatPlane({
   // boundary, which would leave the turn still being written with nothing
   // saying so.
   const liveTurn = working ? (turns.at(-1) ?? null) : null;
+
+  /**
+   * The other place a question draws (round 5). A gated tool call's question
+   * sits on its own row in the transcript, not at the foot — `footInteraction`
+   * skips it by design — so reordering the foot did nothing for it, and a click
+   * on its alert opened the Session with the card somewhere above the fold. So
+   * a revealed question that is drawn inline is scrolled to, once per reveal
+   * and as soon as its row exists: `rows` is a dependency because the row may
+   * mount a frame after the plane does.
+   */
+  const scrolledReveal = React.useRef<SessionNotificationItem | null>(null);
+  React.useEffect(() => {
+    if (revealed === null || revealed.interactionId === null) return;
+    if (scrolledReveal.current === revealed) return;
+    const row = planeRef.current?.querySelector<HTMLElement>(
+      `[data-interaction-id="${CSS.escape(revealed.interactionId)}"]`,
+    );
+    if (row === null || row === undefined) return;
+    scrolledReveal.current = revealed;
+    row.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+  }, [reducedMotion, revealed, rows]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
@@ -1059,6 +1133,9 @@ export function ChatPlane({
     {
       sessionError: session.sessionError,
       attention: projection?.attention ?? EMPTY_ATTENTION,
+      // The failure a notification click named, so the row shows THAT problem
+      // rather than whichever one happens to be newest (VC-295).
+      revealedAttentionId: revealed?.attentionId ?? null,
       catalogState,
       catalogError,
       sessionModel,
@@ -1107,26 +1184,15 @@ export function ChatPlane({
                   </ConversationEmptyState>
                 ) : (
                   <ContentColumn className={MESSAGE_GAP}>
-                    {rows.map((row) =>
-                      row.kind === "compaction" ? (
-                        <CompactionBoundary
-                          key={`compaction:${row.compaction.sequence}`}
-                          compaction={row.compaction}
-                        />
-                      ) : row.kind === "reasoning-drop" ? (
-                        <ReasoningDropNotice
-                          key={`reasoning-drop:${row.drop.sequence}`}
-                          drop={row.drop}
-                        />
-                      ) : (
-                        <ChatTurn
-                          key={row.messages[0]?.id}
-                          messages={row.messages}
-                          context={turnContext}
-                          live={row.messages === liveTurn}
-                        />
-                      ),
-                    )}
+                    {rows.map((row) => (
+                      <ChatTranscriptRow
+                        key={transcriptRowKey(row)}
+                        row={row}
+                        context={turnContext}
+                        live={row.kind === "turn" && row.messages === liveTurn}
+                        {...(onOpenSession === undefined ? {} : { onOpenSession })}
+                      />
+                    ))}
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                     {working ? (
                       <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
@@ -1410,6 +1476,7 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
     // The composer overlay ignores hits so its empty padding does not cover the
     // transcript. This row carries recovery controls, so it must opt back in.
     <div
+      data-slot="session-blocker"
       className={cn(
         "pointer-events-auto mb-2 flex items-center gap-2 rounded-lg border bg-card px-4 py-1 text-ui shadow-raised",
         blocker.tone === "error" ? "border-destructive/30" : "border-border",
@@ -1529,6 +1596,48 @@ export interface TurnContext {
   /** The ids with a decision in flight — one card in flight is not all of them. */
   resolving: ReadonlySet<string>;
   onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
+}
+
+function transcriptRowKey(row: TranscriptRow): string {
+  switch (row.kind) {
+    case "turn":
+      return row.messages[0]?.id ?? "empty-turn";
+    case "host-notice":
+      return row.messageId;
+    case "compaction":
+      return `compaction:${row.compaction.sequence}`;
+    case "reasoning-drop":
+      return `reasoning-drop:${row.drop.sequence}`;
+  }
+}
+
+/** The desktop mapping of one portable transcript row; it owns no projection rules. */
+export function ChatTranscriptRow({
+  row,
+  context,
+  live,
+  onOpenSession,
+}: {
+  row: TranscriptRow;
+  context: TurnContext;
+  live: boolean;
+  onOpenSession?(sessionId: string): void;
+}) {
+  switch (row.kind) {
+    case "host-notice":
+      return (
+        <HostNoticeRow
+          notice={row.notice}
+          {...(onOpenSession === undefined ? {} : { onOpenSession })}
+        />
+      );
+    case "compaction":
+      return <CompactionBoundary compaction={row.compaction} />;
+    case "reasoning-drop":
+      return <ReasoningDropNotice drop={row.drop} />;
+    case "turn":
+      return <ChatTurn messages={row.messages} context={context} live={live} />;
+  }
 }
 
 /**
@@ -1742,7 +1851,9 @@ function renderSegment(
 function GatedCall({ part, context }: { part: DynamicToolUIPart; context: TurnContext }) {
   const interaction = interactionForApproval(context.open, gatedToolCallId(part));
   return (
-    <div className="space-y-1">
+    // The id is on the row so a notification click can scroll to THIS question
+    // (VC-295): it is the one card the foot slot never draws.
+    <div className="space-y-1" data-interaction-id={interaction?.id}>
       <ToolRow part={part} onOpenFile={context.onOpenFile} onOpenSession={context.onOpenSession} />
       {interaction ? (
         <InteractionCard

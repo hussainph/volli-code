@@ -31,6 +31,7 @@ import type {
   CompactionObservation,
   CompactionProgressObservation,
   CompactionReason,
+  CompactionWorkReason,
   ProviderReasoningDroppedObservation,
   RuntimeActivityObservation,
   RuntimeObservation,
@@ -134,7 +135,7 @@ export type TranslatedObservation =
       /** A live-only marker while the executor is preparing a context summary. */
       kind: "context.compaction-progress";
       state: CompactionProgressObservation["state"];
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
     })
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
@@ -150,7 +151,7 @@ export type TranslatedObservation =
    */
   | (TranslatedObservationBase & {
       kind: "context.compacted";
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
       entryId: string;
       tokensBefore: number;
       tokensAfter: number;
