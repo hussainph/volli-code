@@ -54,6 +54,7 @@ import {
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
+  useConversationControl,
 } from "@renderer/components/ui/ai-elements/conversation";
 import { FileMentionProvider } from "@renderer/components/ui/ai-elements/chat-markdown";
 import { MarkdownAttachmentsProvider } from "@renderer/components/attachments/markdown-image";
@@ -147,6 +148,11 @@ import {
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import {
+  readTranscriptView,
+  rememberTranscriptView,
+  transcriptWindow,
+} from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -1183,21 +1189,18 @@ export function ChatPlane({
                     <ChatEmptyState projectId={projectId} ticketId={ticketId} />
                   </ConversationEmptyState>
                 ) : (
-                  <ContentColumn className={MESSAGE_GAP}>
-                    {rows.map((row) => (
-                      <ChatTranscriptRow
-                        key={transcriptRowKey(row)}
-                        row={row}
-                        context={turnContext}
-                        live={row.kind === "turn" && row.messages === liveTurn}
-                        {...(onOpenSession === undefined ? {} : { onOpenSession })}
-                      />
-                    ))}
+                  <ChatTranscript
+                    sessionId={sessionId}
+                    rows={rows}
+                    context={turnContext}
+                    liveTurn={liveTurn}
+                    {...(onOpenSession === undefined ? {} : { onOpenSession })}
+                  >
                     {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                     {working ? (
                       <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
                     ) : null}
-                  </ContentColumn>
+                  </ChatTranscript>
                 )}
               </ConversationContent>
               {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
@@ -1596,6 +1599,269 @@ export interface TurnContext {
   /** The ids with a decision in flight — one card in flight is not all of them. */
   resolving: ReadonlySet<string>;
   onResolve(interactionId: string, submission: InteractionSubmission): Promise<boolean>;
+}
+
+/**
+ * How close to the bottom still counts as pinned, in pixels.
+ *
+ * A scroller that is one subpixel short of its own maximum is at the bottom as
+ * far as a reader is concerned; fractional device pixels and a composer being
+ * measured mid-frame both produce exactly that.
+ */
+const PINNED_SLACK_PX = 8;
+
+/**
+ * How far above the top edge the sentinel starts loading the next page.
+ *
+ * Not zero: a reader arriving at the top of the window should find the earlier
+ * rows already there rather than watch them appear. Not a screen either — a
+ * generous margin pages through history the reader never looked at.
+ */
+const EARLIER_PREFETCH = "400px 0px 0px 0px";
+
+/**
+ * The transcript, windowed (VC-338).
+ *
+ * WHY NOT A VIRTUALIZER. The scroller here is not ours: `Conversation` hands it
+ * to `use-stick-to-bottom`, which owns the bottom lock, the wheel detach, and
+ * the measured-instant resize behaviour that conversation.tsx argues for at
+ * length with numbers. Both candidate libraries want to own a scroller and the
+ * total height inside it, and a transcript's row heights are not guessable: a
+ * turn is one line or a thirty-row bundle with a 400-line payload inside a
+ * nested scroller, and a disclosure changes its height by a factor of fifty on
+ * a click. The accepted fallback in the Ticket — mount a tail, page the rest —
+ * buys the same bound on the document with none of that: `ChatTurn`'s memo
+ * contract is untouched (it never sees a new prop because of a scroll), the
+ * reveal path still finds its row with `querySelector`, and the jsdom tests that
+ * mount this plane still see a transcript, which under a virtualizer measuring
+ * zero-height rows they would not.
+ *
+ * WHAT THE READER SEES. At rest, the last {@link TRANSCRIPT_TAIL_ROWS} rows.
+ * Above them, "Show earlier" — and the same sentinel the button sits on pages
+ * the next block in as soon as it comes near the top edge, so scrolling up
+ * really does reach the first message rather than stopping at a button. Each
+ * reveal keeps the reader's place: the column grows ABOVE them, which moves
+ * everything they were reading down the page, so the scroll offset is corrected
+ * by exactly the height that arrived (and not corrected twice when the browser's
+ * own scroll anchoring already did it).
+ *
+ * AND IT GOES BACK. Returning to the bottom drops the revealed pages again, so a
+ * day of reading history does not leave a thousand rows mounted behind a reader
+ * who is watching the live tail. The drop happens while the reader is pinned to
+ * the bottom, where removing rows far above the viewport moves nothing.
+ */
+function ChatTranscript({
+  sessionId,
+  rows,
+  context,
+  liveTurn,
+  onOpenSession,
+  children,
+}: {
+  sessionId: string;
+  rows: readonly TranscriptRow[];
+  context: TurnContext;
+  /** The turn the harness is still writing into, by identity, or `null`. */
+  liveTurn: readonly UIMessage[] | null;
+  onOpenSession?(sessionId: string): void;
+  /** The live tail's own marks — compaction progress, the working mark. */
+  children?: React.ReactNode;
+}) {
+  const control = useConversationControl();
+  // Restored, not reset: coming back to a tab the reader had scrolled up in
+  // must mount the rows they were looking at, or the offset restored below
+  // would point into a transcript that starts lower than it did.
+  const [anchorKey, setAnchorKey] = React.useState<string | null>(
+    () => readTranscriptView(sessionId)?.anchorKey ?? null,
+  );
+  // Only scanned while the reader has asked for something: the common case is
+  // the tail, and the tail needs no search. A retired anchor (a compaction can
+  // take its row) answers -1, which `transcriptWindow` reads as the tail.
+  const anchor = React.useMemo(
+    () => (anchorKey === null ? -1 : rows.findIndex((row) => transcriptRowKey(row) === anchorKey)),
+    [anchorKey, rows],
+  );
+  const shown = transcriptWindow(rows.length, anchor);
+  const mounted = React.useMemo(() => rows.slice(shown.start), [rows, shown.start]);
+  const earlierRow = shown.earlierStart < 0 ? undefined : rows[shown.earlierStart];
+  const earlierKey = earlierRow === undefined ? null : transcriptRowKey(earlierRow);
+
+  // What the scroller looked like before a reveal, read at the press rather than
+  // in the effect: by then the rows are already in the document and the height
+  // it grew by is no longer measurable.
+  const before = React.useRef<{ height: number; top: number } | null>(null);
+
+  // Where the reader stands, written down for the next mount. Called from the
+  // two places the answer changes — a reveal and a scroll — rather than from an
+  // effect on mount, because a mount's own geometry is the bottom of the
+  // conversation and recording THAT is how a saved position erases itself.
+  const record = React.useCallback(
+    (anchoredAt: string | null) => {
+      const scroller = control.scroller();
+      if (scroller === null) {
+        rememberTranscriptView(sessionId, { anchorKey: anchoredAt, offset: null });
+        return;
+      }
+      const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      rememberTranscriptView(sessionId, {
+        anchorKey: anchoredAt,
+        offset: distance <= PINNED_SLACK_PX ? null : scroller.scrollTop,
+      });
+    },
+    [control, sessionId],
+  );
+
+  const reveal = React.useCallback(() => {
+    if (earlierKey === null) return;
+    const scroller = control.scroller();
+    before.current =
+      scroller === null ? null : { height: scroller.scrollHeight, top: scroller.scrollTop };
+    // Growth the reader revealed is not followed — the same rule a disclosure
+    // obeys (see `useStopFollowing`).
+    control.stopFollowing();
+    record(earlierKey);
+    setAnchorKey(earlierKey);
+  }, [control, earlierKey, record]);
+
+  React.useLayoutEffect(() => {
+    const previous = before.current;
+    before.current = null;
+    const scroller = control.scroller();
+    if (previous === null || scroller === null) return;
+    // Reading `scrollHeight` forces the layout the prepend dirtied, so the
+    // browser's own scroll anchoring has already run by the time this compares:
+    // an offset that is already correct is left alone rather than applied twice.
+    const target = previous.top + (scroller.scrollHeight - previous.height);
+    if (Math.abs(scroller.scrollTop - target) > 1) scroller.scrollTop = target;
+  }, [anchorKey, control]);
+
+  // The press and the sentinel reveal the same page; the ref is what lets one
+  // observer outlive the callback's identity instead of being torn down and
+  // rebuilt on every frame of a streaming turn.
+  const revealRef = React.useRef(reveal);
+  React.useLayoutEffect(() => {
+    revealRef.current = reveal;
+  }, [reveal]);
+
+  const sentinel = React.useRef<HTMLDivElement>(null);
+  const hasEarlier = shown.earlier > 0;
+  React.useEffect(() => {
+    const node = sentinel.current;
+    const scroller = control.scroller();
+    // No observer in jsdom, and none needed: the button beside it is the
+    // affordance, and a test that wants the earlier rows can press it.
+    if (!hasEarlier || node === null || scroller === null) return;
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) revealRef.current();
+      },
+      { root: scroller, rootMargin: EARLIER_PREFETCH },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [control, hasEarlier]);
+
+  // Where the reader is, recorded as they move so a tab switch has an answer
+  // without the unmount having to read the DOM on its way out. The same listener
+  // is what retires revealed pages: `escaped` is set the moment the reader
+  // leaves the bottom, so pressing "Show earlier" while already pinned (a
+  // transcript shorter than its viewport) is never undone by the press itself.
+  const anchorRef = React.useRef(anchorKey);
+  React.useLayoutEffect(() => {
+    anchorRef.current = anchorKey;
+  }, [anchorKey]);
+  React.useEffect(() => {
+    const scroller = control.scroller();
+    if (scroller === null) return;
+    const escaped = { value: false };
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      const pinned = distance <= PINNED_SLACK_PX;
+      if (!pinned) {
+        escaped.value = true;
+        rememberTranscriptView(sessionId, {
+          anchorKey: anchorRef.current,
+          offset: scroller.scrollTop,
+        });
+        return;
+      }
+      if (!escaped.value) {
+        rememberTranscriptView(sessionId, { anchorKey: anchorRef.current, offset: null });
+        return;
+      }
+      escaped.value = false;
+      // Back at the bottom: the revealed pages go, and what is recorded is the
+      // transcript as it will be mounted next time rather than as it was.
+      rememberTranscriptView(sessionId, { anchorKey: null, offset: null });
+      setAnchorKey(null);
+    };
+    const onScroll = () => {
+      // One read per frame: a wheel gesture fires scroll events faster than
+      // layout can answer them, and every answer here reads three geometry
+      // properties.
+      if (frame === 0) frame = requestAnimationFrame(read);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (frame !== 0) cancelAnimationFrame(frame);
+    };
+  }, [control, sessionId]);
+
+  // The offset the reader left, put back. Twice, deliberately: the library
+  // scrolls to the bottom from its own ResizeObserver, which fires after this
+  // effect and again after the first frame's layout, so a single write lands
+  // before the thing that would overwrite it. `stopFollowing` is what makes the
+  // second one stick — an escaped lock is the library's own "leave it alone".
+  React.useEffect(() => {
+    const saved = readTranscriptView(sessionId);
+    if (saved === null || saved.offset === null) return;
+    const offset = saved.offset;
+    let live = true;
+    const apply = () => {
+      const scroller = control.scroller();
+      if (!live || scroller === null) return;
+      control.stopFollowing();
+      scroller.scrollTop = offset;
+    };
+    apply();
+    const frame = requestAnimationFrame(apply);
+    return () => {
+      live = false;
+      cancelAnimationFrame(frame);
+    };
+  }, [control, sessionId]);
+
+  return (
+    <ContentColumn className={MESSAGE_GAP}>
+      {hasEarlier ? (
+        <div ref={sentinel} className="flex justify-center">
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-muted-foreground"
+            onClick={reveal}
+            data-transcript-earlier={shown.earlier}
+          >
+            Show earlier
+          </Button>
+        </div>
+      ) : null}
+      {mounted.map((row) => (
+        <ChatTranscriptRow
+          key={transcriptRowKey(row)}
+          row={row}
+          context={context}
+          live={row.kind === "turn" && row.messages === liveTurn}
+          {...(onOpenSession === undefined ? {} : { onOpenSession })}
+        />
+      ))}
+      {children}
+    </ContentColumn>
+  );
 }
 
 function transcriptRowKey(row: TranscriptRow): string {
