@@ -12,10 +12,17 @@ import { Button } from "@renderer/components/ui/button";
 export const title = "About support report";
 export const note = "The preview gate — closed, open, scrolled, copied, and refused";
 
+// The shape `buildAboutReport` actually produces (VC-293): the metadata a
+// diagnosis starts from, then the three measured sets.
 const REPORT = `Volli report
+Generated at: 2026-02-01T09:15:00.000Z
+App version: 0.2.0-canary.4
+Release channel: canary
+OS: darwin arm64
+Database schema: 34
 
 CLI status
-Command: Linked
+Volli command: Linked
   /Users/ada/.local/bin/volli
 Volli on login PATH: Reachable
 App socket: Live
@@ -26,8 +33,10 @@ Shell chain: zsh
 Doctor
 [ok] Volli's bin is first on PATH
   position 1 of 18
-[ok] App socket
-  Live
+[fail] Shell integration files are missing
+  Check: Shell integration is active
+  /Users/ada/Library/Application Support/Volli Code/shell is missing
+  Remedy: Run \`volli doctor --fix\`.
 
 Harnesses
 Claude Code: claude (built-in)

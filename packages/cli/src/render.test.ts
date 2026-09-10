@@ -2047,6 +2047,7 @@ describe("renderCliSuccess — doctor", () => {
       {
         id: "path-position",
         title: "Volli's bin is first on PATH",
+        failureTitle: "Volli bin is not first on PATH",
         status: "fail",
         detail: "position 20 of 30",
         remedy: "Run `volli doctor --fix`.",
@@ -2058,10 +2059,63 @@ describe("renderCliSuccess — doctor", () => {
 
   it("renders the report a human reads, worst finding included", () => {
     const text = renderCliSuccess("doctor", data, { json: false });
-    expect(text).toContain("✗ Volli's bin is first on PATH");
+    expect(text).toContain("✗ Volli bin is not first on PATH");
     expect(text).toContain("position 20 of 30");
     expect(text).toContain("→ Run `volli doctor --fix`.");
     expect(text.trimEnd().endsWith("1 failed of 2 checks.")).toBe(true);
+  });
+
+  // The reply comes off a socket owned by whichever app build answers, which
+  // is not necessarily this CLI's own version. A finding from a build that
+  // predates VC-293 carries no failure title or remedy, and must neither print
+  // "✗ undefined", present its positive claim as the finding, nor omit repair guidance.
+  it("marks an older app's passing claim as not having held", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        checks: [
+          {
+            id: "path-position",
+            title: "Volli's bin is first on PATH",
+            status: "fail",
+            detail: "position 20 of 30",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+      { json: false },
+    );
+
+    expect(text).toContain("✗ Check did not pass — Volli's bin is first on PATH");
+    expect(text).toContain(
+      "→ Run `volli doctor` from a new Volli terminal for current repair guidance.",
+    );
+    expect(text).not.toContain("✗ Volli's bin is first on PATH");
+    expect(text).not.toContain("undefined");
+  });
+
+  it("normalizes an older app's finding in structured output too", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        checks: [
+          {
+            id: "path-position",
+            title: "Volli's bin is first on PATH",
+            status: "fail",
+            detail: "position 20 of 30",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+      { json: true },
+    );
+
+    const finding = JSON.parse(text).checks[0];
+    expect(finding.failureTitle).toBe("Check did not pass — Volli's bin is first on PATH");
+    expect(finding.remedy).toBe(
+      "Run `volli doctor` from a new Volli terminal for current repair guidance.",
+    );
   });
 
   it("renders the path repair before this Session's stale checks", () => {
@@ -2085,7 +2139,7 @@ describe("renderCliSuccess — doctor", () => {
     expect(text).toContain("env.interactiveProvenance  already-complete");
     expect(text).toContain("This running Session keeps the environment it started with.");
     expect(text.indexOf("Session PATH repair")).toBeLessThan(
-      text.indexOf("✗ Volli's bin is first on PATH"),
+      text.indexOf("✗ Volli bin is not first on PATH"),
     );
   });
 
@@ -2106,7 +2160,7 @@ describe("renderCliSuccess — doctor", () => {
     );
 
     expect(text).not.toContain("Session PATH repair");
-    expect(text).toContain("✗ Volli's bin is first on PATH");
+    expect(text).toContain("✗ Volli bin is not first on PATH");
   });
 
   it("passes the structured report straight through with --json", () => {
@@ -2117,6 +2171,16 @@ describe("renderCliSuccess — doctor", () => {
     expect(() => renderCliSuccess("doctor", { unexpected: true }, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", null, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", { checks: [] }, { json: false })).not.toThrow();
+    expect(() =>
+      renderCliSuccess("doctor", { checks: [null], summary: "malformed" }, { json: false }),
+    ).not.toThrow();
+    expect(() =>
+      renderCliSuccess(
+        "doctor",
+        { checks: [{ id: "a", title: "t", status: "maybe", detail: "d" }], summary: "bad" },
+        { json: false },
+      ),
+    ).not.toThrow();
   });
 });
 

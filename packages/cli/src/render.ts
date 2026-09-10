@@ -1,6 +1,8 @@
 import {
   ERROR_RECOVERY,
   isAgentMutationPlan,
+  LEGACY_DOCTOR_REMEDY,
+  legacyDoctorFailureTitle,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
   untrustedProseResponseLines,
@@ -1226,12 +1228,67 @@ function sessionEnvRepair(value: unknown): SessionEnvRepair | undefined {
     : undefined;
 }
 
-/** `doctor`'s reply is already a report; only its shape needs checking. */
-function doctorReport(data: unknown): string | null {
+/**
+ * One reported check, made safe to print.
+ *
+ * The reply is whichever app build answers the socket, not this CLI's own
+ * version, so a finding may predate the failure titles VC-293 made required.
+ * Marking its passing claim as not having held keeps the report readable
+ * without presenting that claim as true; inventing `undefined` as a heading
+ * would not.
+ */
+function doctorCheck(value: unknown): DoctorCheck | null {
+  if (!isRecord(value)) return null;
+  const { id, title, status, detail, remedy, failureTitle } = value;
+  if (
+    typeof id !== "string" ||
+    typeof title !== "string" ||
+    (status !== "ok" && status !== "warn" && status !== "fail") ||
+    typeof detail !== "string" ||
+    (remedy !== undefined && typeof remedy !== "string") ||
+    (failureTitle !== undefined && typeof failureTitle !== "string")
+  ) {
+    return null;
+  }
+  if (status === "ok") return value as unknown as DoctorCheck;
+  return {
+    ...value,
+    failureTitle: failureTitle ?? legacyDoctorFailureTitle(title),
+    remedy: remedy ?? LEGACY_DOCTOR_REMEDY,
+  } as unknown as DoctorCheck;
+}
+
+interface NormalizedDoctorReport {
+  checks: DoctorCheck[];
+  summary: string;
+  pathRepair: SessionEnvRepair | undefined;
+  data: Record<string, unknown>;
+}
+
+/** `doctor`'s reply is already a report; only its shape needs checking and normalizing. */
+function normalizeDoctorReport(data: unknown): NormalizedDoctorReport | null {
   if (!isRecord(data)) return null;
-  const { checks, summary } = data;
-  if (!Array.isArray(checks) || typeof summary !== "string") return null;
-  return renderDoctorReport(checks as DoctorCheck[], summary, sessionEnvRepair(data["pathRepair"]));
+  const { checks: rawChecks, summary } = data;
+  if (!Array.isArray(rawChecks) || typeof summary !== "string") return null;
+  const checks: DoctorCheck[] = [];
+  for (const rawCheck of rawChecks) {
+    const check = doctorCheck(rawCheck);
+    if (check === null) return null;
+    checks.push(check);
+  }
+  return {
+    checks,
+    summary,
+    pathRepair: sessionEnvRepair(data["pathRepair"]),
+    data: { ...data, checks },
+  };
+}
+
+function doctorReport(data: unknown): string | null {
+  const report = normalizeDoctorReport(data);
+  return report === null
+    ? null
+    : renderDoctorReport(report.checks, report.summary, report.pathRepair);
 }
 
 function renderCliTextSuccess(command: string, data: unknown): string {
@@ -1268,7 +1325,10 @@ function renderCliTextSuccess(command: string, data: unknown): string {
 }
 
 export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
-  if (options.json) return `${terminalSafeJson(data)}\n`;
+  if (options.json) {
+    const normalized = command === "doctor" ? normalizeDoctorReport(data)?.data : undefined;
+    return `${terminalSafeJson(normalized ?? data)}\n`;
+  }
   if (isAgentMutationPlan(data)) {
     const writes =
       data.durableWrites.length === 0

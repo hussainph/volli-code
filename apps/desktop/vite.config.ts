@@ -323,6 +323,12 @@ export default defineConfig(({ mode }) => ({
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
+        // And what About is allowed to CLAIM from them (VC-293). In the gate
+        // because the defect it replaces was invisible on screen: an empty
+        // fault list read as a healthy install, so the pane said
+        // "Everything's working" before it had measured anything and again
+        // after a read failed. Every one of those paths is a branch here.
+        "src/components/settings/panes/about-health-model.ts",
         // What Storage says about an orphaned worktree, before and after a
         // destructive act (VC-284). Enrolled for the same reason as the row
         // above: these are sentences about deletions, and the bug they answer
@@ -533,6 +539,12 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/process/**",
         "**/src/main/db/spawn-ledger-repo.ts",
         "**/src/main/project-roots.ts",
+        // About's support metadata (VC-293). Enrolled on the same argument as
+        // the IPC handlers around it: this module is an ALLOWLIST, and the
+        // guarantee it carries — five fields, one pragma, one app_state key,
+        // nothing that could reach a credential — is only as good as the test
+        // that walks every branch of it.
+        "**/src/main/support-info.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",

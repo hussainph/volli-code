@@ -11,7 +11,7 @@ import * as React from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 
 import { Button } from "@renderer/components/ui/button";
-import { StatusDot } from "@renderer/components/ui/status-dot";
+import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { cn } from "@renderer/lib/utils";
 
 /** One thing that is wrong, and — where there is one — the button that fixes it. */
@@ -22,14 +22,41 @@ export interface Fault {
   remedy?: { label: string; onAct: () => void };
 }
 
+/**
+ * How much the panel actually knows, in ascending order of confidence.
+ *
+ * A boolean was the bug (VC-293): `healthy` had to be either true or false
+ * while the reads behind it were still in flight or had failed, and "not yet"
+ * has no honest side of that line to fall on. Four states means the panel can
+ * only claim health when something established it.
+ */
+export type HealthPanelState = "checking" | "unavailable" | "attention" | "healthy";
+
+/**
+ * The dot, decided here rather than at each call site.
+ *
+ * `checking` is neutral — the same grey `starting` gives a Session that is
+ * connecting: nothing is wrong and nothing is known. `unavailable` shares the
+ * attention tone with `attention` because both want the same thing from the
+ * person reading them, and only the headline can say whether the install is
+ * faulty or the check simply never finished. Green is reachable from one state
+ * alone.
+ */
+const HEALTH_DOT: Record<HealthPanelState, StatusDotState> = {
+  checking: "starting",
+  unavailable: "waiting",
+  attention: "waiting",
+  healthy: "ready",
+};
+
 export function HealthPanel({
-  healthy,
+  state,
   headline,
   faults,
   actions,
   children,
 }: {
-  healthy: boolean;
+  state: HealthPanelState;
   headline: string;
   faults: readonly Fault[];
   actions?: React.ReactNode;
@@ -40,9 +67,9 @@ export function HealthPanel({
   const detailsId = React.useId();
 
   return (
-    <section className="rounded-lg bg-card px-4 py-4">
+    <section className="rounded-lg bg-card px-4 py-4" data-health-state={state}>
       <header className="flex items-center gap-2 py-1">
-        <StatusDot state={healthy ? "ready" : "waiting"} size="md" />
+        <StatusDot state={HEALTH_DOT[state]} size="md" />
         <h2 className="min-w-0 flex-1 text-ui font-medium">{headline}</h2>
         {actions}
       </header>

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vite-plus/test";
-import { doctorSummary, runDoctorChecks as runChecks } from "./doctor";
-import type { DoctorCheck, DoctorDoorContext, DoctorFacts, DoctorObservation } from "./doctor";
+import {
+  doctorCheckHeadline,
+  doctorSummary,
+  legacyDoctorFailureTitle,
+  runDoctorChecks as runChecks,
+} from "./doctor";
+import type {
+  DoctorCheck,
+  DoctorCheckFault,
+  DoctorDoorContext,
+  DoctorFacts,
+  DoctorObservation,
+} from "./doctor";
 
 const BIN = "/ud/bin";
 
@@ -61,6 +72,13 @@ function doctorChecks(
 function find(checks: DoctorCheck[], id: string): DoctorCheck {
   const check = checks.find((entry) => entry.id === id);
   if (!check) throw new Error(`no check ${id}`);
+  return check;
+}
+
+/** The same lookup, narrowed to a finding. */
+function fault(checks: DoctorCheck[], id: string): DoctorCheckFault {
+  const check = find(checks, id);
+  if (check.status === "ok") throw new Error(`check ${id} passed`);
   return check;
 }
 
@@ -492,6 +510,215 @@ describe("runDoctorChecks — ordering", () => {
   });
 });
 
+/**
+ * VC-293. A finding's heading has to name the finding. These titles used to be
+ * the check's positive claim, so a fault list read as a list of things that
+ * were fine. Detail remains a measurement for the support report; each heading
+ * now states the outcome a person can scan.
+ */
+describe("runDoctorChecks — failure titles", () => {
+  it("names which PATH failure happened, not the claim that did not hold", () => {
+    const absent = fault(
+      doctorChecks(observation({ pathEntries: ["/usr/bin"] }), facts()),
+      "path-position",
+    );
+    const shadowed = fault(
+      doctorChecks(observation({ pathEntries: ["/usr/bin", BIN] }), facts()),
+      "path-position",
+    );
+
+    expect(absent.failureTitle).toBe("Volli bin is missing from PATH");
+    expect(shadowed.failureTitle).toBe("Volli bin is not first on PATH");
+    expect(absent.title).toBe("Volli's bin is first on PATH");
+  });
+
+  it("separates a shell with no integration, missing files, silence, and a stale terminal", () => {
+    const findings = [
+      fault(doctorChecks(observation(), facts({ shellInitDir: null })), "shell-init"),
+      fault(doctorChecks(observation(), facts({ shellInitPresent: false })), "shell-init"),
+      fault(doctorChecks(observation({ zdotDir: undefined }), facts()), "shell-init"),
+      fault(doctorChecks(observation({ zdotDir: null }), facts()), "shell-init"),
+    ];
+
+    expect(findings.map((finding) => finding.failureTitle)).toEqual([
+      "This shell has no Volli integration hook",
+      "Shell integration files are missing",
+      "Shell integration could not be checked",
+      "This terminal has stale shell integration",
+    ]);
+    expect(findings.every((finding) => Boolean(finding.remedy))).toBe(true);
+  });
+
+  it("tells a missing `volli` apart from another install's and from silence", () => {
+    const findings = [
+      fault(doctorChecks(observation({ volliPath: undefined }), facts()), "volli-cli"),
+      fault(doctorChecks(observation({ volliPath: null }), facts()), "volli-cli"),
+      fault(doctorChecks(observation({ volliPath: "/usr/local/bin/volli" }), facts()), "volli-cli"),
+    ];
+
+    expect(findings.map((finding) => finding.failureTitle)).toEqual([
+      "`volli`'s location was not reported",
+      "`volli` is missing from PATH",
+      "`volli` belongs to another Volli install",
+    ]);
+    expect(findings.every((finding) => Boolean(finding.remedy))).toBe(true);
+  });
+
+  it("names the tool that a session cannot run", () => {
+    const missing = fault(
+      doctorChecks(observation({ resolved: { git: null } }), facts()),
+      "tool-git",
+    );
+    const unreported = fault(doctorChecks(observation({ resolved: {} }), facts()), "tool-node");
+
+    expect(missing.failureTitle).toBe("`git` is missing from the session PATH");
+    expect(unreported.failureTitle).toBe("`node` availability was not reported");
+  });
+
+  it("names what a harness command resolves to, or fails to", () => {
+    const nowhere = fault(
+      doctorChecks(observation({ resolved: { claude: null } }), facts()),
+      "resolves-claude",
+    );
+    const unreported = fault(
+      doctorChecks(observation({ resolved: {} }), facts()),
+      "resolves-claude",
+    );
+
+    expect(nowhere.failureTitle).toBe("`claude` resolves to nothing");
+    expect(unreported.failureTitle).toBe("`claude`'s resolution was not reported");
+    expect(nowhere.remedy).toBeTruthy();
+    expect(unreported.remedy).toBeTruthy();
+  });
+
+  it("gives each wrapper refusal its own heading", () => {
+    const refusal = (
+      command: string,
+      reason: DoctorFacts["refused"][number]["reason"],
+    ): DoctorCheckFault =>
+      fault(
+        doctorChecks(
+          observation(),
+          facts({ refused: [{ command, resolvedPath: `/usr/bin/${command}`, reason }] }),
+        ),
+        `refused-${command}`,
+      );
+
+    expect(refusal("git", "shadows-system-command").failureTitle).toBe(
+      "`git` is not wrapped — the name belongs to a system command",
+    );
+    expect(refusal("claude", "name-already-owned").failureTitle).toBe(
+      "`claude` is not wrapped — another harness owns the name",
+    );
+    expect(refusal("codex", "argv-not-transportable").failureTitle).toBe(
+      "`codex` is not wrapped — its launch arguments cannot be carried",
+    );
+  });
+
+  it("distinguishes an ended Session from an unauthenticated caller", () => {
+    const ended = fault(
+      doctorChecks(observation({ sessionId: "gone" }), facts({ liveSessionIds: [] }), door()),
+      "session",
+    );
+    const unauthenticated = fault(
+      doctorChecks(observation({ sessionId: "s-1" }), facts({ liveSessionIds: ["s-1"] }), door()),
+      "session",
+    );
+
+    expect(ended.failureTitle).toBe("This terminal's Session has ended");
+    expect(unauthenticated.failureTitle).toBe("This terminal is not authenticated for its Session");
+  });
+
+  it("names the harness whose events never arrived and the edited skill files", () => {
+    const reporting = fault(
+      doctorChecks(
+        observation(),
+        facts({ reporting: [{ harnessId: "codex", declared: 4, verified: 0 }] }),
+      ),
+      "reporting-codex",
+    );
+    const skills = fault(
+      doctorChecks(observation(), facts({ skillConflicts: ["~/.claude/skills/volli"] })),
+      "skills",
+    );
+
+    expect(reporting.failureTitle).toBe("codex has reported no events yet");
+    expect(skills.failureTitle).toBe("Managed skill files were left as you edited them");
+  });
+
+  it("names unavailable and reapable orphan process results", () => {
+    const unavailable = fault(
+      doctorChecks(observation(), facts({ orphanProcesses: undefined })),
+      "orphan-processes",
+    );
+    const reapable = fault(
+      doctorChecks(observation(), facts({ orphanProcesses: { total: 3, reapable: 2 } })),
+      "orphan-processes",
+    );
+
+    expect(unavailable.failureTitle).toBe("Orphaned processes could not be checked");
+    expect(reapable.failureTitle).toBe("Volli-owned orphaned processes are still running");
+    expect(unavailable.remedy).toBeTruthy();
+    expect(reapable.remedy).toBeTruthy();
+  });
+
+  it("gives every finding a failure title distinct from its passing claim and a repair", () => {
+    const checks = doctorChecks(
+      observation({
+        pathEntries: ["/usr/bin"],
+        zdotDir: null,
+        resolved: { claude: null, git: null },
+        volliPath: null,
+        sessionId: "gone",
+      }),
+      facts({
+        liveSessionIds: [],
+        orphanProcesses: { total: 1, reapable: 1 },
+        refused: [
+          { command: "cursor", resolvedPath: "/usr/bin/cursor", reason: "shadows-system-command" },
+        ],
+        reporting: [{ harnessId: "codex", declared: 4, verified: 0 }],
+        skillConflicts: ["~/.claude/skills/volli"],
+      }),
+    );
+
+    const findings = checks.filter((check) => check.status !== "ok");
+    expect(findings.length).toBeGreaterThan(5);
+    for (const finding of findings) {
+      expect(finding.failureTitle).not.toBe(finding.title);
+      expect(finding.failureTitle.length).toBeGreaterThan(0);
+      expect(finding.remedy).toBeTruthy();
+      expect(doctorCheckHeadline(finding)).toBe(finding.failureTitle);
+    }
+  });
+});
+
+describe("doctorCheckHeadline", () => {
+  it("reads a passing check by its claim", () => {
+    expect(
+      doctorCheckHeadline({ id: "a", title: "Everything is wired", status: "ok", detail: "d" }),
+    ).toBe("Everything is wired");
+  });
+
+  it("reads a finding by what went wrong", () => {
+    expect(
+      doctorCheckHeadline({
+        id: "a",
+        title: "Everything is wired",
+        failureTitle: "The wire is cut",
+        status: "fail",
+        detail: "d",
+      }),
+    ).toBe("The wire is cut");
+  });
+
+  it("marks an older finding's passing claim as not having held", () => {
+    expect(legacyDoctorFailureTitle("Everything is wired")).toBe(
+      "Check did not pass — Everything is wired",
+    );
+  });
+});
+
 describe("doctorSummary", () => {
   it("says so plainly when everything passed", () => {
     expect(doctorSummary(doctorChecks(observation(), facts()))).toMatch(
@@ -509,22 +736,26 @@ describe("doctorSummary", () => {
   });
 
   it("omits the warning clause when there are only failures", () => {
-    expect(doctorSummary([{ id: "a", title: "t", status: "fail", detail: "d" }])).toBe(
-      "1 failed of 1 checks.",
-    );
+    expect(
+      doctorSummary([
+        { id: "a", title: "t", failureTitle: "f", status: "fail", detail: "d", remedy: "r" },
+      ]),
+    ).toBe("1 failed of 1 checks.");
   });
 
   it("omits the failure clause when there are only warnings", () => {
-    expect(doctorSummary([{ id: "a", title: "t", status: "warn", detail: "d" }])).toBe(
-      "1 warning of 1 checks.",
-    );
+    expect(
+      doctorSummary([
+        { id: "a", title: "t", failureTitle: "f", status: "warn", detail: "d", remedy: "r" },
+      ]),
+    ).toBe("1 warning of 1 checks.");
   });
 
   it("pluralizes multiple warnings", () => {
     expect(
       doctorSummary([
-        { id: "a", title: "t", status: "warn", detail: "d" },
-        { id: "b", title: "t", status: "warn", detail: "d" },
+        { id: "a", title: "t", failureTitle: "f", status: "warn", detail: "d", remedy: "r" },
+        { id: "b", title: "t", failureTitle: "f", status: "warn", detail: "d", remedy: "r" },
       ]),
     ).toBe("2 warnings of 2 checks.");
   });

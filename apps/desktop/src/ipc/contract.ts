@@ -1193,6 +1193,43 @@ export interface VolliCliIpcContract {
 
 export type CliIpcChannel = keyof VolliCliIpcContract;
 
+// ---- support metadata -------------------------------------------------------
+
+/**
+ * The five facts a support report needs and the renderer cannot know (VC-293).
+ *
+ * An ALLOWLIST, and written as a closed shape for that reason: every field is
+ * named here, main assembles exactly these, and the report prints them. The
+ * report is a thing a user pastes into a public issue, so what is absent
+ * matters as much as what is present — no environment, no credential or
+ * secret-store value, no database contents beyond the schema number.
+ *
+ * There is no separate packaged build id in this app, so {@link appVersion} IS
+ * the build version; inventing a second version field or a source revision
+ * would be reporting something nothing measures.
+ */
+export interface SupportInfo {
+  /** `app.getVersion()` — the running build's version. */
+  appVersion: string;
+  /** The configured release line. A report is unavailable when it cannot be read. */
+  channel: UpdateChannel;
+  /** `process.platform`. */
+  platform: string;
+  /** `process.arch`. */
+  arch: string;
+  /** SQLite's `PRAGMA user_version`. A report is unavailable when it cannot be read. */
+  schemaVersion: number;
+}
+
+export type SupportInfoResult = Result<{ info: SupportInfo }>;
+
+/** The About metadata surface (`src/main/support-info.ts`). Read-only, and takes no argument. */
+export interface VolliSupportIpcContract {
+  "volli:support-info": { args: []; result: SupportInfoResult };
+}
+
+export type SupportIpcChannel = keyof VolliSupportIpcContract;
+
 // ---- theming ----------------------------------------------------------------
 
 /** `{ projectId? }` — a theme read is global unless a project scopes it (#69). */
@@ -2441,6 +2478,7 @@ export interface VolliInvokeContract
     VolliShellIpcContract,
     VolliAutomationIpcContract,
     VolliSessionRpcIpcContract,
+    VolliSupportIpcContract,
     VolliSystemIpcContract,
     VolliNotificationIpcContract,
     VolliUpdateIpcContract {}

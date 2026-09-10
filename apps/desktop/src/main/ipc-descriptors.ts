@@ -31,6 +31,7 @@ import type {
   BrowserIpcChannel,
   AutomationIpcChannel,
   CliIpcChannel,
+  SupportIpcChannel,
   DataIpcChannel,
   FileIpcChannel,
   HarnessIpcChannel,
@@ -1730,6 +1731,16 @@ export const CLI_IPC: { readonly [C in CliIpcChannel]: IpcRequestDescriptor<C> }
 // No CLI_CHANNELS sibling to HARNESS_CHANNELS: that list exists to register
 // degraded-db handlers, and the CLI surface is deliberately db-free — a
 // derived list nothing consumes would be dead weight kept alive by its test.
+
+// ---- About's support metadata (VC-293) -------------------------------------
+// One read, no argument: the whole surface is an allowlist of five facts about
+// this build and profile, so there is nothing for a caller to name or scope.
+export const SUPPORT_IPC: { readonly [C in SupportIpcChannel]: IpcRequestDescriptor<C> } = {
+  "volli:support-info": {
+    guard: (args): args is IpcArgs<"volli:support-info"> => args.length === 0,
+    invalidError: "Invalid request",
+  },
+};
 
 // ---- model-access sign-in descriptor table --------------------------------
 // The one request surface an argument can be a credential on, so the guards

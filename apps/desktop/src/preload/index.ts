@@ -103,6 +103,7 @@ import type {
   CliRepairResult,
   CliStatusInput,
   CliStatusResult,
+  SupportInfoResult,
   CommentCreateInput,
   BlobAttachInput,
   BlobAttachResult,
@@ -993,6 +994,15 @@ const api = {
     doctor: (input: CliDoctorInput): Promise<CliDoctorResult> => invoke("volli:cli-doctor", input),
     /** The repair alone — both PATH passes re-run in main, no login-shell probe behind it (VC-159). */
     repair: (): Promise<CliRepairResult> => invoke("volli:cli-repair"),
+  },
+  /**
+   * The five build/profile facts a support report needs and the renderer
+   * cannot know (VC-293): version, release line, OS, architecture, schema
+   * version. An allowlist assembled in main (`src/main/support-info.ts`) —
+   * read-only, and never a door onto anything else in the profile.
+   */
+  support: {
+    info: (): Promise<SupportInfoResult> => invoke("volli:support-info"),
   },
   files: {
     /** The scoped file index the `@` picker and quick-open rank over: Main, or a ticket's worktree when `ticketId` is given. Fetched fresh per picker open. */
