@@ -236,6 +236,44 @@ describe("BrowserTabController", () => {
     ).rejects.toMatchObject({ rule: "browser.unactionable" });
   });
 
+  it("refuses a select whose resolved element detached before the fixed page function ran", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.resolveNode": { object: { objectId: "object-1" } },
+      "Runtime.callFunctionOn": { result: { value: "detached" } },
+    });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({
+        generation: snapshot.generation,
+        kind: "select",
+        ref: "e1",
+        text: "two",
+      }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+  });
+
+  it("accepts the explicit success result from the fixed select function", async () => {
+    const page = wire({
+      "Accessibility.getFullAXTree": BUTTON_TREE,
+      "DOM.resolveNode": { object: { objectId: "object-1" } },
+      "Runtime.callFunctionOn": { result: { value: "selected" } },
+    });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({
+        generation: snapshot.generation,
+        kind: "select",
+        ref: "e1",
+        text: "two",
+      }),
+    ).resolves.toEqual({ target: { ref: "e1", name: "Save" } });
+  });
+
   it("withdraws a wait action as soon as its call is aborted", async () => {
     const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
     const controller = new BrowserTabController(page.transport);
@@ -251,17 +289,32 @@ describe("BrowserTabController", () => {
     await expect(waiting).rejects.toThrow("withdrawn");
   });
 
-  it("captures the page as the PNG the engine rendered", async () => {
+  it("reports PNG device-pixel dimensions rather than CSS layout dimensions", async () => {
     const page = wire({
-      "Page.captureScreenshot": { data: "aGVsbG8=" },
+      "Page.captureScreenshot": { data: "iVBORw0KGgoAAAANSUhEUgAABkAAAASw" },
       "Page.getLayoutMetrics": { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } },
     });
     const controller = new BrowserTabController(page.transport);
 
     const shot = await controller.screenshot();
 
-    expect(shot).toEqual({ base64Png: "aGVsbG8=", width: 800, height: 600 });
+    expect(shot).toEqual({
+      base64Png: "iVBORw0KGgoAAAANSUhEUgAABkAAAASw",
+      width: 1600,
+      height: 1200,
+    });
+    expect(page.sent.map((call) => call.method)).not.toContain("Page.getLayoutMetrics");
   });
+
+  it.each(["", "aGVsbG8=", "iVBORw0KGgoAAAANSUhEUgAAAAAAAAAA"])(
+    "rejects empty or malformed screenshot data %s",
+    async (data) => {
+      const page = wire({ "Page.captureScreenshot": { data } });
+      await expect(new BrowserTabController(page.transport).screenshot()).rejects.toThrow(
+        /screenshot|pixels/,
+      );
+    },
+  );
 
   it("gives a timed-out screenshot accurate recovery guidance", async () => {
     const controller = new BrowserTabController(
@@ -400,6 +453,155 @@ describe("BrowserTabController", () => {
     await expect(controller.enable(abort.signal)).rejects.toThrow("withdrawn");
     expect(readied).toBe(0);
   });
+
+  it("refuses a node the page dropped since the snapshot instead of failing the host", async () => {
+    // An SPA can remove an element without navigating, so no generation bumps
+    // and the map still holds the ref. CDP answers with a raw node error; the
+    // model must hear the same "take a fresh snapshot" refusal a stale ref
+    // gets, not a broken-port failure.
+    const sent: { method: string }[] = [];
+    const controller = new BrowserTabController({
+      send: async (method) => {
+        sent.push({ method });
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        if (method === "DOM.scrollIntoViewIfNeeded" || method === "DOM.getBoxModel") {
+          throw new Error("No node with given id found");
+        }
+        return {};
+      },
+    });
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "click", ref: "e1" }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+    expect(sent.some((call) => call.method === "Input.dispatchMouseEvent")).toBe(false);
+  });
+
+  it("refuses a type whose element vanished before the focus, as a refusal not a fault", async () => {
+    const controller = new BrowserTabController({
+      send: async (method) => {
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        if (method === "DOM.focus") throw new Error("No node with given id found");
+        return {};
+      },
+    });
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act({ generation: snapshot.generation, kind: "type", ref: "e1", text: "hi" }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-ref" });
+  });
+
+  it("keeps a real fault a fault when the turn was withdrawn, not the node gone", async () => {
+    // The node-error conversion must not swallow aborts: a withdrawn turn is
+    // still a withdrawn turn, not a missing element.
+    const abort = new AbortController();
+    const controller = new BrowserTabController({
+      send: async (method) => {
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        if (method === "DOM.focus") {
+          abort.abort(new Error("withdrawn"));
+          throw new Error("No node with given id found");
+        }
+        return {};
+      },
+    });
+    const snapshot = await controller.snapshot();
+
+    await expect(
+      controller.act(
+        { generation: snapshot.generation, kind: "type", ref: "e1", text: "hi" },
+        abort.signal,
+      ),
+    ).rejects.toThrow("withdrawn");
+  });
+
+  it.each([
+    new Error("debugger disconnected"),
+    new BrowserRefusal("browser.debugger-unavailable", "DevTools is busy"),
+  ])("preserves non-node failures rather than claiming a stale ref", async (failure) => {
+    const controller = new BrowserTabController({
+      send: async (method) => {
+        if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+        throw failure;
+      },
+    });
+    await controller.snapshot();
+    await expect(controller.act({ generation: 0, kind: "click", ref: "e1" })).rejects.toBe(failure);
+  });
+
+  it("delivers the shifted character when press names Shift with a letter", async () => {
+    // A real keyboard puts `A` in the field for Shift+a; the char event must
+    // carry the shifted character, not the bare key.
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    const snapshot = await controller.snapshot();
+
+    await controller.act({ generation: snapshot.generation, kind: "press", key: "Shift+a" });
+
+    expect(page.sent).toContainEqual({
+      method: "Input.dispatchKeyEvent",
+      params: { type: "char", modifiers: 8, text: "A", key: "A" },
+    });
+  });
+
+  it("delivers the shifted symbol and physical key identity for Shift+1", async () => {
+    const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+    const controller = new BrowserTabController(page.transport);
+    await controller.snapshot();
+
+    await controller.act({ generation: 0, kind: "press", key: "Shift+1" });
+
+    expect(page.sent).toContainEqual({
+      method: "Input.dispatchKeyEvent",
+      params: {
+        type: "rawKeyDown",
+        modifiers: 8,
+        key: "!",
+        code: "Digit1",
+        windowsVirtualKeyCode: 49,
+      },
+    });
+    expect(page.sent).toContainEqual({
+      method: "Input.dispatchKeyEvent",
+      params: { type: "char", modifiers: 8, text: "!", key: "!" },
+    });
+  });
+
+  it.each(["click", "press"] as const)(
+    "reports a failed %s release rather than a successful action",
+    async (kind) => {
+      const failure = new Error("input release failed");
+      const controller = new BrowserTabController({
+        send: async (method, params) => {
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          const type = (params as { type?: string } | undefined)?.type;
+          if (type === "mouseReleased" || type === "keyUp") throw failure;
+          return {};
+        },
+      });
+      await controller.snapshot();
+      await expect(controller.act({ generation: 0, kind, ref: "e1", key: "Enter" })).rejects.toBe(
+        failure,
+      );
+    },
+  );
+
+  it.each(["Control+a", "Meta+a"])(
+    "runs the native select-all editing command for %s",
+    async (key) => {
+      const page = wire({ "Accessibility.getFullAXTree": BUTTON_TREE });
+      const controller = new BrowserTabController(page.transport);
+      await controller.snapshot();
+      await controller.act({ generation: 0, kind: "press", key });
+      expect(page.sent).toContainEqual({
+        method: "Input.dispatchKeyEvent",
+        params: expect.objectContaining({ type: "rawKeyDown", commands: ["selectAll"] }),
+      });
+    },
+  );
 
   it("sends no key up when the key spec never named a real key", async () => {
     // The gesture never started, so there is nothing to undo: a refusal must

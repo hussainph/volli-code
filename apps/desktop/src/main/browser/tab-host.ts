@@ -23,6 +23,7 @@ import type {
   BrowserTabPresentation,
   BrowserTabState,
 } from "../../ipc/contract";
+import { BrowserAgentCoordinator } from "./agent-coordinator";
 import type { BrowserPictureStore } from "./picture-store";
 
 /**
@@ -163,6 +164,8 @@ interface BrowserTabEntry {
    * stamp rather than "is focused right now".
    */
   lastInteractionAt: number | null;
+  /** Bounded native transcript-preview captures, deduplicated by generation. */
+  pictureCaptures: Map<number, Promise<NativeImage>>;
   /**
    * Whose turn it is to drive this tab (VC-239): the Session's claim with its
    * attachment, the person, or nobody. The renderer-facing projection of it
@@ -232,6 +235,14 @@ export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, hei
  * frame that exists to sit still behind a menu.
  */
 const BROWSER_CAPTURE_JPEG_QUALITY = 80;
+/** A transcript preview is optional; a stuck compositor must not wedge a tool. */
+export const BROWSER_PREVIEW_TIMEOUT_MS = 1_000;
+/**
+ * Hard safety cap for Electron capture requests, which have no cancellation.
+ * Two compositor hangs disable optional previews until the tab closes rather
+ * than letting later navigations create an unbounded native request queue.
+ */
+export const BROWSER_PREVIEW_MAX_PENDING_CAPTURES = 2;
 const BROWSER_DEVTOOLS_RATIO = 0.42;
 const BROWSER_DEVTOOLS_DIVIDER_PX = 1;
 
@@ -371,6 +382,8 @@ export function browserSessionPartition(input: {
  */
 export class BrowserTabHost {
   private readonly tabs = new Map<string, BrowserTabEntry>();
+  /** Shared Browser tool queues and debugger lifetimes, keyed by native tab. */
+  readonly agentOperations = new BrowserAgentCoordinator();
   private readonly securedSessions = new WeakSet<Session>();
   private readonly holdListeners = new Set<(event: BrowserHoldEvent) => void>();
   /**
@@ -997,6 +1010,7 @@ export class BrowserTabHost {
       consoleTruncated: false,
       wakeLeases: 0,
       lastInteractionAt: null,
+      pictureCaptures: new Map(),
       hold: null,
     };
     this.tabs.set(tabId, entry);
@@ -1024,10 +1038,13 @@ export class BrowserTabHost {
     // place: `input-event` covers keys, clicks and the wheel, and `focus`
     // covers a tab entered by keyboard alone.
     view.webContents.on("input-event", () => {
-      entry.lastInteractionAt = this.now();
+      // CDP input on a staged Headless tab can emit the same event. Only an
+      // on-screen page is reachable by the person; keep its stamp after it is
+      // hidden, but do not treat the agent's own headless input as user data.
+      if (entry.parent.kind === "window") entry.lastInteractionAt = this.now();
     });
     view.webContents.on("focus", () => {
-      entry.lastInteractionAt = this.now();
+      if (entry.parent.kind === "window") entry.lastInteractionAt = this.now();
     });
     view.webContents.setWindowOpenHandler(({ url }) => {
       // A hostile page can ask indefinitely; the same cap used by every other
@@ -1136,6 +1153,7 @@ export class BrowserTabHost {
    */
   private forgetEntry(tabId: string, entry: BrowserTabEntry): void {
     this.tabs.delete(tabId);
+    this.agentOperations.closeTab(tabId);
     this.endHoldOnClose(tabId, entry);
     this.deps.publishClosed(tabId);
   }
@@ -1309,6 +1327,9 @@ export class BrowserTabHost {
           other.state.ownerSessionId === entry.state.ownerSessionId &&
           other.state.presentation === "preview"
         ) {
+          // Main must remove the old preview's native plane immediately,
+          // just as an explicit Hide does; do not wait for renderer unmount.
+          this.goOffScreen(other);
           this.publish(other, { presentation: "headless" });
         }
       }
@@ -1395,32 +1416,90 @@ export class BrowserTabHost {
    * shown tab never focuses it, and focus leaves the moment they click Hide,
    * the chip, or another window — so an act arriving right after they typed
    * would photograph the filled field. Current focus still counts, for the
-   * tab entered before this host ever saw an event from it. A Headless tab is
-   * on no surface a person can touch, so it always photographs.
+   * tab entered before this host ever saw an event from it. Headless state
+   * does not erase this history: a tab hidden just after typing still declines
+   * until the same quiet window passes.
    *
    * JPEG through the same `capturePage` door the overlay freeze uses, for the
    * same latency reason; the store bounds how many live frames are kept.
    */
-  async capturePicture(tabId: string): Promise<string | null> {
-    const entry = this.requireTab(tabId);
+  async capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null> {
+    // Unlike an explicit screenshot, this is background enrichment of an
+    // already completed action. A closed tab or failed camera owes no failed
+    // mutation: the snapshot remains useful without a transcript thumbnail.
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined || signal?.aborted) return null;
     const contents = entry.view.webContents;
-    if (entry.state.presentation !== "headless" && this.isBeingUsed(entry)) return null;
-    const image = await contents.capturePage();
-    // A capture with no pixels is a picture of nothing, and minting an id for it
-    // puts `data:image/jpeg;base64,` in a transcript card as if it were a frame.
-    // Declining says the same thing honestly, through the null this already
-    // returns when it decides not to look. Chromium answers a surfaceless view
-    // this way rather than by failing (VC-278), so the check is cheap insurance
-    // against ever silently storing emptiness again.
-    if (image.isEmpty()) return null;
-    return this.deps.pictures.put({
-      tabId,
-      generation: entry.state.generation,
-      mime: "image/jpeg",
-      bytes: image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY),
-      ownerSessionId: entry.state.ownerSessionId,
-      persist: false,
-    });
+    const generation = entry.state.generation;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abandon: (() => void) | undefined;
+    try {
+      // Interaction privacy is independent of the final presentation. A tab
+      // hidden one moment after the person typed still carries those pixels.
+      if (this.isBeingUsed(entry)) return null;
+      const deadline = new Promise<null>((resolve) => {
+        abandon = () => resolve(null);
+        signal?.addEventListener("abort", abandon, { once: true });
+        timer = setTimeout(() => {
+          console.warn(`[volli] Browser Tab ${tabId} preview capture timed out`);
+          resolve(null);
+        }, BROWSER_PREVIEW_TIMEOUT_MS);
+      });
+      let capture = entry.pictureCaptures.get(generation);
+      // Chromium does not offer cancellation for capturePage. Deduplicate calls
+      // in one generation, and allow recovery after one compositor hang. If a
+      // second native request also hangs, optional previews fail closed for
+      // this tab instead of creating an unbounded queue the host cannot cancel.
+      if (
+        capture === undefined &&
+        entry.pictureCaptures.size >= BROWSER_PREVIEW_MAX_PENDING_CAPTURES
+      )
+        return null;
+      if (capture === undefined) {
+        capture = contents.capturePage();
+        entry.pictureCaptures.set(generation, capture);
+        const owned = capture;
+        void capture.then(
+          () => {
+            if (entry.pictureCaptures.get(generation) === owned)
+              entry.pictureCaptures.delete(generation);
+          },
+          () => {
+            if (entry.pictureCaptures.get(generation) === owned)
+              entry.pictureCaptures.delete(generation);
+          },
+        );
+      }
+      const image = await Promise.race([capture, deadline]);
+      // No late writes: navigation, teardown, withdrawal, or a person starting
+      // to type during capture invalidates the frame just as surely as an
+      // empty image. Keep the generation from BEFORE capture, never relabel it.
+      if (
+        image === null ||
+        signal?.aborted ||
+        image.isEmpty() ||
+        this.tabs.get(tabId) !== entry ||
+        entry.state.generation !== generation ||
+        this.isBeingUsed(entry)
+      )
+        return null;
+      const bytes = image.toJPEG(BROWSER_CAPTURE_JPEG_QUALITY);
+      if (bytes.length === 0) return null;
+      return this.deps.pictures.put({
+        tabId,
+        generation,
+        mime: "image/jpeg",
+        bytes,
+        ownerSessionId: entry.state.ownerSessionId,
+        persist: false,
+      });
+    } catch (error) {
+      console.warn(`[volli] Browser Tab ${tabId} preview capture unavailable:`, error);
+      return null;
+    } finally {
+      clearTimeout(timer);
+      if (abandon !== undefined) signal?.removeEventListener("abort", abandon);
+    }
   }
 
   /** Whether the person has touched this tab inside the quiet window, or holds it now. */

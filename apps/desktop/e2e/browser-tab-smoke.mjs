@@ -503,11 +503,9 @@ async function main() {
         (await shell.getAttribute("data-volli-shell")) === "ephemeral" &&
         (await remoteViewAttached(app, startUrl)),
     );
-    // Nothing is photographed speculatively: the stand-in is taken WHEN an
-    // overlay opens, so it is the frame the person was actually looking at.
-    if ((await page.locator("[data-browser-plane-snapshot]").count()) !== 0) {
-      throw new Error("expected no stand-in pixels before the first overlay");
-    }
+    // Unpinning has its own 160ms renderer overlay while the sidebar exits,
+    // so it may already have captured the persistent stand-in. The unit test
+    // spies on capture timing; this smoke checks the user-visible plane swap.
     await page.mouse.move(700, 70);
     await trigger.hover();
     await waitUntil(
@@ -556,8 +554,7 @@ async function main() {
 
     return {
       ok: true,
-      detail:
-        "no pixels until an overlay asks; floating/menu each capture then detach; both restore",
+      detail: "floating sidebar and menu each detach the live plane over captured pixels",
     };
   });
 
