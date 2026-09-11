@@ -81,6 +81,7 @@ import type {
 } from "@volli/shared";
 
 import type { BrowserTabState } from "../../ipc/contract";
+import type { BrowserAgentCoordinator } from "./agent-coordinator";
 import type {
   BrowserHoldEnd,
   BrowserHoldOutcome,
@@ -88,7 +89,7 @@ import type {
   BrowserTabCreateOptions,
 } from "./tab-host";
 import { BrowserSessionTabLimitError, BrowserTabLimitError, isAllowedBrowserUrl } from "./tab-host";
-import { BrowserTabController, type CdpTransport, type TabCursorDriver } from "./cdp-controller";
+import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-controller";
 
 /**
  * What the port asks of the host — the registry and navigation surface, as a
@@ -96,6 +97,8 @@ import { BrowserTabController, type CdpTransport, type TabCursorDriver } from ".
  * record and production hands the host itself.
  */
 export interface AgentBrowserHost {
+  /** Host-wide Browser operation queues and shared debugger lifetimes. */
+  agentOperations: BrowserAgentCoordinator;
   list(scope: { projectId: string; ticketId?: string }): BrowserTabState[];
   open(input: BrowserTabCreateOptions): BrowserTabState;
   navigate(tabId: string, url: string): BrowserTabState;
@@ -104,7 +107,7 @@ export interface AgentBrowserHost {
   reload(tabId: string): BrowserTabState;
   consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
   /** A live picture of the tab for the transcript card, or null when the host declined to look. */
-  capturePicture(tabId: string): Promise<string | null>;
+  capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
   keepScreenshot(tabId: string, base64Png: string): string;
   /** Closes the headless tabs one Session owns; a shown tab is the person's and stays. */
@@ -184,16 +187,25 @@ export interface AgentBrowserPortOptions {
 export function debuggerTransport(contents: WebContents): CdpTransport {
   const wire = contents.debugger;
   let initialized = false;
+  let disposed = false;
+  const assertLive = (): void => {
+    if (disposed) throw new Error("The Browser Tab debugger transport was disposed");
+  };
   const ensureReady = async (): Promise<void> => {
+    assertLive();
     if (initialized && wire.isAttached()) return;
     initialized = false;
     try {
       if (!wire.isAttached()) wire.attach("1.3");
       await wire.sendCommand("Accessibility.enable");
+      assertLive();
       await wire.sendCommand("DOM.enable");
+      assertLive();
       await wire.sendCommand("Page.enable");
+      assertLive();
       initialized = true;
     } catch {
+      assertLive();
       throw new BrowserRefusal(
         "browser.debugger-unavailable",
         "Browser control is unavailable while another debugger owns this tab. Close its DevTools and retry.",
@@ -204,6 +216,7 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
     ensureReady,
     send: async (method, params) => {
       await ensureReady();
+      assertLive();
       return wire.sendCommand(method, params);
     },
     dispose: () => {
@@ -211,6 +224,7 @@ export function debuggerTransport(contents: WebContents): CdpTransport {
       // `ensureReady` that attached and then failed or was withdrawn leaves
       // `initialized` false over a live attachment, and while Chromium's
       // debugger owns the tab the person cannot open their own DevTools on it.
+      disposed = true;
       if (!wire.isAttached()) return;
       initialized = false;
       try {
@@ -251,15 +265,22 @@ export function loadWaiter(
         if (grace !== undefined) clearTimeout(grace);
         contents.removeListener("did-start-loading", started);
         contents.removeListener("did-stop-loading", finish);
+        contents.removeListener("destroyed", finish);
+        contents.removeListener("render-process-gone", finish);
         signal.removeEventListener("abort", finish);
         resolve();
       };
       const timer = setTimeout(finish, timeoutMs);
       contents.on("did-start-loading", started);
       contents.on("did-stop-loading", finish);
+      contents.on("destroyed", finish);
+      contents.on("render-process-gone", finish);
       signal.addEventListener("abort", finish, { once: true });
-      // Close the gap between the first isLoading() read and listener install.
-      if (contents.isLoading()) started();
+      // Close BOTH gaps: a load can start or finish during listener install,
+      // and a withdrawal can precede its abort listener too.
+      if (signal.aborted) finish();
+      else if (contents.isLoading()) started();
+      else if (loading) finish();
       else if (mode === "possible-navigation") grace = setTimeout(finish, navigationGraceMs);
     });
   };
@@ -349,8 +370,44 @@ function heldRefusal(tabId: string, holder: BrowserTabHolder): BrowserRefusal {
 }
 
 export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentBrowserPort {
-  const controllers = new Map<string, BrowserTabController>();
-  /** One live hold per driven tab; released with the tab's scope or the attachment. */
+  const lifetime = new AbortController();
+  const owner = JSON.stringify([options.session.sessionId, options.session.attachmentId]);
+
+  /** Adds the attachment lifetime to every caller-owned cancellation signal. */
+  const scoped =
+    <I extends { signal: AbortSignal }, O>(
+      run: (input: I) => Promise<O>,
+    ): ((input: I) => Promise<O>) =>
+    async (input) => {
+      const signal = AbortSignal.any([input.signal, lifetime.signal]);
+      signal.throwIfAborted();
+      return await run({ ...input, signal });
+    };
+
+  /**
+   * Every operation that can touch a tab runs in the host-wide per-tab queue.
+   * The controller is lazy so hold-only work and pre-load navigation do not
+   * attach Chromium's debugger before they need it.
+   */
+  const scheduled = async <T>(
+    tabId: string,
+    signal: AbortSignal,
+    operation: (controller: () => Promise<BrowserTabController>) => Promise<T>,
+  ): Promise<T> => {
+    const cursor = options.cursorFor?.(tabId);
+    return await options.host.agentOperations.run({
+      tabId,
+      owner,
+      signal,
+      factory: {
+        transport: () => options.transportFor(tabId),
+        ...(cursor === undefined ? {} : { cursor }),
+      },
+      operation: async (context) => await operation(context.controller),
+    });
+  };
+
+  /** One live wake lease per driven tab; released with the tab's scope or the attachment. */
   const wakes = new Map<string, () => void>();
   const session = options.session;
 
@@ -391,8 +448,6 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
   const resolve = (tabId: string): BrowserTabState => {
     const tab = visible().find((candidate) => candidate.tabId === tabId);
     if (tab === undefined) {
-      controllers.get(tabId)?.dispose();
-      controllers.delete(tabId);
       releaseWake(tabId);
       throw new BrowserRefusal(
         "browser.unknown-tab",
@@ -406,39 +461,24 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
    * Rule 2: a write takes the hold or is refused. The host decides; this
    * only words the refusal. Called before every write and by `acquire`.
    */
+  const heldTabs = new Set<string>();
   const takeHold = (tab: BrowserTabState): BrowserTabState => {
     const outcome = options.host.hold(tab.tabId, session);
     if (outcome.kind === "refused") throw heldRefusal(tab.tabId, outcome.holder);
+    heldTabs.add(tab.tabId);
     return outcome.tab;
   };
 
-  /** The tab's controller, attached and generation-synced to the host's count. */
-  const controllerFor = async (
+  /** The attachment's controller, generation-synced to the host's count. */
+  const syncedController = async (
     tab: BrowserTabState,
-    signal?: AbortSignal,
+    controller: () => Promise<BrowserTabController>,
+    signal: AbortSignal,
   ): Promise<BrowserTabController> => {
-    let controller = controllers.get(tab.tabId);
-    if (controller === undefined) {
-      const pending = new BrowserTabController(
-        options.transportFor(tab.tabId),
-        {},
-        options.cursorFor?.(tab.tabId),
-      );
-      try {
-        await pending.enable(signal);
-      } catch (error) {
-        // Nothing else can reach this controller — it never entered the map, so
-        // the port's own dispose would walk straight past it. An enable that
-        // failed or was withdrawn may still have attached the debugger, so the
-        // only moment it can be handed back is here.
-        pending.dispose();
-        throw error;
-      }
-      controller = pending;
-      controllers.set(tab.tabId, controller);
-    }
-    controller.syncGeneration(tab.generation);
-    return controller;
+    const ready = await controller();
+    signal.throwIfAborted();
+    ready.syncGeneration(resolve(tab.tabId).generation);
+    return ready;
   };
 
   /**
@@ -446,12 +486,16 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
    * change started has settled, so the frame shows the result rather than the
    * moment before it. A read (`snapshot`) changes nothing and takes none.
    */
-  const pictureAfterChange = async (tabId: string, changed: boolean): Promise<string | null> =>
-    changed ? await options.host.capturePicture(tabId) : null;
+  const pictureAfterChange = async (
+    tabId: string,
+    changed: boolean,
+    signal: AbortSignal,
+  ): Promise<string | null> => (changed ? await options.host.capturePicture(tabId, signal) : null);
 
   const snapshotOf = async (
     tabId: string,
     signal: AbortSignal,
+    controller: () => Promise<BrowserTabController>,
     waitMode: BrowserLoadWaitMode = "current",
     changed = false,
   ): Promise<RuntimeBrowserSnapshot> => {
@@ -465,9 +509,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     await options.waitForLoad(tabId, signal, waitMode);
     signal.throwIfAborted();
     const tab = resolve(tabId);
-    const controller = await controllerFor(tab, signal);
-    const printed = await controller.snapshot(signal);
-    const picture = await pictureAfterChange(tab.tabId, changed);
+    const ready = await syncedController(tab, controller, signal);
+    const printed = await ready.snapshot(signal);
+    const picture = await pictureAfterChange(tab.tabId, changed, signal);
+    signal.throwIfAborted();
     // Re-read after the capture, and without refusing: a load that failed
     // while this call waited is the one fact a successful-looking snapshot
     // would otherwise hide (§9), and a tab that closed in the same gap should
@@ -553,7 +598,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     }
   };
 
-  return {
+  const port: AgentBrowserPort = {
     tabs: async (input) => {
       input.signal.throwIfAborted();
       return {
@@ -569,58 +614,85 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     },
     navigate: async (input) => {
       input.signal.throwIfAborted();
-      const run = async (): Promise<RuntimeBrowserSnapshot> => {
-        const steered = steer(input.tabId, input.navigation);
-        return snapshotOf(steered.tabId, input.signal, steered.waitMode, true);
-      };
+      if (input.tabId === undefined) {
+        const steered = steer(undefined, input.navigation);
+        return await scheduled(steered.tabId, input.signal, async (controller) =>
+          snapshotOf(steered.tabId, input.signal, controller, steered.waitMode, true),
+        );
+      }
+
       // Named quietly rather than resolved: a refused navigation should still
       // say which tab it was aimed at, but WHICH refusal fires first is
       // `steer`'s order to keep — the target policy is judged before the host
       // sees anything, unknown tab or not.
-      const aimed =
-        input.tabId === undefined
-          ? undefined
-          : visible().find((candidate) => candidate.tabId === input.tabId);
-      return aimed === undefined ? run() : refusalsOn(aimed, run);
+      const aimed = visible().find((candidate) => candidate.tabId === input.tabId);
+      if (aimed === undefined) {
+        // This can only throw. Running it now avoids creating host queue state
+        // for a tab the Session is not allowed to know exists.
+        steer(input.tabId, input.navigation);
+        throw new Error("Unreachable Browser navigation");
+      }
+      return await refusalsOn(aimed, async () =>
+        scheduled(input.tabId!, input.signal, async (controller) => {
+          const steered = steer(input.tabId, input.navigation);
+          return await snapshotOf(steered.tabId, input.signal, controller, steered.waitMode, true);
+        }),
+      );
     },
     snapshot: async (input) => {
       const tab = resolve(input.tabId);
-      return refusalsOn(tab, () => snapshotOf(input.tabId, input.signal));
+      return await refusalsOn(tab, async () =>
+        scheduled(input.tabId, input.signal, async (controller) =>
+          snapshotOf(input.tabId, input.signal, controller),
+        ),
+      );
     },
     act: async (input): Promise<RuntimeBrowserActResult> => {
       input.signal.throwIfAborted();
-      const tab = takeHold(resolve(input.tabId));
-      keepAwake(tab.tabId);
-      return refusalsOn(tab, async () => {
-        const controller = await controllerFor(tab, input.signal);
-        const acted = await controller.act(
-          {
-            generation: input.generation,
-            kind: input.kind,
-            ...(input.ref === undefined ? {} : { ref: input.ref }),
-            ...(input.text === undefined ? {} : { text: input.text }),
-            ...(input.key === undefined ? {} : { key: input.key }),
-            ...(input.direction === undefined ? {} : { direction: input.direction }),
-            ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
-          },
-          input.signal,
-        );
-        const snap = await snapshotOf(input.tabId, input.signal, "possible-navigation", true);
-        return { ...snap, target: acted.target };
-      });
+      const aimed = resolve(input.tabId);
+      return await refusalsOn(aimed, async () =>
+        scheduled(input.tabId, input.signal, async (controller) => {
+          const tab = takeHold(resolve(input.tabId));
+          keepAwake(tab.tabId);
+          const ready = await syncedController(tab, controller, input.signal);
+          const acted = await ready.act(
+            {
+              generation: input.generation,
+              kind: input.kind,
+              ...(input.ref === undefined ? {} : { ref: input.ref }),
+              ...(input.text === undefined ? {} : { text: input.text }),
+              ...(input.key === undefined ? {} : { key: input.key }),
+              ...(input.direction === undefined ? {} : { direction: input.direction }),
+              ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+            },
+            input.signal,
+          );
+          const snap = await snapshotOf(
+            input.tabId,
+            input.signal,
+            controller,
+            "possible-navigation",
+            true,
+          );
+          return { ...snap, target: acted.target };
+        }),
+      );
     },
     screenshot: async (input) => {
       input.signal.throwIfAborted();
-      const tab = resolve(input.tabId);
-      keepAwake(tab.tabId);
-      return refusalsOn(tab, async () => {
-        const controller = await controllerFor(tab, input.signal);
-        const shot = await controller.screenshot(input.signal);
-        input.signal.throwIfAborted();
-        // The model's picture is the person's too: kept, not re-captured.
-        const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
-        return { ...pageOf(resolve(tab.tabId)), picture, ...shot };
-      });
+      const aimed = resolve(input.tabId);
+      return await refusalsOn(aimed, async () =>
+        scheduled(input.tabId, input.signal, async (controller) => {
+          const tab = resolve(input.tabId);
+          keepAwake(tab.tabId);
+          const ready = await syncedController(tab, controller, input.signal);
+          const shot = await ready.screenshot(input.signal);
+          input.signal.throwIfAborted();
+          // The model's picture is the person's too: kept, not re-captured.
+          const picture = options.host.keepScreenshot(tab.tabId, shot.base64Png);
+          return { ...pageOf(resolve(tab.tabId)), picture, ...shot };
+        }),
+      );
     },
     console: async (input) => {
       input.signal.throwIfAborted();
@@ -634,35 +706,67 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     },
     acquire: async (input) => {
       input.signal.throwIfAborted();
-      const tab = resolve(input.tabId);
-      const outcome = options.host.hold(tab.tabId, session);
-      if (outcome.kind === "held") return { kind: "held", tabId: tab.tabId };
-      // Never null here: a refusal always names who has it.
-      const holder = runtimeHolder(outcome.holder, session) as NonNullable<RuntimeBrowserHolder>;
-      return { kind: "refused", tabId: tab.tabId, holder };
+      resolve(input.tabId);
+      return await scheduled(input.tabId, input.signal, async () => {
+        const tab = resolve(input.tabId);
+        const outcome = options.host.hold(tab.tabId, session);
+        if (outcome.kind === "held") {
+          heldTabs.add(tab.tabId);
+          return { kind: "held" as const, tabId: tab.tabId };
+        }
+        // Never null here: a refusal always names who has it.
+        const holder = runtimeHolder(outcome.holder, session) as NonNullable<RuntimeBrowserHolder>;
+        return { kind: "refused" as const, tabId: tab.tabId, holder };
+      });
     },
     release: async (input) => {
       input.signal.throwIfAborted();
-      const tab = resolve(input.tabId);
-      options.host.releaseHold(tab.tabId, session, "release");
-      return { tabId: tab.tabId };
+      resolve(input.tabId);
+      return await scheduled(input.tabId, input.signal, async () => {
+        const tab = resolve(input.tabId);
+        options.host.releaseHold(tab.tabId, session, "release");
+        heldTabs.delete(tab.tabId);
+        return { tabId: tab.tabId };
+      });
     },
     turnEnded: () => {
-      options.host.releaseAllHeldBy(session, "turn-end");
+      // Put each release behind work already queued for that tab. A new turn's
+      // work queues behind this barrier and therefore takes a fresh hold.
+      const ending = [...heldTabs];
+      heldTabs.clear();
+      for (const tabId of ending) {
+        options.host.agentOperations.afterCurrent(tabId, () => {
+          options.host.releaseHold(tabId, session, "turn-end");
+        });
+      }
     },
     dispose: () => {
-      for (const controller of controllers.values()) controller.dispose();
-      controllers.clear();
-      for (const release of wakes.values()) release();
-      wakes.clear();
-      // Holds go with the attachment, and the Session leaves the colour
-      // wheel; the host does both in one door.
-      options.host.forgetSession(session);
-      // Then the tabs themselves. A headless tab's life is bound to the
-      // attachment (VC-238): nobody can see it, so nothing but this Session
-      // could ever close it. Shown tabs are the person's and outlive it.
-      // After forgetSession, so a closing tab's hold is already gone.
-      options.host.closeHeadlessOwnedBy(session.sessionId);
+      if (lifetime.signal.aborted) return;
+      lifetime.abort(new Error("The Browser port was disposed with its Session attachment"));
+      heldTabs.clear();
+      options.host.agentOperations.releaseOwner(owner, () => {
+        for (const release of wakes.values()) release();
+        wakes.clear();
+        // Holds go with the attachment, and the Session leaves the colour
+        // wheel; the host does both in one door.
+        options.host.forgetSession(session);
+        // Then the tabs themselves. A headless tab's life is bound to the
+        // attachment (VC-238): nobody can see it, so nothing but this Session
+        // could ever close it. Shown tabs are the person's and outlive it.
+        // After forgetSession, so a closing tab's hold is already gone.
+        options.host.closeHeadlessOwnedBy(session.sessionId);
+      });
     },
+  };
+  return {
+    ...port,
+    tabs: scoped(port.tabs),
+    navigate: scoped(port.navigate),
+    snapshot: scoped(port.snapshot),
+    act: scoped(port.act),
+    screenshot: scoped(port.screenshot),
+    console: scoped(port.console),
+    acquire: scoped(port.acquire),
+    release: scoped(port.release),
   };
 }
