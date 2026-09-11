@@ -1,82 +1,119 @@
 /**
  * VC-30 — hover-peek for sessions in the sidebars.
  *
- * **The question: what belongs in a card you never meant to open.** A peek is
- * read in the half-second between deciding to look and deciding to switch, so
- * every variant here is a different answer to "how much is worth showing before
- * showing more is just the chat again". Four bodies over one set of real rows:
+ * **The problem, stated as the user states it.** Someone is running a dozen
+ * agents at once. The cost they actually pay is not reading — it is
+ * RE-ENTRY: every glance at a row has to rebuild context that fell out of
+ * their head three sessions ago. Three things fall out, in this order:
  *
- *   • **A · Tail** — `volli session peek` made visual. Header, six compact
- *     `role · line · [tool]` entries, live text at the foot. No model, maximum
- *     density, nothing inferred.
- *   • **B · Brief** — a utility-model sentence first, at reading size, with the
- *     tail folded away behind a disclosure. Tests whether one generated line
- *     beats six literal ones.
- *   • **C · Mini-plane** — the chat, small: real message bodies, the real
- *     {@link InteractionCard} at the foot. Tests whether a peek can just be the
- *     surface it is peeking at.
- *   • **D · Errand** — content-adaptive. Waiting: the question is the entire
- *     card and nothing else is drawn. Working: a two-line status strip. Tests
- *     whether a peek should be one consistent thing at all.
+ *   1. **Which ticket is this, and what stage is it at?** `VLT-14` is not a
+ *      memorable name. A person with eleven live sessions cannot hold eleven
+ *      ticket codes, and the row shows them nothing else.
+ *   2. **What was this session asked to do, and where has it got to?** Scope
+ *      first, progress second — progress with no scope is just noise.
+ *   3. **Does it need me?** And if so, can I clear it from here.
+ *
+ * Everything below is built backwards from those three, which is why every
+ * variant shares ONE header and differs only in the third zone:
+ *
+ *   • **Anchor** (fixed) — ticket title at reading size with the code demoted
+ *     to a chip beside its status, then the session's own title and state
+ *     underneath. This inverts the ROW's hierarchy on purpose: a row has 240px
+ *     and must lead with the session, a card has 380px and can afford to lead
+ *     with the thing the person actually forgot. The data is already on the
+ *     row — `ActiveSessionRow.ticket` is a whole {@link Ticket}, title, status
+ *     and all — so this costs one read and no new plumbing.
+ *   • **Scope** (fixed) — the one durable sentence saying what this session
+ *     was sent to do. It never churns, which is exactly why it belongs in a
+ *     surface read in half a second.
+ *   • **State** (the variable) — the only zone the variants disagree about.
+ *
+ * ── THE THREE BODIES ──────────────────────────────────────────────────────
+ *   • **1 · Errand** — content-adaptive. A waiting session draws its decision
+ *     and nothing else; a working one draws its current step and last moves; a
+ *     finished one draws its outcome brief. The claim: a peek's shape should
+ *     follow the only question worth asking about that state.
+ *   • **2 · Brief** — uniform. Always one generated sentence, then two delta
+ *     lines, then the decision if there is one. The claim: a predictable shape
+ *     is worth more than a fitted one, because the eye learns where to land.
+ *   • **3 · Glance** — minimal. Anchor, scope, one state sentence, and for a
+ *     decision only its existence and shape. Everything else is one rung up.
+ *     The claim: the card's job is to let you SKIP opening things, and a card
+ *     that tries to be the chat has already lost.
+ *
+ * ── THE LADDER (and why rung 2 already exists) ────────────────────────────
+ * `SubagentPeekDialog` (VC-269) is already exactly the second rung: a modal
+ * over the current surface, read-only transcript, "Open as tab" to promote.
+ * It is written against `IslandAgent` — `{id, label, state, promoted}` — which
+ * a sidebar row maps onto in four lines, so this is reuse rather than a new
+ * surface. That gives three rungs at three costs:
+ *
+ *       hover (0ms, free)  →  the card: is it mine to deal with?
+ *       click "Look"       →  the dialog: the whole transcript, read-only
+ *       "Open as tab"      →  full promotion, the way it works today
+ *
+ * The card is drawn here for real; the dialog is a GEOMETRY MOCK at the real
+ * component's size (`h-[70vh] max-w-3xl`, title row, promote button), because
+ * mounting the real one needs a live session client and the lab has no bridge.
+ * Production reuses the component; this scratch only has to prove the rung
+ * feels right. Note the card never steals focus and the row still navigates on
+ * click — the ladder hangs off the CARD, not off the row.
+ *
+ * ── WHAT A SUMMARY IS FOR, AND WHEN IT IS A LIE ───────────────────────────
+ * A generated sentence is only safe when the thing it summarizes has STOPPED
+ * MOVING. So:
+ *
+ *   • **finished** → brief, generated once at turn end and frozen. This is
+ *     also the answer to the long-final-message problem: agents write a wall
+ *     of text before they stop, and rendering it verbatim in a 380px card is
+ *     useless. Summarize it at the moment it lands (the `auto-title.ts`
+ *     precedent: `completeUtility`, cheapest model, fire-and-forget, failure
+ *     keeps the fallback) and the card shows three lines instead of thirty.
+ *     Because the turn is over, the brief can never go stale.
+ *   • **working** → NO summary. Anything generated mid-turn is stale the
+ *     instant the agent does the next thing, and a confidently stale sentence
+ *     is worse than no sentence. Show the live step instead; it is free.
+ *   • **waiting** → NEVER summarize. You do not paraphrase a question you are
+ *     asking someone to answer.
+ *
+ * Variant 2 breaks that rule on purpose — it summarizes working sessions too —
+ * so the cost of the uniform shape is visible rather than argued about.
+ *
+ * ── THE TRUNCATION SAFETY RULE ────────────────────────────────────────────
+ * Turn `Question` to `long` and hover the VLT-14 row. A real `ask_user` can
+ * carry several paragraphs and six options with a line of description each;
+ * none of that fits in 380px. The rule every variant obeys: **a peek may
+ * truncate what it SHOWS, but it may never offer a decision it had to
+ * truncate.** A clipped option list is a misinformed click, and an
+ * irreversible one. When the decision does not fit, the card says so and
+ * hands off to the dialog, where the whole thing is legible.
  *
  * ── WHAT IS REAL HERE AND WHAT IS NOT ─────────────────────────────────────
- * REAL: the rows (`ActiveBandRow`/`PreviousBandRow`), the band membership and
- * the cleanup rules (`buildActiveSessionListing` over the lab's own measured
- * `sessionListingInput`), the rail's `ListRow`, the board cards behind the
- * card, the interaction card C and D answer with, and every token the peek is
- * drawn from.
+ * REAL: the rows, the band membership and cleanup rules
+ * (`buildActiveSessionListing` over the lab's measured `sessionListingInput`),
+ * the ticket records behind the anchor, the rail's `ListRow`, the board cards
+ * the card floats over, the shipped {@link InteractionCard}, every token.
  *
- * NOT REAL: the peek CONTENT. Tails, summaries and terminal lines are fixtures
- * ({@link SUBJECTS}) — deliberately, because what a peek should contain is
- * exactly the thing under review, and wiring a live read first would have us
- * judging latency instead of shape. Two of them are dishonest on purpose: the
- * summary on `chat-10a` is stale against its own tail, and the one on
- * `chat-9a` is confidently wrong. If B only reads well when the sentence is
- * right, B is not shippable — a real utility call will be stale or wrong some
- * of the time, and the tail underneath is the only thing that catches it.
+ * NOT REAL: the peek CONTENT ({@link SUBJECTS}) — deliberately, because what a
+ * peek should contain is the thing under review, and a live read would have us
+ * judging latency instead of shape.
  *
- * ── THE ORDER SWITCH IS NOT A SIDE QUEST ──────────────────────────────────
- * Turn `Activity` to `live` and leave `Order` on `recency`: rows re-sort under
- * the pointer while agents work, because the shipped comparator
- * (`active-session-listing.ts`, `a.group - b.group || b.recency - a.recency`)
- * reads `lastActivityAt`, and that bumps on every tool call and every streamed
- * message. Hover a row in that state and the row you are reading walks out from
- * under the card — which is the peek's worst failure, and it is not the peek's
- * bug. Switch `Order` to `promotion` for the proposed rule: a row rises only
- * when it ENTERS an active state, and then holds its rank until it leaves one.
- * Judge every variant with that switch on `promotion`; judge whether the fix is
- * needed with it on `recency`.
- *
- * The two rules are applied HERE, over the built band, rather than in the
- * builder — the scratch's job is to make the difference feel like something,
- * and the real change belongs in the pure model with its own tests.
- *
- * ── WHAT TO ACTUALLY LOOK AT ──────────────────────────────────────────────
- *   • **Travel.** Move down the band with the card open. `Timing: warm` opens
- *     the first card after 120ms and every later one at zero while the pointer
- *     stays inside the band. `instant` is 0ms always — cross the sidebar
- *     diagonally on the way to the board and count how many cards you did not
- *     ask for. That is the whole argument for a warm window.
- *   • **The fallback-title rows.** `chat-12a` is titled "Chat", like 45% of
- *     the real corpus (VC-69's measurement). Its kickoff line is the only thing
- *     that says which chat it is — check that it reads as identity and not as
- *     another line of transcript.
- *   • **Answering without arriving.** Peek `VC-14`'s waiting chat and answer
- *     it. In C and D that is the shipped card at 380px; in A and B it is a
- *     compact strip. One of those is right and the prototype is how we find
- *     out which.
- *   • **Height.** Nothing is allowed to push the card past 60vh. Watch the
- *     long tail on `chat-9a` and the tall question on `VC-11`.
+ * ── THE ORDER SWITCH ──────────────────────────────────────────────────────
+ * Set `Activity: live` with `Order: recency` and try to hover a working row:
+ * it walks out from under the pointer, because the shipped comparator
+ * (`active-session-listing.ts`: `a.group - b.group || b.recency - a.recency`)
+ * keys on `lastActivityAt`, which every tool call bumps. `promotion` is the
+ * rule this ticket lands: a row rises when it ENTERS an active state and holds
+ * rank until it leaves one. Applied here over the built band rather than in
+ * the builder — the real change belongs in the pure model with its own tests.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
-import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { UserIcon } from "@phosphor-icons/react/dist/csr/User";
+import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { RendererSessionInteraction } from "@volli/shared";
+import { TICKET_STATUS_LABELS, type RendererSessionInteraction, type Ticket } from "@volli/shared";
 
 import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { InteractionCard } from "@renderer/components/chat/interaction-ui";
@@ -87,6 +124,8 @@ import {
 } from "@renderer/components/sidebar/active-session-listing";
 import { SessionBandHeader } from "@renderer/components/sidebar/session-band-header";
 import { ActiveBandRow, PreviousBandRow } from "@renderer/components/sidebar/session-band-row";
+import { Button } from "@renderer/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { ListRow } from "@renderer/components/ui/list-row";
 import {
   Sidebar,
@@ -101,8 +140,7 @@ import { labels, NOW, project, sessionListingInput, ticketById } from "../fixtur
 import { appApi, seedApp } from "../seed";
 
 export const title = "Session hover-peek (VC-30)";
-export const note =
-  "Four peek bodies over the real bands — hover timing and band ordering drivable";
+export const note = "Three peek bodies over the real bands, plus the promote-to-dialog ladder";
 export const viewport = "window";
 export const seed = seedApp;
 export const api = appApi;
@@ -112,40 +150,53 @@ const MINUTE = 60 * SECOND;
 
 /* ------------------------------------------------------------------ content */
 
-interface PeekTailEntry {
+interface PeekStep {
   ageMs: number;
-  role: "user" | "assistant";
   text: string;
-  tools?: readonly string[];
+  tool?: string;
+}
+
+/** A step's key: its age is unique within a subject, so no index is needed. */
+function stepKey(step: PeekStep): string {
+  return `${step.ageMs}:${step.text.slice(0, 12)}`;
 }
 
 /**
- * A tail entry's key. Its age is what makes it unique within one subject — the
- * fixture gives every entry a distinct one — so the list needs no synthetic id
- * and no index (which would re-key every row the moment a tail grows at the
- * head, which is exactly how a live tail grows).
+ * What one row's peek knows.
+ *
+ * The split between `scope`, `brief` and `step` is the whole design: `scope`
+ * is durable and set at birth, `brief` is frozen at turn end, `step` is live
+ * and never summarized. Nothing here is both generated and moving.
  */
-function tailKey(entry: PeekTailEntry): string {
-  return `${entry.role}:${entry.ageMs}`;
-}
-
 interface PeekSubject {
   kind: "chat" | "terminal";
-  /** The line under the title, for a Session whose title says nothing (VC-69). */
-  kickoff?: string;
-  /** A utility-model sentence, cached on turn settle. Null where none has run. */
-  summary?: string;
-  /** How stale that sentence is — the fixture lies on two rows, on purpose. */
-  summaryAgeMs?: number;
-  tail?: readonly PeekTailEntry[];
-  /** In-flight assistant text, drawn live under the tail. */
+  /** What this Session was sent to do. Durable — the kickoff, or the delegated task. */
+  scope?: string;
+  /** The live step, for a WORKING session only. Never generated, never cached. */
+  step?: string;
+  /** Recent moves, newest last. The delta a working session is judged by. */
+  steps?: readonly PeekStep[];
+  /** In-flight assistant text. */
   streaming?: string;
+  /**
+   * The outcome brief — generated ONCE at turn end from the final message, and
+   * frozen, so it cannot go stale. Present only on a finished session.
+   */
+  brief?: string;
+  /** What the turn actually touched; the fact that decides whether to review. */
+  touched?: readonly string[];
+  /**
+   * The final message the brief was made from — a realistic wall of text. Only
+   * the dialog ever draws it; that contrast is the point (Q4).
+   */
+  finalMessage?: string;
+  /** Why a broken session stopped. Never summarized — the reason IS the payload. */
+  failure?: string;
   interaction?: RendererSessionInteraction;
-  /** A live terminal's trailing output — read from the mounted engine (Q7). */
+  /** A live terminal's trailing output. */
   lines?: readonly string[];
 }
 
-/** A question exactly as `ask_user` shapes one. */
 function question(
   id: string,
   ask: string,
@@ -167,7 +218,6 @@ function question(
   };
 }
 
-/** A permission, on Volli's own three ids. */
 function permission(id: string, ask: string, detail: string): RendererSessionInteraction {
   return {
     id,
@@ -185,64 +235,81 @@ function permission(id: string, ask: string, detail: string): RendererSessionInt
   };
 }
 
+/** The short question — one line, three plain options. Answerable from a glance. */
+const SHORT_QUESTION = question(
+  "ask-14a",
+  "Repaint the gutter on every scroll frame, or flush on scroll end?",
+  [
+    ["per-frame", "Repaint per frame", null],
+    ["flush", "Flush on scroll end", null],
+    ["measure", "Measure both first", null],
+  ],
+);
+
 /**
- * What each row's peek holds. Keyed by the listing row's own id — `chat:<id>`
- * for a chat, `session:<tabId>` for a live terminal (`active-session-listing.ts`).
+ * The long question — several sentences and five options that each need a line
+ * of their own. Nothing about this fits 380px, and the card must refuse to
+ * offer it rather than clip it (see the truncation rule in the module doc).
+ */
+const LONG_QUESTION = question(
+  "ask-14a",
+  "The decoration cache is rebuilt on every scroll frame because the debounce drops its trailing call, and there are three places that could own the fix: the gutter's own cache, the scroll observer that feeds it, or the editor's decoration provider upstream of both. Each one trades correctness against frame cost differently, and two of them change behaviour for extensions that subscribe to decoration events. How do you want this fixed?",
+  [
+    [
+      "per-frame",
+      "Repaint per frame in the gutter",
+      "Always correct, costs ~2ms per frame on a 4k-line file, and no extension sees a change.",
+    ],
+    [
+      "flush",
+      "Keep the debounce, flush on scroll end",
+      "Cheapest option; leaves exactly one stale frame at the 16ms boundary, which is visible on a trackpad fling.",
+    ],
+    [
+      "observer",
+      "Move the trailing call into the scroll observer",
+      "Fixes it for every consumer at once, but the observer currently has no notion of decoration lifetimes and would need one.",
+    ],
+    [
+      "provider",
+      "Fix it in the decoration provider upstream",
+      "The most correct place and the largest change; alters the event ordering that two extensions already depend on.",
+    ],
+    [
+      "measure",
+      "Measure all three before choosing",
+      "Costs a round trip and a benchmark harness before anything changes at all.",
+    ],
+  ],
+);
+
+/**
+ * The corpus, keyed by the listing row's own id (`chat:<id>`, `session:<tabId>`).
  *
- * The corpus is uneven on purpose: two rows are waiting on a human, two are
- * mid-turn with text streaming, one is titled "Chat" and has to be identified
- * by its kickoff alone, one has a tail long enough to test the height cap, and
- * two carry summaries that must not be trusted.
+ * Uneven on purpose: two rows are waiting on a human, one is working with text
+ * streaming, one is titled "Chat" so only its scope identifies it, one has
+ * finished with a wall of text that only a brief can compress, and one is
+ * broken.
  */
 const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
-  // Waiting on a question — the errand the whole feature exists for.
+  // WAITING on a question — the errand the feature exists for.
   "chat:chat-14a": {
     kind: "chat",
-    summary: "Found the debounce that drops decorations; wants to know how far to take the fix.",
-    summaryAgeMs: 40 * SECOND,
-    tail: [
-      { ageMs: 6 * MINUTE, role: "user", text: "Decorations vanish when you scroll fast." },
-      {
-        ageMs: 5 * MINUTE,
-        role: "assistant",
-        text: "Reading the gutter's decoration cache.",
-        tools: ["read", "grep"],
-      },
-      {
-        ageMs: 3 * MINUTE,
-        role: "assistant",
-        text: "The 16ms debounce drops the trailing call, so the last frame never repaints.",
-        tools: ["read"],
-      },
-      {
-        ageMs: 2 * MINUTE,
-        role: "assistant",
-        text: "Two ways to fix it and they disagree about scroll cost.",
-      },
+    scope: "Find why inline diff decorations disappear during a fast scroll.",
+    steps: [
+      { ageMs: 5 * MINUTE, text: "Read the gutter's decoration cache", tool: "read" },
+      { ageMs: 3 * MINUTE, text: "The 16ms debounce drops the trailing call", tool: "grep" },
+      { ageMs: 2 * MINUTE, text: "Two fixes, and they disagree about frame cost" },
     ],
-    interaction: question(
-      "ask-14a",
-      "Should the gutter repaint on every scroll frame, or keep the debounce and flush it on scroll end?",
-      [
-        ["per-frame", "Repaint per frame", "Correct always; ~2ms per frame on a long file"],
-        ["flush", "Keep the debounce, flush on scroll end", "Cheaper; one stale frame at 16ms"],
-        ["measure", "Measure both first", "Costs a round trip before anything changes"],
-      ],
-    ),
+    interaction: SHORT_QUESTION,
   },
-  // Waiting on a permission — the same card, the other vocabulary.
+  // WAITING on a permission — same card, other vocabulary, and always short.
   "chat:chat-11a": {
     kind: "chat",
-    summary: "Ready to write the resume seed; needs permission to touch the split-pane store.",
-    summaryAgeMs: 2 * MINUTE,
-    tail: [
-      { ageMs: 12 * MINUTE, role: "user", text: "Pick the resume seed for a split pane." },
-      {
-        ageMs: 9 * MINUTE,
-        role: "assistant",
-        text: "The root pane's record is the only one with a durable id.",
-        tools: ["read"],
-      },
+    scope: "Choose the seed a split pane resumes from after a relaunch.",
+    steps: [
+      { ageMs: 12 * MINUTE, text: "Only the root pane has a durable id", tool: "read" },
+      { ageMs: 9 * MINUTE, text: "Ready to write the resume seed" },
     ],
     interaction: permission(
       "perm-11a",
@@ -250,120 +317,64 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
       "apps/desktop/src/renderer/src/components/sessions/session-split-layout.tsx",
     ),
   },
-  // Titled "Chat" — 45% of the real corpus. The kickoff is the only identity.
+  // WORKING, and titled "Chat" — 45% of the real corpus (VC-69's count). The
+  // scope line is the ONLY thing that says which chat this is.
   "chat:chat-12a": {
     kind: "chat",
-    kickoff: "Why does the composer lose its draft when I switch projects?",
-    summary: "Tracing the draft store's project key; has not changed anything yet.",
-    summaryAgeMs: 25 * SECOND,
-    tail: [
-      {
-        ageMs: 4 * MINUTE,
-        role: "user",
-        text: "Why does the composer lose its draft when I switch projects?",
-      },
-      {
-        ageMs: 3 * MINUTE,
-        role: "assistant",
-        text: "Looking at how chat-drafts keys its entries.",
-        tools: ["grep", "read"],
-      },
+    scope: "Why does the composer lose its draft when I switch projects?",
+    step: "Reading how chat-drafts keys its entries",
+    steps: [
+      { ageMs: 4 * MINUTE, text: "Found the draft map", tool: "grep" },
+      { ageMs: 3 * MINUTE, text: "Keyed by ticket id alone", tool: "read" },
     ],
-    streaming: "The draft map is keyed by ticket id alone, so two projects holding the same",
+    streaming: "Two projects holding the same ticket number collide on one key, so the",
   },
-  // A summary that is STALE against its own tail — B has to survive this.
+  // FINISHED with a wall of text. The brief is the entire argument for Q4.
   "chat:chat-10a": {
     kind: "chat",
-    summary: "Reproducing the hover-state regression.",
-    summaryAgeMs: 14 * MINUTE,
-    tail: [
-      { ageMs: 20 * MINUTE, role: "user", text: "Summarize the hover-state regression." },
-      {
-        ageMs: 15 * MINUTE,
-        role: "assistant",
-        text: "Reproduced it on the list rows.",
-        tools: ["read"],
-      },
-      {
-        ageMs: 6 * MINUTE,
-        role: "assistant",
-        text: "Fixed: the fill was on the target, not the shell, so it un-tinted over the actions.",
-        tools: ["edit"],
-      },
-      {
-        ageMs: 4 * MINUTE,
-        role: "assistant",
-        text: "Tests pass. Writing the commit.",
-        tools: ["bash"],
-      },
-    ],
+    scope: "Summarize the hover-state regression on the list rows.",
+    brief:
+      "Fixed. The hover fill was on the target, not the shell, so it un-tinted over the row's actions. Tests pass.",
+    touched: ["list-row.tsx", "list-row.test.tsx"],
+    finalMessage:
+      "I've finished tracing and fixing the hover-state regression. The root cause was that the hover fill was being applied to the interactive target element rather than to the row shell that wraps it. Because the trailing actions are siblings of the target rather than children, the tinted background stopped at the target's boundary, which read as the row un-tinting wherever an action button sat — most visibly on rows with a trailing menu, and not at all on rows without one, which is why the earlier report looked intermittent.\n\nThe fix moves the fill to the shell and makes the target transparent, so the tint spans the whole row regardless of what is in the trailing slot. I also removed the `group-hover:` variant on the actions themselves, which was compensating for the old behaviour and would have double-tinted once the shell took over.\n\nI added a regression test that asserts the tint is present on the shell and absent on the target, and confirmed it fails against the previous implementation. The full suite passes: 34 files, 212 tests. No other component reads the class I moved, so the blast radius is this row only.",
   },
-  // A summary that is WRONG, and a tail long enough to test the height cap.
+  // FINISHED and clean — nothing to review. The quietest a peek ever gets.
+  "chat:chat-1a": {
+    kind: "chat",
+    scope: "Confirm the old migration path has no callers left.",
+    brief: "Confirmed unreferenced. No callers outside its own tests; safe to delete.",
+    touched: [],
+    finalMessage:
+      "I checked every reference to the legacy migration path. It is imported in exactly one place — its own test file — and nothing in the application or the packages calls it. It is safe to delete along with the test. I have not deleted anything, since you only asked me to confirm.",
+  },
+  // BROKEN. The reason is the payload; there is nothing to summarize.
   "chat:chat-9a": {
     kind: "chat",
-    summary: "Comparing harness defaults and recommending the per-project one.",
-    summaryAgeMs: 90 * SECOND,
-    tail: [
-      {
-        ageMs: 40 * MINUTE,
-        role: "user",
-        text: "Compare per-project and global harness defaults.",
-      },
-      {
-        ageMs: 38 * MINUTE,
-        role: "assistant",
-        text: "Reading the settings model.",
-        tools: ["read"],
-      },
-      {
-        ageMs: 32 * MINUTE,
-        role: "assistant",
-        text: "Per-project overrides global, null means inherit.",
-        tools: ["read"],
-      },
-      {
-        ageMs: 25 * MINUTE,
-        role: "assistant",
-        text: "The picker writes both on the same commit.",
-        tools: ["grep"],
-      },
-      {
-        ageMs: 18 * MINUTE,
-        role: "assistant",
-        text: "Found a third path that writes neither.",
-        tools: ["read"],
-      },
-      {
-        ageMs: 12 * MINUTE,
-        role: "assistant",
-        text: "That path is dead code from the adapter registry.",
-        tools: ["grep"],
-      },
-      {
-        ageMs: 5 * MINUTE,
-        role: "assistant",
-        text: "Recommending neither default changes — the bug is the dead path, not the precedence.",
-      },
+    scope: "Compare per-project and global harness defaults.",
+    failure: "Turn ended without a reply — the executor exited while the model was streaming.",
+    steps: [
+      { ageMs: 40 * MINUTE, text: "Read the settings model", tool: "read" },
+      { ageMs: 32 * MINUTE, text: "Per-project overrides global", tool: "read" },
+      { ageMs: 25 * MINUTE, text: "Found a third path that writes neither", tool: "grep" },
     ],
   },
-  // Ticketless, working, streaming.
+  // Ticketless and working — the anchor has no ticket to lead with.
   "chat:chat-scratch-a": {
     kind: "chat",
-    kickoff: "Scan the backlog and tell me what is stale.",
-    tail: [
-      { ageMs: 8 * MINUTE, role: "user", text: "Scan the backlog and tell me what is stale." },
-      { ageMs: 5 * MINUTE, role: "assistant", text: "Reading 41 tickets.", tools: ["bash"] },
-    ],
+    scope: "Scan the backlog and say what has gone stale.",
+    step: "Reading 41 tickets",
+    steps: [{ ageMs: 8 * MINUTE, text: "Listed the backlog", tool: "bash" }],
     streaming: "Eleven tickets have had no comment in 30 days. Of those, four are already",
   },
-  // Live terminals — plain trailing output, no second terminal renderer (Q7).
+  // Live terminals — plain trailing output, never a second terminal renderer.
   "session:ses-14b": {
     kind: "terminal",
+    scope: "Watch mode for the sidebar suite.",
     lines: [
-      "  ✓ src/components/sidebar/active-session-listing.test.ts (34)",
-      "  ✓ src/components/sidebar/session-band-row.test.tsx (12)",
-      "  ❯ src/components/ticket/ticket-rail.test.tsx (8)",
-      "    ✓ renders the Now page",
+      "  ✓ sidebar/active-session-listing.test.ts (34)",
+      "  ✓ sidebar/session-band-row.test.tsx (12)",
+      "  ❯ ticket/ticket-rail.test.tsx (8)",
       "    × keeps the rail width across a reload",
       "",
       "  Test Files  1 failed | 2 passed (3)",
@@ -371,10 +382,9 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
   },
   "session:ses-12b": {
     kind: "terminal",
+    scope: "Typecheck on demand.",
     lines: [
       "$ pnpm typecheck",
-      "> tsc --noEmit -p tsconfig.json && vp run -r typecheck",
-      "",
       "packages/session-engine/src/transcript.ts:212:7 - error TS2322:",
       "  Type 'string | null' is not assignable to type 'string'.",
       "",
@@ -383,430 +393,531 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
   },
   "session:ses-11b": {
     kind: "terminal",
+    scope: "Scratch shell in the worktree.",
     lines: [
       "$ git status --short",
-      " M apps/desktop/src/renderer/src/components/sessions/session-split-layout.tsx",
-      "?? apps/desktop/src/renderer/lab/scratches/session-peek.tsx",
+      " M renderer/src/components/sessions/session-split-layout.tsx",
+      "?? renderer/lab/scratches/session-peek.tsx",
     ],
   },
 };
 
-/** Rows with no fixture still peek — a header-only card is the honest floor. */
+/** Rows with no fixture still peek — an anchor-only card is the honest floor. */
 const EMPTY_SUBJECT: PeekSubject = { kind: "chat" };
 
-/* -------------------------------------------------------------- peek chrome */
+/* ------------------------------------------------------------------- the box */
 
 const PEEK_WIDTH = 380;
-/** Nothing may push the card past this; every body scrolls inside it instead. */
+/** Nothing may push the card past this. A hover card that scrolls is a trap. */
 const PEEK_MAX_HEIGHT = "60vh";
 
-/** Where the card stands relative to the row it belongs to. */
 type PeekSide = "right" | "left";
 
 interface PeekAnchor {
   id: string;
   top: number;
-  /** The row's own edge — the card is placed against it by {@link peekPosition}. */
   edge: number;
   side: PeekSide;
 }
 
 function peekPosition(anchor: PeekAnchor): { left: number; top: number } {
   const left = anchor.side === "right" ? anchor.edge + 8 : anchor.edge - PEEK_WIDTH - 8;
-  const maxTop = window.innerHeight - 160;
-  return { left, top: Math.max(8, Math.min(anchor.top, maxTop)) };
+  return { left, top: Math.max(8, anchor.top - 6) };
 }
 
-/** The card's own box: the overlay tier, the popover surface, one radius. */
 const PEEK_SHELL =
   "pointer-events-auto flex flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-overlay";
 
+/* --------------------------------------------------------------- the anchor */
+
 /**
- * The header every body shares: what this Session is, where it lives, and what
- * it is doing. It is the ONLY part of the card that is the same in all four
- * variants — if a body needs its own header, that is a finding.
+ * Zone 1, identical in all three variants: which ticket, what stage, which
+ * session, what state.
+ *
+ * The ticket TITLE leads and the code is demoted to a chip beside its status.
+ * A row has to lead with the session because it has 240px and the session is
+ * what you clicked; a card has 380px and can lead with the thing that actually
+ * fell out of the person's head. For a ticketless Session the session's own
+ * title takes the lead slot, since there is nothing above it.
  */
-function PeekHeader({ row, subject }: { row: PeekRow; subject: PeekSubject }) {
-  const Glyph = subject.kind === "terminal" ? TerminalWindowIcon : ChatCircleIcon;
+function PeekAnchorHeader({ row }: { row: PeekRow }) {
   return (
-    <div className="flex items-start gap-2 px-3 pt-3 pb-2">
-      <Glyph aria-hidden weight="bold" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-ui font-medium text-foreground">{row.title}</span>
-        {/* The kickoff stands in for a title that says nothing. Quiet, and
-            clipped to one line: it is identity, not transcript. */}
-        {subject.kickoff !== undefined ? (
-          <span className="truncate text-label text-muted-foreground">{subject.kickoff}</span>
-        ) : null}
-        <span className="flex min-w-0 items-center gap-1 text-label text-muted-foreground">
-          <span className="font-mono tracking-normal">{row.identity}</span>
-          <span aria-hidden>·</span>
-          <span className="truncate">{row.stateLine}</span>
+    <div className="flex flex-col gap-1.5 px-3 pt-3 pb-2">
+      <div className="flex items-center gap-1.5">
+        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-label text-muted-foreground">
+          {row.identity}
         </span>
-      </div>
-      <StatusDot state={row.state} className="mt-1" />
-    </div>
-  );
-}
-
-/** The card's foot: the one door out, in every variant. */
-function PeekOpen() {
-  return (
-    <div className="flex items-center justify-end border-t border-border/70 px-3 py-1.5">
-      <span className="flex items-center gap-1 text-label text-muted-foreground">
-        Open
-        <ArrowSquareOutIcon aria-hidden className="size-3" />
-      </span>
-    </div>
-  );
-}
-
-/** One transcript line, the shape `volli session peek` prints. */
-function TailLine({ entry }: { entry: PeekTailEntry }) {
-  const Glyph = entry.role === "user" ? UserIcon : SparkleIcon;
-  return (
-    <li className="flex min-w-0 items-start gap-1.5">
-      <Glyph
-        aria-label={entry.role === "user" ? "You" : "Agent"}
-        weight="bold"
-        className={cn(
-          "mt-0.5 size-3 shrink-0",
-          entry.role === "user" ? "text-muted-foreground" : "text-primary",
+        {row.ticketStatus === null ? null : (
+          <span className="text-label text-muted-foreground">{row.ticketStatus}</span>
         )}
-      />
-      <span className="min-w-0 flex-1 text-label leading-prose text-muted-foreground">
-        <span className="text-foreground">{entry.text}</span>
-        {entry.tools !== undefined
-          ? entry.tools.map((tool) => (
-              <span
-                key={tool}
-                className="ml-1 rounded-sm bg-muted px-1 font-mono text-label tracking-normal"
-              >
-                {tool}
-              </span>
-            ))
-          : null}
+      </div>
+      <p className="line-clamp-2 text-ui font-medium leading-snug text-foreground">{row.lead}</p>
+      <div className="flex items-center gap-1.5 text-label text-muted-foreground">
+        <StatusDot state={row.state} />
+        <span className="min-w-0 truncate">{row.sub}</span>
+        <span aria-hidden>·</span>
+        <span className="shrink-0">{row.stateLine}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Zone 2: the durable errand. Never churns, so it is safe to read at a glance. */
+function PeekScope({ scope }: { scope: string | undefined }) {
+  if (scope === undefined) return null;
+  return (
+    <div className="mx-3 mb-2 border-l-2 border-border pl-2">
+      <p className="line-clamp-2 text-label leading-snug text-muted-foreground">{scope}</p>
+    </div>
+  );
+}
+
+/** The foot: the two rungs up the ladder. */
+function PeekFoot({ onLook }: { onLook: () => void }) {
+  return (
+    <div className="mt-auto flex items-center gap-1 border-t border-border px-2 py-1.5">
+      <button
+        type="button"
+        onClick={onLook}
+        className="rounded px-1.5 py-0.5 text-label text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        Look
+      </button>
+      <span className="ml-auto flex items-center gap-1 text-label text-muted-foreground">
+        <ArrowSquareOutIcon className="size-3" />
+        Open
       </span>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- the zones */
+
+/** One recent move. Dense, past tense, one line, never wrapped. */
+function StepLine({ step }: { step: PeekStep }) {
+  return (
+    <li className="flex min-w-0 items-baseline gap-1.5">
+      <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{step.text}</span>
+      {step.tool === undefined ? null : (
+        <span className="shrink-0 rounded bg-muted px-1 font-mono text-label text-muted-foreground">
+          {step.tool}
+        </span>
+      )}
     </li>
   );
 }
 
-/** The in-flight assistant text, with the mark that says it is still arriving. */
-function StreamingLine({ text }: { text: string }) {
+/** What a WORKING session shows: the live step, the last moves, the live text. */
+function WorkingZone({ subject, steps = 2 }: { subject: PeekSubject; steps?: number }) {
+  const recent = (subject.steps ?? []).slice(-steps);
   return (
-    <p className="text-ui leading-prose text-foreground">
-      {text}
-      <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse rounded-xs bg-primary align-middle" />
-    </p>
-  );
-}
-
-/** A terminal's trailing output. Plain mono text — never a second renderer. */
-function TerminalTail({ lines }: { lines: readonly string[] }) {
-  return (
-    <pre className="overflow-x-auto px-3 pb-2 font-mono text-label leading-prose whitespace-pre text-muted-foreground">
-      {lines.join("\n")}
-    </pre>
+    <div className="flex flex-col gap-1.5 px-3 pb-2">
+      {subject.step === undefined ? null : (
+        <p className="flex items-center gap-1.5 text-ui text-foreground">
+          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
+          <span className="min-w-0 truncate">{subject.step}</span>
+        </p>
+      )}
+      {recent.length === 0 ? null : (
+        <ul className="flex flex-col gap-0.5">
+          {recent.map((step) => (
+            <StepLine key={stepKey(step)} step={step} />
+          ))}
+        </ul>
+      )}
+      {subject.streaming === undefined ? null : (
+        <p className="line-clamp-3 text-label leading-snug text-foreground/80">
+          {subject.streaming}
+          <span className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 bg-foreground/60" />
+        </p>
+      )}
+    </div>
   );
 }
 
 /**
- * The compact answer strip — A and B's alternative to mounting the real card.
+ * What a FINISHED session shows: the frozen brief, and what it touched.
  *
- * One row per option, the label alone, no descriptions and no free-text box.
- * The bet is that a peek's answer is a choice rather than a composition; the
- * moment a reader wants to explain themselves they should be in the Session.
- * If this reads as a worse question than C's, the answer is that the shipped
- * card belongs in the peek and this strip should not exist.
+ * The brief is the answer to the long-final-message problem — see the module
+ * doc. `touched` is here because it is the fact that decides whether the
+ * outcome needs reviewing, and it is free.
  */
-function AnswerStrip({
-  interaction,
+function BriefZone({ subject }: { subject: PeekSubject }) {
+  return (
+    <div className="flex flex-col gap-1.5 px-3 pb-2">
+      <p className="flex gap-1.5 text-ui leading-snug text-foreground">
+        <SparkleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0">{subject.brief}</span>
+      </p>
+      {subject.touched === undefined || subject.touched.length === 0 ? null : (
+        <p className="flex flex-wrap gap-1">
+          {subject.touched.map((file) => (
+            <span
+              key={file}
+              className="rounded bg-muted px-1 font-mono text-label text-muted-foreground"
+            >
+              {file}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What a BROKEN session shows. The reason, plainly; nothing is summarized. */
+function FailureZone({ subject }: { subject: PeekSubject }) {
+  return (
+    <div className="px-3 pb-2">
+      <p className="flex gap-1.5 text-ui leading-snug text-foreground">
+        <WarningIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0">{subject.failure}</span>
+      </p>
+    </div>
+  );
+}
+
+/** A terminal's trailing output. Clipped, never wrapped — wrapping lies about columns. */
+function TerminalZone({ lines }: { lines: readonly string[] }) {
+  return (
+    <div className="mx-3 mb-2 overflow-hidden rounded bg-muted/60 px-2 py-1.5">
+      {lines.slice(-6).map((line) => (
+        <p key={line} className="truncate font-mono text-label leading-snug text-muted-foreground">
+          {line === "" ? "\u00a0" : line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- the decision */
+
+/**
+ * Whether this decision can be rendered WHOLE at 380px.
+ *
+ * The rule the module doc states: a peek may truncate what it shows, but it
+ * may never offer a decision it had to truncate — a clipped option list is a
+ * misinformed and irreversible click. The thresholds are deliberately
+ * conservative; the cost of being wrong in one direction is a wasted rung, and
+ * in the other it is a bad decision made on partial information.
+ */
+function decisionFits(interaction: RendererSessionInteraction): boolean {
+  if (interaction.title.length > 120) return false;
+  if (interaction.options.length > 4) return false;
+  return interaction.options.every(
+    (option) => option.label.length <= 44 && (option.description?.length ?? 0) <= 72,
+  );
+}
+
+/**
+ * The decision, answerable inline — it has been checked to fit.
+ *
+ * The RECEIPT is drawn here rather than by the card, because `InteractionCard`
+ * has no resolved state of its own: in the chat the harness's verdict replaces
+ * it, and there is no harness here. It stays after answering by decision — a
+ * peek that forgets what you just told it reads as if the answer was lost.
+ */
+function DecisionZone({
+  subject,
   answered,
   onAnswer,
 }: {
-  interaction: RendererSessionInteraction;
+  subject: PeekSubject;
   answered: string | null;
-  onAnswer(label: string): void;
+  onAnswer: (label: string) => void;
 }) {
+  const interaction = subject.interaction;
+  if (interaction === undefined) return null;
   if (answered !== null) {
     return (
-      <div className="border-t border-border/70 px-3 py-2">
+      <div className="border-t border-border px-3 py-2">
         <p className="text-label text-muted-foreground">
-          Sent: <span className="text-foreground">{answered}</span>
+          Answered <span className="text-foreground">{answered}</span>
         </p>
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-1 border-t border-border/70 px-3 py-2">
-      <p className="text-ui leading-prose font-medium text-pretty text-foreground">
-        {interaction.title}
-      </p>
-      <div className="mt-1 flex flex-col gap-0.5">
-        {interaction.options.map((option, index) => (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => onAnswer(option.label)}
-            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-ui text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
-          >
-            <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-label tabular-nums">
-              {index + 1}
-            </span>
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-          </button>
-        ))}
-      </div>
+    <div className="border-t border-border px-3 py-2">
+      <InteractionCard
+        interaction={interaction}
+        onResolve={(submission) => {
+          const [chosen] = submission.resolution.optionIds;
+          const option = interaction.options.find((entry) => entry.id === chosen);
+          onAnswer(option?.label ?? "Answered");
+          return Promise.resolve(true);
+        }}
+      />
     </div>
   );
 }
 
-/* ----------------------------------------------------------------- variants */
+/**
+ * The decision that does NOT fit: its shape, its gist, and the rung that can
+ * actually show it. No options are drawn, because drawing four of six is how
+ * someone picks the wrong one.
+ */
+function DecisionHandoff({ subject, onLook }: { subject: PeekSubject; onLook: () => void }) {
+  const interaction = subject.interaction;
+  if (interaction === undefined) return null;
+  const word = interaction.kind === "permission" ? "permission" : "question";
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-border px-3 py-2">
+      <p className="text-label text-muted-foreground">
+        A {word} with {interaction.options.length} options
+      </p>
+      <p className="line-clamp-3 text-ui leading-snug text-foreground">{interaction.title}</p>
+      <button
+        type="button"
+        onClick={onLook}
+        className="self-start rounded bg-muted px-2 py-1 text-label text-foreground transition-colors hover:bg-muted/70"
+      >
+        Answer in overlay →
+      </button>
+    </div>
+  );
+}
+
+/** The decision zone, either way — every variant routes through this. */
+function Decision({
+  subject,
+  answered,
+  onAnswer,
+  onLook,
+}: {
+  subject: PeekSubject;
+  answered: string | null;
+  onAnswer: (label: string) => void;
+  onLook: () => void;
+}) {
+  const interaction = subject.interaction;
+  if (interaction === undefined) return null;
+  return decisionFits(interaction) ? (
+    <DecisionZone subject={subject} answered={answered} onAnswer={onAnswer} />
+  ) : (
+    <DecisionHandoff subject={subject} onLook={onLook} />
+  );
+}
+
+/* -------------------------------------------------------------- the variants */
 
 interface VariantProps {
   row: PeekRow;
   subject: PeekSubject;
   answered: string | null;
-  onAnswer(label: string): void;
+  onAnswer: (label: string) => void;
+  onLook: () => void;
 }
 
-/** A · Tail — the CLI peek made visual. */
-function TailPeek({ row, subject, answered, onAnswer }: VariantProps) {
-  const tail = subject.tail ?? [];
+/**
+ * 1 · Errand — the body follows the state.
+ *
+ * A waiting session draws its decision and NOTHING else: no steps, no brief,
+ * no streaming text. The claim is that when a session is blocked on you, every
+ * other fact on the card is a distraction from the one action available.
+ */
+function ErrandPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
+  const waiting = subject.interaction !== undefined;
   return (
     <>
-      <PeekHeader row={row} subject={subject} />
-      {subject.lines !== undefined ? <TerminalTail lines={subject.lines} /> : null}
-      {tail.length > 0 ? (
-        <ul className="flex min-h-0 flex-col gap-1.5 overflow-y-auto px-3 pb-2">
-          {tail.map((entry) => (
-            <TailLine key={tailKey(entry)} entry={entry} />
-          ))}
-        </ul>
-      ) : null}
-      {subject.streaming !== undefined ? (
-        <div className="border-t border-border/70 px-3 py-2">
-          <StreamingLine text={subject.streaming} />
-        </div>
-      ) : null}
-      {subject.interaction !== undefined ? (
-        <AnswerStrip interaction={subject.interaction} answered={answered} onAnswer={onAnswer} />
-      ) : null}
-      <PeekOpen />
-    </>
-  );
-}
-
-/** B · Brief — one generated sentence, with the evidence folded away. */
-function BriefPeek({ row, subject, answered, onAnswer }: VariantProps) {
-  const [open, setOpen] = React.useState(false);
-  const tail = subject.tail ?? [];
-  return (
-    <>
-      <PeekHeader row={row} subject={subject} />
-      {subject.summary !== undefined ? (
-        <div className="px-3 pb-2">
-          <p className="text-sm leading-prose text-pretty text-foreground">{subject.summary}</p>
-          {/* The sentence has to date itself. A summary cached on turn settle is
-              stale by design, and a reader who cannot see how stale has no way
-              to know whether to trust it over the tail below. */}
-          <p className="mt-1 flex items-center gap-1 text-label text-muted-foreground">
-            <SparkleIcon aria-hidden weight="bold" className="size-3" />
-            Summarized {formatAge(subject.summaryAgeMs ?? 0)} ago
-          </p>
-        </div>
-      ) : (
-        <p className="px-3 pb-2 text-ui text-muted-foreground">No summary yet.</p>
+      <PeekAnchorHeader row={row} />
+      <PeekScope scope={subject.scope} />
+      {waiting ? null : (
+        <>
+          {subject.lines !== undefined ? <TerminalZone lines={subject.lines} /> : null}
+          {subject.failure !== undefined ? <FailureZone subject={subject} /> : null}
+          {subject.brief !== undefined ? <BriefZone subject={subject} /> : null}
+          {row.state === "working" ? <WorkingZone subject={subject} /> : null}
+        </>
       )}
-      {subject.lines !== undefined ? <TerminalTail lines={subject.lines} /> : null}
-      {tail.length > 0 ? (
-        <div className="min-h-0 overflow-y-auto border-t border-border/70">
-          <button
-            type="button"
-            onClick={() => setOpen((shown) => !shown)}
-            aria-expanded={open}
-            className="flex w-full items-center gap-1 px-3 py-1.5 text-left text-label text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
-          >
-            <CaretDownIcon
-              aria-hidden
-              weight="bold"
-              className={cn("size-3 transition-transform", !open && "-rotate-90")}
-            />
-            {tail.length} messages
-          </button>
-          {open ? (
-            <ul className="flex flex-col gap-1.5 px-3 pb-2">
-              {tail.map((entry) => (
-                <TailLine key={tailKey(entry)} entry={entry} />
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : null}
-      {subject.streaming !== undefined ? (
-        <div className="border-t border-border/70 px-3 py-2">
-          <StreamingLine text={subject.streaming} />
-        </div>
-      ) : null}
-      {subject.interaction !== undefined ? (
-        <AnswerStrip interaction={subject.interaction} answered={answered} onAnswer={onAnswer} />
-      ) : null}
-      <PeekOpen />
-    </>
-  );
-}
-
-/** C · Mini-plane — the chat, small, with the shipped card at the foot. */
-function MiniPlanePeek({ row, subject, answered, onAnswer }: VariantProps) {
-  const tail = subject.tail ?? [];
-  const recent = tail.slice(-2);
-  return (
-    <>
-      <PeekHeader row={row} subject={subject} />
-      {subject.lines !== undefined ? <TerminalTail lines={subject.lines} /> : null}
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-3 pb-2">
-        {recent.map((entry) => (
-          <div
-            key={tailKey(entry)}
-            className={cn(
-              "flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5",
-              entry.role === "user" ? "bg-muted/60" : "bg-transparent",
-            )}
-          >
-            <span className="text-label text-muted-foreground">
-              {entry.role === "user" ? "You" : "Agent"}
-            </span>
-            <p className="text-ui leading-prose text-foreground">{entry.text}</p>
-          </div>
-        ))}
-        {subject.streaming !== undefined ? (
-          <div className="px-2">
-            <StreamingLine text={subject.streaming} />
-          </div>
-        ) : null}
-      </div>
-      {/* The SHIPPED card, at 380px. Whether it fits is the question this
-          variant exists to answer — it was drawn for a chat plane's foot. */}
-      {subject.interaction !== undefined ? (
-        <div className="border-t border-border/70 p-2">
-          {answered === null ? (
-            <InteractionCard
-              interaction={subject.interaction}
-              onResolve={(submission) => {
-                const id = submission.resolution.optionIds[0];
-                const chosen = subject.interaction?.options.find((option) => option.id === id);
-                onAnswer(chosen?.label ?? "answer");
-              }}
-            />
-          ) : (
-            <p className="px-2 py-1 text-label text-muted-foreground">
-              Sent: <span className="text-foreground">{answered}</span>
-            </p>
-          )}
-        </div>
-      ) : null}
-      <PeekOpen />
+      <Decision subject={subject} answered={answered} onAnswer={onAnswer} onLook={onLook} />
+      <PeekFoot onLook={onLook} />
     </>
   );
 }
 
 /**
- * D · Errand — the card is whatever the state needs and nothing else.
+ * 2 · Brief — one generated sentence always, whatever the state.
  *
- * Waiting: the question, full size, alone. Working: two lines. Idle: one. The
- * bet is that a peek's job changes completely with the row's state, and that a
- * uniform card is therefore always wrong for three of the four states.
+ * Working sessions get a summary here too, which the module doc argues is a
+ * lie waiting to happen. That is the point: the uniform shape's cost should be
+ * visible. Hover the working rows and judge whether the predictability is
+ * worth a sentence that is always one step behind.
  */
-function ErrandPeek({ row, subject, answered, onAnswer }: VariantProps) {
-  if (subject.interaction !== undefined) {
-    return (
-      <>
-        <div className="flex items-center gap-2 px-3 pt-3 pb-1">
-          <StatusDot state="waiting" />
-          <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">
-            {row.identity} · {row.title}
-          </span>
-        </div>
-        {answered === null ? (
-          <div className="p-2">
-            <InteractionCard
-              interaction={subject.interaction}
-              onResolve={(submission) => {
-                const id = submission.resolution.optionIds[0];
-                const chosen = subject.interaction?.options.find((option) => option.id === id);
-                onAnswer(chosen?.label ?? "answer");
-              }}
-            />
-          </div>
-        ) : (
-          <p className="px-3 py-3 text-ui text-muted-foreground">
-            Sent: <span className="text-foreground">{answered}</span>
-          </p>
-        )}
-      </>
-    );
-  }
+function BriefPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
+  const line =
+    subject.brief ??
+    subject.failure ??
+    (subject.step === undefined ? undefined : `${subject.step}…`);
   return (
     <>
-      <PeekHeader row={row} subject={subject} />
-      {subject.lines !== undefined ? <TerminalTail lines={subject.lines} /> : null}
-      {subject.streaming !== undefined ? (
-        <div className="px-3 pb-3">
-          <StreamingLine text={subject.streaming} />
+      <PeekAnchorHeader row={row} />
+      <PeekScope scope={subject.scope} />
+      {line === undefined ? null : (
+        <div className="px-3 pb-2">
+          <p className="flex gap-1.5 text-ui leading-snug text-foreground">
+            <SparkleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0">{line}</span>
+          </p>
         </div>
-      ) : subject.summary !== undefined ? (
-        <p className="px-3 pb-3 text-ui leading-prose text-muted-foreground">{subject.summary}</p>
-      ) : subject.tail !== undefined && subject.tail.length > 0 ? (
-        <p className="px-3 pb-3 text-ui leading-prose text-muted-foreground">
-          {subject.tail[subject.tail.length - 1]?.text}
-        </p>
-      ) : null}
+      )}
+      {subject.lines !== undefined ? <TerminalZone lines={subject.lines} /> : null}
+      {subject.steps === undefined || subject.steps.length === 0 ? null : (
+        <ul className="flex flex-col gap-0.5 px-3 pb-2">
+          {subject.steps.slice(-2).map((step) => (
+            <StepLine key={stepKey(step)} step={step} />
+          ))}
+        </ul>
+      )}
+      <Decision subject={subject} answered={answered} onAnswer={onAnswer} onLook={onLook} />
+      <PeekFoot onLook={onLook} />
+    </>
+  );
+}
+
+/**
+ * 3 · Glance — the smallest card that still answers "is this mine to deal with".
+ *
+ * One state sentence, and for a decision only its existence and shape. Never
+ * answerable inline, by construction: this variant's whole claim is that the
+ * card should make you SKIP opening things, and that answering is a rung up.
+ */
+function GlancePeek({ row, subject, onLook }: VariantProps) {
+  const interaction = subject.interaction;
+  const line =
+    interaction !== undefined
+      ? `Waiting on you — ${interaction.kind === "permission" ? "a permission" : `a question with ${interaction.options.length} options`}`
+      : (subject.brief ??
+        subject.failure ??
+        (subject.step === undefined ? undefined : `${subject.step}…`));
+  return (
+    <>
+      <PeekAnchorHeader row={row} />
+      <PeekScope scope={subject.scope} />
+      {line === undefined ? null : (
+        <p className="line-clamp-3 px-3 pb-2 text-ui leading-snug text-foreground">{line}</p>
+      )}
+      <PeekFoot onLook={onLook} />
     </>
   );
 }
 
 const VARIANTS = [
-  { key: "A", name: "Tail", Body: TailPeek },
-  { key: "B", name: "Brief", Body: BriefPeek },
-  { key: "C", name: "Mini-plane", Body: MiniPlanePeek },
-  { key: "D", name: "Errand", Body: ErrandPeek },
+  { key: "1", name: "Errand", Body: ErrandPeek },
+  { key: "2", name: "Brief", Body: BriefPeek },
+  { key: "3", name: "Glance", Body: GlancePeek },
 ] as const;
 
 type VariantKey = (typeof VARIANTS)[number]["key"];
 
-/* -------------------------------------------------------------- hover model */
-
-type TimingKey = "instant" | "warm" | "tooltip";
-
-const TIMING: Record<TimingKey, { open: number; warm: number; label: string }> = {
-  // True zero. Cross the band on the way somewhere else and count the cards.
-  instant: { open: 0, warm: 0, label: "instant · 0ms" },
-  // The recommendation: perceptually instant on the row you meant, free after.
-  warm: { open: 120, warm: 300, label: "warm · 120ms then 0" },
-  // What the native title attribute does today, for reference.
-  tooltip: { open: 500, warm: 300, label: "tooltip · 500ms" },
-};
+/* ----------------------------------------------------------------- the rung */
 
 /**
- * Dwell, warm window, and the two gestures that must never open a card.
+ * Rung 2 — a GEOMETRY MOCK of `SubagentPeekDialog` (VC-269).
  *
- * `pointerdown` closes and arms a suppression that lasts until the pointer
- * leaves the row: session rows are native drag sources
+ * Same box the real one draws (`h-[70vh] max-w-3xl`, a title row with the
+ * state word and the promote button, a read-only body). Production reuses the
+ * component itself: it is written against `IslandAgent` — `{id, label, state,
+ * promoted}` — which a sidebar row maps onto directly. Mounting the real one
+ * here would need a live session client, which the lab has no bridge for, and
+ * the thing under review is whether the RUNG feels right, not whether the
+ * transcript renders.
+ *
+ * The one real question this raises: the shipped dialog is read-only by
+ * decision ("a peek is a look"). A long decision handed off from the card has
+ * nowhere else to go, so either the dialog learns to answer, or the handoff
+ * opens the session instead.
+ */
+function LookDialog({
+  row,
+  subject,
+  open,
+  onClose,
+}: {
+  row: PeekRow | null;
+  subject: PeekSubject;
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog
+      open={open && row !== null}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="flex h-[70vh] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        {row === null ? null : (
+          <>
+            <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-12 pl-4">
+              <DialogTitle className="min-w-0 truncate text-ui font-medium">{row.lead}</DialogTitle>
+              <span className="shrink-0 text-ui text-muted-foreground">{row.stateLine}</span>
+              <Button type="button" variant="ghost" size="sm" className="ml-auto shrink-0">
+                <ArrowSquareOutIcon />
+                Open as tab
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              <div className="mx-auto flex max-w-2xl flex-col gap-4">
+                <p className="text-label text-muted-foreground">
+                  {row.identity} · {row.sub}
+                </p>
+                {subject.scope === undefined ? null : (
+                  <p className="text-ui text-foreground">{subject.scope}</p>
+                )}
+                {subject.interaction === undefined ? null : (
+                  <InteractionCard
+                    interaction={subject.interaction}
+                    onResolve={() => Promise.resolve(true)}
+                  />
+                )}
+                {/* The wall of text the brief compressed — the Q4 contrast. */}
+                {subject.finalMessage === undefined ? null : (
+                  <div className="flex flex-col gap-3">
+                    {subject.finalMessage.split("\n\n").map((para) => (
+                      <p
+                        key={para.slice(0, 24)}
+                        className="text-ui leading-relaxed text-foreground"
+                      >
+                        {para}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {subject.lines === undefined ? null : (
+                  <pre className="overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-label text-muted-foreground">
+                    {subject.lines.join("\n")}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* -------------------------------------------------------------- hover model */
+
+/**
+ * Instant open, with the two gestures that must never open a card.
+ *
+ * Opening is 0ms by decision (the Chrome tab-peek feel). Closing keeps a 120ms
+ * grace corridor so the pointer can cross the gap from row to card without the
+ * card going out from under it. `pointerdown` closes and suppresses until the
+ * pointer leaves the row: session rows are native drag sources
  * (`split-drag-source.tsx`), and a card opening under a drag is a card the
  * drag tears through. `edge-reveal.ts` made the same call for the same reason.
  */
-function useHoverPeek(timing: TimingKey) {
+function useHoverPeek() {
   const [anchor, setAnchor] = React.useState<PeekAnchor | null>(null);
   const [held, setHeld] = React.useState(false);
-  const openTimer = React.useRef<number | null>(null);
   const closeTimer = React.useRef<number | null>(null);
-  const warmUntil = React.useRef(0);
   const suppressed = React.useRef(false);
 
   const clearTimers = React.useCallback(() => {
-    if (openTimer.current !== null) window.clearTimeout(openTimer.current);
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
-    openTimer.current = null;
     closeTimer.current = null;
   }, []);
 
@@ -814,39 +925,24 @@ function useHoverPeek(timing: TimingKey) {
     (next: PeekAnchor) => {
       if (suppressed.current) return;
       clearTimers();
-      const { open: delay } = TIMING[timing];
-      const warm = Date.now() < warmUntil.current;
-      const wait = warm ? 0 : delay;
-      if (wait === 0) {
-        setAnchor(next);
-        return;
-      }
-      openTimer.current = window.setTimeout(() => setAnchor(next), wait);
+      setAnchor(next);
     },
-    [clearTimers, timing],
+    [clearTimers],
   );
 
   const close = React.useCallback(
     (immediate = false) => {
       clearTimers();
-      // Held means something inside the card has focus — a half-typed answer
-      // must not be thrown away because the pointer wandered (Q3).
+      // Held means something inside the card has focus — a half-made decision
+      // must not be thrown away because the pointer wandered.
       if (held && !immediate) return;
-      const finish = () => {
-        setAnchor((current) => {
-          if (current !== null) warmUntil.current = Date.now() + TIMING[timing].warm;
-          return null;
-        });
-      };
       if (immediate) {
-        finish();
+        setAnchor(null);
         return;
       }
-      // The grace corridor: the pointer is allowed to cross the gap between the
-      // row and the card without the card going out from under it.
-      closeTimer.current = window.setTimeout(finish, 120);
+      closeTimer.current = window.setTimeout(() => setAnchor(null), 120);
     },
-    [clearTimers, held, timing],
+    [clearTimers, held],
   );
 
   const suppress = React.useCallback(() => {
@@ -866,23 +962,38 @@ function useHoverPeek(timing: TimingKey) {
 
 /* ------------------------------------------------------------------- stage */
 
-/** Everything a peek's header needs from whichever list the row came from. */
+/** Everything the anchor needs, from whichever list the row came from. */
 interface PeekRow {
   id: string;
-  title: string;
-  /** The ticket id, or the globe's stand-in for a Session that has none. */
+  /** The headline: the ticket's title, or the session's own when there is no ticket. */
+  lead: string;
+  /** The line under it: the session's title, or its source when that IS the lead. */
+  sub: string;
+  /** The ticket chip, or the stand-in for a Session that has none. */
   identity: string;
+  /** Where the ticket stands on the board; `null` for a ticketless Session. */
+  ticketStatus: string | null;
   state: StatusDotState;
   stateLine: string;
 }
 
+function ticketChip(ticket: Ticket | null): string {
+  return ticket === null ? "No ticket" : `${project.ticketPrefix}-${ticket.ticketNumber}`;
+}
+
+/** "What stage is it at" — the board's own word, not the raw status id. */
+function ticketStage(ticket: Ticket | null): string | null {
+  return ticket === null ? null : TICKET_STATUS_LABELS[ticket.status];
+}
+
 function activePeekRow(row: ActiveSessionRow): PeekRow {
-  const needsYou = row.attention !== null;
+  const needsYou = row.attention !== null || row.activity === "waiting";
   return {
     id: row.id,
-    title: row.title,
-    identity:
-      row.ticket === null ? "No ticket" : `${project.ticketPrefix}-${row.ticket.ticketNumber}`,
+    lead: row.ticket?.title ?? row.title,
+    sub: row.ticket === null ? row.source : row.title,
+    identity: ticketChip(row.ticket),
+    ticketStatus: ticketStage(row.ticket),
     state: needsYou ? "waiting" : row.activity,
     stateLine: needsYou ? "Waiting for you" : row.activity === "working" ? "Working" : "Idle",
   };
@@ -891,17 +1002,13 @@ function activePeekRow(row: ActiveSessionRow): PeekRow {
 function previousPeekRow(row: PreviousSessionRow): PeekRow {
   return {
     id: row.id,
-    title: row.title,
-    identity:
-      row.ticket === null ? "No ticket" : `${project.ticketPrefix}-${row.ticket.ticketNumber}`,
+    lead: row.ticket?.title ?? row.title,
+    sub: row.ticket === null ? row.kind : row.title,
+    identity: ticketChip(row.ticket),
+    ticketStatus: ticketStage(row.ticket),
     state: "exited",
     stateLine: "Ended",
   };
-}
-
-function formatAge(ms: number): string {
-  if (ms < MINUTE) return `${Math.max(1, Math.round(ms / SECOND))}s`;
-  return `${Math.round(ms / MINUTE)}m`;
 }
 
 /**
@@ -928,12 +1035,7 @@ function useRowPointer(
     const id = ids[index];
     if (id === undefined) return;
     const rect = item.getBoundingClientRect();
-    peek.open({
-      id,
-      top: rect.top,
-      edge: side === "right" ? rect.right : rect.left,
-      side,
-    });
+    peek.open({ id, top: rect.top, edge: side === "right" ? rect.right : rect.left, side });
   };
 
   return {
@@ -951,8 +1053,8 @@ function useRowPointer(
  * The Active band under one of the two ordering rules.
  *
  * `recency` is the shipped comparator's key — `lastActivityAt`, which every
- * tool call bumps. `promotion` is the proposal: the instant a row last ENTERED
- * an active state, which nothing but a state change can move.
+ * tool call bumps. `promotion` is the rule this ticket lands: the instant a
+ * row last ENTERED an active state, which nothing but a state change moves.
  */
 type OrderRule = "recency" | "promotion";
 
@@ -978,11 +1080,12 @@ function activeGroup(row: ActiveSessionRow): number {
 }
 
 export default function SessionPeekScratch() {
-  const [variant, setVariant] = React.useState<VariantKey>("A");
-  const [timing, setTiming] = React.useState<TimingKey>("warm");
+  const [variant, setVariant] = React.useState<VariantKey>("1");
   const [rule, setRule] = React.useState<OrderRule>("promotion");
   const [live, setLive] = React.useState(false);
+  const [longQuestion, setLongQuestion] = React.useState(false);
   const [answered, setAnswered] = React.useState<Readonly<Record<string, string>>>({});
+  const [looking, setLooking] = React.useState<string | null>(null);
   const reducedMotion = useReducedMotion() ?? false;
 
   const listing = React.useMemo(
@@ -990,8 +1093,7 @@ export default function SessionPeekScratch() {
     [],
   );
 
-  // The two sort keys, kept apart so the switch is a real comparison: `recency`
-  // is bumped by simulated agent output, `promotedAt` only by a state change.
+  // The two sort keys, kept apart so the switch is a real comparison.
   const [recency, setRecency] = React.useState<Readonly<Record<string, number>>>(() =>
     Object.fromEntries(listing.active.map((row) => [row.id, row.lastActivityAt ?? 0])),
   );
@@ -999,10 +1101,7 @@ export default function SessionPeekScratch() {
     Object.fromEntries(listing.active.map((row) => [row.id, row.lastActivityAt ?? 0])),
   );
 
-  /**
-   * Simulated agent output — the thing that makes the shipped band churn. Each
-   * tick bumps ONE working row's recency, exactly as a tool call does.
-   */
+  /** Simulated agent output: each tick bumps ONE working row, as a tool call does. */
   React.useEffect(() => {
     if (!live) return;
     const working = listing.active.filter(
@@ -1022,21 +1121,23 @@ export default function SessionPeekScratch() {
     [listing.active, rule, recency, promotedAt],
   );
 
-  const peek = useHoverPeek(timing);
+  const peek = useHoverPeek();
   const activeIds = active.map((row) => row.id);
-  const previousIds = listing.previous.slice(0, 8).map((row) => row.id);
-  const railIds = active.slice(0, 4).map((row) => `rail:${row.id}`);
+  const previous = listing.previous.slice(0, 8);
+  const previousIds = previous.map((row) => row.id);
+  const rail = active.slice(0, 4);
+  const railIds = rail.map((row) => `rail:${row.id}`);
 
   const sidebarPointer = useRowPointer(activeIds, "right", peek);
   const previousPointer = useRowPointer(previousIds, "right", peek);
   const railPointer = useRowPointer(railIds, "left", peek);
 
   /**
-   * The native `title` on every shipped row, removed (Q10).
+   * The native `title` on every shipped row, removed.
    *
    * Two hovers describing the same row at two different delays is a fight, and
-   * leaving it in would have us judging the peek against a tooltip that the
-   * real feature deletes. The app does this by not passing `title` at all.
+   * leaving it in would have us judging the peek against a tooltip the real
+   * feature deletes. The app does this by not passing `title` at all.
    */
   const stageRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
@@ -1047,21 +1148,37 @@ export default function SessionPeekScratch() {
 
   const rowsById = React.useMemo(() => {
     const map = new Map<string, PeekRow>();
-    for (const row of active) map.set(row.id, activePeekRow(row));
-    for (const row of listing.previous) map.set(row.id, previousPeekRow(row));
     for (const row of active) {
-      const rail = activePeekRow(row);
-      map.set(`rail:${row.id}`, rail);
+      const peekRow = activePeekRow(row);
+      map.set(row.id, peekRow);
+      map.set(`rail:${row.id}`, peekRow);
     }
+    for (const row of listing.previous) map.set(row.id, previousPeekRow(row));
     return map;
   }, [active, listing.previous]);
+
+  const subjectOf = React.useCallback(
+    (id: string): PeekSubject => {
+      const key = id.replace(/^rail:/, "");
+      const base = SUBJECTS[key] ?? EMPTY_SUBJECT;
+      // The question-size switch, applied to the one flagship waiting row.
+      if (key === "chat:chat-14a" && longQuestion) {
+        return { ...base, interaction: LONG_QUESTION };
+      }
+      return base;
+    },
+    [longQuestion],
+  );
 
   const anchor = peek.anchor;
   const peekRow = anchor === null ? null : (rowsById.get(anchor.id) ?? null);
   const subjectKey = anchor === null ? "" : anchor.id.replace(/^rail:/, "");
-  const subject = SUBJECTS[subjectKey] ?? EMPTY_SUBJECT;
-  const Body = VARIANTS.find((entry) => entry.key === variant)?.Body ?? TailPeek;
+  const subject = anchor === null ? EMPTY_SUBJECT : subjectOf(anchor.id);
+  const Body = VARIANTS.find((entry) => entry.key === variant)?.Body ?? ErrandPeek;
   const position = anchor === null ? null : peekPosition(anchor);
+
+  const lookingRow = looking === null ? null : (rowsById.get(looking) ?? null);
+  const lookingSubject = looking === null ? EMPTY_SUBJECT : subjectOf(looking);
 
   return (
     <div ref={stageRef} className="flex h-svh w-full bg-background">
@@ -1090,7 +1207,7 @@ export default function SessionPeekScratch() {
           <SidebarGroup className="mt-2 gap-1 py-0">
             <SessionBandHeader label="Previous" count={listing.previous.length} />
             <SidebarMenu {...previousPointer}>
-              {listing.previous.slice(0, 8).map((row) => (
+              {previous.map((row) => (
                 <PreviousBandRow
                   key={row.id}
                   row={row}
@@ -1107,9 +1224,9 @@ export default function SessionPeekScratch() {
       </SidebarProvider>
 
       {/* ------------------------------------------------------ the middle */}
-      {/* Real cards, so the card is judged over content rather than over a
-          grey box: a peek's shadow and translucency have to hold up against
-          the board it covers. */}
+      {/* Real cards, so the peek is judged over content rather than over a
+          grey box: its shadow and translucency have to hold up against the
+          board it covers. */}
       <div className="min-w-0 flex-1 overflow-y-auto p-6">
         <div className="flex w-72 flex-col gap-2 rounded-lg bg-muted/30 p-2">
           <TicketCardContent
@@ -1139,14 +1256,13 @@ export default function SessionPeekScratch() {
 
       {/* ------------------------------------------------------ right rail */}
       {/* The rail draws its own rows (`ticket-sessions-panel.tsx`), and the
-          peek has to open on the OTHER side there — which is the whole reason
-          it is in this scratch. */}
+          peek has to open on the OTHER side there. */}
       <aside className="w-[300px] shrink-0 border-l border-border p-2">
         <p className="px-2 py-1 text-label uppercase tracking-normal text-muted-foreground">
           Sessions
         </p>
         <ul className="flex flex-col gap-1" {...railPointer}>
-          {active.slice(0, 4).map((row) => {
+          {rail.map((row) => {
             const peekRowValue = activePeekRow(row);
             return (
               <li key={row.id}>
@@ -1216,33 +1332,45 @@ export default function SessionPeekScratch() {
               subject={subject}
               answered={answered[subjectKey] ?? null}
               onAnswer={(label) => setAnswered((current) => ({ ...current, [subjectKey]: label }))}
+              onLook={() => {
+                setLooking(anchor.id);
+                peek.close(true);
+              }}
             />
           </motion.div>
         ) : null}
       </AnimatePresence>
 
+      <LookDialog
+        row={lookingRow}
+        subject={lookingSubject}
+        open={looking !== null}
+        onClose={() => setLooking(null)}
+      />
+
       {/* -------------------------------------------------------- controls */}
       <div className="fixed bottom-3 left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/90 px-3 py-1.5 shadow-overlay backdrop-blur">
         <Choice<VariantKey>
-          label="Variant"
+          label="Body"
           value={variant}
           options={VARIANTS.map((entry) => [entry.key, `${entry.key} · ${entry.name}`] as const)}
           onChange={setVariant}
         />
-        <Choice<TimingKey>
-          label="Timing"
-          value={timing}
-          options={(Object.keys(TIMING) as TimingKey[]).map(
-            (key) => [key, TIMING[key].label] as const,
-          )}
-          onChange={setTiming}
+        <Choice<"short" | "long">
+          label="Question"
+          value={longQuestion ? "long" : "short"}
+          options={[
+            ["short", "short"],
+            ["long", "long"],
+          ]}
+          onChange={(next) => setLongQuestion(next === "long")}
         />
         <Choice<OrderRule>
           label="Order"
           value={rule}
           options={[
             ["recency", "recency (shipped)"],
-            ["promotion", "promotion (proposed)"],
+            ["promotion", "promotion (this ticket)"],
           ]}
           onChange={setRule}
         />
