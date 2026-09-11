@@ -19,7 +19,7 @@
     "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "0.0.74",
+    "@anthropic-ai/sandbox-runtime": "0.0.75",
     "@earendil-works/pi-agent-core": "0.85.0",
     "@earendil-works/pi-ai": "0.85.0",
     "@mozilla/readability": "^0.6.0",
