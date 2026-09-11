@@ -159,6 +159,7 @@ import { cn } from "@renderer/lib/utils";
 
 import { labels, NOW, project, sessionListingInput, ticketById } from "../fixtures";
 import { appApi, seedApp } from "../seed";
+import { PEEK_CORPUS, type PeekCorpusEntry } from "./session-peek-corpus";
 
 export const title = "Session hover-peek (VC-30)";
 export const note = "Three peek bodies over the real bands, plus the promote-to-dialog ladder";
@@ -183,6 +184,25 @@ function stepKey(step: PeekStep): string {
 }
 
 /**
+ * How long the generated brief is allowed to be.
+ *
+ * A real utility call does not return a length you chose — it returns whatever
+ * the prompt and the model produce, and the spread is wide. The card has to
+ * hold at all three, so the band is a control rather than an assumption:
+ *
+ *   terse    ~40–70 chars    one clause
+ *   normal   ~90–150 chars   the outcome and the detail that matters
+ *   verbose  ~220–320 chars  what a model actually returns unprompted
+ *
+ * Only a FINISHED session's payload moves with this. A waiting session shows
+ * its question verbatim and a working one shows its live step, and neither is
+ * ever generated — so neither has a length to choose.
+ */
+type BriefLength = "terse" | "normal" | "verbose";
+
+type BriefBands = Readonly<Record<BriefLength, string>>;
+
+/**
  * What one row's peek knows.
  *
  * The split between `scope`, `brief` and `step` is the whole design: `scope`
@@ -201,9 +221,10 @@ interface PeekSubject {
   streaming?: string;
   /**
    * The outcome brief — generated ONCE at turn end from the final message, and
-   * frozen, so it cannot go stale. Present only on a finished session.
+   * frozen, so it cannot go stale. Present only on a finished session, and
+   * held at all three lengths so the card can be judged against each.
    */
-  brief?: string;
+  brief?: BriefBands;
   /** What the turn actually touched; the fact that decides whether to review. */
   touched?: readonly string[];
   /**
@@ -354,8 +375,13 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
   "chat:chat-10a": {
     kind: "chat",
     scope: "Summarize the hover-state regression on the list rows.",
-    brief:
-      "Fixed. The hover fill was on the target, not the shell, so it un-tinted over the row's actions. Tests pass.",
+    brief: {
+      terse: "Fixed — the fill was on the target, not the shell.",
+      normal:
+        "Fixed. The hover fill was on the target, not the shell, so it un-tinted over the row's actions. Tests pass.",
+      verbose:
+        "Fixed the hover regression: the fill sat on the interactive target rather than the row shell, so the tint stopped wherever a trailing action button began — which is why it looked intermittent. Moved it to the shell, dropped the compensating group-hover variant, and added a regression test. Full suite passes.",
+    },
     touched: ["list-row.tsx", "list-row.test.tsx"],
     finalMessage:
       "I've finished tracing and fixing the hover-state regression. The root cause was that the hover fill was being applied to the interactive target element rather than to the row shell that wraps it. Because the trailing actions are siblings of the target rather than children, the tinted background stopped at the target's boundary, which read as the row un-tinting wherever an action button sat — most visibly on rows with a trailing menu, and not at all on rows without one, which is why the earlier report looked intermittent.\n\nThe fix moves the fill to the shell and makes the target transparent, so the tint spans the whole row regardless of what is in the trailing slot. I also removed the `group-hover:` variant on the actions themselves, which was compensating for the old behaviour and would have double-tinted once the shell took over.\n\nI added a regression test that asserts the tint is present on the shell and absent on the target, and confirmed it fails against the previous implementation. The full suite passes: 34 files, 212 tests. No other component reads the class I moved, so the blast radius is this row only.",
@@ -364,7 +390,12 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
   "chat:chat-1a": {
     kind: "chat",
     scope: "Confirm the old migration path has no callers left.",
-    brief: "Confirmed unreferenced. No callers outside its own tests; safe to delete.",
+    brief: {
+      terse: "Unreferenced — safe to delete.",
+      normal: "Confirmed unreferenced. No callers outside its own tests; safe to delete.",
+      verbose:
+        "Confirmed the legacy migration path is unreferenced. It is imported in exactly one place — its own test file — and nothing in the app or the packages calls it, so it is safe to delete along with that test. I have not deleted anything, since you only asked me to confirm.",
+    },
     touched: [],
     finalMessage:
       "I checked every reference to the legacy migration path. It is imported in exactly one place — its own test file — and nothing in the application or the packages calls it. It is safe to delete along with the test. I have not deleted anything, since you only asked me to confirm.",
@@ -425,6 +456,77 @@ const SUBJECTS: Readonly<Record<string, PeekSubject>> = {
 
 /** Rows with no fixture still peek — an anchor-only card is the honest floor. */
 const EMPTY_SUBJECT: PeekSubject = { kind: "chat" };
+
+/* ------------------------------------------------------------- the real corpus */
+
+/**
+ * The written fixtures above are suspiciously well-formed, because they were
+ * written to fit. `session-peek-corpus.ts` holds 10 REAL sessions read off
+ * this machine's own board — real ticket ids, real titles at their real
+ * lengths (40–110 chars), real transcripts, and the real wall-of-text final
+ * message for four of them. Its three summary bands were measured, not
+ * estimated: terse 42–57, normal 131–150, verbose 291–320 characters.
+ *
+ * WHAT THE SWITCH DOES. `Data: real` replaces the CARD's content entirely —
+ * identity, anchor, payload, evidence — while the sidebar row underneath
+ * stays the lab's own fixture row. The row and the card therefore disagree
+ * about which ticket they are, deliberately: the thing under review is whether
+ * the card survives real text, and rebuilding the whole listing from the
+ * corpus would have meant rebuilding the band model to look at a paragraph.
+ *
+ * Two gaps the capture could not close, reported rather than faked: the board
+ * had NO waiting or interrupted session at capture time, so the real corpus
+ * cannot exercise the decision zone — keep `Data: written` for that — and
+ * every session literally titled "Chat" had an empty transcript, so the
+ * fallback-title case is represented by a real truncated title instead.
+ */
+const CORPUS_STATE: Record<PeekCorpusEntry["activity"], StatusDotState> = {
+  working: "working",
+  waiting: "waiting",
+  idle: "idle",
+  stopped: "idle",
+  interrupted: "idle",
+};
+
+const CORPUS_WORD: Record<PeekCorpusEntry["activity"], string> = {
+  working: "Working",
+  waiting: "Waiting for you",
+  idle: "Idle",
+  stopped: "Stopped",
+  interrupted: "Interrupted",
+};
+
+function corpusRow(entry: PeekCorpusEntry): PeekRow {
+  return {
+    id: entry.id,
+    lead: entry.ticketTitle ?? entry.sessionTitle,
+    sub: entry.sessionTitle,
+    identity: entry.ticketId ?? "No ticket",
+    ticketStatus: entry.ticketStatus,
+    state: CORPUS_STATE[entry.activity],
+    stateLine: CORPUS_WORD[entry.activity],
+  };
+}
+
+function corpusSubject(entry: PeekCorpusEntry): PeekSubject {
+  const steps = entry.steps ?? [];
+  return {
+    kind: "chat",
+    scope: entry.scope,
+    // A real working session's live step is its newest move.
+    step: entry.activity === "working" ? steps.at(-1)?.text : undefined,
+    steps: steps.map((step, index) => ({
+      // The corpus carries order, not clocks; age is synthesised so the list
+      // keys stay stable and the newest still sorts last.
+      ageMs: (steps.length - index) * MINUTE,
+      text: step.text,
+      tool: step.tool,
+    })),
+    // A working session is never summarised — the rule holds for real data too.
+    brief: entry.activity === "working" ? undefined : entry.summary,
+    finalMessage: entry.finalMessage,
+  };
+}
 
 /* ------------------------------------------------------------------- the box */
 
@@ -493,9 +595,9 @@ function TicketChip({ row }: { row: PeekRow }) {
 /** The anchor slot. One per card, and the only thing at heading size. */
 function PeekAnchor({ children }: { children: React.ReactNode }) {
   return (
-    <p className="line-clamp-3 text-heading leading-snug text-balance text-foreground">
-      {children}
-    </p>
+    // No `text-balance`: on a real 96-char ticket title it narrows the measure
+    // and leaves three short ragged lines in a card that has the width to spare.
+    <p className="line-clamp-3 text-heading leading-snug text-foreground">{children}</p>
   );
 }
 
@@ -692,6 +794,7 @@ function Decision({
 interface VariantProps {
   row: PeekRow;
   subject: PeekSubject;
+  length: BriefLength;
   answered: string | null;
   onAnswer: (label: string) => void;
   onLook: () => void;
@@ -705,10 +808,12 @@ interface VariantProps {
  * to a single function so both layouts share it and it can be argued about on
  * its own.
  */
-function payloadOf(subject: PeekSubject, row: PeekRow): string | undefined {
+function payloadOf(subject: PeekSubject, row: PeekRow, length: BriefLength): string | undefined {
   if (subject.interaction !== undefined) return subject.interaction.title;
   if (subject.failure !== undefined) return subject.failure;
-  if (subject.brief !== undefined) return subject.brief;
+  // The one payload whose LENGTH is a choice, because it is the one that was
+  // generated rather than quoted.
+  if (subject.brief !== undefined) return subject.brief[length];
   if (subject.step !== undefined) return `${subject.step}…`;
   // A terminal, or a Session with nothing to say: its errand is all there is.
   return row.state === "exited" ? undefined : subject.scope;
@@ -744,8 +849,8 @@ function PeekEvidence({ subject, row }: { subject: PeekSubject; row: PeekRow }) 
  * said they forget. The payload sits below at BODY size, so the card reads
  * top-down as: which work → what happened → which session.
  */
-function TicketLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
-  const payload = payloadOf(subject, row);
+function TicketLedPeek({ row, subject, length, answered, onAnswer, onLook }: VariantProps) {
+  const payload = payloadOf(subject, row, length);
   return (
     <>
       <div className="flex flex-col gap-1 px-3 pt-3 pb-2">
@@ -753,7 +858,13 @@ function TicketLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProp
         <PeekAnchor>{row.lead}</PeekAnchor>
       </div>
       {payload === undefined ? null : (
-        <p className="line-clamp-4 px-3 pb-3 text-ui leading-normal text-foreground">{payload}</p>
+        // The padding is on the WRAPPER, never on the clamped element:
+        // `-webkit-line-clamp` hides overflow at the PADDING box, so a clamped
+        // <p> with its own `pb-3` lets a fifth line bleed through the gap. That
+        // is what a real 300-character summary exposed.
+        <div className="px-3 pb-3">
+          <p className="line-clamp-4 text-ui leading-normal text-foreground">{payload}</p>
+        </div>
       )}
       <PeekEvidence subject={subject} row={row} />
       <Decision subject={subject} answered={answered} onAnswer={onAnswer} onLook={onLook} />
@@ -770,8 +881,8 @@ function TicketLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProp
  * of waiting rows; gives up the ticket title as a two-line headline, which is
  * exactly the trade to judge.
  */
-function StateLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
-  const payload = payloadOf(subject, row);
+function StateLedPeek({ row, subject, length, answered, onAnswer, onLook }: VariantProps) {
+  const payload = payloadOf(subject, row, length);
   return (
     <>
       <div className="flex flex-col gap-1.5 px-3 pt-3 pb-2">
@@ -1066,6 +1177,8 @@ function activeGroup(row: ActiveSessionRow): number {
 
 export default function SessionPeekScratch() {
   const [variant, setVariant] = React.useState<VariantKey>("A");
+  const [length, setLength] = React.useState<BriefLength>("normal");
+  const [real, setReal] = React.useState(false);
   const [rule, setRule] = React.useState<OrderRule>("promotion");
   const [live, setLive] = React.useState(false);
   const [longQuestion, setLongQuestion] = React.useState(false);
@@ -1131,20 +1244,42 @@ export default function SessionPeekScratch() {
     }
   });
 
-  const rowsById = React.useMemo(() => {
-    const map = new Map<string, PeekRow>();
-    for (const row of active) {
-      const peekRow = activePeekRow(row);
-      map.set(row.id, peekRow);
-      map.set(`rail:${row.id}`, peekRow);
-    }
-    for (const row of listing.previous) map.set(row.id, previousPeekRow(row));
+  /**
+   * Which corpus entry stands behind each row, when `Data: real` is on.
+   *
+   * Assigned by position over the Active band then Previous, so every row a
+   * pointer can reach has one and the same row always draws the same real
+   * session. The rail reuses its Active row's entry.
+   */
+  const corpusByRow = React.useMemo(() => {
+    const map = new Map<string, PeekCorpusEntry>();
+    const ordered = [...active.map((row) => row.id), ...listing.previous.map((row) => row.id)];
+    ordered.forEach((id, index) => {
+      const entry = PEEK_CORPUS[index % PEEK_CORPUS.length];
+      if (entry !== undefined) map.set(id, entry);
+    });
     return map;
   }, [active, listing.previous]);
+
+  const rowsById = React.useMemo(() => {
+    const map = new Map<string, PeekRow>();
+    const written = new Map<string, PeekRow>();
+    for (const row of active) written.set(row.id, activePeekRow(row));
+    for (const row of listing.previous) written.set(row.id, previousPeekRow(row));
+    for (const [id, fixture] of written) {
+      const entry = corpusByRow.get(id);
+      const peekRow = real && entry !== undefined ? corpusRow(entry) : fixture;
+      map.set(id, peekRow);
+      map.set(`rail:${id}`, peekRow);
+    }
+    return map;
+  }, [active, listing.previous, corpusByRow, real]);
 
   const subjectOf = React.useCallback(
     (id: string): PeekSubject => {
       const key = id.replace(/^rail:/, "");
+      const entry = corpusByRow.get(key);
+      if (real && entry !== undefined) return corpusSubject(entry);
       const base = SUBJECTS[key] ?? EMPTY_SUBJECT;
       // The question-size switch, applied to the one flagship waiting row.
       if (key === "chat:chat-14a" && longQuestion) {
@@ -1152,7 +1287,7 @@ export default function SessionPeekScratch() {
       }
       return base;
     },
-    [longQuestion],
+    [longQuestion, corpusByRow, real],
   );
 
   const anchor = peek.anchor;
@@ -1315,6 +1450,7 @@ export default function SessionPeekScratch() {
             <Body
               row={peekRow}
               subject={subject}
+              length={length}
               answered={answered[subjectKey] ?? null}
               onAnswer={(label) => setAnswered((current) => ({ ...current, [subjectKey]: label }))}
               onLook={() => {
@@ -1335,6 +1471,25 @@ export default function SessionPeekScratch() {
 
       {/* -------------------------------------------------------- controls */}
       <div className="fixed bottom-3 left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/90 px-3 py-1.5 shadow-overlay backdrop-blur">
+        <Choice<"written" | "real">
+          label="Data"
+          value={real ? "real" : "written"}
+          options={[
+            ["written", "written"],
+            ["real", "real board"],
+          ]}
+          onChange={(next) => setReal(next === "real")}
+        />
+        <Choice<BriefLength>
+          label="Summary"
+          value={length}
+          options={[
+            ["terse", "terse"],
+            ["normal", "normal"],
+            ["verbose", "verbose"],
+          ]}
+          onChange={setLength}
+        />
         <Choice<VariantKey>
           label="Layout"
           value={variant}
