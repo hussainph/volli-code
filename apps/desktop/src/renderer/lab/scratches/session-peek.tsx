@@ -14,32 +14,55 @@
  *   3. **Does it need me?** And if so, can I clear it from here.
  *
  * Everything below is built backwards from those three, which is why every
- * variant shares ONE header and differs only in the third zone:
+ * variant shares one structure and differs only in what holds the anchor.
  *
- *   • **Anchor** (fixed) — ticket title at reading size with the code demoted
- *     to a chip beside its status, then the session's own title and state
- *     underneath. This inverts the ROW's hierarchy on purpose: a row has 240px
- *     and must lead with the session, a card has 380px and can afford to lead
- *     with the thing the person actually forgot. The data is already on the
- *     row — `ActiveSessionRow.ticket` is a whole {@link Ticket}, title, status
- *     and all — so this costs one read and no new plumbing.
- *   • **Scope** (fixed) — the one durable sentence saying what this session
- *     was sent to do. It never churns, which is exactly why it belongs in a
- *     surface read in half a second.
- *   • **State** (the variable) — the only zone the variants disagree about.
+ * ── WHY THE FIRST PASS READ AS A JUMBLE ───────────────────────────────────
+ * It stacked five text elements — chip, ticket title, session line, scope,
+ * payload — and they blurred into one grey block. Two structural reasons:
  *
- * ── THE THREE BODIES ──────────────────────────────────────────────────────
- *   • **1 · Errand** — content-adaptive. A waiting session draws its decision
- *     and nothing else; a working one draws its current step and last moves; a
- *     finished one draws its outcome brief. The claim: a peek's shape should
- *     follow the only question worth asking about that state.
- *   • **2 · Brief** — uniform. Always one generated sentence, then two delta
- *     lines, then the decision if there is one. The claim: a predictable shape
- *     is worth more than a fitted one, because the eye learns where to land.
- *   • **3 · Glance** — minimal. Anchor, scope, one state sentence, and for a
- *     decision only its existence and shape. Everything else is one rung up.
- *     The claim: the card's job is to let you SKIP opening things, and a card
- *     that tries to be the chat has already lost.
+ *  1. **The type ladder has no small-prose rung.** Below `text-heading` there
+ *     is `text-ui` (13px) and `text-label` (11px), and DESIGN.md is explicit
+ *     that `text-ui` is "the single UI size" — rows, timestamps, counts,
+ *     HINTS — while `text-label` is "a TREATMENT (caps, tracking)" for
+ *     uppercase labels and badges. Three running sentences were set in
+ *     `text-label`: off-spec, and unreadable as prose at +0.05em tracking.
+ *     11 against 13 is not a step the eye resolves anyway.
+ *  2. **Too many things claimed the same rank.** Ticket title and payload were
+ *     both `text-ui`, so nothing was the headline; scope and brief sat
+ *     adjacent saying nearly the same thing.
+ *
+ * So the card now has exactly THREE tiers, and size moves exactly once:
+ *
+ *       ANCHOR   `text-heading` 18px, foreground     — one per card
+ *       BODY     `text-ui`, foreground               — the payload sentence
+ *       META     `text-ui`, muted                    — everything else
+ *
+ * Colour and space separate BODY from META, never size. `text-label` appears
+ * once, on the ticket chip, which is a badge — what that rung is for.
+ *
+ * **Scope stopped being a zone.** For a ticket Session the ticket title IS the
+ * scope, which is why the two read as redundant; it now appears only as the
+ * PAYLOAD of a session with nothing else to say, or the anchor of a
+ * ticketless one.
+ *
+ * ── THE OPEN QUESTION: WHAT HOLDS THE ANCHOR ──────────────────────────────
+ * One anchor, two candidates — the whole `Layout` switch:
+ *
+ *   • **A · Ticket-led** — the ticket title is the anchor; the payload sits
+ *     below at BODY size. Answers "which ticket is this" in one jump, which is
+ *     the thing the person says they forget. `ActiveSessionRow.ticket` is
+ *     already a whole {@link Ticket}, so this costs no new plumbing.
+ *   • **B · State-led** — the payload is the anchor and the ticket rides one
+ *     muted breadcrumb above it. Faster when triaging a band of waiting rows;
+ *     gives up the ticket title as a headline. That is the trade to judge.
+ *
+ * Both share `payloadOf`: the ONE sentence a state is about — the question if
+ * it is waiting, the failure if it broke, the brief if it finished, the live
+ * step if it is working.
+ *
+ * The session's own title sits in the FOOT of both, because it is the one
+ * thing the person has already read — it is what the row under the pointer
+ * says. At the top it competed with the anchor; at the foot it confirms.
  *
  * ── THE LADDER (and why rung 2 already exists) ────────────────────────────
  * `SubagentPeekDialog` (VC-269) is already exactly the second rung: a modal
@@ -110,8 +133,6 @@
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { SparkleIcon } from "@phosphor-icons/react/dist/csr/Sparkle";
-import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { TICKET_STATUS_LABELS, type RendererSessionInteraction, type Ticket } from "@volli/shared";
 
@@ -428,161 +449,129 @@ function peekPosition(anchor: PeekAnchor): { left: number; top: number } {
 const PEEK_SHELL =
   "pointer-events-auto flex flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-overlay";
 
-/* --------------------------------------------------------------- the anchor */
+/* ------------------------------------------------------------ the three tiers */
 
 /**
- * Zone 1, identical in all three variants: which ticket, what stage, which
- * session, what state.
+ * THE TYPE DISCIPLINE, which the first pass got wrong.
  *
- * The ticket TITLE leads and the code is demoted to a chip beside its status.
- * A row has to lead with the session because it has 240px and the session is
- * what you clicked; a card has 380px and can lead with the thing that actually
- * fell out of the person's head. For a ticketless Session the session's own
- * title takes the lead slot, since there is nothing above it.
+ * The ladder below `text-heading` is two rungs wide: `text-ui` (13px) and
+ * `text-label` (11px). DESIGN.md is explicit that `text-ui` is "the single UI
+ * size" and carries list rows, timestamps, counts and HINTS, while
+ * `text-label` is "a TREATMENT (caps, tracking)" for uppercase section labels
+ * and badges. The first pass set three running sentences — the session line,
+ * the scope, the steps — in `text-label`, which is both off-spec and
+ * unreadable as prose: 11px with +0.05em tracking is a badge, not a sentence.
+ * It also cannot build hierarchy, because 11 against 13 is not a step the eye
+ * resolves; five stacked lines two pixels apart read as one grey block.
+ *
+ * So the card has exactly THREE tiers, and size only moves once:
+ *
+ *   ANCHOR   `text-heading` (18px), foreground        — one per card
+ *   BODY     `text-ui`, foreground                    — the payload
+ *   META     `text-ui`, muted-foreground              — everything else
+ *
+ * `text-label` survives in exactly one place: the ticket chip, which is a
+ * badge and is what that rung is for. Everything separating BODY from META is
+ * colour and space, never size.
  */
-function PeekAnchorHeader({ row }: { row: PeekRow }) {
+
+/** The ticket chip — the one legitimate `text-label` on the card. */
+function TicketChip({ row }: { row: PeekRow }) {
   return (
-    <div className="flex flex-col gap-1.5 px-3 pt-3 pb-2">
-      <div className="flex items-center gap-1.5">
-        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-label text-muted-foreground">
-          {row.identity}
-        </span>
-        {row.ticketStatus === null ? null : (
-          <span className="text-label text-muted-foreground">{row.ticketStatus}</span>
-        )}
-      </div>
-      <p className="line-clamp-2 text-ui font-medium leading-snug text-foreground">{row.lead}</p>
-      <div className="flex items-center gap-1.5 text-label text-muted-foreground">
-        <StatusDot state={row.state} />
-        <span className="min-w-0 truncate">{row.sub}</span>
-        <span aria-hidden>·</span>
-        <span className="shrink-0">{row.stateLine}</span>
-      </div>
-    </div>
+    <span className="flex items-center gap-1.5 text-label text-muted-foreground uppercase">
+      <span className="font-mono">{row.identity}</span>
+      {row.ticketStatus === null ? null : (
+        <>
+          <span aria-hidden>·</span>
+          <span>{row.ticketStatus}</span>
+        </>
+      )}
+    </span>
   );
 }
 
-/** Zone 2: the durable errand. Never churns, so it is safe to read at a glance. */
-function PeekScope({ scope }: { scope: string | undefined }) {
-  if (scope === undefined) return null;
+/** The anchor slot. One per card, and the only thing at heading size. */
+function PeekAnchor({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-3 mb-2 border-l-2 border-border pl-2">
-      <p className="line-clamp-2 text-label leading-snug text-muted-foreground">{scope}</p>
-    </div>
+    <p className="line-clamp-3 text-heading leading-snug text-balance text-foreground">
+      {children}
+    </p>
   );
 }
 
-/** The foot: the two rungs up the ladder. */
-function PeekFoot({ onLook }: { onLook: () => void }) {
+/**
+ * The foot: which session this actually is, and the two rungs up the ladder.
+ *
+ * The session's own title lives DOWN HERE rather than in the header, because
+ * it is the one thing the person already read — it is what the row they are
+ * pointing at says. Repeating it at the top costs the anchor its silence; at
+ * the foot it confirms rather than competes.
+ */
+function PeekFoot({ row, onLook }: { row: PeekRow; onLook: () => void }) {
   return (
-    <div className="mt-auto flex items-center gap-1 border-t border-border px-2 py-1.5">
+    <div className="mt-auto flex items-center gap-2 border-t border-border px-3 py-2">
+      <StatusDot state={row.state} />
+      <span className="min-w-0 flex-1 truncate text-ui text-muted-foreground">
+        {row.sub} · {row.stateLine}
+      </span>
       <button
         type="button"
         onClick={onLook}
-        className="rounded px-1.5 py-0.5 text-label text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="shrink-0 rounded px-1.5 py-0.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         Look
       </button>
-      <span className="ml-auto flex items-center gap-1 text-label text-muted-foreground">
-        <ArrowSquareOutIcon className="size-3" />
-        Open
-      </span>
+      <ArrowSquareOutIcon className="size-3.5 shrink-0 text-muted-foreground" />
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- the zones */
 
-/** One recent move. Dense, past tense, one line, never wrapped. */
+/** One recent move. META tier: `text-ui`, muted, one line, never wrapped. */
 function StepLine({ step }: { step: PeekStep }) {
   return (
-    <li className="flex min-w-0 items-baseline gap-1.5">
-      <span className="min-w-0 flex-1 truncate text-label text-muted-foreground">{step.text}</span>
-      {step.tool === undefined ? null : (
-        <span className="shrink-0 rounded bg-muted px-1 font-mono text-label text-muted-foreground">
-          {step.tool}
-        </span>
-      )}
+    <li className="flex min-w-0 items-baseline gap-1.5 text-ui text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate">{step.text}</span>
+      {step.tool === undefined ? null : <span className="shrink-0 font-mono">{step.tool}</span>}
     </li>
   );
 }
 
-/** What a WORKING session shows: the live step, the last moves, the live text. */
-function WorkingZone({ subject, steps = 2 }: { subject: PeekSubject; steps?: number }) {
-  const recent = (subject.steps ?? []).slice(-steps);
+/** The last moves — META under whatever the anchor said. */
+function StepList({ steps }: { steps: readonly PeekStep[] }) {
+  if (steps.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5 px-3 pb-2">
-      {subject.step === undefined ? null : (
-        <p className="flex items-center gap-1.5 text-ui text-foreground">
-          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
-          <span className="min-w-0 truncate">{subject.step}</span>
-        </p>
-      )}
-      {recent.length === 0 ? null : (
-        <ul className="flex flex-col gap-0.5">
-          {recent.map((step) => (
-            <StepLine key={stepKey(step)} step={step} />
-          ))}
-        </ul>
-      )}
-      {subject.streaming === undefined ? null : (
-        <p className="line-clamp-3 text-label leading-snug text-foreground/80">
-          {subject.streaming}
-          <span className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 bg-foreground/60" />
-        </p>
-      )}
-    </div>
+    <ul className="flex flex-col gap-0.5">
+      {steps.map((step) => (
+        <StepLine key={stepKey(step)} step={step} />
+      ))}
+    </ul>
   );
 }
 
-/**
- * What a FINISHED session shows: the frozen brief, and what it touched.
- *
- * The brief is the answer to the long-final-message problem — see the module
- * doc. `touched` is here because it is the fact that decides whether the
- * outcome needs reviewing, and it is free.
- */
-function BriefZone({ subject }: { subject: PeekSubject }) {
+/** The in-flight text. BODY tier, with the mark that says it is still arriving. */
+function StreamingLine({ text }: { text: string }) {
   return (
-    <div className="flex flex-col gap-1.5 px-3 pb-2">
-      <p className="flex gap-1.5 text-ui leading-snug text-foreground">
-        <SparkleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0">{subject.brief}</span>
-      </p>
-      {subject.touched === undefined || subject.touched.length === 0 ? null : (
-        <p className="flex flex-wrap gap-1">
-          {subject.touched.map((file) => (
-            <span
-              key={file}
-              className="rounded bg-muted px-1 font-mono text-label text-muted-foreground"
-            >
-              {file}
-            </span>
-          ))}
-        </p>
-      )}
-    </div>
+    <p className="line-clamp-2 text-ui leading-snug text-muted-foreground">
+      {text}
+      <span className="ml-0.5 inline-block h-3 w-1 translate-y-0.5 bg-muted-foreground/70" />
+    </p>
   );
 }
 
-/** What a BROKEN session shows. The reason, plainly; nothing is summarized. */
-function FailureZone({ subject }: { subject: PeekSubject }) {
-  return (
-    <div className="px-3 pb-2">
-      <p className="flex gap-1.5 text-ui leading-snug text-foreground">
-        <WarningIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0">{subject.failure}</span>
-      </p>
-    </div>
-  );
+/** What the turn touched — the fact that decides whether to review it. */
+function TouchedList({ touched }: { touched: readonly string[] }) {
+  if (touched.length === 0) return null;
+  return <p className="truncate font-mono text-ui text-muted-foreground">{touched.join("  ")}</p>;
 }
 
 /** A terminal's trailing output. Clipped, never wrapped — wrapping lies about columns. */
 function TerminalZone({ lines }: { lines: readonly string[] }) {
   return (
-    <div className="mx-3 mb-2 overflow-hidden rounded bg-muted/60 px-2 py-1.5">
+    <div className="overflow-hidden rounded bg-muted/60 px-2 py-1.5">
       {lines.slice(-6).map((line) => (
-        <p key={line} className="truncate font-mono text-label leading-snug text-muted-foreground">
+        <p key={line} className="truncate font-mono text-ui leading-snug text-muted-foreground">
           {line === "" ? "\u00a0" : line}
         </p>
       ))}
@@ -630,15 +619,15 @@ function DecisionZone({
   if (interaction === undefined) return null;
   if (answered !== null) {
     return (
-      <div className="border-t border-border px-3 py-2">
-        <p className="text-label text-muted-foreground">
+      <div className="px-3 pb-3">
+        <p className="text-ui text-muted-foreground">
           Answered <span className="text-foreground">{answered}</span>
         </p>
       </div>
     );
   }
   return (
-    <div className="border-t border-border px-3 py-2">
+    <div className="px-3 pb-3">
       <InteractionCard
         interaction={interaction}
         onResolve={(submission) => {
@@ -662,17 +651,16 @@ function DecisionHandoff({ subject, onLook }: { subject: PeekSubject; onLook: ()
   if (interaction === undefined) return null;
   const word = interaction.kind === "permission" ? "permission" : "question";
   return (
-    <div className="flex flex-col gap-1.5 border-t border-border px-3 py-2">
-      <p className="text-label text-muted-foreground">
-        A {word} with {interaction.options.length} options
+    <div className="flex flex-col items-start gap-2 px-3 pb-3">
+      <p className="text-ui text-muted-foreground">
+        {interaction.options.length} options — too long to answer from here
       </p>
-      <p className="line-clamp-3 text-ui leading-snug text-foreground">{interaction.title}</p>
       <button
         type="button"
         onClick={onLook}
-        className="self-start rounded bg-muted px-2 py-1 text-label text-foreground transition-colors hover:bg-muted/70"
+        className="rounded bg-muted px-2 py-1 text-ui text-foreground transition-colors hover:bg-muted/70"
       >
-        Answer in overlay →
+        Answer the {word} →
       </button>
     </div>
   );
@@ -699,7 +687,7 @@ function Decision({
   );
 }
 
-/* -------------------------------------------------------------- the variants */
+/* ----------------------------------------------------------- the two layouts */
 
 interface VariantProps {
   row: PeekRow;
@@ -710,102 +698,99 @@ interface VariantProps {
 }
 
 /**
- * 1 · Errand — the body follows the state.
+ * THE ONE SENTENCE this session's state is about — the payload, in words.
  *
- * A waiting session draws its decision and NOTHING else: no steps, no brief,
- * no streaming text. The claim is that when a session is blocked on you, every
- * other fact on the card is a distraction from the one action available.
+ * A card has one anchor and one payload, and which sentence the payload IS
+ * depends only on state. This is the adaptive rule from the last pass, reduced
+ * to a single function so both layouts share it and it can be argued about on
+ * its own.
  */
-function ErrandPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
-  const waiting = subject.interaction !== undefined;
+function payloadOf(subject: PeekSubject, row: PeekRow): string | undefined {
+  if (subject.interaction !== undefined) return subject.interaction.title;
+  if (subject.failure !== undefined) return subject.failure;
+  if (subject.brief !== undefined) return subject.brief;
+  if (subject.step !== undefined) return `${subject.step}…`;
+  // A terminal, or a Session with nothing to say: its errand is all there is.
+  return row.state === "exited" ? undefined : subject.scope;
+}
+
+/**
+ * The META block under the payload: evidence, never prose.
+ *
+ * Deliberately thin. The first pass put steps, scope and a streaming line all
+ * under the payload and the card turned into a list of grey sentences.
+ */
+function PeekEvidence({ subject, row }: { subject: PeekSubject; row: PeekRow }) {
+  // A waiting card shows its decision and NOTHING else: when a session is
+  // blocked on a person, every other fact competes with the one action.
+  if (subject.interaction !== undefined) return null;
+  const working = row.state === "working";
+  return (
+    <div className="flex flex-col gap-1.5 px-3 pb-3">
+      {subject.lines === undefined ? null : <TerminalZone lines={subject.lines} />}
+      {subject.touched === undefined ? null : <TouchedList touched={subject.touched} />}
+      {working && subject.steps !== undefined ? <StepList steps={subject.steps.slice(-2)} /> : null}
+      {working && subject.streaming !== undefined ? (
+        <StreamingLine text={subject.streaming} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A · Ticket-led — the ticket title is the anchor.
+ *
+ * Answers "which ticket is this" in one jump, which is the thing the person
+ * said they forget. The payload sits below at BODY size, so the card reads
+ * top-down as: which work → what happened → which session.
+ */
+function TicketLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
+  const payload = payloadOf(subject, row);
   return (
     <>
-      <PeekAnchorHeader row={row} />
-      <PeekScope scope={subject.scope} />
-      {waiting ? null : (
-        <>
-          {subject.lines !== undefined ? <TerminalZone lines={subject.lines} /> : null}
-          {subject.failure !== undefined ? <FailureZone subject={subject} /> : null}
-          {subject.brief !== undefined ? <BriefZone subject={subject} /> : null}
-          {row.state === "working" ? <WorkingZone subject={subject} /> : null}
-        </>
+      <div className="flex flex-col gap-1 px-3 pt-3 pb-2">
+        <TicketChip row={row} />
+        <PeekAnchor>{row.lead}</PeekAnchor>
+      </div>
+      {payload === undefined ? null : (
+        <p className="line-clamp-4 px-3 pb-3 text-ui leading-normal text-foreground">{payload}</p>
       )}
+      <PeekEvidence subject={subject} row={row} />
       <Decision subject={subject} answered={answered} onAnswer={onAnswer} onLook={onLook} />
-      <PeekFoot onLook={onLook} />
+      <PeekFoot row={row} onLook={onLook} />
     </>
   );
 }
 
 /**
- * 2 · Brief — one generated sentence always, whatever the state.
+ * B · State-led — the payload is the anchor, the ticket is a breadcrumb.
  *
- * Working sessions get a summary here too, which the module doc argues is a
- * lie waiting to happen. That is the point: the uniform shape's cost should be
- * visible. Hover the working rows and judge whether the predictability is
- * worth a sentence that is always one step behind.
+ * The opposite bet: the biggest thing is what is HAPPENING, and the ticket
+ * rides one muted line above it as context. Reads faster when triaging a band
+ * of waiting rows; gives up the ticket title as a two-line headline, which is
+ * exactly the trade to judge.
  */
-function BriefPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
-  const line =
-    subject.brief ??
-    subject.failure ??
-    (subject.step === undefined ? undefined : `${subject.step}…`);
+function StateLedPeek({ row, subject, answered, onAnswer, onLook }: VariantProps) {
+  const payload = payloadOf(subject, row);
   return (
     <>
-      <PeekAnchorHeader row={row} />
-      <PeekScope scope={subject.scope} />
-      {line === undefined ? null : (
-        <div className="px-3 pb-2">
-          <p className="flex gap-1.5 text-ui leading-snug text-foreground">
-            <SparkleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0">{line}</span>
-          </p>
-        </div>
-      )}
-      {subject.lines !== undefined ? <TerminalZone lines={subject.lines} /> : null}
-      {subject.steps === undefined || subject.steps.length === 0 ? null : (
-        <ul className="flex flex-col gap-0.5 px-3 pb-2">
-          {subject.steps.slice(-2).map((step) => (
-            <StepLine key={stepKey(step)} step={step} />
-          ))}
-        </ul>
-      )}
+      <div className="flex flex-col gap-1.5 px-3 pt-3 pb-2">
+        <p className="flex min-w-0 items-baseline gap-1.5 text-ui text-muted-foreground">
+          <span className="shrink-0 font-mono">{row.identity}</span>
+          <span className="min-w-0 truncate">{row.lead}</span>
+        </p>
+        {payload === undefined ? null : <PeekAnchor>{payload}</PeekAnchor>}
+      </div>
+      <PeekEvidence subject={subject} row={row} />
       <Decision subject={subject} answered={answered} onAnswer={onAnswer} onLook={onLook} />
-      <PeekFoot onLook={onLook} />
-    </>
-  );
-}
-
-/**
- * 3 · Glance — the smallest card that still answers "is this mine to deal with".
- *
- * One state sentence, and for a decision only its existence and shape. Never
- * answerable inline, by construction: this variant's whole claim is that the
- * card should make you SKIP opening things, and that answering is a rung up.
- */
-function GlancePeek({ row, subject, onLook }: VariantProps) {
-  const interaction = subject.interaction;
-  const line =
-    interaction !== undefined
-      ? `Waiting on you — ${interaction.kind === "permission" ? "a permission" : `a question with ${interaction.options.length} options`}`
-      : (subject.brief ??
-        subject.failure ??
-        (subject.step === undefined ? undefined : `${subject.step}…`));
-  return (
-    <>
-      <PeekAnchorHeader row={row} />
-      <PeekScope scope={subject.scope} />
-      {line === undefined ? null : (
-        <p className="line-clamp-3 px-3 pb-2 text-ui leading-snug text-foreground">{line}</p>
-      )}
-      <PeekFoot onLook={onLook} />
+      <PeekFoot row={row} onLook={onLook} />
     </>
   );
 }
 
 const VARIANTS = [
-  { key: "1", name: "Errand", Body: ErrandPeek },
-  { key: "2", name: "Brief", Body: BriefPeek },
-  { key: "3", name: "Glance", Body: GlancePeek },
+  { key: "A", name: "Ticket-led", Body: TicketLedPeek },
+  { key: "B", name: "State-led", Body: StateLedPeek },
 ] as const;
 
 type VariantKey = (typeof VARIANTS)[number]["key"];
@@ -859,7 +844,7 @@ function LookDialog({
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <div className="mx-auto flex max-w-2xl flex-col gap-4">
-                <p className="text-label text-muted-foreground">
+                <p className="text-ui text-muted-foreground">
                   {row.identity} · {row.sub}
                 </p>
                 {subject.scope === undefined ? null : (
@@ -885,7 +870,7 @@ function LookDialog({
                   </div>
                 )}
                 {subject.lines === undefined ? null : (
-                  <pre className="overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-label text-muted-foreground">
+                  <pre className="overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-ui text-muted-foreground">
                     {subject.lines.join("\n")}
                   </pre>
                 )}
@@ -1080,7 +1065,7 @@ function activeGroup(row: ActiveSessionRow): number {
 }
 
 export default function SessionPeekScratch() {
-  const [variant, setVariant] = React.useState<VariantKey>("1");
+  const [variant, setVariant] = React.useState<VariantKey>("A");
   const [rule, setRule] = React.useState<OrderRule>("promotion");
   const [live, setLive] = React.useState(false);
   const [longQuestion, setLongQuestion] = React.useState(false);
@@ -1174,7 +1159,7 @@ export default function SessionPeekScratch() {
   const peekRow = anchor === null ? null : (rowsById.get(anchor.id) ?? null);
   const subjectKey = anchor === null ? "" : anchor.id.replace(/^rail:/, "");
   const subject = anchor === null ? EMPTY_SUBJECT : subjectOf(anchor.id);
-  const Body = VARIANTS.find((entry) => entry.key === variant)?.Body ?? ErrandPeek;
+  const Body = VARIANTS.find((entry) => entry.key === variant)?.Body ?? TicketLedPeek;
   const position = anchor === null ? null : peekPosition(anchor);
 
   const lookingRow = looking === null ? null : (rowsById.get(looking) ?? null);
@@ -1351,7 +1336,7 @@ export default function SessionPeekScratch() {
       {/* -------------------------------------------------------- controls */}
       <div className="fixed bottom-3 left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-background/90 px-3 py-1.5 shadow-overlay backdrop-blur">
         <Choice<VariantKey>
-          label="Body"
+          label="Layout"
           value={variant}
           options={VARIANTS.map((entry) => [entry.key, `${entry.key} · ${entry.name}`] as const)}
           onChange={setVariant}
