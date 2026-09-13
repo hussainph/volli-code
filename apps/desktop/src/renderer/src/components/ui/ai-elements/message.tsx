@@ -61,7 +61,25 @@ export type MessageResponseProps = Omit<
   "plugins" | "rehypePlugins"
 >;
 
-const streamdownPlugins = { cjk, code, mermaid };
+const settledStreamdownPlugins = { cjk, code, mermaid };
+const liveStreamdownPlugins = { cjk, mermaid };
+
+/**
+ * Shiki is a settle-time pipeline, not live-stream work.
+ *
+ * Streamdown 2.6 already memoizes completed markdown blocks, so growing the last
+ * block does not re-parse or re-highlight the closed blocks above it. The code
+ * plugin still tokenizes the GROWING fence from the beginning on every update,
+ * though, and each string is a cache miss by definition. A long open fence is
+ * therefore quadratic work on the same frames where the reader is scrolling.
+ *
+ * With no code plugin, Streamdown keeps the same code frame, actions and plain
+ * token fallback; only Shiki is absent. CJK, Mermaid, images and the sanitizer
+ * stay in the live pipeline. The turn's existing one-way `isAnimating` flag
+ * changes the stable plugin object exactly once at settle, when every fence is
+ * highlighted once at its final size. Both objects are module constants because
+ * Streamdown's outer memo compares the plugin-map identity.
+ */
 
 /**
  * `animated` is not passed, and its absence is the load-bearing part.
@@ -115,7 +133,7 @@ export const MessageResponse = memo(
       <Streamdown
         {...props}
         className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
-        plugins={streamdownPlugins}
+        plugins={props.isAnimating ? liveStreamdownPlugins : settledStreamdownPlugins}
         rehypePlugins={chatRehypePlugins}
         components={merged}
       />
