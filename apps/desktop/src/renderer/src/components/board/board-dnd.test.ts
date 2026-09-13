@@ -119,6 +119,30 @@ describe("resolveGroupDrop", () => {
   });
 });
 
+describe("one-card slots from a frozen board snapshot", () => {
+  it("resolves repeated in-column and cross-column targets without changing the snapshot", () => {
+    const before = structuredClone(TICKETS);
+    for (let i = 0; i < 40; i++) {
+      expect(resolveGroupDrop(TICKETS, ["ticket-1"], "ticket-1", "ticket-2")).toEqual({
+        toStatus: "backlog",
+        toIndex: 1,
+      });
+      expect(resolveGroupDrop(TICKETS, ["ticket-1"], "ticket-1", "ticket-3")).toEqual({
+        toStatus: "todo",
+        toIndex: 0,
+      });
+      expect(
+        resolveGroupDrop(TICKETS, ["ticket-1"], "ticket-1", columnDroppableId("backlog")),
+      ).toEqual({ toStatus: "backlog", toIndex: 1 });
+    }
+    expect(TICKETS).toEqual(before);
+  });
+
+  it("cancels a previous aim when the pointer returns to its source card", () => {
+    expect(resolveGroupDrop(TICKETS, ["ticket-1"], "ticket-1", "ticket-1")).toBeNull();
+  });
+});
+
 describe("resolveDrop", () => {
   it("targets the end of a column when over its droppable", () => {
     expect(resolveDrop(TICKETS, "ticket-1", columnDroppableId("todo"))).toEqual({

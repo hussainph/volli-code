@@ -179,6 +179,7 @@ function ListSection({
   onSelect,
   onOpen,
   dragActive,
+  aimed,
 }: {
   status: TicketStatus;
   tickets: Ticket[];
@@ -192,6 +193,7 @@ function ListSection({
   /** Double-click opens the ticket's full-page detail view (ticket-detail-mvp step 3). */
   onOpen(ticketId: string): void;
   dragActive: boolean;
+  aimed: boolean;
 }) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
   // from context for the reason board-column.tsx gives — the derivation has to
@@ -206,7 +208,12 @@ function ListSection({
   const draggingSet = React.useMemo(() => new Set(draggingIds), [draggingIds]);
 
   return (
-    <section data-list-section data-status={status}>
+    <section
+      data-list-section
+      data-status={status}
+      data-drop-aimed={aimed || undefined}
+      className={cn(aimed && "bg-accent/30 ring-1 ring-inset ring-primary/50")}
+    >
       <div className="sticky top-0 z-10 flex items-center gap-2 bg-muted/30 px-gutter py-1 backdrop-blur-sm">
         <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
         <Badge variant="count">{tickets.length}</Badge>
@@ -280,7 +287,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
  * language as the board's collapsed pills — brightened while dragging, ringed
  * when hovered. On drop it becomes a real section via the normal data flow.
  */
-function EmptyDropRow({ status }: { status: TicketStatus }) {
+function EmptyDropRow({ status, aimed }: { status: TicketStatus; aimed: boolean }) {
   const { setNodeRef, isOver } = useDroppable({ id: columnDroppableId(status) });
 
   return (
@@ -288,7 +295,7 @@ function EmptyDropRow({ status }: { status: TicketStatus }) {
       ref={setNodeRef}
       className={cn(
         "flex h-9 items-center gap-2 border-b border-border/30 px-gutter transition-colors duration-150 ease-out",
-        isOver ? "bg-accent ring-1 ring-inset ring-primary/50" : "bg-muted/30",
+        isOver || aimed ? "bg-accent ring-1 ring-inset ring-primary/50" : "bg-muted/30",
       )}
     >
       <span className="text-ui font-medium text-muted-foreground">
@@ -314,6 +321,8 @@ interface BoardListViewProps {
   /** The project has no tickets at all — a different nothing from "no tickets match". */
   boardEmpty: boolean;
   dragActive: boolean;
+  /** Status resolved from the board's frozen drag snapshot. */
+  aimedStatus: TicketStatus | null;
   selectedIds: readonly string[];
   draggingIds: readonly string[];
   groupDragIds: readonly string[];
@@ -338,6 +347,7 @@ export function BoardListView({
   emptyDropStatuses,
   boardEmpty,
   dragActive,
+  aimedStatus,
   selectedIds,
   draggingIds,
   groupDragIds,
@@ -375,11 +385,12 @@ export function BoardListView({
               onSelect={onSelect}
               onOpen={onOpen}
               dragActive={dragActive}
+              aimed={aimedStatus === status}
             />
           );
         }
         if (emptyDropStatuses.includes(status)) {
-          return <EmptyDropRow key={status} status={status} />;
+          return <EmptyDropRow key={status} status={status} aimed={aimedStatus === status} />;
         }
         return null;
       })}
