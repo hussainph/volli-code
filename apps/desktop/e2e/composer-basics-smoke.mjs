@@ -23,8 +23,8 @@
  *     seeding one. The seeded version, and the proof that the seed comes from
  *     the TICKET purpose rather than the project one, is
  *     composer-kickoff-smoke.mjs's;
- *   • a footer with a "Create more" switch, a secondary "Create" button, and
- *     the primary kickoff button (data-testid="composer-kickoff").
+ *   • one primary kickoff button (data-testid="composer-kickoff") and a mode
+ *     selector. Branch setup and Create more live in the Options popover.
  *   • the dialog root carries data-testid="new-ticket-composer".
  *
  * This file drives the REAL built app through Playwright against a scratch
@@ -54,6 +54,11 @@ import {
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  createOnlyTicket,
+  selectCreationAction,
+  setComposerCreateMore,
+} from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-composer-basics-smoke-");
 const { attempt, summarize } = createRunner();
@@ -129,7 +134,7 @@ async function main() {
     // === 2. The opened dialog is the COMPOSER with the full header + fields ===
     await attempt(
       2,
-      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels chips, base → destination branch row, Create-more + Create + kickoff, and NO terminal harness',
+      'Composer structure: data-testid root, project chip + static "New ticket" + Expand/Close, title/description, Status/Priority/Labels chips, Options for working copy and Create-more, one split commit button, and NO terminal harness',
       async () => {
         const opened = await openComposerViaHeader(page);
         const root = await composer(page).count();
@@ -173,15 +178,18 @@ async function main() {
         // The branch relationship replaced the footer's Worktree switch: the
         // destination chip binds the same `usesWorktree` field, and the base
         // chip is shown only while that destination is a worktree.
-        const baseChip = await composer(page).getByRole("button", { name: "Base branch" }).count();
-        const destinationChip = await composer(page)
+        await composer(page).getByRole("button", { name: "Ticket options" }).click();
+        const baseChip = await page.getByRole("button", { name: "Base branch" }).count();
+        const destinationChip = await page
           .getByRole("button", { name: "Working destination" })
           .count();
-        const createMore = await composer(page)
-          .getByRole("switch", { name: "Create more" })
+        const createMore = await page.getByRole("switch", { name: "Create more" }).count();
+        await page.keyboard.press("Escape");
+        const actionPicker = await composer(page)
+          .getByRole("button", { name: "Choose creation action" })
           .count();
         const createBtn = await composer(page)
-          .getByRole("button", { name: "Create", exact: true })
+          .getByRole("button", { name: "Create ticket", exact: true })
           .count();
         const kickoff = await page.locator('[data-testid="composer-kickoff"]').count();
         await closeAnyDialog(page);
@@ -203,7 +211,8 @@ async function main() {
           baseChip === 1 &&
           destinationChip === 1 &&
           createMore === 1 &&
-          createBtn === 1 &&
+          createBtn === 0 &&
+          actionPicker === 1 &&
           kickoff === 1;
         return {
           ok,
@@ -247,7 +256,7 @@ async function main() {
         await page.getByRole("menuitem", { name: PROJECT_BETA.name, exact: true }).click();
         await sleep(200);
         await titleInput(page).fill(title);
-        await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+        await createOnlyTicket(page);
         await waitUntil(
           "dialog closes after create",
           async () => (await composer(page).count()) === 0,
@@ -295,7 +304,7 @@ async function main() {
         // Title + markdown description.
         await titleInput(page).fill(title);
         await typeIntoMonaco(composer(page), "## A heading\n\nBody paragraph.");
-        await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+        await createOnlyTicket(page);
         await waitUntil(
           "dialog closes after create",
           async () => (await composer(page).count()) === 0,
@@ -329,12 +338,12 @@ async function main() {
           await closeAnyDialog(page);
           return { ok: false, detail: "composer did not open (data-testid missing)" };
         }
-        await composer(page).getByRole("switch", { name: "Create more" }).click();
+        await setComposerCreateMore(page, true);
         const before = (await ticketsFor(page, alphaId)).length;
 
         const first = "Create-more first";
         await titleInput(page).fill(first);
-        await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+        await createOnlyTicket(page);
         // Dialog must STAY open and reset.
         const stayedOpen = await waitUntil(
           "dialog stays open + title resets after first create",
@@ -348,7 +357,7 @@ async function main() {
 
         const second = "Create-more second";
         await titleInput(page).fill(second);
-        await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+        await createOnlyTicket(page);
         await sleep(500);
         await closeAnyDialog(page);
 
@@ -372,6 +381,8 @@ async function main() {
       }
       const title = "Cmd-Enter ticket";
       await titleInput(page).fill(title);
+      await selectCreationAction(page, "Create only");
+      await titleInput(page).focus();
       await page.keyboard.press("Meta+Enter");
       const closed = await waitUntil(
         "dialog closes after ⌘+Enter",

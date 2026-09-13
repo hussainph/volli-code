@@ -101,6 +101,20 @@ activity) share one shell: `rounded-container`, hairline `border-border`, `bg-ca
 composer and never replace it — the input stays so a follow-up can be typed while a question or a
 run is live.
 
+### New-ticket composer
+
+The writing canvas owns the space: title and description on the reading measure,
+with Status, Priority and Labels below. Working-copy setup and Create more live
+in **Options**, not beside every commit. Checkout and batch-entry selections
+remain visible on the closed Options trigger.
+
+The footer has **one primary split button**. Its menu selects Create only, Start
+chat, or a saved Automation; selection never submits. The primary label names the
+chosen action. Model and effort appear only for chat kickoff; an Automation uses
+its saved Runtime. `⌘/Ctrl+Enter` performs the selected action, while
+`⇧⌘/Ctrl+Enter` explicitly starts chat. Launch mode is per-open and resets when
+retargeting projects; the ticket draft itself still survives closing.
+
 ## Elevation — three tiers
 
 One shadow per role, generated from the canvas so the halo is tinted to the window rather than

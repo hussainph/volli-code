@@ -208,7 +208,9 @@ function labModelAccess(): ModelAccessClient {
 
 /* ------------------------------------------------------------------ scratch */
 
-export default function TicketKickoffScratch() {
+export default function TicketKickoffScratch({
+  initialTickets = tickets,
+}: { initialTickets?: typeof tickets } = {}) {
   const client = React.useMemo(labModelAccess, []);
   const [empty, setEmpty] = React.useState(false);
 
@@ -216,10 +218,10 @@ export default function TicketKickoffScratch() {
   // the PROJECT's tickets, not off a filter, so this is the only way to reach it.
   React.useEffect(() => {
     useBoardStore.setState({
-      ticketsByProject: { [project.id]: empty ? [] : tickets },
+      ticketsByProject: { [project.id]: empty ? [] : initialTickets },
       labelsByProject: { [project.id]: labels },
     });
-  }, [empty]);
+  }, [empty, initialTickets]);
 
   return (
     // The app shell mounts one `TooltipProvider` at its root; a scratch that
@@ -236,7 +238,7 @@ export default function TicketKickoffScratch() {
               {empty ? "Fill the board" : "Empty the board"}
             </Button>
             <span className="text-ui text-muted-foreground">
-              ⌘↵ creates · ⇧⌘↵ creates and starts
+              ⌘↵ selected action · ⇧⌘↵ starts chat
             </span>
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border">

@@ -1,25 +1,11 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { act } from "react";
+import { act, useState, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import type { Automation } from "@volli/shared";
-import type { ComposerRun } from "./composer-run";
-
 import { ComposerFooter, CreateRunAutomationItems } from "./composer-footer";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
-
-const run: ComposerRun = {
-  models: [],
-  tiers: [],
-  selection: null,
-  setSelection: () => {},
-};
+import type { ComposerLaunch } from "./composer-launch";
 
 function automation(id: string, name: string): Automation {
   return {
@@ -33,7 +19,6 @@ function automation(id: string, name: string): Automation {
     updatedAt: 1,
   };
 }
-
 const GROUPS = [
   {
     status: "todo" as const,
@@ -48,154 +33,151 @@ const GROUPS = [
     automations: [automation("a2", "Implement")],
   },
 ];
-
-const automationRun = {
-  ready: true,
-  groups: GROUPS,
-  enabledIds: [] as readonly string[],
-  onRun: () => {},
+const props: ComponentProps<typeof ComposerFooter> = {
+  projectId: "p1",
+  run: { models: [], tiers: [], selection: null, setSelection: () => {} },
+  launch: { kind: "kickoff" },
+  onLaunchChange: () => {},
+  onSubmit: () => {},
+  automationOffer: { ready: true, groups: GROUPS, enabledIds: [] },
+  disabled: false,
 };
-
-let root: Root | null = null;
-let container: HTMLElement | null = null;
-
-/** Mount the items inside a real DropdownMenu and open it (Radix needs the Menu context). */
-async function openItems(disabled = false): Promise<void> {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => {
-    root?.render(
-      <DropdownMenu defaultOpen>
-        <DropdownMenuTrigger />
-        <DropdownMenuContent>
-          <CreateRunAutomationItems
-            groups={GROUPS}
-            enabledIds={[]}
-            onRun={() => {}}
-            disabled={disabled}
-          />
-        </DropdownMenuContent>
-      </DropdownMenu>,
-    );
-  });
-}
-
+let root: Root;
+let host: HTMLDivElement;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
 });
-
 afterEach(async () => {
-  await act(async () => {
-    root?.unmount();
-  });
-  root = null;
-  container?.remove();
-  container = null;
+  await act(async () => root.unmount());
+  host.remove();
   vi.unstubAllGlobals();
 });
-
-function render(
-  overrides: {
-    onAttachFiles?: (files: readonly File[]) => void;
-    automationRun?: typeof automationRun;
-    disabled?: boolean;
-  } = {},
-): string {
-  return renderToStaticMarkup(
-    <ComposerFooter
-      run={run}
-      createMore={false}
-      onCreateMoreChange={() => {}}
-      onCreate={() => {}}
-      onKickoff={() => {}}
-      automationRun={overrides.automationRun ?? automationRun}
-      disabled={overrides.disabled ?? false}
-      {...overrides}
-    />,
+function render(overrides: Partial<typeof props> = {}): string {
+  return renderToStaticMarkup(<ComposerFooter {...props} {...overrides} />);
+}
+async function openMenu() {
+  const trigger = host.querySelector('[data-testid="composer-launch-picker"]')!;
+  await act(async () =>
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
   );
 }
+function radio(text: string): HTMLElement {
+  return [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((el) =>
+    el.textContent?.includes(text),
+  )!;
+}
 
-/**
- * VC-115: the footer carried two paperclips — this one, and a popover that
- * searched the project file index. The second is gone, so what these assert is
- * a COUNT, not just a presence: a returning project-file icon fails the first
- * test even though every other assertion still passes.
- */
-describe("the composer footer's attach affordance", () => {
-  it("offers exactly one paperclip, and it is the system file picker", () => {
+describe("one attachment affordance", () => {
+  it("offers one system file picker, never a duplicate file-reference picker", () => {
     const html = render({ onAttachFiles: () => {} });
-
     expect(html.match(/aria-label="Attach files"/g)).toHaveLength(1);
     expect(html.match(/type="file"/g)).toHaveLength(1);
     expect(html).toContain("multiple");
-  });
-
-  it("no longer renders the project file-reference picker", () => {
-    const html = render({ onAttachFiles: () => {} });
-
     expect(html).not.toContain("Attach file reference");
     expect(html).not.toContain("Search files…");
   });
-
-  it("renders no attach control at all when the composer takes no files", () => {
-    const html = render();
-
-    expect(html).not.toContain('aria-label="Attach files"');
-    expect(html).not.toContain('type="file"');
+  it("omits the paperclip when attachments are unsupported", () => {
+    expect(render()).not.toContain('aria-label="Attach files"');
   });
 });
 
-/**
- * VC-329 item 4: the third commit. A caret welded onto the commit pill opens
- * the saved Automations, grouped by column; choosing one creates the ticket in
- * the chip's status and runs that record on it — not a rewritten prompt.
- */
-describe("the composer footer's Create & run automation caret", () => {
-  it("is always drawn, even for a project with no automations", () => {
-    const html = render({ automationRun: { ...automationRun, groups: [] } });
+it("has one commit action at rest, with no create-more switch or competing launch buttons", () => {
+  const html = render();
+  expect(html).toContain('data-testid="composer-kickoff"');
+  expect(html).toContain('aria-label="Choose creation action"');
+  expect(html).not.toContain('aria-label="Create more"');
+  expect(html).not.toContain('aria-label="Create ticket"');
+  expect(html).not.toContain('aria-label="Create and run an automation"');
+});
 
-    expect(html).toContain('data-testid="composer-run-automation"');
-    expect(html).toContain('aria-label="Create and run an automation"');
-  });
-
-  it("lists the saved automations grouped and labelled by column", async () => {
-    await openItems();
-
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("Todo");
-    expect(text).toContain("· this column");
-    expect(text).toContain("Create & run: Triage");
-    expect(text).toContain("Doing");
-    expect(text).toContain("Create & run: Implement");
-  });
-
-  it("says so when the project lists no automations", () => {
-    const html = renderToStaticMarkup(
-      <CreateRunAutomationItems groups={[]} enabledIds={[]} onRun={() => {}} disabled={false} />,
+it("changes mode without submitting, then commits the selected saved automation", async () => {
+  const submit = vi.fn();
+  function Harness() {
+    const [launch, setLaunch] = useState<ComposerLaunch>({ kind: "kickoff" });
+    return (
+      <ComposerFooter
+        {...props}
+        launch={launch}
+        onLaunchChange={setLaunch}
+        onSubmit={() => submit(launch)}
+      />
     );
-
-    expect(html).toContain("No ticket automations in this project.");
+  }
+  await act(async () => root.render(<Harness />));
+  await openMenu();
+  expect(radio("Start chat").getAttribute("aria-checked")).toBe("true");
+  expect(document.body.textContent).toContain("Todo · this column");
+  expect(document.body.textContent).toContain("Doing");
+  await act(async () => radio("Implement").click());
+  expect(submit).not.toHaveBeenCalled();
+  expect(host.textContent).toContain("Saved runtime");
+  expect(host.querySelector('[aria-label^="Model:"]')).toBeNull();
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')!.click(),
+  );
+  expect(submit).toHaveBeenCalledExactlyOnceWith({
+    kind: "automation",
+    projectId: "p1",
+    automationId: "a2",
   });
+});
 
-  it("disables the automation rows while the composer cannot commit", async () => {
-    await openItems(true);
+it("can choose plain creation while the title is empty, but cannot commit", async () => {
+  const submit = vi.fn();
+  function Harness() {
+    const [launch, setLaunch] = useState<ComposerLaunch>({ kind: "kickoff" });
+    return (
+      <ComposerFooter
+        {...props}
+        disabled
+        launch={launch}
+        onLaunchChange={setLaunch}
+        onSubmit={submit}
+      />
+    );
+  }
+  await act(async () => root.render(<Harness />));
+  await openMenu();
+  expect(radio("Triage").getAttribute("data-disabled")).toBeNull();
+  await act(async () => radio("Create only").click());
+  const button = host.querySelector<HTMLButtonElement>('[aria-label="Create ticket"]')!;
+  expect(button.disabled).toBe(true);
+  expect(host.querySelector('[aria-label^="Model:"]')).toBeNull();
+  await act(async () => button.click());
+  expect(submit).not.toHaveBeenCalled();
+});
 
-    const items = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')];
-    expect(items).toHaveLength(2);
-    expect(items.every((item) => item.getAttribute("data-disabled") !== null)).toBe(true);
+it("does not silently fall back to starting chat when a selected automation disappears", () => {
+  const html = render({
+    launch: { kind: "automation", projectId: "p1", automationId: "missing" },
   });
+  expect(html).toContain("Choose an available automation");
+  expect(html).toMatch(/disabled="" aria-label="Create &amp; run"/);
+  expect(html).not.toContain("composer-kickoff");
+});
+
+it("shows model controls only for chat kickoff", () => {
+  expect(render()).toContain('aria-label="Model:');
+  expect(render({ launch: { kind: "create" } })).not.toContain('aria-label="Model:');
+});
+
+it("keeps the launch selector available without a catalogue", async () => {
+  await act(async () =>
+    root.render(
+      <ComposerFooter {...props} automationOffer={{ ...props.automationOffer, groups: [] }} />,
+    ),
+  );
+  await openMenu();
+  expect(radio("Start chat")).toBeDefined();
+  expect(document.body.textContent).toContain("No ticket automations in this project.");
 });
 
 it("does not claim an empty catalogue or expose cached runs while reading", () => {
   const html = renderToStaticMarkup(
-    <CreateRunAutomationItems
-      groups={GROUPS}
-      ready={false}
-      enabledIds={[]}
-      onRun={() => {}}
-      disabled={false}
-    />,
+    <CreateRunAutomationItems groups={GROUPS} ready={false} enabledIds={[]} />,
   );
   expect(html).toContain("Reading automations");
   expect(html).not.toContain("No ticket automations");

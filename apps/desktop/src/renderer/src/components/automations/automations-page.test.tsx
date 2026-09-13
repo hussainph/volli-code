@@ -835,7 +835,6 @@ describe("editor navigation keeps drafts", () => {
     expect(loadEditorDraft("p1", undefined, "automation-1")?.name).toBe("Unsaved name");
     clearEditorDraft("p1", undefined, "automation-1");
   });
-
 });
 
 describe("column arming trigger control", () => {
