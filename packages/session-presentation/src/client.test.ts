@@ -2078,6 +2078,168 @@ describe("the queued message", () => {
   });
 });
 
+/* ------------------------------------------------- the Session that crashed */
+
+/**
+ * VC-367. A relaunch closes the attachment of every Session whose process died,
+ * so `liveExecutor` reads null and the composer routes every later message to
+ * the queue. Before this, nothing ever came for it: the release rule waits on
+ * an executor and no path produced one, so the app accepted the words and the
+ * Session simply never started. The one unacceptable outcome is the silent
+ * queue — either the message brings the executor back, or the refusal is on
+ * screen with the way out beside it.
+ */
+describe("a message sent to a Session whose executor died", () => {
+  /** Exactly what boot recovery leaves behind: open Session, no attachment. */
+  async function crashed(prepare: (rpc: FakeRpc) => void = () => undefined) {
+    return adopted((fake) => {
+      fake.snapshotProjection = projectionFor(null);
+      fake.liveProjection = projectionFor(null);
+      prepare(fake);
+    });
+  }
+
+  it("reattaches and delivers rather than queueing into the void", async () => {
+    const { rpc, store, sessionId, slice } = await crashed();
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "carry on where you left off" });
+    await settle();
+
+    // The send itself asked for the executor back. Nothing else in the app was
+    // ever going to.
+    expect(rpc.attaches).toEqual([{ operationId: "cmd-1", sessionId }]);
+
+    // The attachment the reattach opened, arriving the way it does in the app:
+    // off the stream frame that reports it.
+    store.getState().setProjection(sessionId, projectionFor("attach-2"));
+    await settle();
+
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(rpc.submissions()[0]).toMatchObject({
+      commandId: "q1",
+      command: { message: { parts: [{ type: "text", text: "carry on where you left off" }] } },
+    });
+    expect(slice()!.queue).toEqual([]);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("refuses visibly when the reattach cannot happen, and never swallows the words", async () => {
+    const { rpc, store, sessionId, slice } = await crashed((fake) => {
+      fake.answerAttach = () => REFUSED;
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "are you there" });
+    await settle();
+
+    expect(rpc.attaches).toHaveLength(1);
+    // Nothing was sent, and the person is told so rather than left watching a
+    // composer that looked like it worked. `recover()` behind the band is the
+    // reattach offered inline.
+    expect(rpc.submissions()).toEqual([]);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toContain("Could not start Session");
+    // And the words are still held, so the refusal costs nothing typed.
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
+  });
+
+  it("asks again when a person sends again after a refusal", async () => {
+    const { rpc, store, sessionId } = await crashed((fake) => {
+      fake.answerAttach = () => REFUSED;
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    await settle();
+    expect(rpc.attaches).toHaveLength(1);
+
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await settle();
+
+    // A person sending again is asking again: a latch that ignored them would
+    // be the same silence in a different place.
+    expect(rpc.attaches).toHaveLength(2);
+  });
+
+  it("spends exactly one attach on a queue however much the store churns", async () => {
+    const { rpc, store, sessionId } = await crashed();
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
+    for (let churn = 0; churn < 5; churn += 1) {
+      store.getState().setProjection(sessionId, projectionFor(null));
+    }
+    await settle();
+
+    // The drain re-enters on every store write; an unlatched arm would spend a
+    // process per frame.
+    expect(rpc.attaches).toHaveLength(1);
+  });
+
+  it("attaches nothing for a Session nobody is trying to talk to", async () => {
+    const { rpc, store, sessionId } = await crashed();
+
+    for (let churn = 0; churn < 3; churn += 1) {
+      store.getState().setProjection(sessionId, projectionFor(null));
+    }
+    await settle();
+
+    expect(rpc.attaches).toEqual([]);
+  });
+
+  it("re-arms after the executor it brought back dies again", async () => {
+    const { rpc, store, sessionId } = await crashed();
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    await settle();
+    expect(rpc.attaches).toHaveLength(1);
+
+    store.getState().setProjection(sessionId, projectionFor("attach-2"));
+    await settle();
+
+    // The second death, and the second message into it.
+    store.getState().setProjection(sessionId, projectionFor(null));
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await settle();
+
+    expect(rpc.attaches).toHaveLength(2);
+  });
+
+  it("picks up a message typed while the reattach was still in flight", async () => {
+    const gate = deferred();
+    const { rpc, store, sessionId, slice } = await crashed((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        return ACCEPTED;
+      };
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+    await settle();
+    expect(rpc.attaches).toHaveLength(1);
+
+    // Typed while the attach is still open. The drain latch is held, so this
+    // write re-enters and is refused — it must be remembered, not dropped.
+    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    gate.release();
+    await settle();
+
+    store.getState().setProjection(sessionId, projectionFor("attach-2"));
+    await settle();
+
+    expect(rpc.submissions().map((sent) => sent.commandId)).toEqual(["q1"]);
+    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
+  });
+
+  it("leaves an archived Session alone — there is nothing to attach to", async () => {
+    const { rpc, store, sessionId } = await crashed((fake) => {
+      fake.snapshotProjection = { ...projectionFor(null), status: "archived" };
+    });
+
+    store.getState().enqueue(sessionId, { id: "q1", text: "hello?" });
+    await settle();
+
+    expect(rpc.attaches).toEqual([]);
+  });
+});
+
 /* --------------------------------------------------------------- the ending */
 
 describe("dispose", () => {
