@@ -53,6 +53,8 @@ import type {
   LatestSessionSignal,
   LegacyProject,
   ManifestError,
+  McpServerDraft,
+  McpServerRecord,
   ModelAccessSignInType,
   DeliberateMoveChoice,
   ModelSelection,
@@ -159,6 +161,40 @@ export interface ProjectAuthorityPolicyInput {
   /** An `AuthorityPolicyOverride`-shaped document, or `null` to inherit everything. */
   override: unknown;
 }
+
+export interface McpProjectInput {
+  projectId: string;
+}
+
+export interface McpServerInput extends McpProjectInput {
+  server: McpServerDraft;
+}
+
+export interface McpSaveInput extends McpServerInput {
+  enabledTools: readonly string[];
+}
+
+export interface McpServerIdInput extends McpProjectInput {
+  serverId: string;
+}
+
+export interface McpSetEnabledInput extends McpServerIdInput {
+  enabled: boolean;
+}
+
+export interface McpSetToolsInput extends McpServerIdInput {
+  enabledTools: readonly string[];
+}
+
+export type McpServersResult =
+  | { ok: true; servers: readonly McpServerRecord[] }
+  | { ok: false; error: string };
+export type McpServerResult =
+  | { ok: true; server: McpServerRecord }
+  | { ok: false; error: string; server?: McpServerRecord };
+export type McpCatalogResult =
+  | { ok: true; catalog: McpServerRecord["catalog"] }
+  | { ok: false; error: string };
 
 /**
  * A policy write that was refused, with every reason.
@@ -661,6 +697,14 @@ export interface VolliDataIpcContract {
     args: [input: ProjectAuthorityPolicyInput];
     result: ProjectAuthorityPolicyResult;
   };
+  /** App-owned per-project MCP settings. No repository configuration is read. */
+  "volli:mcp-list": { args: [input: McpProjectInput]; result: McpServersResult };
+  "volli:mcp-test": { args: [input: McpServerInput]; result: McpCatalogResult };
+  "volli:mcp-save": { args: [input: McpSaveInput]; result: McpServerResult };
+  "volli:mcp-refresh": { args: [input: McpServerIdInput]; result: McpServerResult };
+  "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
+  "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
+  "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */

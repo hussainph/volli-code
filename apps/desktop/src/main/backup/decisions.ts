@@ -249,6 +249,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "Global settings, theme, retention and automation cursors; it holds no credential (see `secrets`).",
   },
+  {
+    table: "mcp_servers",
+    decision: "include",
+    reason:
+      "Per-project MCP server configuration and selected tool catalogs; transport settings contain no credentials.",
+  },
   // ---- Rebuilt -------------------------------------------------------------
   {
     table: "session_usage",
@@ -325,6 +331,7 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
  */
 export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "projects",
+  "mcp_servers",
   "labels",
   "tickets",
   "ticket_labels",

@@ -308,6 +308,32 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+describe("MCP settings IPC", () => {
+  it("routes typed project-scoped settings operations through the main-owned service", async () => {
+    const list = vi.fn(() => [{ id: "server-1" }]);
+    const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
+
+    expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
+      ok: true,
+      servers: [{ id: "server-1" }],
+    });
+    await expect(
+      invoke<Promise<unknown>>("volli:mcp-save" as never, {
+        projectId: "project-1",
+        server: { id: "server-1" },
+        enabledTools: ["echo"],
+      }),
+    ).resolves.toEqual({ ok: true, server: { id: "server-1" } });
+    expect(list).toHaveBeenCalledWith("project-1");
+    expect(save).toHaveBeenCalledWith({
+      projectId: "project-1",
+      server: { id: "server-1" },
+      enabledTools: ["echo"],
+    });
+  });
+});
+
 describe("volli:project-authority-policy", () => {
   it("records a departure and answers with the project carrying it", () => {
     const id = createProject();

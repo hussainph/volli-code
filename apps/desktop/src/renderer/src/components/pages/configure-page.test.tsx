@@ -108,14 +108,21 @@ describe("Configure → Sessions", () => {
 });
 
 describe("Configure → MCP", () => {
-  it("shows the shape and says it does not work yet", () => {
+  it("offers app-owned stdio and Streamable HTTP configuration without a shell command field", () => {
     const html = renderConfigure("mcp");
 
-    expect(html).toContain("aren&#x27;t available yet");
-    // Rule 3 of kit/unavailable.tsx: the real empty state, never invented
-    // servers that a reader could mistake for real ones gone wrong.
+    expect(html).not.toContain("aren&#x27;t available yet");
+    expect(html).not.toContain("inert");
     expect(html).toContain("No MCP servers yet.");
-    expect(html).toContain("inert");
+    expect(html).toContain("Add server");
+    expect(html).toContain("Standard input/output");
+    expect(html).toContain("Streamable HTTP");
+    expect(html).toContain("Executable");
+    expect(html).toContain("Arguments (one per line)");
+    expect(html).not.toContain("Shell command");
+    // The one line the pane says without being asked: a trust boundary the
+    // controls cannot show. Everything else about MCP is a summoned hint.
+    expect(html).toContain("A local MCP command runs as you");
   });
 });
 

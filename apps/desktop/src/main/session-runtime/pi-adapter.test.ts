@@ -19,12 +19,14 @@ import {
   BUILTIN_RULE_PACK_ID,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
+  mcpProviderToolName,
   resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type McpToolDefinition,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
   type PromptResource,
@@ -1117,6 +1119,97 @@ describe("Pi native adapter attach", () => {
         request: { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "tc-0" },
       },
     ]);
+  });
+
+  it("binds exact frozen MCP definitions to an attachment-scoped port and disposes it on release", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo/exact",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo/exact"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const dispose = vi.fn(async () => undefined);
+    const call = vi.fn(async () => ({ content: [], isError: false }));
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: ({ mcpTools, workspacePath }) => {
+        expect(mcpTools).toEqual([tool]);
+        expect(workspacePath).toBe(attachmentSpec().directory);
+        return { call, dispose };
+      },
+    });
+
+    expect(runtime.spec.tools.mcp).toEqual([tool]);
+    await runtime.spec.mcp?.call(
+      { serverId: "fixture-1", toolName: "echo/exact", arguments: {}, toolCallId: "call-1" },
+      new AbortController().signal,
+    );
+    expect(call).toHaveBeenCalledOnce();
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes the MCP attachment host when runtime setup fails", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const dispose = vi.fn(async () => undefined);
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+      resolveMcpPort: () => ({
+        call: async () => ({ content: [], isError: false }),
+        dispose,
+      }),
+    });
+    runtime.startFailure = new Error("runtime setup failed");
+
+    await expect(adapter.attach(attachmentSpec(), new RecordingSink())).rejects.toThrow(
+      "runtime setup failed",
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an MCP surface with missing definitions or no main-process port", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const missingDefinitions = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(missingDefinitions).rejects.toThrow(/MCP definitions.*surface/i);
+
+    const noPort = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(noPort).rejects.toThrow(/wired no MCP host/i);
   });
 
   it("names todo_write in the bundle exactly when the frozen surface holds it (VC-6)", async () => {

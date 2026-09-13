@@ -78,7 +78,7 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           label: "MCP Servers",
           icon: PlugsConnectedIcon,
           keywords: ["mcp", "server", "servers", "tool", "tools", "context protocol", "status"],
-          content: <McpPane />,
+          content: <McpPane project={project} />,
         },
         {
           key: "plugins",
