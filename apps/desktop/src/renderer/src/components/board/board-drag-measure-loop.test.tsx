@@ -483,6 +483,12 @@ function grown(status: TicketStatus): boolean {
   );
 }
 
+function ticketSlots(status: TicketStatus): string[] {
+  return [...columnNamed(status).querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].map(
+    (slot) => slot.dataset.boardTicketSlot!,
+  );
+}
+
 /**
  * Which droppable dnd-kit says the card is over, read back from its OWN live
  * region rather than from anything this file computed. It is what keeps the
@@ -660,6 +666,25 @@ describe("a card flipping between itself and the column holding it", () => {
       expect(preview?.parentElement?.style.zIndex).toBe("10");
       await press("keyup", { key: "Alt", altKey: false });
       expect(preview?.className).not.toContain("opacity-30");
+      await endDrag();
+    },
+    BUDGET,
+  );
+
+  it(
+    "keeps cross-column measured nodes frozen and paints the resolved landing column",
+    async () => {
+      await pickUp();
+      const beforeDoing = ticketSlots("doing");
+      const beforeTodo = ticketSlots("todo");
+      const target = columnNamed("todo").querySelector("article");
+      expect(target).not.toBeNull();
+      await move(centre(target!));
+
+      expect(ticketSlots("doing")).toEqual(beforeDoing);
+      expect(ticketSlots("todo")).toEqual(beforeTodo);
+      expect(columnNamed("todo").getAttribute("data-drop-aimed")).toBe("true");
+      expect(columnNamed("doing").hasAttribute("data-drop-aimed")).toBe(false);
       await endDrag();
     },
     BUDGET,

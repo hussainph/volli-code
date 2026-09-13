@@ -1,7 +1,7 @@
 /**
  * VC-329: real-layout regression for the SortableTicketShell update-depth loop.
  * Run a worktree Lab first, then:
- *   VOLLI_LAB_PORT=5189 node apps/desktop/e2e/board-sort-loop-smoke.mjs
+ *   VOLLI_LAB_PORT=5189 pnpm smoke:board-sort-loop
  * Uses fixture IPC only; no real tickets, Automations, or Sessions are started.
  * DOM order and parentage must stay fixed while the detached card previews a move.
  * Repeated cross-column drags exercise both successful commits and rollbacks.
