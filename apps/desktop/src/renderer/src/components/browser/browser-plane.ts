@@ -14,6 +14,18 @@ interface BrowserPlaneRect {
   height: number;
 }
 
+/** Renderer-owned animation-frame clock, injected so placement stays DOM-free and testable. */
+export interface BrowserPlaneFrameScheduler {
+  request(callback: () => void): number;
+  cancel(handle: number): void;
+}
+
+/**
+ * A lazy read keeps repeated ResizeObserver notifications from forcing layout
+ * before their animation-frame batch knows which observation is the latest.
+ */
+export type BrowserPlaneBoundsReader = () => BrowserPlaneRect;
+
 function measuredBounds(rect: BrowserPlaneRect): BrowserTabBounds {
   return {
     x: Math.max(0, Math.round(rect.x)),
@@ -23,26 +35,17 @@ function measuredBounds(rect: BrowserPlaneRect): BrowserTabBounds {
   };
 }
 
-function sameBounds(left: BrowserTabBounds | null, right: BrowserTabBounds): boolean {
-  return (
-    left !== null &&
-    left.x === right.x &&
-    left.y === right.y &&
-    left.width === right.width &&
-    left.height === right.height
-  );
-}
-
 /**
  * Imperative lifecycle for one native Browser Tab plane.
  *
  * React owns when the plane exists; this controller owns the ordered messages
  * that fact implies. Keeping it DOM-free makes the meaningful contract testable:
- * bounds land before show, duplicate observations are quiet, and every visible
- * plane hides before its owner disappears.
+ * bounds land before show, same-frame observations collapse to their latest
+ * value, and every visible plane hides before its owner disappears.
  */
 export class BrowserPlaneController {
-  private bounds: BrowserTabBounds | null = null;
+  private pendingBounds: BrowserPlaneBoundsReader | null = null;
+  private boundsFrame: number | null = null;
   private visibility: "unknown" | "visible" | "hidden" = "unknown";
   private disposed = false;
 
@@ -50,14 +53,23 @@ export class BrowserPlaneController {
     private readonly tabId: string,
     private readonly gateway: BrowserPlaneGateway,
     private readonly onError: (message: string) => void,
+    private readonly scheduler: BrowserPlaneFrameScheduler,
   ) {}
 
-  reportBounds(rect: BrowserPlaneRect): void {
+  /**
+   * Keeps only the latest observation and reads/sends it on the next animation
+   * frame. A sidebar transition, split drag or window resize may notify more
+   * than once before paint; none of those intermediate rectangles should force
+   * layout or cross IPC merely to be superseded in the same frame.
+   */
+  reportBounds(readBounds: BrowserPlaneBoundsReader): void {
     if (this.disposed) return;
-    const bounds = measuredBounds(rect);
-    if (sameBounds(this.bounds, bounds)) return;
-    this.bounds = bounds;
-    this.run(this.gateway.setBounds({ tabId: this.tabId, bounds }), "place Browser Tab");
+    this.pendingBounds = readBounds;
+    if (this.boundsFrame !== null) return;
+    this.boundsFrame = this.scheduler.request(() => {
+      this.boundsFrame = null;
+      this.flushBounds();
+    });
   }
 
   /**
@@ -71,6 +83,10 @@ export class BrowserPlaneController {
     if (this.disposed) return Promise.resolve();
     const next = visible ? "visible" : "hidden";
     if (this.visibility === next) return Promise.resolve();
+    // The first show cannot wait for the scheduled frame: main must receive
+    // real geometry before it attaches a native surface over renderer pixels.
+    // Later observations remain frame-coalesced.
+    if (visible) this.flushBounds();
     this.visibility = next;
     return this.run(
       visible ? this.gateway.show({ tabId: this.tabId }) : this.gateway.hide({ tabId: this.tabId }),
@@ -80,6 +96,11 @@ export class BrowserPlaneController {
 
   dispose(): void {
     if (this.disposed) return;
+    if (this.boundsFrame !== null) {
+      this.scheduler.cancel(this.boundsFrame);
+      this.boundsFrame = null;
+    }
+    this.pendingBounds = null;
     if (this.visibility === "visible") {
       // A failed cleanup can leave remote pixels covering the app after React
       // believes the tab is gone. Report this one even after disposal; late
@@ -89,6 +110,23 @@ export class BrowserPlaneController {
     }
     this.visibility = "hidden";
     this.disposed = true;
+  }
+
+  private flushBounds(): void {
+    if (this.disposed) return;
+    if (this.boundsFrame !== null) {
+      this.scheduler.cancel(this.boundsFrame);
+      this.boundsFrame = null;
+    }
+    const readBounds = this.pendingBounds;
+    this.pendingBounds = null;
+    if (readBounds === null) return;
+    const bounds = measuredBounds(readBounds());
+    // Main owns exact-bound deduplication because only it sees every placement
+    // path (including the page/DevTools split and the initial staged viewport).
+    // Caching here can suppress the write that restores a main-moved view to
+    // this renderer plane.
+    this.run(this.gateway.setBounds({ tabId: this.tabId, bounds }), "place Browser Tab");
   }
 
   private run(
