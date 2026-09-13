@@ -58,7 +58,7 @@ describe("MessageResponse", () => {
     );
   });
 
-  it("defers Shiki until settle while keeping the rest of the live pipeline", () => {
+  it("selects the live and settled plugin maps", () => {
     const live = renderToStaticMarkup(
       <MessageResponse isAnimating>Incremental response</MessageResponse>,
     );

@@ -368,8 +368,16 @@ export function ChatPlane({
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const { messages, durableMessages, queue, working, deliverable, projection, liveCompaction } =
-    session;
+  const {
+    messages,
+    durableMessages,
+    queue,
+    working,
+    turnActive,
+    deliverable,
+    projection,
+    liveCompaction,
+  } = session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   // The tier the model resolved from (VC-259), as the Settings row names it;
@@ -1077,8 +1085,10 @@ export function ChatPlane({
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
-  // saying so.
-  const liveTurn = working ? (turns.at(-1) ?? null) : null;
+  // saying so. Stream-owned `turnActive`, rather than the wider Session
+  // lifecycle, keeps a transient error from treating incomplete content as
+  // settled and an optimistic submit from reopening the previous Turn.
+  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
 
   /**
    * The other place a question draws (round 5). A gated tool call's question
