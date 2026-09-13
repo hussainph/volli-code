@@ -28,7 +28,7 @@ const instructions =
 ---
 
 <div class="storyboard" data-storyboard>
-  <ol class="story-frames" aria-label="How an Automation runs, in four steps">
+  <ol class="story-frames" aria-label="How an automation starts work, in four steps">
     {/* 01 — the saved record. It stays still: nothing about it changes when a
         Run starts, which is the point of saving it. */}
     <li class="story-frame" data-step="1">
@@ -45,7 +45,7 @@ const instructions =
             <strong>Review handoff</strong>
             <span class="story-switch is-on">
               <span class="story-switch-knob" aria-hidden="true"></span>
-              Enabled<span class="visually-hidden"> on this machine: Review handoff</span>
+              Enabled<span class="visually-hidden"> on this Mac for Review handoff</span>
             </span>
           </div>
           <span class="story-label">Instructions</span>
@@ -73,10 +73,10 @@ const instructions =
       </div>
       <div class="story-caption">
         <span class="story-step">01</span>
-        <h3>Save it once</h3>
+        <h3>Save the setup</h3>
         <p>
-          A name, the Instructions, one Trigger, and a Runtime. Switch it on for this Mac when you
-          want the Trigger to count.
+          An automation saves the instructions, trigger, and runtime for repeated work. With Enabled
+          on for this Mac, its trigger can start a run.
         </p>
       </div>
     </li>
@@ -110,7 +110,7 @@ const instructions =
               <strong>Needs Review</strong>
               <span class="story-armed-mark">
                 <StoryIcon kind="bolt" />
-                <span class="visually-hidden">Armed: Review handoff</span>
+                <span class="visually-hidden">Review handoff is armed for this column</span>
               </span>
               <span>1</span>
             </header>
@@ -123,7 +123,7 @@ const instructions =
         <div class="story-window">
           <StoryIcon kind="bolt" />
           <span class="story-window-text">
-            Review handoff <small>on HB-27 · 3s</small>
+            Review handoff <small>on HB-27 · <span data-countdown>1</span>s</small>
           </span>
           <span class="story-window-cancel">Cancel</span>
           <span class="story-window-bar" aria-hidden="true"><span class="story-window-fill"></span></span>
@@ -133,8 +133,8 @@ const instructions =
         <span class="story-step">02</span>
         <h3>It fires only on a deliberate move</h3>
         <p>
-          Drop a ticket into the armed column and a 3.5-second window opens with one control:
-          Cancel. Tickets already sitting there are left alone.
+          A deliberate move into an armed column opens a 3.5-second window. Cancel it there. Tickets
+          already in the column are left alone.
         </p>
       </div>
     </li>
@@ -158,7 +158,7 @@ const instructions =
           </div>
           <div class="story-turn is-agent">
             <span class="story-author">Volli</span>
-            <p>Reading the brief and the change set in this worktree.</p>
+            <p>Reading the ticket’s brief and changes in this worktree.</p>
           </div>
           <div class="story-working">
             <span class="story-spinner" aria-hidden="true"></span>
@@ -174,10 +174,9 @@ const instructions =
       </div>
       <div class="story-caption">
         <span class="story-step">03</span>
-        <h3>Every Run is a fresh Session</h3>
+        <h3>Every run opens a fresh Session</h3>
         <p>
-          The Instructions land as the first message, with the ticket’s brief already in context. A
-          Run never wakes an old chat.
+          The instructions are the first message, and the ticket’s brief supplies the context.
         </p>
       </div>
     </li>
@@ -232,8 +231,8 @@ const instructions =
         <span class="story-step">04</span>
         <h3>The history stays connected</h3>
         <p>
-          Each Run keeps its Automation, its target, and the model it actually resolved. A missed
-          schedule is recorded with its reason — never replayed behind your back.
+          Each run keeps its automation, target, model, and Session together. Scheduled skips record
+          why they didn’t start and never replay automatically.
         </p>
       </div>
     </li>
@@ -247,6 +246,16 @@ const instructions =
   const boards = document.querySelectorAll<HTMLElement>("[data-storyboard]");
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
+  // The armed window's seconds count down in step with the drain bar (70% →
+  // 14% over 500–1700 ms) and stop on the resting "1s" the markup carries.
+  const countDown = (board: HTMLElement) => {
+    const counter = board.querySelector<HTMLElement>("[data-countdown]");
+    if (!counter) return;
+    counter.textContent = "3";
+    window.setTimeout(() => (counter.textContent = "2"), 900);
+    window.setTimeout(() => (counter.textContent = "1"), 1300);
+  };
+
   boards.forEach((board) => {
     if (reducedMotion.matches || !("IntersectionObserver" in window)) {
       board.classList.add("is-live");
@@ -256,6 +265,7 @@ const instructions =
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
         board.classList.add("is-live");
+        countDown(board);
         observer.disconnect();
       },
       { threshold: 0.35 },

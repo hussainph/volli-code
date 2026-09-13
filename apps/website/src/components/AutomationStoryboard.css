@@ -50,7 +50,11 @@
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #101010;
+  /* A dot grain at ~5% over the panel colour: surface, not glow. It sits in
+     the background stack so the chrome bar and every row paint over it. */
+  background:
+    radial-gradient(rgb(255 255 255 / 4%) 0.6px, transparent 0.8px) 0 0 / 7px 7px,
+    #101010;
   box-shadow:
     0 1px 0 rgb(255 255 255 / 4%) inset,
     0 14px 34px rgb(0 0 0 / 34%);
@@ -737,7 +741,7 @@
 
 .storyboard:where(:not(.is-live)) .story-turn,
 .storyboard:where(:not(.is-live)) .story-working,
-.storyboard:where(:not(.is-live)) .story-run.is-new {
+.storyboard:where(:not(.is-live)) .story-run {
   opacity: 0.55;
 }
 
@@ -772,6 +776,16 @@
 
 .storyboard.is-live .story-frame[data-step="4"] .story-link > span {
   animation: story-draw 500ms var(--ease-out) 2950ms both;
+}
+
+/* The two older rows rise as the frame's connector draws, so the history is
+   there before the new Run lands on top of it. */
+.storyboard.is-live .story-run:not(.is-new) {
+  animation: story-rise 450ms var(--ease-out) 2950ms both;
+}
+
+.storyboard.is-live .story-run:not(.is-new) + .story-run:not(.is-new) {
+  animation-delay: 3100ms;
 }
 
 .storyboard.is-live .story-run.is-new {
@@ -962,7 +976,7 @@
 
   .storyboard .story-turn,
   .storyboard .story-working,
-  .storyboard .story-run.is-new {
+  .storyboard .story-run {
     opacity: 1;
     transform: none;
   }

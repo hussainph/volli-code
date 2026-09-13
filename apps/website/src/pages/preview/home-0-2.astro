@@ -2,22 +2,23 @@
 /**
  * PROPOSAL — a 0.2 homepage for comparative review, not the live lander.
  *
- * Built from docs/research/volli-0.2-automations-public-surface-audit.md:
- * the §7.1 section sequence, the §1.3 master and campaign copy, the §6.3
- * visual grammar, and the §9 claims ledger. `/` is untouched; this route is
- * excluded from the sitemap (astro.config.mjs) and carries noindex, so it can
- * be deployed beside the current page and compared without being found.
+ * `/` is untouched; this route is excluded from the sitemap (astro.config.mjs)
+ * and carries noindex, so it can be deployed beside the current page and
+ * compared without being found.
  *
- * Deliberate differences from index.astro, each traceable to the audit:
- *  - no hydrated demo: the proof is a static storyboard of the 0.2 workflow
- *    (§3.4, §5.1 — spend novelty on the new value, not a generic board);
- *  - an Automations anchor in the header and a versioned release band (§3.3);
- *  - the control model stated plainly, as facts, not as "autonomy" (§1.4);
- *  - local-first, provider and open-source posture said in one place (§3.5).
+ * Shape: the whole product first, the release second.
+ *  - hero → the interactive board demo (the same VolliDemo island as `/`) →
+ *    what the workspace is made of → New in 0.2: Automations → trust → closing;
+ *  - Automations is one section, not three: the storyboard (audit §6.3) and
+ *    three ways to start, with the control facts (§1.4) folded into the cards;
+ *  - copy stays inside the audit's §9.2 safe-claims list and the app's own
+ *    labels (§8.4); local-first, provider and open-source posture are said in
+ *    one place (§3.5).
  */
 import "@fontsource-variable/mona-sans/wght.css";
 import AutomationStoryboard from "../../components/AutomationStoryboard.astro";
 import FeatureGlyph from "../../components/FeatureGlyph.astro";
+import VolliDemo from "../../components/VolliDemo";
 import "../../styles/global.css";
 import "../../styles/home-0-2.css";
 
@@ -32,10 +33,11 @@ const automationsDocsUrl = docsUrl;
 const description =
   "Plan coding work. Run it in parallel. Automate the repeatable parts. Volli is a local-first macOS workspace for people and coding agents.";
 
-// The core lifecycle, kept as the current page tells it (LifecycleAccordion),
-// so 0.2 does not swallow the product (§7.1 step 7). Rendered as a still grid
-// rather than an accordion: no GSAP, no click to discover the fourth item.
-const lifecycle = [
+// What the workspace is made of. Items 1, 2, 5 and 6 carry the live page's
+// vetted claims (LifecycleAccordion); 3 and 4 add the agent's tool surface,
+// Skills, the `volli` CLI and the Change Set review, all as CONTEXT.md
+// defines them.
+const workspace = [
   {
     title: "Turn ideas into tasks",
     description:
@@ -43,62 +45,34 @@ const lifecycle = [
     glyph: "phases" as const,
   },
   {
-    title: "Give each task context",
-    description:
-      "Write the outcome, constraints, and review criteria before you start an agent. The task carries that context into its chat.",
-    glyph: "agents" as const,
-  },
-  {
     title: "Run agents in parallel",
     description:
-      "Start a focused chat for each task. Volli gives every task its own Git worktree and branch, so each works in a separate checkout.",
+      "Each ticket gets its own worktree and branch. Run independent tickets in parallel without touching the main checkout.",
     glyph: "parallel" as const,
   },
   {
-    title: "Return to the work",
+    title: "Give agents the tools they need",
     description:
-      "Each task keeps its chat history. Leave, restart the app, and return to the same conversation later.",
-    glyph: "context" as const,
+      "An agent can read, edit, and run commands in its worktree. It can use its tools and the volli CLI to read the board, comment, and move tickets.",
+    glyph: "agents" as const,
   },
   {
-    title: "Review each change",
+    title: "Review every change",
     description:
-      "Inspect a task’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
-    glyph: "phases" as const,
+      "Inspect a ticket’s changes against its base branch, read the files, and decide when the work is ready to move forward.",
+    glyph: "review" as const,
+  },
+  {
+    title: "Come back any time",
+    description:
+      "Leave, restart Volli, and come back to the same chat with its history intact.",
+    glyph: "context" as const,
   },
   {
     title: "Keep your TUI workflow",
     description:
       "Open Claude Code, Codex, OpenCode, or your own TUI in an embedded terminal in the same worktree whenever you want to drive it yourself.",
     glyph: "harnesses" as const,
-  },
-];
-
-// §7.1 step 6 — the control strip. Every line is on the §9.2 safe list.
-const controls = [
-  {
-    title: "Off by default on a new Mac",
-    detail: "A Trigger counts only where somebody switched the Automation on. Nothing fires on a machine that was never asked.",
-  },
-  {
-    title: "One armed Automation per column",
-    detail: "A column can offer several and fires at most one. Arming is a property of the column, on this Mac.",
-  },
-  {
-    title: "Only deliberate moves fire it",
-    detail: "A drag, a status change you make in the app, or a move from the volli CLI. Lifecycle auto-moves and tickets already in the column never start a Run.",
-  },
-  {
-    title: "A fresh Session for every Run",
-    detail: "A Run never wakes an existing chat — one whose permissions were granted while a person was present. One Run per ticket at a time.",
-  },
-  {
-    title: "Schedules need Volli open",
-    detail: "A scheduled Run starts only while the app is running. No Automation starts while Volli is closed.",
-  },
-  {
-    title: "Skips are recorded, not replayed",
-    detail: "A due time that passed is listed with its reason. Run it once by hand if you want it — the backlog never fires on its own.",
   },
 ];
 ---
@@ -120,7 +94,7 @@ const controls = [
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli 0.2 homepage proposal | Plan, run in parallel, automate</title>
+    <title>Volli | Plan coding work. Run it in parallel. Automate the repeatable parts.</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -138,6 +112,7 @@ const controls = [
         <span>Volli</span>
       </a>
       <nav aria-label="Primary">
+        <a href="#product">Product</a>
         <a href="#automations">Automations</a>
         <a href={docsUrl}>Docs</a>
         <a href={repositoryUrl}>GitHub</a>
@@ -147,17 +122,21 @@ const controls = [
 
     {/* tabindex so the skip link moves focus in Safari, not just the viewport. */}
     <main id="main" tabindex="-1">
-      {/* §7.1 step 2 — the durable promise. Category, maturity and platform
-          are read before anything else on the page. */}
+      {/* The durable promise. Category, maturity and platform are read before
+          anything else on the page. */}
       <section class="hero hero--proposal" id="top">
         <span class="alpha-pill">Alpha · Apple silicon</span>
+        {/* Each clause is masked so it can rise into place once on load; the
+            text stays one node per clause and reads as one sentence. */}
         <h1 class="hero-headline hero-headline--proposal">
-          Plan coding work. Run it in parallel. Automate the repeatable parts.
+          <span class="hero-clause"><span>Plan coding work.</span></span>{" "}
+          <span class="hero-clause"><span>Run it in parallel.</span></span>{" "}
+          <span class="hero-clause"><span>Automate the repeatable parts.</span></span>
         </h1>
         <p class="hero-lede">
-          Volli is a local-first macOS workspace for people and coding agents. Break work into
-          tickets, give each task its own branch and context, and save repeated setup as an
-          Automation you stay in control of.
+          Volli is a local-first macOS workspace. Plan coding work as tickets on a board, then run
+          coding agents in separate worktrees. Review each change. In 0.2, save repeated setup as an
+          Automation.
         </p>
 
         <div class="cta-row hero-cta">
@@ -193,11 +172,42 @@ const controls = [
         </p>
       </section>
 
-      {/* §7.1 steps 3–4 — the versioned release band and the product proof.
-          The version lives here and nowhere else, so the product does not read
-          as a scheduler once 0.3 ships. */}
+      {/* The product proof: the same interactive board as the live page. Drag
+          a ticket and a Session opens — the loop everything else builds on. */}
+      <section class="hero-shell" aria-label="Volli product preview">
+        <VolliDemo client:load />
+      </section>
+
+      {/* What the workspace is made of. The board and the worktrees are the
+          product; Automations, below, are one way to start it. */}
+      <section class="workspace" id="product" aria-labelledby="workspace-title">
+        <div class="section-head">
+          <h2 id="workspace-title">One board. A worktree per ticket. You decide what moves.</h2>
+          <p>
+            Each ticket has a brief, a chat you can come back to, and changes to review. The board
+            keeps work visible as you move it.
+          </p>
+        </div>
+        <ol class="workspace-grid">
+          {
+            workspace.map((item, index) => (
+              <li class="workspace-item">
+                <FeatureGlyph kind={item.glyph} />
+                <span class="workspace-index">0{index + 1}</span>
+                <h3>{item.title}</h3>
+                <p>{item.description}</p>
+              </li>
+            ))
+          }
+        </ol>
+      </section>
+
+      {/* New in 0.2. The version lives here and nowhere else, so the product
+          does not read as a scheduler once 0.3 ships. One section: the
+          storyboard (§6.3), the three ways a Run starts (§7.1 step 5), and the
+          control facts (§1.4) folded into the cards rather than listed twice. */}
       <section class="release" id="automations" aria-labelledby="release-title">
-        <div class="release-band">
+        <div class="release-band" data-release-band>
           <span class="release-version">
             <svg viewBox="0 0 256 256" width="14" height="14" aria-hidden="true">
               <path
@@ -209,107 +219,58 @@ const controls = [
                 d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
               />
             </svg>
-            Volli 0.2 · Automations
+            New in Volli 0.2
           </span>
           <h2 class="release-title" id="release-title">Save how work starts.</h2>
           <p class="release-lede">
-            Create an Automation once, then run it by hand, arm a board column with it, or put it on
-            a schedule. Every Automation Run starts a fresh Session and leaves a history you can
-            return to.
+            An Automation saves the instructions, trigger, and runtime for repeated work. Run it by
+            hand, arm a board column, or put it on a schedule. Each run opens a fresh Session.
           </p>
         </div>
 
         <AutomationStoryboard />
-      </section>
 
-      {/* §7.1 step 5 — the three ways a Run starts. The footnote carries the
-          rule the cards would otherwise each have to repeat. */}
-      <section class="ways" aria-labelledby="ways-title">
-        <div class="section-head">
-          <h2 id="ways-title">Three ways to start the same work</h2>
-          <p>
-            Running by hand is always on the table. The other two depend on the saved Trigger and on
-            the Automation being switched on for this Mac.
+        <div class="release-ways">
+          <h3 class="release-subhead">Three ways to start the same work</h3>
+          <div class="ways-grid">
+            <article class="way" data-spotlight>
+              <span class="way-index">By hand</span>
+              <h4>Run it when you want</h4>
+              <p>
+                From the Automations page, a ticket rail, a board card, or the command palette.
+                Running by hand doesn’t depend on the trigger. Need it once?{" "}
+                <strong>Run once</strong> makes an Unbound Run: one-time Instructions, nothing saved.
+              </p>
+            </article>
+            <article class="way" data-spotlight>
+              <span class="way-index">Ticket enters</span>
+              <h4>When a ticket lands in a column</h4>
+              <p>
+                Switch it to Enabled on this Mac and its trigger counts. Name columns in the trigger
+                and arm one automation per column. Only a deliberate move — a drag,
+                status change, or volli CLI move — fires it. Tickets already there and lifecycle moves
+                don’t start a run.
+              </p>
+            </article>
+            <article class="way" data-spotlight>
+              <span class="way-index">On a schedule</span>
+              <h4>Hourly, Every day, Mon–Fri, or Weekly</h4>
+              <p>
+                In the time zone you choose. Each occurrence opens a Session for the project only
+                while Volli is open. Scheduled skips record why they didn’t start. <strong>Run
+                now</strong> starts one by hand; skipped occurrences never replay themselves.
+              </p>
+            </article>
+          </div>
+          <p class="release-closer">
+            Automations remove repetitive setup, not the person. Automatic triggering is local to
+            this Mac. Every run starts a fresh Session, and the history shows what happened.
           </p>
         </div>
-        <div class="ways-grid">
-          <article class="way">
-            <span class="way-index">By hand</span>
-            <h3>Run it when you want</h3>
-            <p>
-              From the Automations page, a ticket’s rail, a board card, or the command palette.
-              Running by hand never depends on the Trigger.
-            </p>
-          </article>
-          <article class="way">
-            <span class="way-index">Ticket enters</span>
-            <h3>When a ticket lands in a column</h3>
-            <p>
-              Name the columns in the Trigger and arm one Automation per column. A deliberate move
-              opens a Ticket Session on that ticket.
-            </p>
-          </article>
-          <article class="way">
-            <span class="way-index">On a schedule</span>
-            <h3>Hourly, every day, Mon–Fri, or weekly</h3>
-            <p>
-              In the time zone you choose. Each occurrence opens a Board Session for the project
-              while Volli is open.
-            </p>
-          </article>
-        </div>
-        <p class="ways-note">
-          Need it once? <strong>Run once</strong> sends one-time Instructions from a ticket without
-          saving an Automation at all.
-        </p>
       </section>
 
-      {/* §7.1 step 6 — the control strip. Calm, bounded, inspectable (§1.4). */}
-      <section class="controls" aria-labelledby="controls-title">
-        <div class="section-head">
-          <h2 id="controls-title">Automations remove repetitive setup, not the person.</h2>
-          <p>
-            Every switch that lets work start without you is local to this Mac and visible on the
-            board.
-          </p>
-        </div>
-        <ul class="controls-grid">
-          {
-            controls.map((control) => (
-              <li class="control">
-                <h3>{control.title}</h3>
-                <p>{control.detail}</p>
-              </li>
-            ))
-          }
-        </ul>
-      </section>
-
-      {/* §7.1 step 7 — the workflow Automations plug into. */}
-      <section class="workflow" aria-labelledby="workflow-title">
-        <div class="section-head">
-          <h2 id="workflow-title">From idea to reviewed code</h2>
-          <p>
-            Automations start work; the board, the worktrees, and the review loop are where it
-            happens.
-          </p>
-        </div>
-        <ol class="workflow-grid">
-          {
-            lifecycle.map((item, index) => (
-              <li class="workflow-item">
-                <FeatureGlyph kind={item.glyph} />
-                <span class="workflow-index">0{index + 1}</span>
-                <h3>{item.title}</h3>
-                <p>{item.description}</p>
-              </li>
-            ))
-          }
-        </ol>
-      </section>
-
-      {/* §7.1 step 8 — one place for the trust facts the download page and the
-          docs currently split between them (§3.5). */}
+      {/* One place for the trust facts the download page and the docs
+          currently split between them (§3.5). */}
       <section class="trust" aria-labelledby="trust-title">
         <div class="section-head">
           <h2 id="trust-title">Local-first, by construction</h2>
@@ -318,35 +279,35 @@ const controls = [
           <article class="trust-item">
             <h3>Your work stays on your Mac</h3>
             <p>
-              Projects, tickets, Sessions, and every Automation — including its per-Mac switches —
-              live in local storage, and each ticket’s worktree is an ordinary Git checkout on your
-              disk. Volli itself needs no account.
+              Projects, tickets, chats, and automations — including their switches on this Mac — live
+              in local storage. Each ticket’s worktree is an ordinary Git checkout on your disk. Volli
+              itself needs no account.
             </p>
           </article>
           <article class="trust-item">
             <h3>Your models, your provider</h3>
             <p>
               Model requests go to the provider and account you configure in{" "}
-              <a href={`${docsUrl}/guides/settings/`}>Model Access</a>. Pin a model and its reasoning
-              level per Automation, name a tier, or inherit the default from Settings.
+              <a href={`${docsUrl}/guides/settings/`}>Model Access</a>. An automation’s runtime sets
+              its model and tier. Choose Deep, Fast, or Default model.
             </p>
           </article>
           <article class="trust-item">
             <h3>Open source, Apache-2.0</h3>
             <p>
-              Read the code, build it yourself, or file an issue. The alpha ships from{" "}
-              <a href={releasesUrl}>GitHub Releases</a>, one build for Apple silicon Macs.
+              Read the source or report a problem. The alpha is available from{" "}
+              <a href={releasesUrl}>GitHub Releases</a> for Apple silicon Macs.
             </p>
           </article>
         </div>
       </section>
 
-      {/* §7.1 step 9 — the closing routes. */}
+      {/* The closing routes. */}
       <section class="closing" aria-labelledby="closing-title">
         <h2 id="closing-title">Try the 0.2 alpha</h2>
         <p>
-          Apple silicon, macOS 12 or later. Expect rough edges and changes between builds — and say
-          so when you hit one.
+          For Apple silicon Macs running macOS 12 or later. This is an alpha; report problems you
+          find.
         </p>
         <div class="cta-row closing-cta">
           <a class="cta cta-primary" href="/download/">
@@ -391,6 +352,7 @@ const controls = [
       </a>
       <nav aria-label="Footer">
         <a href="/download/">Download</a>
+        <a href="#product">Product</a>
         <a href="#automations">Automations</a>
         <a href={docsUrl}>Docs</a>
         <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
@@ -400,5 +362,36 @@ const controls = [
         <a href={issuesUrl}>Feedback</a>
       </nav>
     </footer>
+
+    <script>
+      // Two decorations, neither load-bearing. The beam runs once when the
+      // release band is on screen; the spotlight follows a fine pointer over
+      // the three cards. Both stay off under prefers-reduced-motion, and the
+      // page reads the same without them.
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      const band = document.querySelector<HTMLElement>("[data-release-band]");
+      if (band && !reducedMotion && "IntersectionObserver" in window) {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            if (!entries.some((entry) => entry.isIntersecting)) return;
+            band.classList.add("is-live");
+            observer.disconnect();
+          },
+          { threshold: 0.6 },
+        );
+        observer.observe(band);
+      }
+
+      if (!reducedMotion && window.matchMedia("(pointer: fine)").matches) {
+        document.querySelectorAll<HTMLElement>("[data-spotlight]").forEach((card) => {
+          card.addEventListener("pointermove", (event) => {
+            const rect = card.getBoundingClientRect();
+            card.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+            card.style.setProperty("--my", `${event.clientY - rect.top}px`);
+          });
+        });
+      }
+    </script>
   </body>
 </html>
