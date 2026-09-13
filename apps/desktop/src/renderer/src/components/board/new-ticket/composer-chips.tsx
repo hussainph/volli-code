@@ -14,6 +14,9 @@ import {
 import { composerChipClass } from "@renderer/components/board/new-ticket/composer-chip";
 import { ComposerLabels } from "@renderer/components/board/new-ticket/composer-labels";
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
+import { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";
+import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { Switch } from "@renderer/components/ui/switch";
 import { Button } from "@renderer/components/ui/button";
 import {
   DropdownMenu,
@@ -93,29 +96,9 @@ function PriorityChip({
 }
 
 /**
- * The composer's metadata row: what the ticket IS on the left — Status,
- * Priority, Labels — and where its work will HAPPEN on the right, as one
- * `base → destination` statement.
- *
- * The split is the point. Everything on the left describes the ticket; the
- * right names the git ground it lands on, and the two never interleave, so the
- * row can be read as two thoughts instead of five controls. All of it is local
- * state — nothing is persisted until the ticket is created.
- *
- * AND IT IS ONE ROW, which it had stopped being. The terminal-harness chip used
- * to sit at the end of the left group; at the composer's own width its ~110px
- * pushed the `base → destination` pair past the wrap, so the row's two thoughts
- * were rendered as two LINES with the second one right-aligned under the first
- * — which reads as a layout accident rather than a split. The chip is gone with
- * the terminal kickoff it described (VC-15/VC-56) and its successor, the model +
- * effort pair, belongs to the ACT of creating rather than to the ticket, so it
- * sits in the footer beside the button that consults it (`composer-footer.tsx`).
- * Keep this row's left group short enough that the pair stays beside it.
- *
- * The branch half arrives as ONE `branch` prop rather than five loose ones.
- * This row does not read or decide anything about a base; passing the pair's
- * state through field by field only gave every future change to it a second
- * place to be spelled out.
+ * Ticket metadata stays on the canvas; working-copy and batch-entry settings
+ * are secondary, behind Options. Non-default checkout/batch choices remain
+ * visible on the closed trigger so hidden settings cannot become surprises.
  */
 export function ComposerChips({
   projectId,
@@ -126,6 +109,8 @@ export function ComposerChips({
   labels,
   onLabelsChange,
   branch,
+  createMore,
+  onCreateMoreChange,
 }: {
   projectId: string;
   status: TicketStatus;
@@ -135,13 +120,46 @@ export function ComposerChips({
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   branch: ComposerBranchRowProps;
+  createMore: boolean;
+  onCreateMoreChange(createMore: boolean): void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1">
       <StatusChip status={status} onChange={onStatusChange} />
       <PriorityChip priority={priority} onChange={onPriorityChange} />
       <ComposerLabels projectId={projectId} value={labels} onChange={onLabelsChange} />
-      <ComposerBranchRow {...branch} />
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Ticket options"
+            className="ml-auto text-muted-foreground"
+          >
+            <SlidersHorizontalIcon />
+            {branch.usesWorktree ? "Options" : "Project checkout"}
+            {createMore ? " · Create more" : ""}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" side="top" className="w-80 p-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <span className="text-ui font-medium">Working copy</span>
+              <div className="flex">
+                <ComposerBranchRow {...branch} />
+              </div>
+            </div>
+            <label className="flex items-center justify-between gap-2 border-t border-border pt-4 text-ui">
+              Create more
+              <Switch
+                aria-label="Create more"
+                checked={createMore}
+                onCheckedChange={onCreateMoreChange}
+              />
+            </label>
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

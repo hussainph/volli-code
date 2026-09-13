@@ -499,14 +499,12 @@ describe("the registry table", () => {
     // `ticket.await` is unlisted for a different reason than the involuntary
     // pair: it has no cli access mode at all, so a reference line would teach
     // an invocation the socket refuses. Its discovery surface is the tool
-    // schema itself.
-    expect(unlisted).toEqual([
-      "session.harness",
-      "hook",
-      "ticket.await",
-      "automation.run",
-      "session.await",
-    ]);
+    // schema itself. `automation.run` used to sit beside it, but VC-329 moved
+    // it to listed (with the session.start precedent): an agent that could not
+    // discover it substituted a hand-written session_start kickoff for the
+    // person's saved Automation. `session.await` remains unlisted because its
+    // cursor contract is discovered through the tool schema that supplies it.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -608,6 +606,30 @@ describe("the registry table", () => {
     expect(AGENT_COMMANDS).not.toContain("automation.run");
     // One handler binding, named by the verb's own key (VC-167).
     expect(entry!.handler).toEqual({ site: "main", id: "automation.run" });
+  });
+
+  // VC-329's item 6: agents that could not discover `automation.run` rewrote
+  // the person's saved Automation as a hand-written `session_start` kickoff.
+  // These pin the two halves of the fix: the Run verb is discoverable, and
+  // both descriptions cross-reference so the substitution is named where the
+  // model is about to make it.
+  it("lets an agent reading the reference discover automation.run (VC-329)", () => {
+    const entry = verbEntry("automation.run");
+    expect(entry?.listed).toBe(true);
+    expect(DISCOVERABLE_VERBS.map((candidate) => candidate.key)).toContain("automation.run");
+    // Listed but still tool-only: the reference teaches the real door, and the
+    // parser refusal (parser.test.ts) names it for a shell attempt.
+    expect(entry?.accessModes).toEqual(["tool"]);
+  });
+
+  it("cross-references the Run verb from both substitution-prone descriptions", () => {
+    const start = verbEntry("session.start")?.tool?.description ?? "";
+    const run = verbEntry("automation.run")?.tool?.description ?? "";
+    expect(start).toContain("automation_run");
+    expect(start).toMatch(/Automation/);
+    expect(start).toContain("If this Session holds");
+    expect(start).toContain("do not bypass the missing tool");
+    expect(run).toContain("session_start");
   });
 
   it("shows automation.run a semantic schema with no caller field in it", () => {
@@ -737,14 +759,16 @@ describe("REFERENCE_VERBS", () => {
     const discoverable = DISCOVERABLE_VERBS.map((entry) => entry.key);
     const reference = new Set(REFERENCE_VERBS.map((entry) => entry.key));
     // In reference order: the app-only archive, then the agent-control family
-    // — start (VC-163), stop and send (VC-86) — each listed so a wrong door
-    // teaches instead of reading as no door.
+    // — start (VC-163), stop, send (VC-86) and delegate — plus the
+    // orchestrator's `automation.run` (VC-134, listed by VC-329), each listed
+    // so a wrong door teaches instead of reading as no door.
     expect(discoverable.filter((key) => !reference.has(key))).toEqual([
       "ticket.archive",
       "session.start",
       "session.stop",
       "session.send",
       "session.delegate",
+      "automation.run",
     ]);
   });
 

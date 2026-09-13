@@ -14,6 +14,8 @@ import {
   BROWSER_INTERACTION_QUIET_MS,
   BROWSER_MAX_TABS_PER_PROJECT,
   BROWSER_MAX_TABS_PER_SESSION,
+  BROWSER_PREVIEW_MAX_PENDING_CAPTURES,
+  BROWSER_PREVIEW_TIMEOUT_MS,
   BROWSER_TITLE_MAX_CHARS,
   BROWSER_URL_MAX_CHARS,
   BrowserSessionTabLimitError,
@@ -1619,8 +1621,13 @@ describe("BrowserTabHost ownership and presentation (VC-238)", () => {
     });
 
     host.setPresentation(first.tabId, "preview");
+    host.show(first.tabId);
     host.setPresentation(other.tabId, "preview");
+    host.show(other.tabId);
     host.setPresentation(second.tabId, "preview");
+    expect(host.isOnScreen(first.tabId)).toBe(false);
+    expect(host.isOnScreen(other.tabId)).toBe(true);
+    expect(stage().contentView.addChildView).toHaveBeenLastCalledWith(views[0]);
 
     const byId = new Map(host.list({ projectId: "project-1" }).map((tab) => [tab.tabId, tab]));
     expect(byId.get(first.tabId)?.presentation).toBe("headless");
@@ -1993,6 +2000,7 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   it("keeps its camera shut for a window after the person's last keystroke, then opens again", async () => {
     const tab = agentTab();
     host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
     // Typed, then clicked Hide or another window: focus has already left, and
     // an instantaneous focus check would photograph the field they just filled.
     views[0]!.webContents.emit("input-event", { type: "keyDown" });
@@ -2008,16 +2016,32 @@ describe("BrowserTabHost pictures (VC-238)", () => {
   it("counts a wheel or a hover as using the tab, which focus alone never reports", async () => {
     const tab = agentTab();
     host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
     views[0]!.webContents.emit("input-event", { type: "mouseWheel" });
 
     expect(views[0]!.webContents.isFocused()).toBe(false);
     expect(await host.capturePicture(tab.tabId)).toBeNull();
   });
 
-  it("photographs a headless tab however recently the page was driven, since nobody can touch it", async () => {
+  it("does not treat CDP input on a never-shown headless tab as person interaction", async () => {
     const tab = agentTab();
     views[0]!.webContents.emit("input-event", { type: "keyDown" });
 
+    expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+  });
+
+  it("does not erase recent interaction when a shown tab becomes headless", async () => {
+    const tab = agentTab();
+    host.setPresentation(tab.tabId, "preview");
+    host.show(tab.tabId);
+    views[0]!.webContents.emit("input-event", { type: "keyDown" });
+    views[0]!.webContents.focused = false;
+    host.setPresentation(tab.tabId, "headless");
+
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+    expect(views[0]!.webContents.capturePage).not.toHaveBeenCalled();
+
+    clock += BROWSER_INTERACTION_QUIET_MS;
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
   });
 
@@ -2039,6 +2063,134 @@ describe("BrowserTabHost pictures (VC-238)", () => {
     views[0]!.webContents.captureBytes = "real";
     expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
   });
+
+  it("declines a failed optional preview instead of failing the completed browser action", async () => {
+    const tab = agentTab();
+    views[0]!.webContents.capturePage.mockRejectedValueOnce(new Error("UnknownVizError"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(host.capturePicture(tab.tabId)).resolves.toBeNull();
+      expect(warning).toHaveBeenCalled();
+      expect(pictures.describe("picture-1")).toBeNull();
+      expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it.each(["timeout", "abort"])(
+    "bounds a preview on %s and never stores a late frame",
+    async (end) => {
+      vi.useFakeTimers();
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const tab = agentTab();
+        const contents = views[0]!.webContents;
+        const image = await contents.capturePage();
+        const pending = Promise.withResolvers<typeof image>();
+        contents.capturePage.mockReturnValueOnce(pending.promise);
+        const abort = new AbortController();
+        const capture = host.capturePicture(tab.tabId, abort.signal);
+        if (end === "timeout") await vi.advanceTimersByTimeAsync(BROWSER_PREVIEW_TIMEOUT_MS);
+        else abort.abort();
+        expect(await capture).toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+        pending.resolve(image);
+        await Promise.resolve();
+        expect(pictures.describe("picture-1")).toBeNull();
+        expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+      } finally {
+        vi.useRealTimers();
+        warning.mockRestore();
+      }
+    },
+  );
+
+  it("reuses one pending native capture after timeout instead of starting an unbounded queue", async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const tab = agentTab();
+      const contents = views[0]!.webContents;
+      const image = await contents.capturePage();
+      contents.capturePage.mockClear();
+      const pending = Promise.withResolvers<typeof image>();
+      contents.capturePage.mockReturnValueOnce(pending.promise);
+
+      const first = host.capturePicture(tab.tabId);
+      await vi.advanceTimersByTimeAsync(BROWSER_PREVIEW_TIMEOUT_MS);
+      expect(await first).toBeNull();
+
+      const second = host.capturePicture(tab.tabId);
+      await vi.advanceTimersByTimeAsync(BROWSER_PREVIEW_TIMEOUT_MS);
+      expect(await second).toBeNull();
+      expect(contents.capturePage).toHaveBeenCalledTimes(1);
+
+      pending.resolve(image);
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0));
+      expect(await host.capturePicture(tab.tabId)).toBe("picture-1");
+      expect(contents.capturePage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      warning.mockRestore();
+    }
+  });
+
+  it("fails optional previews closed after the bounded number of native captures hang", async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const tab = agentTab();
+      const contents = views[0]!.webContents;
+      const image = await contents.capturePage();
+      contents.capturePage.mockClear();
+
+      for (let index = 0; index < BROWSER_PREVIEW_MAX_PENDING_CAPTURES; index += 1) {
+        const pending = Promise.withResolvers<typeof image>();
+        contents.capturePage.mockReturnValueOnce(pending.promise);
+        const capture = host.capturePicture(tab.tabId);
+        await vi.advanceTimersByTimeAsync(BROWSER_PREVIEW_TIMEOUT_MS);
+        expect(await capture).toBeNull();
+        host.navigate(tab.tabId, `https://example.com/${index}`);
+      }
+
+      expect(await host.capturePicture(tab.tabId)).toBeNull();
+      expect(contents.capturePage).toHaveBeenCalledTimes(BROWSER_PREVIEW_MAX_PENDING_CAPTURES);
+    } finally {
+      vi.useRealTimers();
+      warning.mockRestore();
+    }
+  });
+
+  it("does not start a preview after withdrawal or tab closure", async () => {
+    const tab = agentTab();
+    expect(await host.capturePicture(tab.tabId, AbortSignal.abort())).toBeNull();
+    host.close(tab.tabId);
+    expect(await host.capturePicture(tab.tabId)).toBeNull();
+    expect(views[0]!.webContents.capturePage).not.toHaveBeenCalled();
+  });
+
+  it.each(["navigation", "close", "interaction"])(
+    "discards preview pixels if %s happens during capture",
+    async (change) => {
+      const tab = agentTab();
+      if (change === "interaction") {
+        host.setPresentation(tab.tabId, "preview");
+        host.show(tab.tabId);
+      }
+      const contents = views[0]!.webContents;
+      const image = await contents.capturePage();
+      const pending = Promise.withResolvers<typeof image>();
+      contents.capturePage.mockReturnValueOnce(pending.promise);
+      const capture = host.capturePicture(tab.tabId);
+      if (change === "navigation") host.navigate(tab.tabId, "https://example.com/next");
+      if (change === "close") host.close(tab.tabId);
+      if (change === "interaction") contents.emit("input-event", { type: "keyDown" });
+      pending.resolve(image);
+      expect(await capture).toBeNull();
+      expect(pictures.describe("picture-1")).toBeNull();
+    },
+  );
 
   it("refuses to keep a screenshot with no pixels, at the store's door too", () => {
     const tab = agentTab();

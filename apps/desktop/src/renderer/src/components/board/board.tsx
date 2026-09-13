@@ -16,11 +16,9 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
-  displayTicketId,
   EMPTY_TICKET_FILTER,
   filterTickets,
   groupTicketsByStatus,
-  moveTicket,
   sortTickets,
   TICKET_STATUSES,
   type Automation,
@@ -34,9 +32,7 @@ import type { DeliberateMoveChoice } from "@renderer/components/automations/arme
 import {
   columnDroppableId,
   isTicketDragData,
-  resolveDrop,
   resolveGroupDrop,
-  ticketPosition,
   type DropTarget,
 } from "@renderer/components/board/board-dnd";
 import { BoardColumn } from "@renderer/components/board/board-column";
@@ -89,11 +85,10 @@ import { useBoardStore } from "@renderer/stores/board";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 /**
- * Everything alive only while a card is mid-drag. A one-card preview mutates
- * its local snapshot via the shared moveTicket op; a group deliberately leaves
- * measured source rects still and previews in the detached overlay (see
- * handleDragOver). Either way the store is written exactly once on drop, and
- * cancel discards the state. Column topology is frozen at drag start.
+ * Everything alive only while a card is mid-drag. The ticket snapshot and
+ * column topology stay frozen for single- and multi-card drags alike. Only
+ * the intended slot changes; transforms and the detached overlay preview it.
+ * The store is written exactly once on drop, and cancel discards the state.
  */
 interface DragState {
   activeTicket: Ticket;
@@ -736,52 +731,27 @@ export const Board = React.memo(function Board({
     setDrag((current) => {
       if (!current) return current;
 
-      if (current.ticketIds.length > 1) {
-        // Returning the pointer to any selected source card means "put the
-        // group back". Clear a previously-resolved destination rather than
-        // committing the last column the pointer happened to cross.
-        if (current.ticketIds.includes(overId)) {
-          return current.drop === null ? current : { ...current, drop: null };
-        }
-        const drop = resolveGroupDrop(
-          current.preview,
-          current.ticketIds,
-          current.activeTicket.id,
-          overId,
-        );
-        if (!drop) return current;
-        if (drop.toStatus === current.drop?.toStatus && drop.toIndex === current.drop.toIndex) {
-          return current;
-        }
-        // Do not move several mounted sortables while dnd-kit is measuring the
-        // active drag. That changes several observed rects in one layout pass
-        // and triggers its React-185 measurement loop. The detached overlay is
-        // the group preview; source cards stay as dimmed placeholders until the
-        // gesture ends, then the atomic board op lays the group out once.
-        return { ...current, drop };
+      // Returning to a selected source card cancels the previously aimed slot.
+      if (current.ticketIds.includes(overId)) {
+        return current.drop === null ? current : { ...current, drop: null };
       }
-
-      // Keep the proven one-card preview path byte-for-byte in spirit: moving
-      // one observed sortable is what dnd-kit's multi-container recipe expects.
-      const activeId = current.ticketIds[0]!;
-      const target = resolveDrop(current.preview, activeId, overId);
-      if (!target) return current;
-      const next = moveTicket(
+      const drop = resolveGroupDrop(
         current.preview,
-        activeId,
-        target.toStatus,
-        target.toIndex,
-        Date.now(),
+        current.ticketIds,
+        current.activeTicket.id,
+        overId,
       );
-      const drop = ticketPosition(next, activeId);
-      if (
-        next === current.preview &&
-        drop?.toStatus === current.drop?.toStatus &&
-        drop?.toIndex === current.drop?.toIndex
-      ) {
+      if (!drop) return current;
+      if (drop.toStatus === current.drop?.toStatus && drop.toIndex === current.drop.toIndex) {
         return current;
       }
-      return { ...current, preview: next, drop };
+      // Freeze measured nodes for ONE card too (VC-329). Same-column reorder
+      // fed useSortable's derived-transform reset; cross-column reparenting
+      // could also feed core's active-node measureRect after rollback. Keeping
+      // the original snapshot breaks both collision/layout feedback paths.
+      // Source cards remain dimmed placeholders; only the detached overlay and
+      // the intended slot change until the gesture finishes.
+      return { ...current, drop };
     });
   }
 
@@ -927,6 +897,7 @@ export const Board = React.memo(function Board({
                 emptyDropStatuses={emptyDropStatuses}
                 boardEmpty={boardEmpty}
                 dragActive={drag !== null}
+                aimedStatus={drag?.drop?.toStatus ?? null}
                 selectedIds={selectedIds}
                 draggingIds={draggingIds}
                 groupDragIds={groupDragIds}
@@ -960,6 +931,7 @@ export const Board = React.memo(function Board({
                     // panel the rail's pills draw, from the same builder.
                     offered={offeredPanelFor(status)}
                     dimmed={dimmedFor(status)}
+                    aimed={drag?.drop?.toStatus === status}
                     // Display order is sort-driven: `sortedGroups` reorders each
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
@@ -988,11 +960,15 @@ export const Board = React.memo(function Board({
                     animateEnter={boardMounted.current}
                     offeredFor={offeredPanelFor}
                     dimmedFor={dimmedFor}
+                    aimedFor={(status) => drag?.drop?.toStatus === status}
                   />
                 )}
               </div>
             )}
             <DragOverlay
+              // Keep the full card behind the landing panel rather than
+              // replacing it with a tiny id label while the person is aiming.
+              zIndex={isPickerOpen(picker) ? 10 : 999}
               // The lifted card is a PICTURE, never a surface: dnd-kit's own
               // wrapper is a fixed, card-sized box at `z-index: 999` that
               // follows the pointer exactly, so without this it is the topmost
@@ -1015,15 +991,10 @@ export const Board = React.memo(function Board({
               }
             >
               {drag ? (
-                isPickerOpen(picker) ? (
-                  // The cluster gives way over the panel rather than covering
-                  // the choices. Keep its identity and group size visible in
-                  // one compact line while the picker is the thing being read.
-                  <div className="w-fit rounded-md border border-border bg-card px-2 py-1 font-mono text-label text-muted-foreground shadow-overlay">
-                    {displayTicketId(ticketPrefix, drag.activeTicket.ticketNumber)}
-                    {drag.ticketIds.length > 1 ? ` +${drag.ticketIds.length - 1}` : ""}
-                  </div>
-                ) : (
+                <div
+                  data-ticket-drag-preview
+                  className={isPickerOpen(picker) ? "opacity-30" : undefined}
+                >
                   <DragOverlayBody
                     activeTicket={drag.activeTicket}
                     tickets={drag.selectedTickets}
@@ -1032,7 +1003,7 @@ export const Board = React.memo(function Board({
                     listView={boardView === "list"}
                     reducedMotion={reducedMotion}
                   />
-                )
+                </div>
               ) : null}
             </DragOverlay>
             {/* "⌥ to choose" — the mid-drag affordance (VC-132, VC-112). Three
@@ -1057,7 +1028,7 @@ export const Board = React.memo(function Board({
                   <kbd className="rounded-sm border border-border px-1 font-mono text-label text-foreground">
                     ⌥
                   </kbd>
-                  to choose
+                  Choose automation · 0 Move only
                 </p>
               </div>
             ) : null}

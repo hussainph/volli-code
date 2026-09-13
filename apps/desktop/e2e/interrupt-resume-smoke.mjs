@@ -102,6 +102,7 @@ import {
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { createOnlyTicket } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeShortScratch("intr");
 const { attempt, summarize } = createRunner();
@@ -243,7 +244,7 @@ async function kickoffTicket(page, projectId, title, body, opts = {}) {
   );
   await sleep(200);
   await fillTitleAndBody(page, title, body);
-  await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+  await createOnlyTicket(page);
   await waitUntil(
     "the composer to close after Create",
     async () => (await composer(page).count()) === 0,
