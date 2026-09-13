@@ -338,6 +338,29 @@ function streamSnapshot(sessionId: string, base: readonly UIMessage[], tokenCoun
   return text.length;
 }
 
+/** Remove the previous sample before mounting the next stable live row. */
+function resetStream(sessionId: string, messages: readonly UIMessage[]): void {
+  store.setState((state) => {
+    const sessions = (state as unknown as { sessions: Record<string, unknown> }).sessions;
+    const slice = sessions[sessionId] as { transcript: typeof EMPTY_TRANSCRIPT };
+    return {
+      sessions: {
+        ...sessions,
+        [sessionId]: {
+          ...slice,
+          lifecycle: "ready",
+          transcript: {
+            ...slice.transcript,
+            turnActive: false,
+            durableMessages: messages,
+            messages,
+          },
+        },
+      },
+    } as never;
+  });
+}
+
 /** Commit the final overlay and leave the synthetic Session idle again. */
 function settleStream(sessionId: string): void {
   store.setState((state) => {
@@ -392,6 +415,18 @@ async function streamAndScroll(
   const base = (
     slice as unknown as { transcript: { messages: readonly UIMessage[] } }
   ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
+  // Every repetition starts from the same Turn and window state. If the prior
+  // sample's settled row is replaced while the reader is detached, a large
+  // transcript can anchor its 60-row window above the new Turn and leave the
+  // live fence unmounted. Return to the bottom first so ChatTranscript retires
+  // that anchor, then mount one cheap prose snapshot before the measured reader
+  // moves inside the stable row.
+  scroller.scrollTop = scroller.scrollHeight;
+  await settle();
+  resetStream(sessionId, base);
+  await settle();
+  streamSnapshot(sessionId, base, 1);
+  await settle();
   scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 120);
   await settle();
 
@@ -427,8 +462,8 @@ async function streamAndScroll(
   let priorTop = scroller.scrollTop;
   let readerOffsetPx = 120;
   let readerDirection = 1;
-  let streamedCharacters = 0;
-  let priorTokenCount = 0;
+  let streamedCharacters = streamText(1).length;
+  let priorTokenCount = 1;
   let liveCodeBlocks = 0;
   let liveHighlightedCodeBlocks = 0;
   let liveHighlightedTokens = 0;
