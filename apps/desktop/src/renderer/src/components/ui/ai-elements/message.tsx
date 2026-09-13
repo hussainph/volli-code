@@ -75,10 +75,11 @@ const liveStreamdownPlugins = { cjk, mermaid };
  *
  * With no code plugin, Streamdown keeps the same code frame, actions and plain
  * token fallback; only Shiki is absent. CJK, Mermaid, images and the sanitizer
- * stay in the live pipeline. The turn's existing one-way `isAnimating` flag
- * changes the stable plugin object exactly once at settle, when every fence is
- * highlighted once at its final size. Both objects are module constants because
- * Streamdown's outer memo compares the plugin-map identity.
+ * stay in the live pipeline. The caller derives `isAnimating` from the stream's
+ * one-way `turnActive` boundary, not from the wider Session lifecycle. It changes
+ * the stable plugin object exactly once at settle, when every fence is highlighted
+ * once at its final size. Both objects are module constants because Streamdown's
+ * outer memo compares the plugin-map identity.
  */
 
 /**
