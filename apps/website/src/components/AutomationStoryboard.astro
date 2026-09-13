@@ -1,0 +1,265 @@
+---
+/**
+ * The 0.2 product proof: one Automation, from the saved record to the Run it
+ * leaves behind. Four artifacts joined by one ember path — the motif the
+ * public-surface audit recommends (§6.3: saved setup → explicit Trigger →
+ * fresh Run → visible history).
+ *
+ * Static markup, not a hydrated React island. The audit's performance note
+ * (§3.4) is that an interaction this expensive should prove a launch-critical
+ * behavior; this one proves it without shipping React, GSAP or Flip. The only
+ * script is an IntersectionObserver that starts the pulse once the board is
+ * on screen. Every final state is visible without it, and under
+ * prefers-reduced-motion nothing moves at all.
+ *
+ * Every product label here is the app's own (automation-editor.tsx,
+ * armed-run-window.tsx, automations-page.tsx): "Ticket enters", "Enabled",
+ * "Cancel", "Runs", "Run now", "Skipped — Volli wasn’t running", the Run row's
+ * `name · id · model · reasoning` shape. The chrome around them — the company,
+ * ticket ids, author chips, relative times — is illustrative, as on the
+ * current demo.
+ */
+import StoryIcon from "./StoryIcon.astro";
+
+import "./AutomationStoryboard.css";
+
+const instructions =
+  "Review this ticket’s change set against its brief. Use /code-review and read @CONTEXT.md. Leave findings as a comment — don’t rewrite.";
+---
+
+<div class="storyboard" data-storyboard>
+  <ol class="story-frames" aria-label="How an Automation runs, in four steps">
+    {/* 01 — the saved record. It stays still: nothing about it changes when a
+        Run starts, which is the point of saving it. */}
+    <li class="story-frame" data-step="1">
+      <div class="story-panel story-panel--record">
+        <div class="story-chrome">
+          <span class="story-chrome-title">
+            <StoryIcon kind="bolt" />
+            Automations
+          </span>
+          <span class="story-chrome-meta">Harbor</span>
+        </div>
+        <div class="story-record">
+          <div class="story-record-head">
+            <strong>Review handoff</strong>
+            <span class="story-switch is-on">
+              <span class="story-switch-knob" aria-hidden="true"></span>
+              Enabled<span class="visually-hidden"> on this machine: Review handoff</span>
+            </span>
+          </div>
+          <span class="story-label">Instructions</span>
+          <p class="story-instructions">
+            Review this ticket’s change set against its brief. Use <code>/code-review</code> and
+            read <code>@CONTEXT.md</code>. Leave findings as a comment — don’t rewrite.
+          </p>
+          <dl class="story-fields">
+            <div>
+              <dt>Ownership</dt>
+              <dd>This project</dd>
+            </div>
+            <div>
+              <dt>Trigger</dt>
+              <dd>
+                Ticket enters <span class="story-pill">Needs Review</span>
+              </dd>
+            </div>
+            <div>
+              <dt>Runtime</dt>
+              <dd>Deep</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+      <div class="story-caption">
+        <span class="story-step">01</span>
+        <h3>Save it once</h3>
+        <p>
+          A name, the Instructions, one Trigger, and a Runtime. Switch it on for this Mac when you
+          want the Trigger to count.
+        </p>
+      </div>
+    </li>
+
+    {/* 02 — a deliberate move into the armed column opens the 3.5 s window.
+        The countdown card is the one control the product offers: Cancel. */}
+    <li class="story-frame" data-step="2">
+      <span class="story-link" aria-hidden="true"><span></span></span>
+      <div class="story-panel story-panel--board">
+        <div class="story-chrome">
+          <span class="story-chrome-title">Board</span>
+          <span class="story-chrome-meta">Harbor · 8</span>
+        </div>
+        <div class="story-columns">
+          <div class="story-column">
+            <header>
+              <strong>Doing</strong>
+              <span>1</span>
+            </header>
+            <div class="story-card">
+              <span>HB-32</span>
+              <strong>Move billing to webhooks</strong>
+            </div>
+            <div class="story-card is-ghost" aria-hidden="true">
+              <span>HB-27</span>
+              <strong>Admin audit log</strong>
+            </div>
+          </div>
+          <div class="story-column is-armed">
+            <header>
+              <strong>Needs Review</strong>
+              <span class="story-armed-mark">
+                <StoryIcon kind="bolt" />
+                <span class="visually-hidden">Armed: Review handoff</span>
+              </span>
+              <span>1</span>
+            </header>
+            <div class="story-card is-arriving">
+              <span>HB-27</span>
+              <strong>Admin audit log</strong>
+            </div>
+          </div>
+        </div>
+        <div class="story-window">
+          <StoryIcon kind="bolt" />
+          <span class="story-window-text">
+            Review handoff <small>on HB-27 · 3s</small>
+          </span>
+          <span class="story-window-cancel">Cancel</span>
+          <span class="story-window-bar" aria-hidden="true"><span class="story-window-fill"></span></span>
+        </div>
+      </div>
+      <div class="story-caption">
+        <span class="story-step">02</span>
+        <h3>It fires only on a deliberate move</h3>
+        <p>
+          Drop a ticket into the armed column and a 3.5-second window opens with one control:
+          Cancel. Tickets already sitting there are left alone.
+        </p>
+      </div>
+    </li>
+
+    {/* 03 — the Run opens a fresh Session. The Instructions arrive as its first
+        message; nothing is appended and no stale context is woken. */}
+    <li class="story-frame" data-step="3">
+      <span class="story-link" aria-hidden="true"><span></span></span>
+      <div class="story-panel story-panel--session">
+        <div class="story-chrome story-chrome--tabs">
+          <span class="story-tab">HB-27</span>
+          <span class="story-tab is-active">
+            <StoryIcon kind="bolt" />
+            Review handoff
+          </span>
+        </div>
+        <div class="story-thread">
+          <div class="story-turn is-instructions">
+            <span class="story-author">Instructions</span>
+            <p>{instructions}</p>
+          </div>
+          <div class="story-turn is-agent">
+            <span class="story-author">Volli</span>
+            <p>Reading the brief and the change set in this worktree.</p>
+          </div>
+          <div class="story-working">
+            <span class="story-spinner" aria-hidden="true"></span>
+            Working…
+          </div>
+        </div>
+        <div class="story-session-meta">
+          <span>Branch</span>
+          <b>volli/HB-27-admin-audit-log</b>
+          <span>Started by</span>
+          <b>Automation · Review handoff</b>
+        </div>
+      </div>
+      <div class="story-caption">
+        <span class="story-step">03</span>
+        <h3>Every Run is a fresh Session</h3>
+        <p>
+          The Instructions land as the first message, with the ticket’s brief already in context. A
+          Run never wakes an old chat.
+        </p>
+      </div>
+    </li>
+
+    {/* 04 — the Run row and the skip row, interleaved as the product lists
+        them. A skip wears a different mark and offers exactly one Run now. */}
+    <li class="story-frame" data-step="4">
+      <span class="story-link" aria-hidden="true"><span></span></span>
+      <div class="story-panel story-panel--history">
+        <div class="story-chrome">
+          <span class="story-chrome-title">Runs</span>
+          <span class="story-chrome-meta">Newest first</span>
+        </div>
+        <ul class="story-runs">
+          <li class="story-run is-new">
+            <StoryIcon kind="bolt" />
+            <span class="story-run-text">
+              <b>Review handoff</b>
+              <small>just now</small>
+              <span aria-hidden="true">·</span>
+              <code>HB-27</code>
+              <span aria-hidden="true">·</span>
+              <span class="story-run-model">claude-sonnet-4-5 · medium</span>
+            </span>
+          </li>
+          <li class="story-run">
+            <StoryIcon kind="bolt" />
+            <span class="story-run-text">
+              <b>Review handoff</b>
+              <small>yesterday</small>
+              <span aria-hidden="true">·</span>
+              <code>HB-24</code>
+              <span aria-hidden="true">·</span>
+              <span class="story-run-model">gpt-5 · high</span>
+            </span>
+          </li>
+          <li class="story-run is-skip">
+            <StoryIcon kind="clock-back" />
+            <span class="story-run-text">
+              <b>Nightly triage</b>
+              <small>Mon</small>
+              <span aria-hidden="true">·</span>
+              <span class="story-run-model">Skipped — Volli wasn’t running</span>
+              <span aria-hidden="true">·</span>
+              <span class="story-run-model">2 occurrences</span>
+            </span>
+            <span class="story-run-action">Run now</span>
+          </li>
+        </ul>
+      </div>
+      <div class="story-caption">
+        <span class="story-step">04</span>
+        <h3>The history stays connected</h3>
+        <p>
+          Each Run keeps its Automation, its target, and the model it actually resolved. A missed
+          schedule is recorded with its reason — never replayed behind your back.
+        </p>
+      </div>
+    </li>
+  </ol>
+</div>
+
+<script>
+  // Start the pulse once, when the storyboard is on screen. Nothing here is
+  // load-bearing: every final state is already in the markup, and the CSS
+  // drops the animation entirely under prefers-reduced-motion.
+  const boards = document.querySelectorAll<HTMLElement>("[data-storyboard]");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  boards.forEach((board) => {
+    if (reducedMotion.matches || !("IntersectionObserver" in window)) {
+      board.classList.add("is-live");
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        board.classList.add("is-live");
+        observer.disconnect();
+      },
+      { threshold: 0.35 },
+    );
+    observer.observe(board);
+  });
+</script>
