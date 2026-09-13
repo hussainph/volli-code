@@ -877,6 +877,36 @@ describe("Session tRPC router", () => {
     expect(JSON.stringify(samples)).not.toContain("session-private");
   });
 
+  it("isolates procedure behavior from optional observer clock and record failures", async () => {
+    const fixture = runtimeFixture();
+    const defaultClockSamples: unknown[] = [];
+    const defaultClockCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: { record: (sample) => defaultClockSamples.push(sample) },
+    });
+    await expect(
+      defaultClockCaller.session.projection({ sessionId: "session-default-clock" }),
+    ).resolves.toBeDefined();
+    expect(defaultClockSamples).toHaveLength(1);
+
+    const throwingCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => {
+          throw new Error("clock failed");
+        },
+        record: () => {
+          throw new Error("record failed");
+        },
+      },
+    });
+    await expect(
+      throwingCaller.session.projection({ sessionId: "session-throwing-observer" }),
+    ).resolves.toBeDefined();
+  });
+
   it("exposes Model Access without adapter, profile, or credential inputs", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
