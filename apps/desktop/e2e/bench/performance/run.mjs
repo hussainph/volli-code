@@ -152,6 +152,8 @@ function aggregateInteraction(id, label, samples) {
     "closeMs",
     "scrollDistancePx",
     "streamedCharacters",
+    "resizeObserverCallbacks",
+    "resizeObserverCallbacksPerSecond",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -921,7 +923,7 @@ function markdown(report) {
     "- The app measurements launch the production Vite/Electron build against a fresh APFS-cloned copy of the deterministic, file-backed migrated fixture for every repetition.",
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
-    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → roughly 4 KB of TypeScript across 44 open-fence snapshots → a closed fence → prose, and moves the transcript scroller every animation frame in the same loop.`,
+    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 44 more growing snapshots → a closed fence → prose, and moves the transcript scroller every animation frame in the same loop.`,
     "- The loaded arm is named `N-busy-core`: N Node worker threads run the fixed integer-mixing loop in `busy-worker.mjs` continuously from before Electron launch through the last sample; actual arm duration and worker checksums are recorded in JSON.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",

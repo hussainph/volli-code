@@ -62,6 +62,35 @@ const bridgeNode = (path: string[]): unknown =>
 
 Object.defineProperty(window, "api", { value: bridgeNode([]), writable: true });
 
+// Count the native observer deliveries the real plane requests. The wrapper is
+// installed before React mounts, delegates every method unchanged, and counts
+// callbacks rather than entries because one delivery is one scheduled JS turn.
+const NativeResizeObserver = window.ResizeObserver;
+let resizeObserverCallbacks = 0;
+class CountingResizeObserver implements ResizeObserver {
+  readonly #observer: ResizeObserver;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.#observer = new NativeResizeObserver((entries) => {
+      resizeObserverCallbacks += 1;
+      callback(entries, this);
+    });
+  }
+
+  observe(target: Element, options?: ResizeObserverOptions): void {
+    this.#observer.observe(target, options);
+  }
+
+  unobserve(target: Element): void {
+    this.#observer.unobserve(target);
+  }
+
+  disconnect(): void {
+    this.#observer.disconnect();
+  }
+}
+window.ResizeObserver = CountingResizeObserver;
+
 /* ---------------------------------------------------------------- fixtures */
 
 const FENCE = [
@@ -218,17 +247,23 @@ function appendTurn(sessionId: string): void {
   });
 }
 
-// The measured reply deliberately grows roughly 4 KB of TypeScript across 44
-// token snapshots before it closes the fence. The former 107-character fence
-// completed too quickly to reproduce Shiki's append-only cache misses: its
-// owner-machine baseline reported zero dropped frames before the optimization.
-// This keeps the production live Markdown branch and the reader's scroll in the
-// same frame loop while giving the highlighter the realistic long-fence input
-// VC-357 was opened for.
-const STREAM_CODE_TOKENS = Array.from({ length: 42 }, (_value, index) => {
+// The measured reply opens with roughly 4 KB of TypeScript, then grows that
+// fence across 44 more token snapshots before it closes. The former
+// 107-character fence completed too quickly to reproduce Shiki's append-only
+// cache misses: its owner-machine baseline reported zero dropped frames before
+// the optimization. This keeps the production live Markdown branch and the
+// reader's scroll in the same frame loop while giving every cache miss the
+// realistic long-fence input VC-357 was opened for.
+const streamCodeLine = (prefix: string, index: number): string => {
   const suffix = String(index + 1).padStart(2, "0");
-  return `  const frame${suffix} = Math.max(0, delta${suffix} - budget) + history[${index}]!.duration + samples[${index}]!.cost;\n`;
-});
+  return `  const ${prefix}${suffix} = Math.max(0, delta${suffix} - budget) + history[${index}]!.duration + samples[${index}]!.cost;\n`;
+};
+const STREAM_CODE_BASE = Array.from({ length: 42 }, (_value, index) =>
+  streamCodeLine("baseline", index),
+).join("");
+const STREAM_CODE_TOKENS = Array.from({ length: 42 }, (_value, index) =>
+  streamCodeLine("frame", index),
+);
 const STREAM_TOKENS = [
   "Streaming ",
   "benchmark ",
@@ -239,7 +274,7 @@ const STREAM_TOKENS = [
   "opens ",
   "code:\n\n",
   "```ts\n",
-  "export function measureFrames(delta: number, budget: number, history: Frame[], samples: Sample[]) {\n",
+  `export function measureFrames(delta: number, budget: number, history: Frame[], samples: Sample[]) {\n${STREAM_CODE_BASE}`,
   ...STREAM_CODE_TOKENS,
   "  return history.length;\n}\n",
   "```\n",
@@ -387,6 +422,7 @@ async function streamAndScroll(
   }
 
   const frames: number[] = [];
+  const resizeObserverCallbacksBefore = resizeObserverCallbacks;
   let scrollDistancePx = 0;
   let priorTop = scroller.scrollTop;
   let direction = -1;
@@ -423,6 +459,7 @@ async function streamAndScroll(
   await settle();
   observer?.disconnect();
   const latencyMs = performance.now() - started;
+  const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
   const frameTimesMs = frames.slice(1).map((value, at) => value - frames[at]!);
   const droppedFrames =
     refreshIntervalMs === null
@@ -446,6 +483,9 @@ async function streamAndScroll(
     frameTimesMs,
     droppedFrames,
     longTasksMs: longTasks,
+    resizeObserverCallbacks: observedResizeCallbacks,
+    resizeObserverCallbacksPerSecond:
+      latencyMs === 0 ? 0 : (observedResizeCallbacks * 1_000) / latencyMs,
     scrollDistancePx,
     streamedCharacters,
   };
