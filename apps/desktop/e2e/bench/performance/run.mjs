@@ -863,7 +863,7 @@ function markdown(report) {
     `Device: ${report.host.device.model} — ${report.host.device.cpu}, ${report.host.device.logicalCores} logical cores, ${(report.host.device.memoryBytes / 2 ** 30).toFixed(1)} GiB`,
     `macOS: ${report.host.os.macosVersion} (${report.host.os.macosBuild})`,
     `Fixture: \`${report.fixture.preset}\`, seed \`${report.fixture.seed}\`, ${report.fixture.counts.sessions.toLocaleString()} Sessions / ${report.fixture.counts.sessionEvents.toLocaleString()} Session Events / ${report.fixture.counts.tickets.toLocaleString()} Tickets`,
-    `Sampling: ${report.config.repetitions} repetitions per interaction and arm; loaded arm = ${report.config.busyCores} continuously busy worker threads.`,
+    `Sampling: ${report.config.repetitions} repetitions per interaction and arm; arms: ${report.arms.map((arm) => arm.name).join(", ")}.`,
     "",
     "## Results",
     "",
