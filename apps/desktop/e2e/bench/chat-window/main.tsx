@@ -218,10 +218,17 @@ function appendTurn(sessionId: string): void {
   });
 }
 
-// The measured reply deliberately spends multiple token snapshots inside an
-// open code fence before closing it. That exercises the production live
-// markdown branch (including incremental code parsing), rather than measuring
-// only settled prose while the realistic fenced blocks sit unchanged above it.
+// The measured reply deliberately grows roughly 4 KB of TypeScript across 44
+// token snapshots before it closes the fence. The former 107-character fence
+// completed too quickly to reproduce Shiki's append-only cache misses: its
+// owner-machine baseline reported zero dropped frames before the optimization.
+// This keeps the production live Markdown branch and the reader's scroll in the
+// same frame loop while giving the highlighter the realistic long-fence input
+// VC-357 was opened for.
+const STREAM_CODE_TOKENS = Array.from({ length: 42 }, (_value, index) => {
+  const suffix = String(index + 1).padStart(2, "0");
+  return `  const frame${suffix} = Math.max(0, delta${suffix} - budget) + history[${index}]!.duration + samples[${index}]!.cost;\n`;
+});
 const STREAM_TOKENS = [
   "Streaming ",
   "benchmark ",
@@ -232,21 +239,9 @@ const STREAM_TOKENS = [
   "opens ",
   "code:\n\n",
   "```ts\n",
-  "export ",
-  "function ",
-  "frameCost",
-  "(delta: ",
-  "number) ",
-  "{\n",
-  "  const ",
-  "budget ",
-  "= 16.67;\n",
-  "  return ",
-  "Math.max",
-  "(0, ",
-  "delta ",
-  "- budget);\n",
-  "}\n",
+  "export function measureFrames(delta: number, budget: number, history: Frame[], samples: Sample[]) {\n",
+  ...STREAM_CODE_TOKENS,
+  "  return history.length;\n}\n",
   "```\n",
   "The ",
   "reader ",
@@ -417,12 +412,13 @@ async function streamAndScroll(
     if (actualTop <= 0 || actualTop >= scroller.scrollHeight - scroller.clientHeight)
       direction *= -1;
   }
-  const streamedWhileWorking =
-    (
-      store.getState() as unknown as {
-        sessions: Record<string, { lifecycle: string }>;
-      }
-    ).sessions[sessionId]?.lifecycle === "working";
+  const streamedSlice = (
+    store.getState() as unknown as {
+      sessions: Record<string, { lifecycle: string; transcript: { turnActive: boolean } }>;
+    }
+  ).sessions[sessionId];
+  const streamedWhileWorking = streamedSlice?.lifecycle === "working";
+  const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
   settleStream(sessionId);
   await settle();
   observer?.disconnect();
@@ -442,6 +438,7 @@ async function streamAndScroll(
     tokenRate,
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
+    streamedWhileTurnActive,
     codeFenceOpened: priorTokenCount >= STREAM_FENCE_OPEN_TOKEN,
     codeFenceClosed: priorTokenCount >= STREAM_FENCE_CLOSE_TOKEN,
     latencyMs,
