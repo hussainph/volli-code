@@ -172,10 +172,26 @@ const firstMessageSpec = {
   workspaceEnvironment: { dependencies: "absent" as const, installCommand: "pnpm install" },
 };
 
+/**
+ * Clean tool output, shaped like what a coding agent's tools actually return.
+ *
+ * Source lines rather than prose, deliberately: redaction's cost is driven by
+ * how often `-`, `_`, `:` and `=` appear, and prose has almost none of them.
+ * A punctuation-free fixture makes the secret scan look cheap and would hide a
+ * regression on every `read` and `execute` result the runtime really handles.
+ */
+function cleanOutputBlock(index: number): string {
+  return Array.from(
+    { length: 24 },
+    (_, line) =>
+      `export const session_id_${index}_${line}: string = "sess-${line}"; // read-only path`,
+  ).join("\n");
+}
+
 function activityEvent(): unknown {
   const cleanBlocks = Array.from({ length: 32 }, (_, index) => ({
     type: "text",
-    text: `Block ${index}: ${"ordinary tool output without credentials ".repeat(28)}`,
+    text: cleanOutputBlock(index),
   }));
   return {
     type: "tool_execution_end",
@@ -305,7 +321,7 @@ export function buildRuntimeCostReport(
       {
         name: "tool.activity-normalization",
         waiting: "user",
-        fixture: "completed read, bounded 64 KB nested output and 16 KB patch",
+        fixture: "completed read, bounded source-shaped nested output and 16 KB patch",
         operationsPerSample: operations(8),
         samples,
       },
@@ -342,7 +358,17 @@ export function buildRuntimeCostReport(
   };
 }
 
+/**
+ * Above this relative standard deviation a figure is describing the machine,
+ * not the code, and must not be quoted as a result. A shared machine under
+ * load routinely puts these benchmarks past it, which is the failure this
+ * exists to make visible: a quiet-looking table with a noisy figure in it is
+ * how a wrong number ends up in a design note.
+ */
+const QUOTABLE_RSD = 0.2;
+
 export function formatRuntimeCostReport(report: RuntimeCostReport): string {
+  const noisy = report.samples.filter((sample) => sample.relativeStandardDeviation > QUOTABLE_RSD);
   return [
     "# Agent Runtime cost profile (VC-356)",
     "",
@@ -351,14 +377,23 @@ export function formatRuntimeCostReport(report: RuntimeCostReport): string {
     `fixture: ${report.fixturePreset}; scale: ${report.operationScale}\u00d7; load arm: ${report.loadArm}; VOLLI_CONCURRENCY_HINT=${report.concurrencyHint ?? "unset"}`,
     "",
     table(
-      ["path", "benchmark", "p50 us", "p95 us", "RSD"],
+      ["path", "benchmark", "p50 us", "p95 us", "RSD", ""],
       report.samples.map((sample) => [
         sample.waiting,
         sample.name,
         sample.p50Us.toFixed(1),
         sample.p95Us.toFixed(1),
         `${(sample.relativeStandardDeviation * 100).toFixed(1)}%`,
+        sample.relativeStandardDeviation > QUOTABLE_RSD ? "too noisy to quote" : "",
       ]),
     ),
+    ...(noisy.length === 0
+      ? []
+      : [
+          "",
+          `${noisy.length} of ${report.samples.length} figures exceeded ${QUOTABLE_RSD * 100}% RSD.`,
+          "Re-run on a quiet machine before quoting them. The assertions in",
+          "runtime-cost.bench.test.ts count work rather than time and hold either way.",
+        ]),
   ].join("\n");
 }
