@@ -81,10 +81,12 @@ async function openComposerViaHeader(page) {
   return (await composer(page).count()) === 1;
 }
 
-/** Escape and wait until no Radix dialog remains, so the next flow starts clean. */
+/** Close the composer and wait until no Radix dialog remains, so the next flow starts clean. */
 async function closeAnyDialog(page) {
   if ((await page.getByRole("dialog").count()) === 0) return;
-  await page.keyboard.press("Escape");
+  const composerClose = composer(page).getByRole("button", { name: "Close", exact: true });
+  if ((await composerClose.count()) === 1) await composerClose.click();
+  else await page.keyboard.press("Escape");
   await waitUntil("dialog to close", async () => (await page.getByRole("dialog").count()) === 0, {
     timeout: 3000,
   }).catch(() => {});
