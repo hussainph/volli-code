@@ -408,12 +408,9 @@ export type SystemPromptSpec = SystemPromptInput;
 
 /** Compose the full system prompt: operating and execution rules, trust, workspace, resources. */
 export function composeSystemPrompt(spec: SystemPromptSpec): string {
-  const sections = systemPromptSections(spec);
-  let prompt = sections[0]!.text;
-  for (let index = 1; index < sections.length; index += 1) {
-    prompt += `\n\n${sections[index]!.text}`;
-  }
-  return prompt;
+  return systemPromptSections(spec)
+    .map((section) => section.text)
+    .join("\n\n");
 }
 
 /** The delimiter the Brief arrives in; named for what the Session actually has. */

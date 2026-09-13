@@ -1875,7 +1875,7 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = contextTokenProjector.projectedContextTokens(
+      const occupied = contextTokenProjector(
         context.messages,
         requestModel,
         context.systemPrompt,
@@ -2334,7 +2334,7 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
-        const occupied = contextTokenProjector.projectedContextTokens(
+        const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,
           agent.state.systemPrompt,

@@ -16,7 +16,8 @@
     "smoke": "vp test run --config vite.smoke.config.ts",
     "bench": "vp test run --config vite.bench.config.ts",
     "bench:runtime": "vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
-    "bench:runtime:profile": "rm -rf .runtime-profile && mkdir -p .runtime-profile && esbuild bench/parallel-tools/runtime-cost-profile.ts --bundle --platform=node --format=cjs --sourcemap --outfile=.runtime-profile/profile.cjs --external:sharp --external:proper-lockfile --external:jsdom --external:turndown --external:@anthropic-ai/sandbox-runtime && node --cpu-prof --cpu-prof-dir=.runtime-profile .runtime-profile/profile.cjs && node --experimental-strip-types bench/parallel-tools/runtime-cost-profile-summary.ts .runtime-profile/*.cpuprofile",
+    "bench:runtime:published": "BENCH_ARM=published vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
+    "bench:runtime:profile": "node bench/parallel-tools/run-profile.mjs",
     "bench:live": "vp test run --config vite.bench-live.config.ts",
     "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },

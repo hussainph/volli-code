@@ -1,15 +1,33 @@
+/**
+ * What `@volli/agent-runtime` itself spends on one turn (VC-356).
+ *
+ * The subject is CPU this package owns and the rest of the app waits on:
+ * prompt assembly, the context projection every compaction and output-ceiling
+ * check makes, and the normalization that turns one finished tool call into a
+ * bounded activity payload. Provider latency and real tool execution dominate
+ * a turn's wall clock and are deliberately absent — they cannot be measured
+ * without spending money, and `bench:live` is where that lane lives.
+ *
+ * The boundary is the point. What the Session Engine then does with an
+ * observation — translate it, fold it, append it — is measured in
+ * `packages/session-engine/src/turn-write-cost.bench.test.ts`, in the package
+ * that owns it. The Agent Runtime emits observations and never holds durable
+ * Session state, so a probe here that reached into the Engine would be pricing
+ * someone else's code across a package boundary it does not depend on.
+ */
+
 import { execFileSync } from "node:child_process";
 import { cpus, freemem, hostname, platform, release, totalmem } from "node:os";
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
-import type { PromptResource, RuntimeObservation, RuntimeToolBundle } from "@volli/shared";
+import type { PromptResource, RuntimeToolBundle } from "@volli/shared";
 
-import { RuntimeObservationTranslator } from "../../../session-engine/src/observation-translation";
 import { composeFirstUserMessage, composeSystemPrompt } from "../../src/prompt";
 import { mapPiActivity } from "../../src/pi/activity";
 import { createContextTokenProjector } from "../../src/pi/token-counting";
-import { measureAsync, measureSync, type TimingSummary } from "./runtime-cost-measure";
+import { table } from "./report";
+import { measureSync, type TimingSummary } from "./runtime-cost-measure";
 
 export interface RuntimeCostReport {
   schemaVersion: 1;
@@ -27,6 +45,16 @@ export interface RuntimeCostReport {
     node: string;
   };
   fixturePreset: "runtime-long-turn-v1";
+  /**
+   * Operations per timed batch, relative to the fixture's own base counts.
+   *
+   * Recorded because it changes the ANSWER, not just how long the run takes: a
+   * batch of one op prices `performance.now()` alongside the work, so the same
+   * code reads several times slower at 0.2x than at the published 20x. Two
+   * tables are comparable only at equal scale, and a table that did not carry
+   * its scale could not say so.
+   */
+  operationScale: number;
   loadArm: string;
   concurrencyHint: number | null;
   samples: TimingSummary[];
@@ -184,38 +212,55 @@ function positiveInteger(value: string | undefined): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-async function emitTranslated(translated: { id: string }): Promise<void> {
-  if (translated.id.length === Number.MIN_SAFE_INTEGER) console.log(translated.id);
+/**
+ * The two arms this bench has, named rather than hidden behind a flag.
+ *
+ * `published` is the arm every number in `docs/research/` was taken at, and
+ * the only arm whose figures may be quoted. `probe` is the fast regression
+ * lane: same fixture and same code path, small enough to sit in the default
+ * bench run, and honest about the fact that its batches are too short to
+ * separate the work from the timer. Quoting a probe figure as a published one
+ * is the mistake the split exists to prevent, so the arm travels in the report
+ * and prints above the table.
+ */
+/**
+ * The long settled context the projection sample runs against, handed out so
+ * the bench's assertions exercise the very fixture its table is timed on. A
+ * property proved against a different fixture proves nothing about the table.
+ */
+export function longContextFixture(): {
+  messages: AgentMessage[];
+  model: Model<Api>;
+  systemPrompt: string;
+  tools: readonly Tool[];
+} {
+  return { messages: conversationFixture(), model, systemPrompt, tools };
 }
 
-export async function buildRuntimeCostReport(
+export const RUNTIME_COST_ARMS = {
+  published: { samples: 20, operationScale: 20 },
+  probe: { samples: 5, operationScale: 0.2 },
+} as const satisfies Record<string, { samples: number; operationScale: number }>;
+
+export type RuntimeCostArm = keyof typeof RUNTIME_COST_ARMS;
+
+/** The arm `BENCH_ARM` names, or the fast probe when it names nothing valid. */
+export function runtimeCostArm(value = process.env["BENCH_ARM"]): RuntimeCostArm {
+  return value === "published" ? "published" : "probe";
+}
+
+export function buildRuntimeCostReport(
   options: {
     samples?: number;
     operationScale?: number;
   } = {},
-): Promise<RuntimeCostReport> {
+): RuntimeCostReport {
   const samples = options.samples ?? positiveInteger(process.env["BENCH_SAMPLES"]) ?? 25;
   const operationScale = options.operationScale ?? 1;
   const operations = (base: number): number => Math.max(1, Math.floor(base * operationScale));
   const messages = conversationFixture();
   const contextTokenProjector = createContextTokenProjector();
   const event = activityEvent();
-  const translator = new RuntimeObservationTranslator({
-    namespace: "pi",
-    sessionId: "session-profile",
-    attachmentId: "attachment-profile",
-    now: () => 1_000,
-  });
-  await translator.translate(
-    { kind: "turn", state: "started", turnId: "turn-profile" },
-    emitTranslated,
-  );
-  const delta: RuntimeObservation = {
-    kind: "delta",
-    turnId: "turn-profile",
-    channel: "text",
-    text: "deterministic streamed text ",
-  };
 
   const timings: TimingSummary[] = [];
   timings.push(
@@ -252,7 +297,7 @@ export async function buildRuntimeCostReport(
         operationsPerSample: operations(2),
         samples,
       },
-      () => contextTokenProjector.projectedContextTokens(messages, model, systemPrompt, tools),
+      () => contextTokenProjector(messages, model, systemPrompt, tools),
     ),
   );
   timings.push(
@@ -273,22 +318,6 @@ export async function buildRuntimeCostReport(
         }).activityId.length,
     ),
   );
-  timings.push(
-    await measureAsync(
-      {
-        name: "stream.delta-translation",
-        waiting: "user",
-        fixture: "steady-state text delta, no durable sink work",
-        operationsPerSample: operations(500),
-        samples,
-      },
-      async () => {
-        await translator.translate(delta, emitTranslated);
-        return 1;
-      },
-    ),
-  );
-
   const cpu = cpus();
   return {
     schemaVersion: 1,
@@ -306,39 +335,30 @@ export async function buildRuntimeCostReport(
       node: process.version,
     },
     fixturePreset: "runtime-long-turn-v1",
+    operationScale,
     loadArm: process.env["BENCH_LOAD_ARM"] ?? "idle",
     concurrencyHint: positiveInteger(process.env["VOLLI_CONCURRENCY_HINT"]),
     samples: timings,
   };
 }
 
-function pad(value: string, width: number): string {
-  return value.padEnd(width, " ");
-}
-
 export function formatRuntimeCostReport(report: RuntimeCostReport): string {
-  const rows = report.samples.map((sample) => [
-    sample.waiting,
-    sample.name,
-    sample.p50Us.toFixed(1),
-    sample.p95Us.toFixed(1),
-    `${(sample.relativeStandardDeviation * 100).toFixed(1)}%`,
-  ]);
-  const headers = ["path", "benchmark", "p50 us", "p95 us", "RSD"];
-  const widths = headers.map((header, column) =>
-    Math.max(header.length, ...rows.map((row) => row[column]?.length ?? 0)),
-  );
-  const line = (cells: readonly string[]): string =>
-    `| ${cells.map((cell, column) => pad(cell, widths[column] ?? cell.length)).join(" | ")} |`;
   return [
     "# Agent Runtime cost profile (VC-356)",
     "",
     `revision: ${report.revision}`,
     `machine: ${report.machine.cpu}, ${report.machine.logicalCpus} logical CPUs, ${Math.round(report.machine.totalMemoryBytes / 2 ** 30)} GiB, ${report.machine.platform} ${report.machine.release}, Node ${report.machine.node}`,
-    `fixture: ${report.fixturePreset}; load arm: ${report.loadArm}; VOLLI_CONCURRENCY_HINT=${report.concurrencyHint ?? "unset"}`,
+    `fixture: ${report.fixturePreset}; scale: ${report.operationScale}\u00d7; load arm: ${report.loadArm}; VOLLI_CONCURRENCY_HINT=${report.concurrencyHint ?? "unset"}`,
     "",
-    line(headers),
-    `|${widths.map((width) => "-".repeat(width + 2)).join("|")}|`,
-    ...rows.map(line),
+    table(
+      ["path", "benchmark", "p50 us", "p95 us", "RSD"],
+      report.samples.map((sample) => [
+        sample.waiting,
+        sample.name,
+        sample.p50Us.toFixed(1),
+        sample.p95Us.toFixed(1),
+        `${(sample.relativeStandardDeviation * 100).toFixed(1)}%`,
+      ]),
+    ),
   ].join("\n");
 }

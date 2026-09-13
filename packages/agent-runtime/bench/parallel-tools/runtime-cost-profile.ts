@@ -1,8 +1,15 @@
-import { buildRuntimeCostReport, formatRuntimeCostReport } from "./runtime-cost-report";
+/**
+ * The bundled entry `bench:runtime:profile` runs under `node --cpu-prof`.
+ *
+ * It exists because a CPU profile of a vitest worker is mostly vitest. This
+ * runs the same fixture at the same published arm with nothing else in the
+ * process, so every sample in the `.cpuprofile` belongs to the runtime.
+ */
 
-async function main(): Promise<void> {
-  const report = await buildRuntimeCostReport({ samples: 20, operationScale: 20 });
-  console.log(formatRuntimeCostReport(report));
-}
+import {
+  buildRuntimeCostReport,
+  formatRuntimeCostReport,
+  RUNTIME_COST_ARMS,
+} from "./runtime-cost-report";
 
-void main();
+console.log(formatRuntimeCostReport(buildRuntimeCostReport(RUNTIME_COST_ARMS.published)));

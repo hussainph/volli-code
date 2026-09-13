@@ -1,3 +1,15 @@
+/**
+ * Batch timing for operations far too short to time one at a time.
+ *
+ * Every measured call here costs single-digit microseconds or less, which is
+ * the same order as `performance.now()` itself. So nothing is timed alone: a
+ * batch of `operationsPerSample` runs is timed and divided, and the batch size
+ * is part of the published arm rather than an implementation detail — see
+ * `RUNTIME_COST_ARMS`. p50 and p95 come from repeating that batch, and the
+ * relative standard deviation is reported beside them so a reader can see when
+ * a figure is too noisy to rank.
+ */
+
 import { performance } from "node:perf_hooks";
 
 export interface TimingSummary {
@@ -48,6 +60,15 @@ function summarize(spec: MeasureSpec, elapsedUs: readonly number[]): TimingSumma
   };
 }
 
+/**
+ * Keeps a measured result observable so V8 cannot prove the calls dead and
+ * delete the very work being timed. The comparison never holds, so nothing is
+ * ever printed; what matters is that the optimizer cannot know that.
+ */
+function keepAlive(checksum: number): void {
+  if (checksum === Number.MIN_SAFE_INTEGER) console.log(checksum);
+}
+
 /** Measure a synchronous operation in batches large enough to rise above timer noise. */
 export function measureSync(spec: MeasureSpec, operation: () => number): TimingSummary {
   let checksum = 0;
@@ -58,27 +79,6 @@ export function measureSync(spec: MeasureSpec, operation: () => number): TimingS
   };
   for (let index = 0; index < (spec.warmupSamples ?? 3); index += 1) run();
   const elapsedUs = Array.from({ length: spec.samples }, run);
-  // Keep results observable so V8 cannot prove the measured calls dead.
-  if (checksum === Number.MIN_SAFE_INTEGER) console.log(checksum);
-  return summarize(spec, elapsedUs);
-}
-
-/** Measure an async operation whose promise settlement is part of the path. */
-export async function measureAsync(
-  spec: MeasureSpec,
-  operation: () => Promise<number>,
-): Promise<TimingSummary> {
-  let checksum = 0;
-  const run = async (): Promise<number> => {
-    const startedAt = performance.now();
-    for (let index = 0; index < spec.operationsPerSample; index += 1) {
-      checksum ^= await operation();
-    }
-    return ((performance.now() - startedAt) * 1_000) / spec.operationsPerSample;
-  };
-  for (let index = 0; index < (spec.warmupSamples ?? 3); index += 1) await run();
-  const elapsedUs: number[] = [];
-  for (let index = 0; index < spec.samples; index += 1) elapsedUs.push(await run());
-  if (checksum === Number.MIN_SAFE_INTEGER) console.log(checksum);
+  keepAlive(checksum);
   return summarize(spec, elapsedUs);
 }

@@ -192,6 +192,47 @@ function toolsTokens(tools: readonly Tool[] | undefined, count: TokenCounter): n
 }
 
 /**
+ * The two things a projection must estimate because no provider usage covers
+ * them: one settled message, and the request metadata ahead of the messages.
+ *
+ * Named as one type because they always travel together and are always chosen
+ * together — a caller either wants both estimates fresh or both reused. Making
+ * that a single seam is what keeps the projection itself free of any knowledge
+ * about whether an estimate was cached.
+ */
+interface ContextEstimator {
+  message(message: AgentMessage, model: Model<Api>): number;
+  prefix(
+    model: Model<Api>,
+    systemPrompt: string | undefined,
+    tools: readonly Tool[] | undefined,
+  ): number;
+}
+
+/** Estimates everything afresh. The honest answer when nothing is known to be reusable. */
+const DIRECT_ESTIMATOR: ContextEstimator = {
+  message: estimateMessageTokens,
+  prefix: (model, systemPrompt, tools) => {
+    const count = counterFor(model);
+    return (
+      (systemPrompt ? count(systemPrompt) + SYSTEM_PROMPT_FRAMING : 0) + toolsTokens(tools, count)
+    );
+  },
+};
+
+function wholeContextTokens(
+  messages: readonly AgentMessage[],
+  model: Model<Api>,
+  systemPrompt: string | undefined,
+  tools: readonly Tool[] | undefined,
+  estimator: ContextEstimator,
+): number {
+  let tokens = estimator.prefix(model, systemPrompt, tools);
+  for (const message of messages) tokens += estimator.message(message, model);
+  return tokens;
+}
+
+/**
  * Model-aware estimate of the whole request: system prompt, tool definitions
  * and every message. No provider usage is consulted — this is the pure
  * estimate, for contexts the model has not measured yet.
@@ -202,11 +243,7 @@ export function estimateContextTokens(
   systemPrompt?: string,
   tools?: readonly Tool[],
 ): number {
-  const count = counterFor(model);
-  let tokens = systemPrompt ? count(systemPrompt) + SYSTEM_PROMPT_FRAMING : 0;
-  tokens += toolsTokens(tools, count);
-  for (const message of messages) tokens += estimateMessageTokens(message, model);
-  return tokens;
+  return wholeContextTokens(messages, model, systemPrompt, tools, DIRECT_ESTIMATOR);
 }
 
 /**
@@ -220,9 +257,7 @@ export function projectedContextTokens(
   systemPrompt?: string,
   tools?: readonly Tool[],
 ): number {
-  return projectContextTokens(messages, model, systemPrompt, tools, (message) =>
-    estimateMessageTokens(message, model),
-  );
+  return projectContextTokens(messages, model, systemPrompt, tools, DIRECT_ESTIMATOR);
 }
 
 function projectContextTokens(
@@ -230,13 +265,7 @@ function projectContextTokens(
   model: Model<Api>,
   systemPrompt: string | undefined,
   tools: readonly Tool[] | undefined,
-  estimateMessage: (message: AgentMessage) => number,
-  estimatePrefix: () => number = () => {
-    const count = counterFor(model);
-    return (
-      (systemPrompt ? count(systemPrompt) + SYSTEM_PROMPT_FRAMING : 0) + toolsTokens(tools, count)
-    );
-  },
+  estimator: ContextEstimator,
 ): number {
   let measured: number | undefined;
   let measuredIndex = -1;
@@ -255,36 +284,45 @@ function projectContextTokens(
     }
   }
   if (measured === undefined) {
-    let estimated = estimatePrefix();
-    for (const message of messages) estimated += estimateMessage(message);
-    return estimated;
+    return wholeContextTokens(messages, model, systemPrompt, tools, estimator);
   }
   let suffix = 0;
   for (let index = measuredIndex + 1; index < messages.length; index++) {
-    suffix += estimateMessage(messages[index]!);
+    suffix += estimator.message(messages[index]!, model);
   }
   return measured + suffix;
 }
 
-export interface ContextTokenProjector {
-  /**
-   * Project one settled request context. Values already seen by this projector
-   * are reused by identity; callers must not mutate settled messages or tool
-   * definitions in place.
-   */
-  projectedContextTokens(
-    messages: readonly AgentMessage[],
-    model: Model<Api>,
-    systemPrompt?: string,
-    tools?: readonly Tool[],
-  ): number;
-}
+/**
+ * Project one settled request context, reusing whatever this projector has
+ * already counted. Callers must not mutate settled messages or tool
+ * definitions in place.
+ */
+export type ContextTokenProjector = (
+  messages: readonly AgentMessage[],
+  model: Model<Api>,
+  systemPrompt?: string,
+  tools?: readonly Tool[],
+) => number;
 
+/**
+ * One tokenizer family's reusable answers.
+ *
+ * Keyed by FAMILY rather than by model because `estimateMessageTokens` depends
+ * on the model only through {@link counterFor}: two models of one family
+ * necessarily agree, and two models of different families necessarily may not.
+ *
+ * The system prompt is a single slot rather than a map. Context Assembly makes
+ * it a pure function of Role, bundle, product version and resource set, all
+ * frozen for an attachment, so there is one value to hold; a map would keep
+ * every multi-kilobyte prompt it ever saw alive as its own key to cache an
+ * entry nothing asks for twice.
+ */
 interface FamilyEstimateCache {
   readonly count: TokenCounter;
   readonly messages: WeakMap<object, number>;
-  readonly prompts: Map<string, number>;
   readonly tools: WeakMap<readonly Tool[], number>;
+  prompt: { readonly text: string; readonly tokens: number } | null;
 }
 
 /**
@@ -302,53 +340,44 @@ export function createContextTokenProjector(): ContextTokenProjector {
     const created: FamilyEstimateCache = {
       count: counterFor(model),
       messages: new WeakMap<object, number>(),
-      prompts: new Map<string, number>(),
       tools: new WeakMap<readonly Tool[], number>(),
+      prompt: null,
     };
     families.set(family, created);
     return created;
   };
 
-  return {
-    projectedContextTokens(messages, model, systemPrompt, tools) {
-      const cache = cacheFor(model);
-      const estimateMessage = (message: AgentMessage): number => {
-        const key = message as object;
-        const existing = cache.messages.get(key);
-        if (existing !== undefined) return existing;
-        const estimated = estimateMessageTokens(message, model);
-        cache.messages.set(key, estimated);
-        return estimated;
-      };
-      const estimatePrefix = (): number => {
-        let promptTokens = 0;
-        if (systemPrompt) {
-          const existing = cache.prompts.get(systemPrompt);
-          if (existing !== undefined) promptTokens = existing;
-          else {
-            promptTokens = cache.count(systemPrompt) + SYSTEM_PROMPT_FRAMING;
-            cache.prompts.set(systemPrompt, promptTokens);
-          }
-        }
-        let toolTokens = 0;
-        if (tools && tools.length > 0) {
-          const existing = cache.tools.get(tools);
-          if (existing !== undefined) toolTokens = existing;
-          else {
-            toolTokens = toolsTokens(tools, cache.count);
-            cache.tools.set(tools, toolTokens);
-          }
-        }
-        return promptTokens + toolTokens;
-      };
-      return projectContextTokens(
-        messages,
-        model,
-        systemPrompt,
-        tools,
-        estimateMessage,
-        estimatePrefix,
-      );
+  const memoizing = (cache: FamilyEstimateCache): ContextEstimator => ({
+    message: (message, model) => {
+      const key = message as object;
+      const existing = cache.messages.get(key);
+      if (existing !== undefined) return existing;
+      const estimated = estimateMessageTokens(message, model);
+      cache.messages.set(key, estimated);
+      return estimated;
     },
-  };
+    prefix: (_model, systemPrompt, tools) => {
+      let promptTokens = 0;
+      if (systemPrompt) {
+        if (cache.prompt?.text === systemPrompt) promptTokens = cache.prompt.tokens;
+        else {
+          promptTokens = cache.count(systemPrompt) + SYSTEM_PROMPT_FRAMING;
+          cache.prompt = { text: systemPrompt, tokens: promptTokens };
+        }
+      }
+      let toolTokens = 0;
+      if (tools && tools.length > 0) {
+        const existing = cache.tools.get(tools);
+        if (existing !== undefined) toolTokens = existing;
+        else {
+          toolTokens = toolsTokens(tools, cache.count);
+          cache.tools.set(tools, toolTokens);
+        }
+      }
+      return promptTokens + toolTokens;
+    },
+  });
+
+  return (messages, model, systemPrompt, tools) =>
+    projectContextTokens(messages, model, systemPrompt, tools, memoizing(cacheFor(model)));
 }
