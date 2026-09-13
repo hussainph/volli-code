@@ -45,6 +45,8 @@ interface BoardColumnProps {
   offered?: ColumnOfferedPanelProps;
   /** Quieted because another column is currently grown into landing targets. */
   dimmed?: boolean;
+  /** The frozen drag snapshot currently resolves its release into this column. */
+  aimed?: boolean;
 }
 
 /** A single status column: header, its own vertically-scrolling ticket list, and an add-card composer. */
@@ -64,6 +66,7 @@ export function BoardColumn({
   animateEnter,
   offered,
   dimmed = false,
+  aimed = false,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
   // from the board's single derivation rather than handed down as a prop: the
@@ -101,6 +104,7 @@ export function BoardColumn({
       // panel row is (board.tsx's `pointerLanding`). It is on the column ROOT
       // so the panel floating over the list still reads as this column.
       data-board-column={status}
+      data-drop-aimed={aimed || undefined}
       className={cn(
         // Cap below the canvas so a strip of background stays grab-able for
         // mouse drag-to-pan (see useBoardCanvasPan). Short columns still hug.
@@ -119,6 +123,10 @@ export function BoardColumn({
         // Quieted while another column holds the ⌥ picker: one column is being
         // aimed at, and the rest are not the question.
         dimmed && "opacity-50",
+        // The board's card order and parentage stay frozen during the gesture
+        // to keep dnd-kit measurement stable. This paint-only ring replaces the
+        // old reparented-card gap as explicit cross-column landing feedback.
+        aimed && "bg-accent/50 ring-1 ring-inset ring-primary/50",
       )}
     >
       <div className="group/column-header flex items-center gap-2 px-4 pt-2 pb-2">
@@ -126,8 +134,8 @@ export function BoardColumn({
         <Badge variant="count">{tickets.length}</Badge>
         <div className="flex-1" />
         {/* Arming lives on the column because that is what it is a property of
-            (VC-112). Trailing, so an unarmed board's header reads exactly as it
-            did before this existed. */}
+            (VC-112). Always visible so an unarmed column still offers an
+            obvious way to configure what happens on arrival. */}
         <ColumnArmingButton projectId={projectId} status={status} />
       </div>
       {/* The panel floats OVER the list rather than sitting above it in the

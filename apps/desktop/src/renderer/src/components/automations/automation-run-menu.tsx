@@ -48,6 +48,7 @@ import {
 import { offerableModels, type ComposerModel } from "@renderer/components/chat/composer-ui";
 import {
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
@@ -57,7 +58,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
   selectArmings,
-  selectColumnRank,
+  selectColumnOrders,
   selectAutomations,
   selectPlanningLoaded,
   useAutomationsStore,
@@ -119,10 +120,10 @@ export function useOfferableModels(): readonly ComposerModel[] {
  * `armed-run.ts` makes for an arrival; what differs is only what each does
  * about it — the drop waits, the button says it is reading.
  *
- * "Landed" means EVERY one of the three reads succeeded, not merely that they
+ * "Landed" means EVERY one of the four reads succeeded, not merely that they
  * all settled. A failed read toasts and leaves its slice as it found it, which
  * on a cold cache is empty — but on a warm one is the very stale value this
- * rail must not press. So the answer stays unread unless all three came back
+ * rail must not press. So the answer stays unread unless all four came back
  * ok: a press whose backing read failed runs nothing, exactly as a press that
  * arrived before the read runs nothing.
  */
@@ -132,12 +133,14 @@ export function useAutomationRunOffer(
 ): TicketRailAutomations {
   const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
   const armings = useAutomationsStore((state) => selectArmings(state, projectId));
-  const rankedAutomationIds = useAutomationsStore((state) =>
-    selectColumnRank(state, projectId, status),
-  );
+  // Every column's rank at once (VC-329 item 5): the cross-column groups are
+  // each ordered the way their own lane arranges, so the menu reads the whole
+  // order table rather than one column's slice of it.
+  const orders = useAutomationsStore((state) => selectColumnOrders(state, projectId));
   const landed = useAutomationsStore((state) => selectPlanningLoaded(state, projectId));
   const refresh = useAutomationsStore((state) => state.refresh);
   const refreshArming = useAutomationsStore((state) => state.refreshArming);
+  const refreshOrder = useAutomationsStore((state) => state.refreshOrder);
   const refreshEnablement = useAutomationsStore((state) => state.refreshEnablement);
   const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
   const [read, setRead] = React.useState(false);
@@ -147,19 +150,22 @@ export function useAutomationRunOffer(
     // Every arrival re-opens the question, including one caused by a planning
     // change: what is on screen now was decided from what the cache held then.
     setRead(false);
-    void Promise.all([refresh(projectId), refreshArming(projectId), refreshEnablement()]).then(
-      (landings) => {
-        // Every one of them, not just all of them SETTLING. A refresh that
-        // failed toasted and returned false, leaving its slice holding whatever
-        // was there before — on a warm cache, the stale arming a press would
-        // otherwise spend. One failure keeps the whole rail unread.
-        if (current && landings.every(Boolean)) setRead(true);
-      },
-    );
+    void Promise.all([
+      refresh(projectId),
+      refreshArming(projectId),
+      refreshEnablement(),
+      refreshOrder(projectId),
+    ]).then((landings) => {
+      // Every one of them, not just all of them SETTLING. A refresh that
+      // failed toasted and returned false, leaving its slice holding whatever
+      // was there before — on a warm cache, the stale arming a press would
+      // otherwise spend. One failure keeps the whole rail unread.
+      if (current && landings.every(Boolean)) setRead(true);
+    });
     return () => {
       current = false;
     };
-  }, [refresh, refreshArming, refreshEnablement, projectId, planningVersion]);
+  }, [refresh, refreshArming, refreshEnablement, refreshOrder, projectId, planningVersion]);
 
   // `landed` adds the cold-cache half of the same rule: a slice that has never
   // been filled is not something to classify from either. The control keeps
@@ -168,7 +174,8 @@ export function useAutomationRunOffer(
     automations,
     armings,
     status,
-    rankedAutomationIds,
+    orders,
+    rankedAutomationIds: orders.find((order) => order.status === status)?.rankedAutomationIds,
     ready: read && landed,
   });
 }
@@ -211,22 +218,35 @@ export function AutomationRunMenuItems({
   }
   return (
     <>
-      {rail.offered.map((automation) => (
-        <ContextMenuItem
-          key={automation.id}
-          icon={LightningIcon}
-          onSelect={() => onRun({ kind: "automation", automation }, null)}
-        >
-          <span className="min-w-0 flex-1 truncate">{automation.name}</span>
-          <OffNote automation={automation} enabledIds={enabledIds} />
-        </ContextMenuItem>
+      {/* The whole cross-column answer (VC-329 item 5), grouped and labelled by
+          column — the Ticket's own column first, the rest in board order. A row
+          under another column's heading runs that Automation on THIS Ticket by
+          hand, through the same `runAutomationOnTicket` the current column's
+          rows always reached: no move, no arming, no different landing. */}
+      {rail.groups.map((group) => (
+        <React.Fragment key={group.status}>
+          <ContextMenuLabel className="text-label text-muted-foreground">
+            {group.label}
+            {group.current ? " · this ticket" : ""}
+          </ContextMenuLabel>
+          {group.automations.map((automation) => (
+            <ContextMenuItem
+              key={automation.id}
+              icon={LightningIcon}
+              onSelect={() => onRun({ kind: "automation", automation }, null)}
+            >
+              <span className="min-w-0 flex-1 truncate">{automation.name}</span>
+              <OffNote automation={automation} enabledIds={enabledIds} />
+            </ContextMenuItem>
+          ))}
+        </React.Fragment>
       ))}
       {rail.offered.length === 0 && onRunOnce === undefined ? (
         // Nothing offered and nothing to type: say which of the two it is
         // rather than leaving an empty popover (the Labels submenu's own idiom).
         <div className={EMPTY_INLINE}>No automations offered in this column</div>
       ) : null}
-      {rail.offered.length > 0 && onRunOnce !== undefined ? <ContextMenuSeparator /> : null}
+      {rail.groups.length > 0 && onRunOnce !== undefined ? <ContextMenuSeparator /> : null}
       {onRunOnce === undefined ? null : (
         <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
           {UNBOUND_RUN_LABEL}…
@@ -306,7 +326,7 @@ export function OffNote({
  * action universal across the board, rail, page, and palette; this menu reaches
  * that one `runAutomationOnTicket` landing.
  *
- * Its own component because it reads three project-wide slices and the whole
+ * Its own component because it reads the project-wide planning slices and the whole
  * board holds one menu per card: mounted inside the submenu's content, those
  * subscriptions and that read exist only while the submenu is open.
  */

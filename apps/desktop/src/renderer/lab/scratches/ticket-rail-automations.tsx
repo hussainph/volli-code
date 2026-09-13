@@ -120,6 +120,7 @@ export const api: ApiOverrides = {
     armings: (input: { projectId: string }) =>
       Promise.resolve({ ok: true, armings: input.projectId === ARMED.id ? ARMINGS : [] }),
     enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-implement"] }),
+    columnOrders: () => Promise.resolve({ ok: true, orders: [] }),
     runsForTicket: () => Promise.resolve({ ok: true, runs: [] }),
   },
 };

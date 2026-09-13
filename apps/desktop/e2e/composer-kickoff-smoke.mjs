@@ -51,6 +51,7 @@ import {
   waitForSettledReply,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { setComposerCreateMore } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch(
   "volli-composer-kickoff-smoke-",
@@ -281,7 +282,7 @@ async function main() {
           await closeAnyDialog(page);
           return { ok: false, detail: "composer / kickoff button missing" };
         }
-        await composer(page).getByRole("switch", { name: "Create more" }).click();
+        await setComposerCreateMore(page, true);
 
         const title = "Kickoff background ticket";
         await fillTitleAndBody(page, title, "Reply with OK. Run no commands.");

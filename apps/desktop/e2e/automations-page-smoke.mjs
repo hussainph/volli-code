@@ -236,7 +236,7 @@ try {
       // turns something on there, so the resting row says so.
       const ownId = await listedId("Review sweep");
       await page.locator("[data-automation-rail-row]").filter({ hasText: "Review sweep" }).click();
-      const control = page.getByLabel("Enabled on this machine: Review sweep");
+      const control = page.getByLabel("Automatic triggers on this machine: Review sweep");
       const restingState = await control.getAttribute("aria-checked");
 
       await control.click();

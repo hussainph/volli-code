@@ -11,6 +11,11 @@ import {
 } from "@volli/shared";
 
 import { AutomationEditorPanel } from "./automation-editor";
+import { startAutomationAuthoring } from "./automation-authoring";
+
+vi.mock("./automation-authoring", () => ({ startAutomationAuthoring: vi.fn(async () => null) }));
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 let root: Root | null = null;
@@ -53,6 +58,16 @@ async function mountEditor(record: Automation | null = null): Promise<void> {
         })),
         index: vi.fn(async () => ({ ok: true, files: [] })),
       },
+      automations: {
+        create: vi.fn(async ({ name }: { name: string }) => ({
+          ok: true,
+          automation: automation({ id: "automation-2", name }),
+        })),
+        update: vi.fn(async () => ({ ok: true, automation: automation() })),
+      },
+      appState: {
+        set: vi.fn(async () => ({ ok: true, receipt: {} })),
+      },
     },
   });
   useAutomationsStore.setState({ editor: { projectId: "p1", automation: record } });
@@ -61,11 +76,13 @@ async function mountEditor(record: Automation | null = null): Promise<void> {
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <AutomationEditorPanel
-        projectId="p1"
-        automation={record}
-        history={<div data-slot="run-history">Recent runs</div>}
-      />,
+      <TooltipProvider>
+        <AutomationEditorPanel
+          projectId="p1"
+          automation={record}
+          history={<div data-slot="run-history">Recent runs</div>}
+        />
+      </TooltipProvider>,
     );
   });
 }
@@ -118,6 +135,10 @@ afterEach(async () => {
   container?.remove();
   container = null;
   useAutomationsStore.setState({ editor: null });
+  // The draft cache is module-level and shared across tests; a leftover slot
+  // would seed the next mount's fields and turn these tests order-dependent.
+  clearEditorDraft("p1");
+  clearEditorDraft("p1", undefined, "automation-1");
   vi.unstubAllGlobals();
 });
 
@@ -291,5 +312,155 @@ describe("the Instructions picker", () => {
     expect(overlay?.classList.contains("absolute")).toBe(true);
     // Floating suggestions do not take a flow slot before the Run history.
     expect(document.querySelector('[data-slot="run-history"]')?.textContent).toBe("Recent runs");
+  });
+});
+
+function typeName(value: string): Promise<void> {
+  const box = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  return act(async () => {
+    setter?.call(box, value);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function seededDraft(): Parameters<typeof saveEditorDraft>[1] {
+  return {
+    name: "Nightly sweep",
+    instructions: "/review the board",
+    ownership: "project",
+    triggerChoice: "schedule",
+    columns: [],
+    schedule: { preset: "daily", hour: 21, minute: 0, timeZone: "Europe/London" },
+    runtime: null,
+  };
+}
+
+describe("automation editor drafts (VC-329)", () => {
+  it("hands the current idea and skill catalogue to a drafting chat without saving a record", async () => {
+    await mountEditor();
+    expect(buttonContaining("Draft in chat").disabled).toBe(true);
+    await typeName("Review idea");
+    await typeInstructions("Use the user's review approach and report findings");
+    await act(async () => buttonContaining("Draft in chat").click());
+    expect(startAutomationAuthoring).toHaveBeenCalledWith(
+      "p1",
+      expect.objectContaining({
+        name: "Review idea",
+        instructions: "Use the user's review approach and report findings",
+        skillSlugs: [LONG_SKILL.name],
+      }),
+    );
+    expect(window.api.automations.create).not.toHaveBeenCalled();
+    expect(loadEditorDraft("p1")?.name).toBe("Review idea");
+  });
+
+  it("writes every field change into the draft cache", async () => {
+    await mountEditor();
+    await typeName("Nightly sweep");
+    await typeInstructions("/review the board");
+
+    expect(loadEditorDraft("p1")).toMatchObject({
+      name: "Nightly sweep",
+      instructions: "/review the board",
+    });
+  });
+
+  it("keeps an ownership-only choice as a draft", async () => {
+    await mountEditor();
+    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    ownership.focus();
+    await act(async () => {
+      ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const globalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes("All projects"),
+    );
+    expect(globalOption).toBeDefined();
+    await act(async () => {
+      globalOption?.focus();
+    });
+    await act(async () => {
+      globalOption?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+
+    expect(loadEditorDraft("p1")?.ownership).toBe("global");
+  });
+
+  it("restores a stored draft on mount, visibly, with a discard", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    const name = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+    const instructions = document.querySelector(
+      '[aria-label="Instructions"]',
+    ) as HTMLTextAreaElement;
+    expect(name.value).toBe("Nightly sweep");
+    expect(instructions.value).toBe("/review the board");
+    expect(buttonContaining("On a schedule").getAttribute("aria-checked")).toBe("true");
+    expect((document.querySelector('[aria-label="Time"]') as HTMLButtonElement).textContent).toBe(
+      "21:00",
+    );
+    // Visible, not silent: the restored state says so, and offers the discard.
+    const banner = document.querySelector('[data-slot="draft-resumed"]');
+    expect(banner?.textContent).toContain("Draft restored");
+    await act(async () => {
+      buttonContaining("Discard draft").click();
+    });
+    expect(loadEditorDraft("p1")).toBeNull();
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe("");
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+  });
+
+  it("clears the draft once the create succeeds", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+    expect(loadEditorDraft("p1")).not.toBeNull();
+
+    await act(async () => {
+      buttonContaining("Create automation").click();
+    });
+
+    expect(loadEditorDraft("p1")).toBeNull();
+  });
+
+  it("restores unsaved edits over a refreshed record and discards back to the record", async () => {
+    saveEditorDraft(
+      "p1",
+      { ...seededDraft(), name: "Unsaved", triggerChoice: "none", runtime: null },
+      undefined,
+      "automation-1",
+    );
+    await mountEditor(automation({ name: "Saved", runtime: { kind: "tier", tier: "fast" } }));
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Unsaved",
+    );
+    expect(document.querySelector('[aria-label="Runtime model"]')?.textContent).toContain(
+      "Project default",
+    );
+    await act(async () => buttonContaining("Discard draft").click());
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe("Saved");
+    expect(loadEditorDraft("p1", undefined, "automation-1")).toBeNull();
+  });
+
+  it("caches existing edits without writing the saved Automation", async () => {
+    await mountEditor(automation());
+    await typeInstructions("Unsaved review instructions");
+    expect(loadEditorDraft("p1", undefined, "automation-1")?.instructions).toBe(
+      "Unsaved review instructions",
+    );
+    expect(loadEditorDraft("p1")).toBeNull();
+    expect(window.api.automations.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps the new-automation draft separate from an existing record", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor(automation({ name: "Existing" }));
+
+    const name = document.querySelector('[aria-label="Name"]') as HTMLInputElement;
+    expect(name.value).toBe("Existing");
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+    // A saved record uses its own slot; the new-automation draft is untouched.
+    expect(loadEditorDraft("p1")).toEqual(seededDraft());
   });
 });

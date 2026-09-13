@@ -10,14 +10,18 @@ import { useBranchListing } from "@renderer/components/board/new-ticket/composer
 import { ComposerBreadcrumb } from "@renderer/components/board/new-ticket/composer-breadcrumb";
 import { ComposerChips } from "@renderer/components/board/new-ticket/composer-chips";
 import { ComposerFooter } from "@renderer/components/board/new-ticket/composer-footer";
+import { composerLaunchAction, type ComposerLaunch } from "./composer-launch";
 import { useComposerRun } from "@renderer/components/board/new-ticket/composer-run";
 import { clearDraft, loadDraft, saveDraft } from "@renderer/components/board/new-ticket/draft";
 import {
   type ComposerFields,
+  runCreateWithAutomation,
   runKickoff,
   runPlainCreate,
   type SubmitDeps,
 } from "@renderer/components/board/new-ticket/submit";
+import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
+import { useAutomationRunOffer } from "@renderer/components/automations/automation-run-menu";
 import {
   type DocumentFileRefs,
   MonacoDocumentEditor,
@@ -27,6 +31,7 @@ import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -43,9 +48,9 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  * currently selected project). Every field change re-saves the draft; a
  * successful create clears it.
  *
- * The one piece of state that is NOT a field and NOT in the draft is what a
- * kickoff will RUN on: it is seeded per open from Model Access's Ticket default
- * rather than remembered here — see `composer-run.tsx`.
+ * Launch mode and kickoff model are per-open choices, not draft fields. Each
+ * open starts with chat kickoff and Model Access's Ticket default; retargeting
+ * resets the mode so a different project cannot inherit a saved Automation.
  */
 /**
  * The reserved ticket id the not-yet-created draft body's document identity
@@ -81,6 +86,7 @@ export function ComposerForm({
   const [usesWorktree, setUsesWorktree] = React.useState(restored?.usesWorktree ?? true);
   const [createMore, setCreateMore] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [launch, setLaunch] = React.useState<ComposerLaunch>({ kind: "kickoff" });
   // The chip's own choice, or null for "whatever the project's default is".
   // Never read directly — `baseBranch` below is the resolved answer.
   //
@@ -113,6 +119,7 @@ export function ComposerForm({
   const handleRetarget = React.useCallback((project: Project) => {
     setTarget(project);
     setChosenBase(null);
+    setLaunch({ kind: "kickoff" });
   }, []);
 
   // Implicit save: every field change re-caches the draft (the storage layer
@@ -154,6 +161,11 @@ export function ComposerForm({
   // alone (`composer-run.tsx`). Deliberately NOT part of the draft above — see
   // that module's header.
   const run = useComposerRun(target.sessionModel ?? null);
+
+  // Read on arrival and project changes: a composer can open without ever
+  // visiting the board, or retarget to a project whose cache is still cold.
+  const automationOffer = useAutomationRunOffer(target.id, status);
+  const enabledIds = useAutomationsStore((state) => state.enabledIds);
 
   const currentFields = React.useCallback(
     (): ComposerFields => ({
@@ -246,6 +258,17 @@ export function ComposerForm({
         });
         if (!result.ok) toast.error(result.error);
       },
+      // The one Run call every other hand-run door uses, so this composer's
+      // third commit lands, toasts and refuses exactly like a rail press.
+      runAutomation: async (input) => {
+        await runAutomationOnTicket({
+          target: { kind: "automation", automationId: input.automationId },
+          automationName: input.automationName,
+          ticketId: input.ticketId,
+          ticketDisplayId: input.ticketDisplayId,
+          modelOverride: null,
+        });
+      },
     }),
     [],
   );
@@ -264,31 +287,70 @@ export function ComposerForm({
   const handleCreate = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
     setSubmitting(true);
-    const result = await runPlainCreate(currentFields(), deps);
-    setSubmitting(false);
-    if (!result.created) return;
-    clearDraft(); // the create consumed the draft — next open starts blank
-    if (createMore) resetForm();
-    else onClose();
+    try {
+      const result = await runPlainCreate(currentFields(), deps);
+      if (!result.created) return;
+      clearDraft(); // the create consumed the draft — next open starts blank
+      if (createMore) resetForm();
+      else onClose();
+    } catch (error) {
+      toast.error(`Couldn't create ticket: ${errorMessage(error)}`);
+    } finally {
+      setSubmitting(false);
+    }
   }, [title, submitting, currentFields, deps, createMore, resetForm, onClose]);
 
   const handleKickoff = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
     setSubmitting(true);
-    const result = await runKickoff(currentFields(), deps, {
-      createMore,
-      ...(run.selection === null ? {} : { model: run.selection }),
-    });
-    setSubmitting(false);
-    if (!result.created) return;
-    clearDraft(); // the kickoff consumed the draft — next open starts blank
-    // Foreground kickoff already navigated into the ticket workspace; either way
-    // the composer is done — close it (Create-more resets in place instead).
-    if (createMore) resetForm();
-    else onClose();
+    try {
+      const result = await runKickoff(currentFields(), deps, {
+        createMore,
+        ...(run.selection === null ? {} : { model: run.selection }),
+      });
+      if (!result.created) return;
+      clearDraft(); // the kickoff consumed the draft — next open starts blank
+      // Foreground kickoff already navigated into the ticket workspace; either way
+      // the composer is done — close it (Create-more resets in place instead).
+      if (createMore) resetForm();
+      else onClose();
+    } catch (error) {
+      toast.error(`Couldn't create ticket: ${errorMessage(error)}`);
+    } finally {
+      setSubmitting(false);
+    }
   }, [title, submitting, currentFields, deps, createMore, run.selection, resetForm, onClose]);
 
-  // ⌘+Enter → Create, ⌘+Shift+Enter → Create & start. Captured on the composer
+  // The third commit (VC-329 item 4): create in the chip's status — never
+  // moved to make a column match — then run the chosen saved Automation on it.
+  const handleCreateWithAutomation = React.useCallback(
+    async (automation: { id: string; name: string }) => {
+      if (title.trim() === "" || submitting) return;
+      setSubmitting(true);
+      try {
+        const result = await runCreateWithAutomation(currentFields(), deps, { automation });
+        if (!result.created) return;
+        clearDraft();
+        if (createMore) resetForm();
+        else onClose();
+      } catch (error) {
+        toast.error(`Couldn't create ticket: ${errorMessage(error)}`);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [title, submitting, currentFields, deps, createMore, resetForm, onClose],
+  );
+
+  const handleSubmit = React.useCallback(() => {
+    const action = composerLaunchAction(launch, target.id, automationOffer);
+    if (!action.available) return;
+    if (launch.kind === "create") void handleCreate();
+    else if (launch.kind === "kickoff") void handleKickoff();
+    else if (action.automation !== null) void handleCreateWithAutomation(action.automation);
+  }, [launch, target.id, automationOffer, handleCreate, handleKickoff, handleCreateWithAutomation]);
+
+  // ⌘+Enter → the selected action, ⌘+Shift+Enter → Create & start. Captured on the composer
   // root so the shortcut fires before Monaco or the title input can act on the
   // Enter — plain Enter is left alone (title moves focus to the body). React
   // dispatches capture-phase handlers from a native listener on the app root,
@@ -298,12 +360,15 @@ export function ComposerForm({
   const handleKeyDownCapture = React.useCallback(
     (event: React.KeyboardEvent) => {
       if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+      // Portalled menus are React descendants, but choosing within one is not
+      // a composer commit. Let its own keyboard interaction finish first.
+      if (!event.currentTarget.contains(event.target as Node)) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.shiftKey) void handleKickoff();
-      else void handleCreate();
+      else handleSubmit();
     },
-    [handleCreate, handleKickoff],
+    [handleSubmit, handleKickoff],
   );
 
   return (
@@ -330,7 +395,7 @@ export function ComposerForm({
       {...fileAttachHandlers((picked) => void attachFiles(picked))}
       className="flex min-w-0 flex-col"
     >
-      <div className="border-b border-border px-4 py-2">
+      <div className="px-6 pt-4 pb-2">
         <ComposerBreadcrumb
           projects={projects}
           target={target}
@@ -341,7 +406,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="flex min-w-0 flex-col gap-2 px-4 pt-4 pb-4">
+      <div className="flex min-w-0 flex-col gap-2 px-6 pt-4 pb-4">
         <input
           ref={titleRef}
           autoFocus
@@ -380,7 +445,7 @@ export function ComposerForm({
         />
       </div>
 
-      <div className="px-4 pb-4">
+      <div className="px-6 pb-4">
         <ComposerChips
           projectId={target.id}
           status={status}
@@ -389,6 +454,8 @@ export function ComposerForm({
           onPriorityChange={setPriority}
           labels={labels}
           onLabelsChange={setLabels}
+          createMore={createMore}
+          onCreateMoreChange={setCreateMore}
           branch={{
             state: branchState,
             baseBranch,
@@ -402,17 +469,22 @@ export function ComposerForm({
       <AttachmentStrip
         attachments={attachments}
         onRemove={(attachment) => void removeAttachment(attachment)}
-        className="border-t border-border px-4 pt-2"
+        className="border-t border-border px-6 pt-2"
       />
 
-      <div className="border-t border-border px-4 py-2">
+      <div className="border-t border-border bg-muted/10 px-6 py-4">
         <ComposerFooter
+          projectId={target.id}
           onAttachFiles={(picked) => void attachFiles(picked)}
           run={run}
-          createMore={createMore}
-          onCreateMoreChange={setCreateMore}
-          onCreate={() => void handleCreate()}
-          onKickoff={() => void handleKickoff()}
+          launch={launch}
+          onLaunchChange={setLaunch}
+          onSubmit={handleSubmit}
+          automationOffer={{
+            groups: automationOffer.groups,
+            ready: automationOffer.ready,
+            enabledIds,
+          }}
           disabled={!canSubmit}
         />
       </div>
