@@ -253,9 +253,42 @@ export function isProjectSessionRowSelected(
 }
 
 /**
+ * The ids from one flat, per-session store map that
+ * {@link buildActiveSessionListing} can actually read for one project — every
+ * tab root and every pane under the containers it walks, and nothing else.
+ *
+ * `lastOutputAt`, `parkState`, and `harness` all have that shape and all replace
+ * their top-level object when one Session moves. Keeping the key walk here
+ * means their React subscriptions can narrow by the same exact rule as the
+ * builder instead of each component maintaining an almost-the-same project
+ * membership test.
+ */
+export function listingSessionIds(input: {
+  containers: Readonly<Record<string, SessionContainer>>;
+  /** The project's ticket ids — the container keys its ticket Sessions live under. */
+  ticketIds: Iterable<string>;
+  /** The project's own id, which is the container key its Board Sessions live under. */
+  projectOwnerId: string;
+}): string[] {
+  const sessionIds = new Set<string>();
+  const takeContainer = (ownerId: string): void => {
+    const container = input.containers[ownerId];
+    if (container === undefined) return;
+    for (const tab of container.tabs) {
+      // Both, and not just the panes: an exited tab is dated by its ROOT id
+      // (`fileExitedTab`), which in a split tab is no longer any live pane.
+      sessionIds.add(tab.sessionId);
+      for (const pane of sessionPanes(tab.layout)) sessionIds.add(pane.sessionId);
+    }
+  };
+  for (const ticketId of input.ticketIds) takeContainer(ticketId);
+  takeContainer(input.projectOwnerId);
+  return [...sessionIds];
+}
+
+/**
  * The `lastOutputAt` entries {@link buildActiveSessionListing} can actually
- * read for one project — every tab root and every pane under the containers it
- * walks, and nothing else.
+ * read for one project.
  *
  * The store keeps ONE flat output-stamp map for every live session in the app
  * and replaces it wholesale on each bump (a busy session bumps about once a
@@ -273,28 +306,14 @@ export function isProjectSessionRowSelected(
 export function listingOutputStamps(input: {
   lastOutputAt: Readonly<Record<string, number>>;
   containers: Readonly<Record<string, SessionContainer>>;
-  /** The project's ticket ids — the container keys its ticket Sessions live under. */
   ticketIds: Iterable<string>;
-  /** The project's own id, which is the container key its Board Sessions live under. */
   projectOwnerId: string;
 }): Record<string, number> {
   const stamps: Record<string, number> = {};
-  const take = (sessionId: string): void => {
-    const at = input.lastOutputAt[sessionId];
-    if (at !== undefined) stamps[sessionId] = at;
-  };
-  const takeContainer = (ownerId: string): void => {
-    const container = input.containers[ownerId];
-    if (container === undefined) return;
-    for (const tab of container.tabs) {
-      // Both, and not just the panes: an exited tab is dated by its ROOT id
-      // (`fileExitedTab`), which in a split tab is no longer any live pane.
-      take(tab.sessionId);
-      for (const pane of sessionPanes(tab.layout)) take(pane.sessionId);
-    }
-  };
-  for (const ticketId of input.ticketIds) takeContainer(ticketId);
-  takeContainer(input.projectOwnerId);
+  for (const sessionId of listingSessionIds(input)) {
+    const value = input.lastOutputAt[sessionId];
+    if (value !== undefined) stamps[sessionId] = value;
+  }
   return stamps;
 }
 
