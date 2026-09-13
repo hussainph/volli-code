@@ -8,6 +8,7 @@ const REPORT = JSON.stringify({
     {
       id: "path-position",
       title: "Volli's bin is first on PATH",
+      failureTitle: "Volli bin is missing from PATH",
       status: "fail",
       detail: "not on PATH",
       remedy: "Run `volli doctor --fix`.",
@@ -41,6 +42,37 @@ describe("parseDoctorOutput", () => {
         '__VOLLI_DOCTOR__{"checks":[{"id":"a","title":"t","status":"meh","detail":"d"}],"summary":"s"}',
       ),
     ).toBeNull();
+  });
+
+  // VC-293: About heads a finding with its failure title, so the parse has to
+  // guarantee one exists.
+  it("keeps a finding's failure title", () => {
+    const parsed = parseDoctorOutput(`__VOLLI_DOCTOR__${REPORT}`);
+    const finding = parsed?.checks[1];
+
+    expect(finding?.status).toBe("fail");
+    expect(finding?.status === "ok" ? undefined : finding?.failureTitle).toBe(
+      "Volli bin is missing from PATH",
+    );
+  });
+
+  // The probe runs whichever `volli` the login shell resolves, which may be an
+  // older install's. A report is still a report: the finding marks its old
+  // passing claim as unconfirmed and supplies repair guidance rather than
+  // discarding the whole run or exposing its measurement on the page.
+  it("fills a finding's heading and repair when an older CLI sent neither", () => {
+    const parsed = parseDoctorOutput(
+      '__VOLLI_DOCTOR__{"checks":[{"id":"a","title":"Shell integration is active","status":"warn","detail":"d"}],"summary":"s"}',
+    );
+    const finding = parsed?.checks[0];
+
+    expect(parsed?.checks).toHaveLength(1);
+    expect(finding?.status === "ok" ? undefined : finding?.failureTitle).toBe(
+      "Check did not pass — Shell integration is active",
+    );
+    expect(finding?.remedy).toBe(
+      "Run `volli doctor` from a new Volli terminal for current repair guidance.",
+    );
   });
 });
 

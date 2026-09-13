@@ -29,16 +29,50 @@ import type { WrapperRefusal } from "./harness/wrapper";
 /** How much a finding matters. `warn` is a degraded but working install. */
 export type DoctorStatus = "ok" | "warn" | "fail";
 
-export interface DoctorCheck {
+interface DoctorCheckShape {
   /** Stable machine name, for `--json` consumers and for talking about a finding. */
   id: string;
+  /** The claim the check makes when it holds — the heading a passing result reads under. */
   title: string;
-  status: DoctorStatus;
   /** What was actually observed — always concrete, never a restatement of the title. */
   detail: string;
-  /** What would put it right, when there is a next action a human can take. */
+  /** What would put it right. Passing checks normally have no repair to offer. */
   remedy?: string;
 }
+
+/** A check that held. */
+export interface DoctorCheckPass extends DoctorCheckShape {
+  status: "ok";
+}
+
+/**
+ * A check that did not hold, with a required problem heading.
+ *
+ * `title` remains the passing claim for support reports. `failureTitle` is the
+ * self-contained heading people see when the claim did not hold. New checks
+ * supply a remedy through `bad`; the field remains optional on the wire so
+ * reports from an older app can still be normalized and displayed safely.
+ */
+export interface DoctorCheckFault extends DoctorCheckShape {
+  status: Exclude<DoctorStatus, "ok">;
+  failureTitle: string;
+}
+
+export type DoctorCheck = DoctorCheckPass | DoctorCheckFault;
+
+/** The heading a surface draws: the claim when it held, the problem when it did not. */
+export function doctorCheckHeadline(check: DoctorCheck): string {
+  return check.status === "ok" ? check.title : check.failureTitle;
+}
+
+/** A safe problem heading for a finding received from a pre-VC-293 producer. */
+export function legacyDoctorFailureTitle(title: string): string {
+  return `Check did not pass — ${title}`;
+}
+
+/** Repair guidance when an older producer sent only its diagnostic measurement. */
+export const LEGACY_DOCTOR_REMEDY =
+  "Run `volli doctor` from a new Volli terminal for current repair guidance.";
 
 /**
  * One reported field. `null` is a MEASUREMENT — the caller looked and found
@@ -114,22 +148,34 @@ export interface DoctorFacts {
   reporting: readonly { harnessId: string; declared: number; verified: number }[];
   /** Managed skill files the installer left alone because the user edited them. */
   skillConflicts: readonly string[];
+  /**
+   * Running processes no live Session owns (VC-341), as the latest sweep
+   * counted them: `total` is everything the panel lists and `reapable` is the
+   * subset Volli is prepared to kill — the rest is a person's own terminal
+   * standing in a worktree, which is context rather than a finding.
+   *
+   * `undefined` is a launch that could not sweep at all (no database, no
+   * `ps`), and it reads as "unknown" rather than as zero. Zero is a
+   * measurement worth printing: it is the answer this check exists to give
+   * on a healthy machine.
+   */
+  orphanProcesses?: { total: number; reapable: number };
 }
 
 function ok(id: string, title: string, detail: string): DoctorCheck {
   return { id, title, status: "ok", detail };
 }
 
+/** Every new finding must choose both its problem heading and its repair. */
 function bad(
   id: string,
   title: string,
+  failureTitle: string,
   status: Exclude<DoctorStatus, "ok">,
   detail: string,
-  remedy?: string,
-): DoctorCheck {
-  return remedy === undefined
-    ? { id, title, status, detail }
-    : { id, title, status, detail, remedy };
+  remedy: string,
+): DoctorCheckFault {
+  return { id, title, failureTitle, status, detail, remedy };
 }
 
 /**
@@ -147,6 +193,7 @@ function pathPositionCheck(observation: DoctorObservation, facts: DoctorFacts): 
     return bad(
       "path-position",
       "Volli's bin is first on PATH",
+      "Volli bin is missing from PATH",
       "fail",
       `${facts.binDir} is not on PATH at all (${total} entries)`,
       "Open a new Volli terminal; if this persists, the session was not started by Volli.",
@@ -156,6 +203,7 @@ function pathPositionCheck(observation: DoctorObservation, facts: DoctorFacts): 
   return bad(
     "path-position",
     "Volli's bin is first on PATH",
+    "Volli bin is not first on PATH",
     "fail",
     `position ${index + 1} of ${total} — ${ahead.length} ${
       ahead.length === 1 ? "entry shadows" : "entries shadow"
@@ -195,13 +243,21 @@ function resolutionChecks(observation: DoctorObservation, facts: DoctorFacts): D
       return bad(
         id,
         title,
+        `\`${command}\`'s resolution was not reported`,
         "warn",
         `no resolution was reported for \`${command}\``,
         "Run `volli doctor` from a Volli terminal, where the full wrapper set is visible.",
       );
     }
     if (actual === null) {
-      return bad(id, title, "warn", `\`${command}\` resolves to nothing on this PATH`);
+      return bad(
+        id,
+        title,
+        `\`${command}\` resolves to nothing`,
+        "warn",
+        `\`${command}\` resolves to nothing on this PATH`,
+        `Install the \`${command}\` command, or remove its harness if you no longer use it.`,
+      );
     }
     return ok(id, title, actual);
   });
@@ -277,6 +333,7 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
       return bad(
         id,
         title,
+        `\`${tool}\` is missing from the session PATH`,
         "fail",
         `\`${tool}\` resolves to nothing on this PATH`,
         TOOL_REMEDIES[required],
@@ -285,6 +342,7 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
     return bad(
       id,
       title,
+      `\`${tool}\` availability was not reported`,
       "warn",
       `no resolution was reported for \`${tool}\``,
       "Run `volli doctor` from a Volli terminal, where the full tool set is visible.",
@@ -298,35 +356,43 @@ function toolChecks(observation: DoctorObservation): DoctorCheck[] {
  * lead with: three rules reported under one sentence sends a user to rename a
  * command that was never the problem.
  */
-function refusalReport(entry: DoctorFacts["refused"][number]): { detail: string; remedy: string } {
+function refusalReport(entry: DoctorFacts["refused"][number]): {
+  failureTitle: string;
+  detail: string;
+  remedy: string;
+} {
   switch (entry.reason) {
     case "shadows-system-command":
       return {
+        failureTitle: `\`${entry.command}\` is not wrapped — the name belongs to a system command`,
         detail: `a harness claims the name \`${entry.command}\`, which is ${entry.resolvedPath} on this system`,
         remedy:
           "Volli refuses to shadow a system tool. Rename the harness's command in its manifest.",
       };
     case "name-already-owned":
       return {
+        failureTitle: `\`${entry.command}\` is not wrapped — another harness owns the name`,
         detail: `another harness already owns the name \`${entry.command}\`, so ${entry.resolvedPath} was left as it was`,
         remedy:
           "Volli's bin holds one file per name. Rename the harness's command in its manifest.",
       };
     case "argv-not-transportable":
       return {
+        failureTitle: `\`${entry.command}\` is not wrapped — its launch arguments cannot be carried`,
         detail: `the launch argv for \`${entry.command}\` holds a newline or an empty word, which ${entry.resolvedPath} could not have carried intact`,
         remedy: "Remove the newline or empty argument from the harness's declared flags.",
       };
   }
 }
 
-/** A refused wrapper is a correct outcome, but the user should know the harness is unwrapped. */
+/** A refused wrapper is a correct outcome, but the user should know why it is unwrapped. */
 function refusedChecks(facts: DoctorFacts): DoctorCheck[] {
   return facts.refused.map((entry) => {
     const report = refusalReport(entry);
     return bad(
       `refused-${entry.command}`,
       `\`${entry.command}\` is not wrapped`,
+      report.failureTitle,
       "warn",
       report.detail,
       report.remedy,
@@ -341,12 +407,21 @@ function shellInitCheck(observation: DoctorObservation, facts: DoctorFacts): Doc
     return bad(
       id,
       title,
+      "This shell has no Volli integration hook",
       "warn",
       "this shell has no post-startup hook Volli can use, so only Volli-started agents are wrapped",
+      "Use a Volli-started terminal, or switch your login shell to zsh for shell-startup integration.",
     );
   }
   if (!facts.shellInitPresent) {
-    return bad(id, title, "fail", `${facts.shellInitDir} is missing`, "Run `volli doctor --fix`.");
+    return bad(
+      id,
+      title,
+      "Shell integration files are missing",
+      "fail",
+      `${facts.shellInitDir} is missing`,
+      "Run `volli doctor --fix`.",
+    );
   }
   // Unmeasured before mismatched, because unmeasured is also unequal — and
   // calling it a mismatch would name a value nobody read.
@@ -354,14 +429,17 @@ function shellInitCheck(observation: DoctorObservation, facts: DoctorFacts): Doc
     return bad(
       id,
       title,
+      "Shell integration could not be checked",
       "warn",
       `ZDOTDIR was not reported, so it cannot be compared to ${facts.shellInitDir}`,
+      "Run `volli doctor` from a Volli terminal, where shell integration is visible.",
     );
   }
   if (observation.zdotDir !== facts.shellInitDir) {
     return bad(
       id,
       title,
+      "This terminal has stale shell integration",
       "fail",
       `ZDOTDIR is ${observation.zdotDir ?? "unset"}, not ${facts.shellInitDir}`,
       "This terminal started before the integration was generated. Open a new one.",
@@ -374,12 +452,20 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
   const id = "volli-cli";
   const title = "`volli` is this app's CLI";
   if (observation.volliPath === undefined) {
-    return bad(id, title, "warn", "no `volli` path was reported, so nothing is known about it");
+    return bad(
+      id,
+      title,
+      "`volli`'s location was not reported",
+      "warn",
+      "no `volli` path was reported, so nothing is known about it",
+      "Run `volli doctor` from a Volli terminal, where the command location is visible.",
+    );
   }
   if (observation.volliPath === null) {
     return bad(
       id,
       title,
+      "`volli` is missing from PATH",
       "fail",
       "`volli` resolves to nothing — agents cannot reach the planner",
       "Launch the Volli app (it installs the CLI in the background), then open a new terminal.",
@@ -389,6 +475,7 @@ function volliCheck(observation: DoctorObservation, facts: DoctorFacts): DoctorC
   return bad(
     id,
     title,
+    "`volli` belongs to another Volli install",
     "warn",
     `resolves to ${observation.volliPath}, which is not this app's shim (${facts.shimPath})`,
     "Another Volli install owns the link. Launch the app you want owning it, or remove ~/.local/bin/volli and relaunch this one.",
@@ -420,6 +507,7 @@ function sessionCheck(
     return bad(
       id,
       title,
+      "This terminal is not authenticated for its Session",
       "warn",
       `VOLLI_SESSION names ${observation.sessionId}, but this caller is not authenticated for it, so coordination events from here are refused.`,
       "Run `volli doctor` from inside the live Session attachment whose VOLLI_SESSION_TOKEN authenticates this caller.",
@@ -430,6 +518,7 @@ function sessionCheck(
   return bad(
     id,
     title,
+    "This terminal's Session has ended",
     "warn",
     `VOLLI_SESSION names ${observation.sessionId}, which has ended; coordination events from here are refused.`,
     "Open or resume a live Session, then run `volli doctor` from its attachment.",
@@ -446,13 +535,52 @@ function reportingChecks(facts: DoctorFacts): DoctorCheck[] {
       return bad(
         id,
         title,
+        `${entry.harnessId} has reported no events yet`,
         "warn",
         `declares ${entry.declared} events, none seen yet`,
-        "Expected before its first run. If it persists after a turn, the hooks are not firing.",
+        "Run one harness turn; if this persists, run `volli doctor --fix` and open a new terminal.",
       );
     }
     return ok(id, title, `${entry.verified} of ${entry.declared} verified by real delivery`);
   });
+}
+
+/**
+ * The count VC-341's audit would have surfaced: ten dev servers and tool
+ * daemons, three to eighteen days old, under worktrees whose Sessions had long
+ * since ended, with nothing on the machine able to name them.
+ *
+ * A `warn` rather than a `fail`, and deliberately: a stale process is not a
+ * broken install, it is memory nobody is getting back, and the remedy is a
+ * person looking at a list rather than a repair this app can perform.
+ */
+function orphanProcessCheck(facts: DoctorFacts): DoctorCheck {
+  const id = "orphan-processes";
+  const title = "Processes no live Session owns";
+  const counts = facts.orphanProcesses;
+  if (counts === undefined) {
+    return bad(
+      id,
+      title,
+      "Orphaned processes could not be checked",
+      "warn",
+      "the process sweep did not run this launch",
+      "Relaunch Volli, then re-check.",
+    );
+  }
+  if (counts.total === 0) return ok(id, title, "none");
+  const listed = `${counts.total} still running`;
+  if (counts.reapable === 0) {
+    return ok(id, title, `${listed}, none of them Volli's to reap`);
+  }
+  return bad(
+    id,
+    title,
+    "Volli-owned orphaned processes are still running",
+    "warn",
+    `${listed}, ${counts.reapable} of them Volli's`,
+    "Settings → Storage lists them with their Ticket, age and memory, and reaps the ones you choose.",
+  );
 }
 
 function skillCheck(facts: DoctorFacts): DoctorCheck[] {
@@ -461,6 +589,7 @@ function skillCheck(facts: DoctorFacts): DoctorCheck[] {
     bad(
       "skills",
       "Managed skill files",
+      "Managed skill files were left as you edited them",
       "warn",
       `${facts.skillConflicts.length} left untouched because you edited them: ${facts.skillConflicts.join(", ")}`,
       "Delete a file to let Volli rewrite it, or keep your version.",
@@ -487,6 +616,7 @@ export function runDoctorChecks(
     ...resolutionChecks(observation, facts),
     ...refusedChecks(facts),
     ...reportingChecks(facts),
+    orphanProcessCheck(facts),
     ...skillCheck(facts),
   ];
   const rank: Record<DoctorStatus, number> = { fail: 0, warn: 1, ok: 2 };

@@ -19,7 +19,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, LEGACY_DOCTOR_REMEDY, legacyDoctorFailureTitle } from "@volli/shared";
 import type { DoctorCheck, DoctorStatus } from "@volli/shared";
 
 import type { CliDoctorResult } from "../ipc/contract";
@@ -95,7 +95,7 @@ function isDoctorStatus(value: unknown): value is DoctorStatus {
   return value === "ok" || value === "warn" || value === "fail";
 }
 
-function isDoctorCheck(value: unknown): value is DoctorCheck {
+function isDoctorCheck(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null) return false;
   const check = value as Record<string, unknown>;
   return (
@@ -103,8 +103,28 @@ function isDoctorCheck(value: unknown): value is DoctorCheck {
     typeof check["title"] === "string" &&
     isDoctorStatus(check["status"]) &&
     typeof check["detail"] === "string" &&
-    (check["remedy"] === undefined || typeof check["remedy"] === "string")
+    (check["remedy"] === undefined || typeof check["remedy"] === "string") &&
+    (check["failureTitle"] === undefined || typeof check["failureTitle"] === "string")
   );
+}
+
+/**
+ * A validated check, with the guarantee About draws on: a finding HAS a
+ * failure title (VC-293).
+ *
+ * The probe runs whichever `volli` the login shell resolves, so the report may
+ * come from an install older than that requirement. Marking its passing claim
+ * as not having held keeps such a report usable without presenting the claim
+ * as true — refusing the whole run would report a working doctor as a broken
+ * login shell, and leaving the field absent would head a fault with `undefined`.
+ */
+function doctorCheck(value: Record<string, unknown>): DoctorCheck {
+  if (value["status"] === "ok") return value as unknown as DoctorCheck;
+  return {
+    ...value,
+    failureTitle: value["failureTitle"] ?? legacyDoctorFailureTitle(value["title"] as string),
+    remedy: value["remedy"] ?? LEGACY_DOCTOR_REMEDY,
+  } as unknown as DoctorCheck;
 }
 
 /** The `{ checks, summary }` the CLI printed, or `null` when the output holds no such report. */
@@ -126,7 +146,7 @@ export function parseDoctorOutput(
   if (!Array.isArray(checks) || !checks.every(isDoctorCheck) || typeof summary !== "string") {
     return null;
   }
-  return { checks, summary };
+  return { checks: checks.map(doctorCheck), summary };
 }
 
 export async function probeCliDoctor(deps: CliDoctorDeps): Promise<CliDoctorResult> {

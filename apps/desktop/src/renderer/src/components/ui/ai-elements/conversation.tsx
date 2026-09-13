@@ -95,14 +95,14 @@ export const Conversation = ({ className, resize, children, ...props }: Conversa
       onWheel={handleWheel}
       {...props}
     >
-      <StopFollowingBridge>{children}</StopFollowingBridge>
+      <ConversationBridge>{children}</ConversationBridge>
     </StickToBottom>
   );
 };
 
 /* --------------------------------------------------------------- following */
 
-/**
+/*
  * Growth the agent produces is followed. Growth the reader reveals is not.
  *
  * `use-stick-to-bottom` has exactly one input — the content element got taller
@@ -130,7 +130,28 @@ export const Conversation = ({ className, resize, children, ...props }: Conversa
  * on its own. Expand detaches, collapse re-attaches, and neither needed a
  * second state of ours to say it.
  */
-const StopFollowing = createContext<() => void>(() => {});
+/**
+ * The transcript's scroller, and the detach above, behind ONE stable object.
+ *
+ * Both answers come from `useStickToBottomContext()`, and neither may be read
+ * from it directly by a consumer in the transcript — see
+ * {@link ConversationBridge} for why. The scroller is published as a getter
+ * rather than the element because the element arrives a commit after the first
+ * render and a value would have been `null` forever.
+ */
+export interface ConversationControl {
+  /** Detach auto-follow before growing the column under the reader. */
+  stopFollowing(): void;
+  /** The scrolling element, or `null` outside a `Conversation`. */
+  scroller(): HTMLElement | null;
+}
+
+const NO_CONVERSATION: ConversationControl = {
+  stopFollowing: () => {},
+  scroller: () => null,
+};
+
+const ConversationControlContext = createContext<ConversationControl>(NO_CONVERSATION);
 
 /**
  * What a disclosure calls before it grows the transcript under the reader.
@@ -140,7 +161,18 @@ const StopFollowing = createContext<() => void>(() => {});
  * anything. `useStickToBottomContext()` throws there, which is not a fact a
  * presentation row should have to carry.
  */
-export const useStopFollowing = (): (() => void) => useContext(StopFollowing);
+export const useStopFollowing = (): (() => void) =>
+  useContext(ConversationControlContext).stopFollowing;
+
+/**
+ * The same hand-out for a consumer that also has to READ the scroll position —
+ * the windowed transcript (VC-338), which keeps the reader's place when it
+ * mounts a page of earlier rows above them. Outside a `Conversation` it answers
+ * `null` for the scroller, so a row list in a test or a lab scratch simply does
+ * no compensating.
+ */
+export const useConversationControl = (): ConversationControl =>
+  useContext(ConversationControlContext);
 
 /**
  * Published with a permanently stable identity, which is the whole reason this
@@ -149,14 +181,24 @@ export const useStopFollowing = (): (() => void) => useContext(StopFollowing);
  * and a context whose value changes re-renders every consumer through `memo`.
  * The consumers here are every tool row in the transcript.
  */
-function StopFollowingBridge({ children }: { children: ReactNode }) {
-  const { stopScroll } = useStickToBottomContext();
-  const latest = useRef(stopScroll);
+function ConversationBridge({ children }: { children: ReactNode }) {
+  const { stopScroll, scrollRef } = useStickToBottomContext();
+  const latest = useRef({ stopScroll, scrollRef });
   useLayoutEffect(() => {
-    latest.current = stopScroll;
-  }, [stopScroll]);
-  const stopFollowing = useMemo(() => () => latest.current(), []);
-  return <StopFollowing.Provider value={stopFollowing}>{children}</StopFollowing.Provider>;
+    latest.current = { stopScroll, scrollRef };
+  }, [scrollRef, stopScroll]);
+  const control = useMemo<ConversationControl>(
+    () => ({
+      stopFollowing: () => latest.current.stopScroll(),
+      scroller: () => latest.current.scrollRef.current,
+    }),
+    [],
+  );
+  return (
+    <ConversationControlContext.Provider value={control}>
+      {children}
+    </ConversationControlContext.Provider>
+  );
 }
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;

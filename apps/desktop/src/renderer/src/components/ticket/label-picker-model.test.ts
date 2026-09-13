@@ -96,6 +96,11 @@ describe("newLabelFromQuery", () => {
     expect(newLabelFromQuery(["bug"], [], "Bug")).toBeNull();
   });
 
+  it("uses SQLite NOCASE identity for non-ASCII and NUL edge cases", () => {
+    expect(newLabelFromQuery(["Ü"], [], "ü")).toBe("ü");
+    expect(newLabelFromQuery(["A\0x"], [], "a\0y")).toBeNull();
+  });
+
   it("refuses a name already selected on this ticket", () => {
     expect(newLabelFromQuery([], ["fresh"], "fresh")).toBeNull();
   });

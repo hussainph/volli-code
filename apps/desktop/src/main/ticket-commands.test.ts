@@ -24,8 +24,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import type { TicketEventActor } from "@volli/shared";
 
 import { listTicketEvents } from "./db/events-repo";
+import { getOrCreateLabel } from "./db/labels-repo";
 import { insertProject } from "./db/projects-repo";
-import { getTicketRow } from "./db/tickets-repo";
+import { getTicket, getTicketRow } from "./db/tickets-repo";
 import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
 import {
   archiveTicketCommand,
@@ -35,9 +36,11 @@ import {
   interruptOnBackwardMove,
   moveTicketCommand,
   moveTicketsCommand,
+  planLabelMerge,
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   unarchiveTicketCommand,
+  mergeLabelsCommand,
   updateTicketFieldsCommand,
   type CreateTicketCommandInput,
 } from "./ticket-commands";
@@ -128,6 +131,20 @@ describe("ticket-commands event emission", () => {
     expect(eventKinds("t2")).toEqual(["created", "labels_changed"]);
     expect(eventOfKind("t2", "labels_changed")!.payload).toMatchObject({
       added: ["bug", "ui"],
+      removed: [],
+    });
+  });
+
+  it("records the canonical existing Label spelling when create uses case variants", () => {
+    seed();
+    createTicket("t1", "backlog", { labels: ["UI"] });
+
+    createTicket("t2", "backlog", { labels: ["ui", "Ui"] });
+
+    expect(getTicket(ctx.db, "t2")?.labels).toEqual(["UI"]);
+    expect(eventOfKind("t2", "labels_changed")?.payload).toEqual({
+      kind: "labels_changed",
+      added: ["UI"],
       removed: [],
     });
   });
@@ -366,6 +383,23 @@ describe("ticket-commands event emission", () => {
     expect(removed.payload).toMatchObject({ added: [], removed: ["a"] });
   });
 
+  it("treats a case-only Label replacement as a no-op instead of removing it", () => {
+    seed();
+    createTicket("t1", "backlog", { labels: ["UI"] });
+    const before = getTicketRow(ctx.db, "t1")!;
+    const beforeEvents = listTicketEvents(ctx.db, "t1");
+
+    const ticket = setTicketLabelsCommand(
+      ctx.db,
+      { ticketId: "t1", labels: ["ui", "Ui"] },
+      { now: 2, actor: USER },
+    );
+
+    expect(ticket.labels).toEqual(["UI"]);
+    expect(getTicketRow(ctx.db, "t1")?.row_version).toBe(before.row_version);
+    expect(listTicketEvents(ctx.db, "t1")).toEqual(beforeEvents);
+  });
+
   it("records a commented event when a comment is created", () => {
     seed();
     createTicket("t1");
@@ -390,6 +424,33 @@ describe("ticket-commands event emission", () => {
 
     unarchiveTicketCommand(ctx.db, "t1", { now: 4, actor: USER });
     expect(eventKinds("t1")).toContain("unarchived");
+  });
+});
+
+describe("Label merge command boundary", () => {
+  it("rejects self-merges and cross-Project targets before changing either Label", () => {
+    seed();
+    const from = getOrCreateLabel(ctx.db, PROJECT_ID, "from", 1);
+    const into = getOrCreateLabel(ctx.db, PROJECT_ID, "into", 1);
+    const otherProject = testProject({ id: "p2", ticketPrefix: "OT", path: "/other" });
+    insertProject(ctx.db, otherProject);
+    const other = getOrCreateLabel(ctx.db, otherProject.id, "other", 1);
+
+    expect(() => planLabelMerge(ctx.db, { fromLabelId: from.id, intoLabelId: from.id })).toThrow(
+      /itself/i,
+    );
+    expect(() =>
+      mergeLabelsCommand(
+        ctx.db,
+        { fromLabelId: from.id, intoLabelId: other.id },
+        { now: 2, actor: USER },
+      ),
+    ).toThrow(/different projects/i);
+    expect(planLabelMerge(ctx.db, { fromLabelId: from.id, intoLabelId: into.id })).toMatchObject({
+      from: { id: from.id },
+      into: { id: into.id },
+      tickets: [],
+    });
   });
 });
 

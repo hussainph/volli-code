@@ -20,7 +20,7 @@ import type Database from "better-sqlite3";
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { listRecentComments } from "../db/comments-repo";
 import { listRecentTicketEvents } from "../db/events-repo";
-import { listAllLabels } from "../db/labels-repo";
+import { findLabelByName, listAllLabels } from "../db/labels-repo";
 import { listLatestSignals } from "../db/signals-repo";
 import {
   getTicket,
@@ -309,10 +309,18 @@ export async function ticketListVerb(
   ) {
     return failure("INVALID_REQUEST", "Invalid ticket list filters.");
   }
+  const canonicalLabel =
+    typeof label === "string"
+      ? findLabelByName(options.db, resolved.project.id, label)?.name
+      : undefined;
   const tickets = listTicketsByProject(options.db, resolved.project.id)
     .filter((ticket) => status === undefined || ticket.status === status)
     .filter((ticket) => priority === undefined || ticket.priority === priority)
-    .filter((ticket) => label === undefined || ticket.labels.includes(label))
+    .filter(
+      (ticket) =>
+        label === undefined ||
+        (canonicalLabel !== undefined && ticket.labels.includes(canonicalLabel)),
+    )
     .slice(0, typeof limit === "number" ? limit : undefined)
     .map((ticket) => agentTicket(ticket, resolved.project));
   return { v: 1, ok: true, data: { tickets } };

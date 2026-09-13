@@ -1,6 +1,8 @@
 import {
   ERROR_RECOVERY,
   isAgentMutationPlan,
+  LEGACY_DOCTOR_REMEDY,
+  legacyDoctorFailureTitle,
   SESSION_ENV_TOOLS,
   TICKET_STATUS_LABELS,
   untrustedProseResponseLines,
@@ -228,6 +230,7 @@ const TICKET_EVENT_INLINE_FIELDS: Readonly<Record<string, readonly string[]>> = 
   pr_opened: ["url"],
   pr_merged: ["url"],
   worktree_reclaimed: ["branch", "daysInDone"],
+  worktree_trimmed: ["entries", "bytes", "kept"],
   attachment_added: ["attachmentId"],
   attachment_removed: ["attachmentId"],
   session_started: ["sessionId"],
@@ -430,6 +433,27 @@ function countCell(value: unknown): string {
 }
 
 /**
+ * A chat Session's liveness cell: its state word, and the reason that state
+ * carries when it has one.
+ *
+ * One helper for the list row and the peek header, because they are the same
+ * cell read at two distances and VC-86's rule is that they say the same thing.
+ * At most one reason can apply: `waitingOn` rides `waiting` and
+ * `interruptedReason` rides `interrupted` (VC-324), and main pins each to its
+ * own state before it is sent. `on` for the errand a person can run, a
+ * parenthetical for the post-mortem — nobody is being asked to go and do
+ * `crash-recovered`.
+ */
+function sessionStateCell(session: Record<string, unknown>): unknown {
+  const status = session["status"];
+  const waitingOn = session["waitingOn"];
+  if (typeof waitingOn === "string") return `${status} on ${waitingOn}`;
+  const interruptedReason = session["interruptedReason"];
+  if (typeof interruptedReason === "string") return `${status} (${interruptedReason})`;
+  return status;
+}
+
+/**
  * An elapsed span at the precision a peek is read at: seconds while something
  * is happening, minutes while it is thinking, hours once it has stopped. The
  * caller is deciding whether to look closer, not measuring anything.
@@ -450,12 +474,9 @@ function ageText(value: unknown): string {
  * conversation.
  */
 function renderChatPeek(data: Record<string, unknown>, transcript: readonly unknown[]): string {
-  const waitingOn = data["waitingOn"];
   const unreadable = data["unreadable"];
   const header = [
-    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(data["status"])}${
-      typeof waitingOn === "string" ? ` on ${terminalSafeInline(waitingOn)}` : ""
-    }`,
+    `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
     ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
@@ -718,6 +739,30 @@ function modelTierCells(row: Record<string, unknown>): ModelTierCells {
         ? `via ${terminalSafeInline(resolvedFrom)}`
         : "",
   };
+}
+
+/**
+ * A merge preview, or the receipt for one that ran (VC-310).
+ *
+ * The affected tickets are the whole point of the preview, so they are listed
+ * rather than counted — a number cannot be checked against what a person
+ * expected, and this is the last screen before a destructive write.
+ */
+function renderLabelMerge(data: Record<string, unknown>): string | null {
+  const tickets = recordsAt(data, "tickets");
+  if (tickets === null) return null;
+  const from = terminalSafeInline(data["from"]);
+  const into = terminalSafeInline(data["into"]);
+  const applied = data["applied"] === true;
+  const headline = applied
+    ? `Merged ${from} into ${into} across ${tickets.length} ticket(s).`
+    : `${from} → ${into} would change ${tickets.length} ticket(s).`;
+  const lines = tickets.map(
+    (ticket) =>
+      `  ${terminalSafeInline(ticket["id"])}${ticket["archived"] === true ? "  archived" : ""}  ${terminalSafeInline(ticket["title"])}`,
+  );
+  const next = typeof data["next"] === "string" ? [terminalSafeInline(data["next"])] : [];
+  return [headline, ...lines, ...next].join("\n");
 }
 
 /**
@@ -1008,6 +1053,7 @@ function renderStableLines(command: string, data: unknown): string | null {
         .join("\n") ?? null
     );
   }
+  if (command === "label.merge") return renderLabelMerge(data);
   if (command === "session.list") {
     const sessions = recordsAt(data, "sessions");
     return (
@@ -1018,11 +1064,9 @@ function renderStableLines(command: string, data: unknown): string | null {
               session["id"],
               session["kind"],
               // The liveness cell (VC-86): peek's own vocabulary — the state,
-              // with its waiting reason inline so "waiting" never hides the
-              // one thing the caller could act on.
-              typeof session["waitingOn"] === "string"
-                ? `${session["status"]} on ${session["waitingOn"]}`
-                : session["status"],
+              // with its reason inline so "waiting" never hides the one thing
+              // the caller could act on.
+              sessionStateCell(session),
               // Age of the newest durable fact — the signal a wedge hides in.
               // Absent only on a legacy or malformed row, never rendered as "-".
               typeof session["lastActivityAgeMs"] === "number"
@@ -1184,12 +1228,67 @@ function sessionEnvRepair(value: unknown): SessionEnvRepair | undefined {
     : undefined;
 }
 
-/** `doctor`'s reply is already a report; only its shape needs checking. */
-function doctorReport(data: unknown): string | null {
+/**
+ * One reported check, made safe to print.
+ *
+ * The reply is whichever app build answers the socket, not this CLI's own
+ * version, so a finding may predate the failure titles VC-293 made required.
+ * Marking its passing claim as not having held keeps the report readable
+ * without presenting that claim as true; inventing `undefined` as a heading
+ * would not.
+ */
+function doctorCheck(value: unknown): DoctorCheck | null {
+  if (!isRecord(value)) return null;
+  const { id, title, status, detail, remedy, failureTitle } = value;
+  if (
+    typeof id !== "string" ||
+    typeof title !== "string" ||
+    (status !== "ok" && status !== "warn" && status !== "fail") ||
+    typeof detail !== "string" ||
+    (remedy !== undefined && typeof remedy !== "string") ||
+    (failureTitle !== undefined && typeof failureTitle !== "string")
+  ) {
+    return null;
+  }
+  if (status === "ok") return value as unknown as DoctorCheck;
+  return {
+    ...value,
+    failureTitle: failureTitle ?? legacyDoctorFailureTitle(title),
+    remedy: remedy ?? LEGACY_DOCTOR_REMEDY,
+  } as unknown as DoctorCheck;
+}
+
+interface NormalizedDoctorReport {
+  checks: DoctorCheck[];
+  summary: string;
+  pathRepair: SessionEnvRepair | undefined;
+  data: Record<string, unknown>;
+}
+
+/** `doctor`'s reply is already a report; only its shape needs checking and normalizing. */
+function normalizeDoctorReport(data: unknown): NormalizedDoctorReport | null {
   if (!isRecord(data)) return null;
-  const { checks, summary } = data;
-  if (!Array.isArray(checks) || typeof summary !== "string") return null;
-  return renderDoctorReport(checks as DoctorCheck[], summary, sessionEnvRepair(data["pathRepair"]));
+  const { checks: rawChecks, summary } = data;
+  if (!Array.isArray(rawChecks) || typeof summary !== "string") return null;
+  const checks: DoctorCheck[] = [];
+  for (const rawCheck of rawChecks) {
+    const check = doctorCheck(rawCheck);
+    if (check === null) return null;
+    checks.push(check);
+  }
+  return {
+    checks,
+    summary,
+    pathRepair: sessionEnvRepair(data["pathRepair"]),
+    data: { ...data, checks },
+  };
+}
+
+function doctorReport(data: unknown): string | null {
+  const report = normalizeDoctorReport(data);
+  return report === null
+    ? null
+    : renderDoctorReport(report.checks, report.summary, report.pathRepair);
 }
 
 function renderCliTextSuccess(command: string, data: unknown): string {
@@ -1226,7 +1325,10 @@ function renderCliTextSuccess(command: string, data: unknown): string {
 }
 
 export function renderCliSuccess(command: string, data: unknown, options: RenderOptions): string {
-  if (options.json) return `${terminalSafeJson(data)}\n`;
+  if (options.json) {
+    const normalized = command === "doctor" ? normalizeDoctorReport(data)?.data : undefined;
+    return `${terminalSafeJson(normalized ?? data)}\n`;
+  }
   if (isAgentMutationPlan(data)) {
     const writes =
       data.durableWrites.length === 0

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { labelColor } from "./label";
+import { labelColor, labelNameKey } from "./label";
 import type { Label } from "./label";
 import { TAG_COLORS, tagColor } from "./tag-color";
 
@@ -23,5 +23,23 @@ describe("labelColor", () => {
     // `??` only falls through on null/undefined, so an explicit (if odd)
     // empty-string color is honored rather than silently reinterpreted.
     expect(labelColor({ name: "bug", color: "" })).toBe("");
+  });
+});
+
+describe("labelNameKey", () => {
+  it("folds ASCII case to the expected stable key", () => {
+    expect(labelNameKey("UI")).toBe("ui");
+    expect(labelNameKey("ui")).toBe("ui");
+    expect(labelNameKey("UX")).toBe("ux");
+  });
+
+  it("matches SQLite NOCASE at NUL and does not fold non-ASCII letters", () => {
+    expect(labelNameKey("A\0x")).toBe(labelNameKey("a\0y"));
+    expect(labelNameKey("Ü")).not.toBe(labelNameKey("ü"));
+  });
+
+  it("does not trim names as part of identity", () => {
+    expect(labelNameKey(" ui")).not.toBe(labelNameKey("ui"));
+    expect(labelNameKey("ui ")).not.toBe(labelNameKey("ui"));
   });
 });

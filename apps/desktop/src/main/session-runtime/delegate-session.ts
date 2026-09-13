@@ -80,11 +80,17 @@
  * settle would have. Nothing is re-watched; recovery reports and lets go.
  */
 
-import { shortSessionId } from "@volli/shared";
+import {
+  sessionHostNoticeMetadata,
+  shortSessionId,
+  SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
+} from "@volli/shared";
 import type {
   ModelSelection,
   RuntimeSessionIdentity,
   SessionEvent,
+  SubagentNoticeReason,
+  SubagentNoticeState,
   TicketEventActor,
 } from "@volli/shared";
 import type { SessionEngine, SessionRuntime } from "@volli/session-engine";
@@ -153,7 +159,7 @@ export interface DelegateSessionOutcome {
 }
 
 /** How a watched delegation ended. `completed` is the only one with an answer. */
-export type SubagentOutcomeState = "completed" | "interrupted" | "stopped" | "failed" | "timed-out";
+export type SubagentOutcomeState = SubagentNoticeState;
 
 /**
  * The notice the parent reads when its helper is done. Host-minted facts only:
@@ -166,18 +172,19 @@ export function subagentNotice(input: {
   childSessionId: string;
   title: string;
   state: SubagentOutcomeState;
-  how?: string;
+  reason: SubagentNoticeReason | null;
 }): string {
   const handle = shortSessionId(input.childSessionId);
   const ended =
-    input.how ??
-    {
-      completed: "completed its task",
-      interrupted: "was interrupted before it answered",
-      stopped: "was stopped before it answered",
-      failed: "failed before it answered",
-      "timed-out": "did not finish within its time bound and was stopped",
-    }[input.state];
+    input.reason === "app-relaunched"
+      ? "was mid-turn when Volli relaunched, and the relaunch ended its turn before it answered"
+      : {
+          completed: "completed its task",
+          interrupted: "was interrupted before it answered",
+          stopped: "was stopped before it answered",
+          failed: "failed before it answered",
+          "timed-out": "did not finish within its time bound and was stopped",
+        }[input.state];
   const read =
     input.state === "completed"
       ? `Read its answer with \`volli session answer ${handle}\`.`
@@ -201,7 +208,7 @@ export const DELEGATION_ID_SUFFIXES = Object.freeze({
   kickoff: ":kickoff",
   kickoffMessage: ":kickoff-message",
   notice: ":answer",
-  noticeMessage: ":answer-message",
+  noticeMessage: SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
   stop: ":stop",
 });
 
@@ -306,7 +313,11 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
    * listener parked on the parent's own turn would hold the very frames that
    * turn needs to publish. The refusal, if any, lands in the log.
    */
-  function submitNotice(entry: DelegationRef, text: string): void {
+  function submitNotice(
+    entry: DelegationRef,
+    state: SubagentOutcomeState,
+    reason: SubagentNoticeReason | null,
+  ): void {
     const ids = noticeIds(entry.operationId);
     const who = `subagent notice for ${shortSessionId(entry.childSessionId)} to parent ${shortSessionId(entry.parentSessionId)}`;
     void ports.runtime
@@ -316,7 +327,31 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         command: {
           kind: "message.submit",
           delivery: "steer",
-          message: { id: ids.messageId, role: "user", parts: [{ type: "text", text }] },
+          message: {
+            id: ids.messageId,
+            role: "user",
+            // Shared semantic metadata lets every Session client draw this
+            // message as a host-authored row. The adapter delivers only the
+            // text below to the Agent Runtime.
+            metadata: sessionHostNoticeMetadata({
+              kind: "subagent",
+              childSessionId: entry.childSessionId,
+              title: entry.title,
+              state,
+              reason,
+            }),
+            parts: [
+              {
+                type: "text",
+                text: subagentNotice({
+                  childSessionId: entry.childSessionId,
+                  title: entry.title,
+                  state,
+                  reason,
+                }),
+              },
+            ],
+          },
         },
       })
       .then((result) => {
@@ -333,9 +368,14 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
   /**
    * The one delivery. Submitted now if the parent can read it; parked on the
    * parent's stream until its next attachment otherwise; dropped, and logged,
-   * for a parent that has stopped.
+   * for a parent that has stopped. The outcome state rides along so the
+   * message can carry it as metadata for the chat surface (VC-330).
    */
-  async function deliver(entry: DelegationRef, text: string): Promise<NoticeDelivery> {
+  async function deliver(
+    entry: DelegationRef,
+    state: SubagentOutcomeState,
+    reason: SubagentNoticeReason | null = null,
+  ): Promise<NoticeDelivery> {
     const { projection, throughSequence } = await ports.runtime.projection({
       sessionId: entry.parentSessionId,
     });
@@ -346,7 +386,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       return "parent-stopped";
     }
     if (projection.liveExecutor !== null) {
-      submitNotice(entry, text);
+      submitNotice(entry, state, reason);
       return "delivered";
     }
     let delivered = false;
@@ -366,7 +406,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         if (kind !== "attachment.opened") return;
         delivered = true;
         unsubscribe();
-        submitNotice(entry, text);
+        submitNotice(entry, state, reason);
       },
       (error) => {
         report(
@@ -387,10 +427,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       parentWatches.get(entry.parentSessionId)?.();
       parentWatches.delete(entry.parentSessionId);
     }
-    await deliver(
-      entry,
-      subagentNotice({ childSessionId: entry.childSessionId, title: entry.title, state }),
-    );
+    await deliver(entry, state);
   }
 
   async function stopChild(entry: LiveDelegation, reason: string): Promise<void> {
@@ -561,27 +598,15 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       for (const entry of unanswered) {
         const events = await ports.sessionEngine.listEvents({ sessionId: entry.childSessionId });
         const { state } = foldSessionAnswerState(events);
-        const notice = { childSessionId: entry.childSessionId, title: entry.title };
         switch (state) {
           case "completed":
-            await deliver(entry, subagentNotice({ ...notice, state }));
+            await deliver(entry, state);
             recovery.answered += 1;
             break;
           case "interrupted":
           case "failed":
           case "stopped":
-            await deliver(
-              entry,
-              subagentNotice({
-                ...notice,
-                state,
-                ...(state === "interrupted"
-                  ? {
-                      how: "was mid-turn when Volli relaunched, and the relaunch ended its turn before it answered",
-                    }
-                  : {}),
-              }),
-            );
+            await deliver(entry, state, state === "interrupted" ? "app-relaunched" : null);
             recovery.reported += 1;
             break;
           case "running":

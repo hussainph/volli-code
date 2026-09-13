@@ -18,13 +18,21 @@ export type CliRowTone = "ok" | "warn" | "muted";
 
 export interface CliStatusRow {
   key: string;
-  /** Row label — a noun; the value does the explaining. */
+  /**
+   * Row label — a noun; the value does the explaining.
+   *
+   * It also has to name its subject on its OWN, because About heads a fault
+   * with {@link cliStatusFaultTitle} (VC-293): "Command: Not linked" left a
+   * reader asking whose command, so the link row says "Volli command".
+   */
   label: string;
   tone: CliRowTone;
   /** The short state phrase next to the dot. */
   value: string;
-  /** An optional second line — a path or a one-line consequence. */
+  /** An optional diagnostic measurement, kept in CLI details and the support report. */
   detail?: string;
+  /** The corrective action About shows when this row is a warning. */
+  remedy?: string;
 }
 
 export type SessionPathComparisonState = "matching" | "pending" | "diverged" | "unknown";
@@ -126,34 +134,44 @@ export function sessionPathComparison(
 
 function linkRow(status: CliToolStatus): CliStatusRow {
   const { link, installSuppressed } = status;
+  const label = "Volli command";
   switch (link.state) {
     case "ours":
-      return { key: "link", label: "Command", tone: "ok", value: "Linked", detail: link.path };
+      return { key: "link", label, tone: "ok", value: "Linked", detail: link.path };
     case "missing":
       return installSuppressed
         ? {
             key: "link",
-            label: "Command",
+            label,
             tone: "muted",
             value: "Removed",
             detail: "Reinstall from File → Install Volli CLI & Agent Skills.",
           }
-        : { key: "link", label: "Command", tone: "warn", value: "Not linked", detail: link.path };
+        : {
+            key: "link",
+            label,
+            tone: "warn",
+            value: "Not linked",
+            detail: link.path,
+            remedy: "Select Fix to reinstall the Volli command.",
+          };
     case "foreign":
       return {
         key: "link",
-        label: "Command",
+        label,
         tone: "warn",
         value: "Owned by another tool",
         detail: link.target ?? undefined,
+        remedy: "Remove the other tool's link, then select Fix to install this app's command.",
       };
     case "not-symlink":
       return {
         key: "link",
-        label: "Command",
+        label,
         tone: "warn",
         value: "A file of yours holds the name",
         detail: link.path,
+        remedy: "Move or remove the file currently named `volli`, then select Fix.",
       };
   }
 }
@@ -174,6 +192,9 @@ function pathRow(status: CliToolStatus): CliStatusRow {
         detail: status.shell.supported
           ? `${status.path.binDir} is not on the login shell's PATH.`
           : `${status.path.binDir} is not on the login shell's PATH. Volli only manages zsh, so add it to your ${status.shell.name} configuration yourself.`,
+        remedy: status.shell.supported
+          ? "Select Fix, then open a new Volli terminal."
+          : `Open Settings → CLI and add the listed bin directory to your ${status.shell.name} configuration.`,
       };
     case "unknown":
       return {
@@ -198,7 +219,13 @@ function shellRow(status: CliToolStatus): CliStatusRow {
   }
   return shell.chainActive
     ? { key: "shell", label: "Shell chain", tone: "ok", value: "zsh" }
-    : { key: "shell", label: "Shell chain", tone: "warn", value: "Not generated" };
+    : {
+        key: "shell",
+        label: "Shell chain",
+        tone: "warn",
+        value: "Not generated",
+        remedy: "Select Fix to regenerate shell integration, then open a new terminal.",
+      };
 }
 
 /** The pane's detection rows, in reading order: the outside world first, then this launch. */
@@ -212,6 +239,7 @@ export function cliStatusRows(status: CliToolStatus): CliStatusRow[] {
       tone: status.socket.live ? "ok" : "warn",
       value: status.socket.live ? "Live" : "Not running",
       detail: status.socket.path,
+      remedy: status.socket.live ? undefined : "Relaunch Volli, then re-check.",
     },
     status.wrappers.commands.length > 0
       ? {
@@ -242,6 +270,7 @@ export function cliStatusRows(status: CliToolStatus): CliStatusRow[] {
       tone: "warn",
       value: "Another volli sits in /usr/local/bin",
       detail: status.legacy.path,
+      remedy: "Remove or rename the other `volli` command, then re-check.",
     });
   }
   return rows;
@@ -250,6 +279,20 @@ export function cliStatusRows(status: CliToolStatus): CliStatusRow[] {
 /** Whether anything on the pane deserves the user's eyes — drives the section's compact summary. */
 export function cliNeedsAttention(rows: readonly CliStatusRow[]): boolean {
   return rows.some((row) => row.tone === "warn");
+}
+
+/**
+ * The heading About gives a warning row (VC-293).
+ *
+ * A fault list is read one line at a time, so its heading has to be the whole
+ * finding. About used to head these rows with the label alone — "Command",
+ * "App socket" — which names a subject and no problem, and pushed the state
+ * that made it a fault onto the detail line beside a path. Label plus state is
+ * the smallest thing that stands on its own, and it stays derived from the
+ * measured row so a new state cannot arrive without one.
+ */
+export function cliStatusFaultTitle(row: CliStatusRow): string {
+  return `${row.label}: ${row.value}`;
 }
 
 /**

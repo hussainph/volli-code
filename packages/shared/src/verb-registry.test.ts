@@ -41,6 +41,7 @@ const SOCKET_SURFACE = [
   "conflicts",
   "project.list",
   "label.list",
+  "label.merge",
   "model.list",
   "cost",
   "session.list",
@@ -77,6 +78,7 @@ const REFERENCE_SURFACE = [
   "ticket.comment",
   "ticket.signal",
   "worktree.sync",
+  "label.merge",
   "session.list",
   "session.peek",
   "session.answer",
@@ -127,6 +129,9 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   conflicts: "read",
   "project.list": "read",
   "label.list": "read",
+  // A coordination write despite sitting beside a read: it retires a Label
+  // and rewrites associations, so it is attributable or it does not happen.
+  "label.merge": "coordination",
   "model.list": "read",
   // VC-92 staged it read tier explicitly: an orchestrator sampling spend must
   // not pay context rent to ask. Setting a budget is not here — that is
@@ -168,6 +173,10 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // the `project` bundle alone. Filed as a registry entry rather than minted
   // as a verb surface of its own, exactly as the parent ruling asked.
   "automation.run": "control",
+  // The Session-side await (VC-324 item 3): the same bargain as `ticket.await`
+  // — tool-only, Role-gated, never on the socket, because a CLI verb must
+  // never wait.
+  "session.await": "control",
   // The supervision pair (VC-86), born control tier the same way: control
   // over OTHER agents is only safe where the caller is unspoofable, so
   // neither has ever had a socket door to shut.
@@ -356,7 +365,8 @@ describe("verbTier", () => {
     expect(socketTiers.filter((tier) => tier === "read")).toHaveLength(18);
     // VC-163 removes archive/start from the socket; VC-85 adds ticket.signal
     // and VC-185 adds worktree.sync to the remaining coordination surface.
-    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(12);
+    // VC-310 adds label.merge, the label cleanup write.
+    expect(socketTiers.filter((tier) => tier === "coordination")).toHaveLength(13);
     expect(socketTiers.filter((tier) => tier === "control")).toHaveLength(0);
   });
 
@@ -492,8 +502,9 @@ describe("the registry table", () => {
     // schema itself. `automation.run` used to sit beside it, but VC-329 moved
     // it to listed (with the session.start precedent): an agent that could not
     // discover it substituted a hand-written session_start kickoff for the
-    // person's saved Automation.
-    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await"]);
+    // person's saved Automation. `session.await` remains unlisted because its
+    // cursor contract is discovered through the tool schema that supplies it.
+    expect(unlisted).toEqual(["session.harness", "hook", "ticket.await", "session.await"]);
   });
 
   it("stores each listed verb's reference position on that entry", () => {
@@ -529,15 +540,41 @@ describe("the registry table", () => {
     // newly declared coordination verb instead of preserving a stale list of
     // the ones that happened to exist when the test was written. Unlisted
     // harness plumbing is involuntary and intentionally has no preview.
-    const voluntaryCoordinationWrites = VERB_REGISTRY.filter(
+    // Read as `VerbEntry`, not as the const-asserted tuple's literal member
+    // types: an optional field is absent from the literal type of every entry
+    // that omits it, so the union has no `previewsByDefault` to ask about.
+    const voluntaryCoordinationWrites = (VERB_REGISTRY as readonly VerbEntry[]).filter(
       (entry) => entry.listed && verbTier(entry) === "coordination",
     );
     expect(voluntaryCoordinationWrites).not.toHaveLength(0);
     for (const entry of voluntaryCoordinationWrites) {
+      // TWO ways to satisfy the rule, because the rule is "a caller can see
+      // this write before it happens", not "this flag exists". A verb that
+      // previews unless told to apply already keeps that promise, and more
+      // strongly than one whose safe mode has to be remembered — see
+      // `previewsByDefault`. What is refused is a coordination write offering
+      // neither.
+      expect(
+        entry.previewsByDefault === true ||
+          entry.options.some((option) => option.name === "--dry-run"),
+        entry.key,
+      ).toBe(true);
+    }
+  });
+
+  it("pins the default-preview shape and never lets it contradict --dry-run", () => {
+    // `--dry-run` means "this run writes unless you ask otherwise";
+    // `previewsByDefault` means the opposite. A verb declaring both leaves a
+    // caller no way to know what the plain form does.
+    const defaultPreviews = (VERB_REGISTRY as readonly VerbEntry[]).filter(
+      (entry) => entry.previewsByDefault === true,
+    );
+    expect(defaultPreviews.map((entry) => entry.key)).toEqual(["label.merge"]);
+    for (const entry of defaultPreviews) {
       expect(
         entry.options.some((option) => option.name === "--dry-run"),
         entry.key,
-      ).toBe(true);
+      ).toBe(false);
     }
   });
 

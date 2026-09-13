@@ -389,6 +389,39 @@ describe("parseCliArgs", () => {
       ok: true,
       invocation: { command: "label.list", args: { project: "VC" }, json: false },
     });
+    expect(
+      parseCliArgs([
+        "label",
+        "merge",
+        "--from",
+        "front-end",
+        "--into",
+        "frontend",
+        "--apply",
+        "--project",
+        "VC",
+      ]),
+    ).toEqual({
+      ok: true,
+      invocation: {
+        command: "label.merge",
+        args: { from: "front-end", into: "frontend", apply: true, project: "VC" },
+        json: false,
+      },
+    });
+    expect(parseCliArgs(["label", "merge", "--into", "frontend"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "label merge requires --from",
+    });
+    expect(
+      parseCliArgs(["label", "merge", "--from", "front-end", "--into", "frontend", "--dry-run"]),
+    ).toEqual({
+      ok: false,
+      code: "USAGE",
+      message:
+        "Unknown option --dry-run (options: --from, --into, --apply, --project) — see volli help label merge",
+    });
     expect(parseCliArgs(["model", "list"])).toEqual({
       ok: true,
       invocation: { command: "model.list", args: {}, json: false },
@@ -957,6 +990,7 @@ describe("registry ↔ argv mechanics", () => {
       "session.stop",
       "session.send",
       "session.delegate",
+      "session.await",
     ]);
   });
 });

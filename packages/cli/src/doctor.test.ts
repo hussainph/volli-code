@@ -2,7 +2,12 @@ import { chmod, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
-import type { DoctorCheck, SessionEnvRepair } from "@volli/shared";
+import type {
+  DoctorCheck,
+  DoctorCheckFault,
+  DoctorCheckPass,
+  SessionEnvRepair,
+} from "@volli/shared";
 import {
   entriesInDirectory,
   executableAt,
@@ -181,11 +186,21 @@ describe("observeEnvironment", () => {
   });
 });
 
-const check = (overrides: Partial<DoctorCheck> = {}): DoctorCheck => ({
+const check = (overrides: Partial<DoctorCheckPass> = {}): DoctorCheck => ({
   id: "path-position",
   title: "Volli's bin is first on PATH",
   status: "ok",
   detail: "position 1 of 30",
+  ...overrides,
+});
+
+/** The same check, not holding — with the heading VC-293 requires of a finding. */
+const finding = (overrides: Partial<DoctorCheckFault> = {}): DoctorCheck => ({
+  id: "path-position",
+  title: "Volli's bin is first on PATH",
+  failureTitle: "Volli bin is not first on PATH",
+  status: "fail",
+  detail: "position 20 of 30",
   ...overrides,
 });
 
@@ -195,8 +210,17 @@ describe("renderDoctorCheck", () => {
   });
 
   it("distinguishes a failure from a warning at a glance", () => {
-    expect(renderDoctorCheck(check({ status: "fail" })).startsWith("✗")).toBe(true);
-    expect(renderDoctorCheck(check({ status: "warn" })).startsWith("!")).toBe(true);
+    expect(renderDoctorCheck(finding()).startsWith("✗")).toBe(true);
+    expect(renderDoctorCheck(finding({ status: "warn" })).startsWith("!")).toBe(true);
+  });
+
+  // VC-293: a finding printed under the check's positive claim reads as a
+  // passing line with a cross in front of it.
+  it("heads a finding with what went wrong, not with the claim that failed", () => {
+    const rendered = renderDoctorCheck(finding());
+
+    expect(rendered).toBe("✗ Volli bin is not first on PATH\n    position 20 of 30");
+    expect(rendered).not.toContain("Volli's bin is first on PATH");
   });
 
   it("shows the remedy only when there is one", () => {

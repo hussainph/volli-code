@@ -43,6 +43,7 @@ import type {
   TicketMovedNotice,
 } from "../../ipc/contract";
 
+import type { NotificationOutcome, NotificationRequest } from "../notifications/dispatch";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
 import type { RunGit, RunGitAsync } from "../worktree";
@@ -88,7 +89,14 @@ export interface AgentCommandServiceOptions {
    * transcript rather than failing.
    */
   readTranscriptArtifact?: (reference: TranscriptReference) => Promise<SessionTranscriptArtifact>;
-  notify?: (title: string, message: string) => void;
+  /**
+   * The one delivery path (VC-295). Three verbs reach it and each names its own
+   * producer: a verified harness `input.needed` hook (`needs-you`, and it opens
+   * the Session), an unattended move into Doing (operational — a guardrail a
+   * preference must not be able to hide, opening the ticket), and `volli notify`
+   * (operational and free-form, so it opens nothing).
+   */
+  notify?: (request: NotificationRequest) => NotificationOutcome;
   /**
    * The Model Access snapshot read `model.list` serves (VC-78) — the same
    * `inspectPiModelAccess` seam every app surface reads, threaded in the way

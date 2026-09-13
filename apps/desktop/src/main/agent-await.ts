@@ -58,6 +58,7 @@ import {
   firstMatchingTicketEventAfter,
 } from "./db/events-repo";
 import { listLiveTicketRefsByNumber } from "./db/tickets-repo";
+import { optionalPositiveNumber, parkForWake, waitRefusal as refusal } from "./agent-wait";
 
 /** One post-commit planner fact, as the wake bus (slice C, `ticket-wake.ts`) fans it out. */
 export interface TicketWake {
@@ -76,24 +77,6 @@ export interface AwaitTicketPorts {
   /** The caller's project policy, read at call time — a wait is judged when it starts. */
   authorityPolicy: (projectId: string) => AuthorityPolicy;
   subscribeTicketWake: SubscribeTicketWake;
-}
-
-/** A refusal the model reads and can act on. Never a thrown error. */
-function refusal(text: string): RuntimeVerbResult {
-  return { text };
-}
-
-/** One optional positive number field, or a refusal naming the field. */
-function optionalPositiveNumber(
-  input: Readonly<Record<string, unknown>>,
-  field: string,
-): { ok: true; value: number | undefined } | { ok: false; text: string } {
-  const raw = input[field];
-  if (raw === undefined || raw === null) return { ok: true, value: undefined };
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    return { ok: false, text: `\`${field}\` must be a positive number when given.` };
-  }
-  return { ok: true, value: raw };
 }
 
 /**
@@ -296,62 +279,42 @@ export function awaitTicketTool(
   const eventKindSet = new Set<TicketEventKind>(eventKinds);
   const displays = [...watched.values()].join(", ");
 
-  return new Promise<RuntimeVerbResult>((resolve, reject) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const settle = (act: () => void): void => {
-      if (settled) return;
-      settled = true;
-      unsubscribe();
-      if (timer !== undefined) clearTimeout(timer);
-      signal.removeEventListener("abort", withdraw);
-      act();
-    };
-    const withdraw = (): void =>
-      settle(() => reject(new Error("The wait was withdrawn before any event arrived.")));
-    const unsubscribe = ports.subscribeTicketWake((wake) => {
-      if (wake.projectId !== project.id) return;
+  // Subscribe first, establish/replay the cursor second: the shared wait
+  // lifecycle guarantees an event is included in the durable query or arrives
+  // through the live subscription — never neither.
+  const continuousCursor = cursor ?? currentTicketEventCursor(ports.db);
+  return parkForWake({
+    signal,
+    subscribe: ports.subscribeTicketWake,
+    onWake: (wake) => {
+      if (wake.projectId !== project.id) return undefined;
       const display = watched.get(wake.event.ticketId);
-      if (display === undefined || !eventKindSet.has(wake.event.payload.kind)) return;
-      settle(() => resolve({ text: wakeText(ports.db, display, wake.event, wake.cursor) }));
-    });
-
-    // Subscribe first, establish/replay the cursor second: the read is
-    // synchronous, so an event is either included in the durable query or
-    // arrives through the live subscription — never neither. A first call
-    // intentionally starts at "now", while still returning that baseline on a
-    // timeout so the gap before a retry is replayable.
-    const continuousCursor = cursor ?? currentTicketEventCursor(ports.db);
-    if (cursor !== undefined) {
-      const replayed = replayedWake(ports.db, watched, eventKinds, cursor);
-      if (replayed !== null) {
-        settle(() =>
-          resolve({
-            text: wakeText(ports.db, replayed.display, replayed.event, replayed.cursor),
+      return display === undefined || !eventKindSet.has(wake.event.payload.kind)
+        ? undefined
+        : { text: wakeText(ports.db, display, wake.event, wake.cursor) };
+    },
+    ...(cursor === undefined
+      ? {}
+      : {
+          replay: () => {
+            const replayed = replayedWake(ports.db, watched, eventKinds, cursor);
+            return replayed === null
+              ? undefined
+              : {
+                  text: wakeText(ports.db, replayed.display, replayed.event, replayed.cursor),
+                };
+          },
+        }),
+    ...(timeout.value === undefined
+      ? {}
+      : {
+          timeoutMs: timeout.value * 1000,
+          onTimeout: () => ({
+            text: [
+              `No matching event within ${timeout.value} seconds on ${displays} (waiting for: ${kinds.join(", ")}).`,
+              `cursor: ${continuousCursor}. Pass this cursor unchanged to the next ticket_await; events committed after this wait began will be replayed.`,
+            ].join("\n"),
           }),
-        );
-        return;
-      }
-    }
-
-    if (timeout.value !== undefined) {
-      timer = setTimeout(
-        () =>
-          settle(() =>
-            resolve({
-              text: [
-                `No matching event within ${timeout.value} seconds on ${displays} (waiting for: ${kinds.join(", ")}).`,
-                `cursor: ${continuousCursor}. Pass this cursor unchanged to the next ticket_await; events committed after this wait began will be replayed.`,
-              ].join("\n"),
-            }),
-          ),
-        timeout.value * 1000,
-      );
-    }
-
-    // Read rather than trusted to the listener: a signal that aborted while
-    // the subscription opened would never fire again (ask_user's lesson).
-    if (signal.aborted) withdraw();
-    else signal.addEventListener("abort", withdraw, { once: true });
+        }),
   });
 }

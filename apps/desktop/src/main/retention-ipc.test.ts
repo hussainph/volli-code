@@ -54,7 +54,7 @@ import { registerDataIpcHandlers } from "./data-ipc";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
 import { getTicketRow, insertTicket, updateTicketFields } from "./db/tickets-repo";
-import { resetOrphanSweepForTest } from "./orphan-sweep";
+import { resetOrphanScanForTest } from "./orphan-scan";
 import { resetRetentionWatcherForTest } from "./retention-runtime";
 
 const fakeEvent = { sender: {} };
@@ -70,7 +70,7 @@ let ctx: TestDb;
 beforeEach(() => {
   handlers.clear();
   dataChangedSends.length = 0;
-  resetOrphanSweepForTest();
+  resetOrphanScanForTest();
   resetRetentionWatcherForTest();
   ctx = openTestDb();
   registerDataIpcHandlers({ ok: true, db: ctx.db });

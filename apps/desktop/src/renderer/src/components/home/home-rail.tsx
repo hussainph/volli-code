@@ -434,6 +434,7 @@ const ACTIVITY_LABEL: Record<StatusDotState, string> = {
   parked: "Parked",
   exited: "Ended",
   stopped: "Stopped",
+  interrupted: "Interrupted",
 };
 
 /** The chat Session a Home tab id names, or `null` for the Board and terminals. */

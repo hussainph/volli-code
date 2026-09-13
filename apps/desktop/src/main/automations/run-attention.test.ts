@@ -24,35 +24,23 @@ import {
   createSessionRuntime,
   type NativeHarnessAdapter,
 } from "@volli/session-engine";
-import {
-  DEFAULT_NOTIFICATION_PREFERENCES,
-  parseNotificationPreferences,
-  type AutomationRunAttendance,
-  type NotificationPreferences,
-  type SessionProjection,
-} from "@volli/shared";
+import { type AutomationRunAttendance, type SessionProjection } from "@volli/shared";
 
-import { createRunAttentionWatch, runAttentionNotification } from "./run-attention";
+import type { NotificationRequest } from "../notifications/dispatch";
+import {
+  createRunAttentionWatch,
+  runAttentionNotification,
+  runAttentionTarget,
+} from "./run-attention";
 
 const SESSION_ID = "session-1";
 
-interface Recorded {
-  title: string;
-  body: string;
-}
-
-function harness(
-  options: {
-    attendance?: AutomationRunAttendance | null;
-    preferences?: NotificationPreferences;
-  } = {},
-) {
-  const notified: Recorded[] = [];
+function harness(options: { attendance?: AutomationRunAttendance | null } = {}) {
+  const notified: NotificationRequest[] = [];
   const errors: unknown[] = [];
   const watch = createRunAttentionWatch({
     attendanceOf: () => options.attendance ?? null,
-    preferences: () => options.preferences ?? DEFAULT_NOTIFICATION_PREFERENCES,
-    notify: (input) => notified.push(input),
+    notify: (request) => notified.push(request),
     onError: (error) => errors.push(error),
   });
   return { watch, notified, errors };
@@ -123,12 +111,12 @@ function state(
   sessionId = SESSION_ID,
 ): SessionProjection {
   const interactions = { active: kind === "waiting" ? [{ id: "ask-1" }] : [], all: [] };
-  const attention = {
-    active: kind === "error" ? [{ id: "a1", kind: "configuration_invalid" }] : [],
-    all: [],
-  };
+  const active = kind === "error" ? [{ id: "a1", kind: "configuration_invalid" }] : [];
+  // `primary` as the ledger folds it — the newest active attention — because
+  // that is the row the chat plane draws and the item a click lands on.
+  const attention = { active, primary: active.at(-1) ?? null };
   return {
-    session: { id: sessionId, title },
+    session: { id: sessionId, title, projectId: "project-1", ticketId: "ticket-1" },
     interactions,
     attention,
     stopped: kind === "stopped" ? { at: 1, reason: null, by: "user" } : null,
@@ -141,9 +129,17 @@ describe("createRunAttentionWatch", () => {
     h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("waiting"));
-    expect(h.notified).toEqual([
+    expect(h.notified.map(({ title, body }) => ({ title, body }))).toEqual([
       { title: "An Automation is waiting on you", body: "Nightly sweep stopped to ask." },
     ]);
+    expect(h.notified[0]?.target).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: "ask-1",
+      attentionId: null,
+    });
   });
 
   it("notifies when an unattended Run's Session enters error", () => {
@@ -154,7 +150,7 @@ describe("createRunAttentionWatch", () => {
     h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("idle"));
     h.watch.observe(state("error"));
-    expect(h.notified).toEqual([
+    expect(h.notified.map(({ title, body }) => ({ title, body }))).toEqual([
       { title: "An Automation stopped", body: "Nightly sweep could not keep running." },
     ]);
   });
@@ -171,9 +167,11 @@ describe("createRunAttentionWatch", () => {
     });
     h.watch.observe((await runtime.projection({ sessionId })).projection);
 
-    expect(h.notified).toEqual([
+    expect(h.notified.map(({ title, body }) => ({ title, body }))).toEqual([
       { title: "An Automation stopped", body: "Nightly sweep could not keep running." },
     ]);
+    // The durable failure the runtime recorded is the one a click lands on.
+    expect(h.notified[0]?.target).toMatchObject({ kind: "session", sessionId });
   });
 
   it("notifies on the very first fold of a Session it watched being minted", () => {
@@ -329,41 +327,23 @@ describe("createRunAttentionWatch", () => {
     expect(h.notified).toHaveLength(1);
   });
 
-  it("honours VC-75's needs-you switch rather than a setting of its own", () => {
-    const off = parseNotificationPreferences({ enabled: true, events: { "needs-you": false } });
-    const h = harness({ attendance: "unattended", preferences: off });
+  it("posts as the needs-you producer rather than reading a preference itself", () => {
+    // VC-295 moved the switch read to the delivery path: this rule names what
+    // happened, and one place decides whether it may be said. The category is
+    // still `needs-you` — the map from this producer to that switch is asserted
+    // in @volli/shared's catalog test, and muting it is asserted there and in
+    // the dispatcher's suite.
+    const h = harness({ attendance: "unattended" });
     h.watch.observeBirth(SESSION_ID);
     h.watch.observe(state("waiting"));
-    expect(h.notified).toEqual([]);
-  });
-
-  it("honours the master switch", () => {
-    const off = parseNotificationPreferences({ enabled: false, events: { "needs-you": true } });
-    const h = harness({ attendance: "unattended", preferences: off });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(state("waiting"));
-    expect(h.notified).toEqual([]);
-  });
-
-  it("keeps other events' switches out of this decision", () => {
-    // Muting "a session finishes" must not mute the one event that means
-    // somebody is blocked.
-    const prefs = parseNotificationPreferences({
-      enabled: true,
-      events: { "needs-you": true, finished: false, swept: false, update: false },
-    });
-    const h = harness({ attendance: "unattended", preferences: prefs });
-    h.watch.observeBirth(SESSION_ID);
-    h.watch.observe(state("waiting"));
-    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]?.producer).toBe("run-attention");
   });
 
   it("tracks each Session separately", () => {
-    const notified: Recorded[] = [];
+    const notified: NotificationRequest[] = [];
     const watch = createRunAttentionWatch({
       attendanceOf: (sessionId) => (sessionId === "run-session" ? "unattended" : "attended"),
-      preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
-      notify: (input) => notified.push(input),
+      notify: (request) => notified.push(request),
     });
     watch.observeBirth("human-session");
     watch.observeBirth("run-session");
@@ -379,7 +359,6 @@ describe("createRunAttentionWatch", () => {
     const errors: unknown[] = [];
     const watch = createRunAttentionWatch({
       attendanceOf: () => "unattended",
-      preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
       notify: () => {
         throw new Error("no notification centre");
       },
@@ -399,7 +378,6 @@ describe("createRunAttentionWatch", () => {
         attendanceOf: () => {
           throw new Error("database closed");
         },
-        preferences: () => DEFAULT_NOTIFICATION_PREFERENCES,
         notify: () => undefined,
       });
       watch.observeBirth(SESSION_ID);
@@ -434,5 +412,45 @@ describe("runAttentionNotification", () => {
       title: null,
     });
     expect(notification.body).toContain("Session 0f9c2b71");
+  });
+});
+
+describe("runAttentionTarget", () => {
+  it("names the Session and the open question a waiting Run is blocked on", () => {
+    expect(runAttentionTarget("waiting", state("waiting"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: "ask-1",
+      attentionId: null,
+    });
+  });
+
+  it("names the failing Attention for a Run that broke", () => {
+    // A click on "An Automation stopped" has to land on the failure, not on
+    // whatever question happened to be open before the transport died.
+    expect(runAttentionTarget("error", state("error"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: null,
+      attentionId: "a1",
+    });
+  });
+
+  it("still points at the Session when there is no item to name", () => {
+    // `sessionAwaitsUser` also answers `waiting` for a blocking Attention with
+    // no Interaction; the target degrades to the Session rather than inventing
+    // an id that would open the wrong card.
+    expect(runAttentionTarget("waiting", state("idle"))).toEqual({
+      kind: "session",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      sessionId: SESSION_ID,
+      interactionId: null,
+      attentionId: null,
+    });
   });
 });

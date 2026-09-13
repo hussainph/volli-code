@@ -31,9 +31,9 @@
  *  2. **The primary pane is the first leaf, and it is where everything
  *     unclaimed lives.** Splits only ever open a pane to the RIGHT or BELOW
  *     (the vocabulary the in-app terminal split already uses), so the top-left
- *     leaf is stable — which is what lets the surface's existing full-width tab
- *     strip go on being the primary pane's strip, and what makes "the permanent
- *     tab (Board / Body) never leaves the primary pane" a property of the model
+ *     leaf is stable — which keeps the primary pane at the start of the main
+ *     tab bar, and makes "the permanent tab (Board / Body) never leaves the
+ *     primary pane" a property of the model
  *     rather than a rule every caller has to remember.
  *
  * Every operation is IDENTITY-STABLE: it returns its input when nothing
@@ -691,7 +691,7 @@ export interface ResolvedSplitViewPane {
   activeTabId: string | null;
   /** Reading-order position, for "Pane 2 of 3" labels. */
   index: number;
-  /** The primary pane draws no strip of its own: the surface's top strip is it. */
+  /** The primary pane holds the permanent tab, at the start of the main tab bar. */
   isPrimary: boolean;
 }
 

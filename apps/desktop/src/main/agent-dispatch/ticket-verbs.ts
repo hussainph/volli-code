@@ -21,6 +21,7 @@ import {
   isTicketSignalVerdict,
   isTicketStatus,
   isValidBranchName,
+  labelNameKey,
   parseHarnessId,
   shortSessionId,
   TICKET_SIGNAL_KINDS,
@@ -37,6 +38,7 @@ import type {
 } from "@volli/shared";
 
 import { getRegisteredHarness } from "../db/harness-registry-repo";
+import { findLabelByName } from "../db/labels-repo";
 import { listTicketsByProject } from "../db/tickets-repo";
 import {
   createTicketCommand,
@@ -282,9 +284,14 @@ export async function ticketUpdateVerb(
         );
       }
       const currentLabels = resolved.ticket.labels;
+      const canonicalName = (name: string) =>
+        findLabelByName(options.db, resolved.project.id, name)?.name ?? name;
+      const canonicalAdds = addLabels.map(canonicalName);
+      const currentKeys = new Set(currentLabels.map(labelNameKey));
+      const removedKeys = new Set(removeLabels.map(canonicalName).map(labelNameKey));
       const requestedLabels = currentLabels
-        .filter((label) => !removeLabels.includes(label))
-        .concat(addLabels.filter((label) => !currentLabels.includes(label)));
+        .filter((label) => !removedKeys.has(labelNameKey(label)))
+        .concat(canonicalAdds.filter((label) => !currentKeys.has(labelNameKey(label))));
       ticket = setTicketLabelsCommand(
         options.db,
         { ticketId: resolved.ticket.id, labels: requestedLabels },
@@ -447,10 +454,21 @@ export async function ticketMoveVerb(
         actor.kind === "session"
           ? actorSessionTicketDisplay(options.db, projects, actor.ticketId)
           : null;
-      options.notify?.(
-        `${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`,
-        moveNotificationBody(actor.kind, via),
-      );
+      // Operational, never preference-controlled (VC-295): this is the
+      // guardrail VC-92 §3 asked for, and a notifications switch that could
+      // silence it would be a mute button on the one signal that work was
+      // pushed into the active column by somebody who is not at the keyboard.
+      // It still deep-links — the ticket is a real target, not an invented one.
+      options.notify?.({
+        producer: "ticket-moved-to-doing",
+        title: `${movedDisplay} → ${TICKET_STATUS_LABELS[to]}`,
+        body: moveNotificationBody(actor.kind, via),
+        target: {
+          kind: "ticket",
+          projectId: resolved.project.id,
+          ticketId: resolved.ticket.id,
+        },
+      });
     }
     options.onMutation?.({
       ticketId: resolved.ticket.id,

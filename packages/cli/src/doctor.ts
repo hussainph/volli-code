@@ -17,6 +17,7 @@ import { dirname } from "node:path";
 
 import {
   harnessAdapters,
+  doctorCheckHeadline,
   isBareHarnessCommand,
   resolveOnPath,
   SESSION_ENV_TOOLS,
@@ -178,9 +179,16 @@ export async function observeEnvironment(
 
 const MARK: Record<DoctorCheck["status"], string> = { ok: "✓", warn: "!", fail: "✗" };
 
-/** One check as a human reads it: a mark, the claim, and what was actually seen. */
+/**
+ * One check as a human reads it: a mark, the heading, and what was actually
+ * seen.
+ *
+ * The heading is {@link doctorCheckHeadline}, not `title` (VC-293): a finding
+ * printed under the check's positive claim — "✗ Volli's bin is first on PATH" —
+ * makes a report of what is broken read as a list of what is fine.
+ */
 export function renderDoctorCheck(check: DoctorCheck): string {
-  const lines = [`${MARK[check.status]} ${check.title}`, `    ${check.detail}`];
+  const lines = [`${MARK[check.status]} ${doctorCheckHeadline(check)}`, `    ${check.detail}`];
   if (check.remedy !== undefined) lines.push(`    → ${check.remedy}`);
   return lines.join("\n");
 }

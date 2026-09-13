@@ -2,7 +2,7 @@
  * Configure → Worktrees: what a new ticket checkout in this project starts as.
  *
  * Orphan cleanup is NOT here, and that is a boundary rather than a layout
- * choice: `sweepOrphans` walks every project in the db, and its disk-vs-git
+ * choice: `scanOrphans` walks every project in the db, and its disk-vs-git
  * pass reports directories git no longer attributes to any project at all. It
  * cannot be scoped, so it lives in Settings → Storage. Showing it here would
  * let project A delete project B's uncommitted work.

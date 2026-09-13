@@ -25,6 +25,7 @@ Write
   ticket comment <id> [-m <text>|--file <path>] [--dry-run]
   ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
   worktree sync [<id>] [--abort] [--dry-run]
+  label merge --from <name> --into <name> [--apply] [--project <p>]
 
 Session
   session list [--project <p>] [--ticket <id>]
@@ -482,6 +483,36 @@ Notes:
 - --abort undoes a merge left in flight. Nothing else here cleans up after a conflict.
 
 ============================================================================
+volli help label merge
+============================================================================
+label merge — Fold one label into another, previewing the affected tickets.
+
+Door: Agent CLI
+Verb tier: coordination
+
+Usage: volli label merge --from <name> --into <name> [options]
+
+Options:
+  --from <name>  Label to merge away.
+  --into <name>  Label that survives.
+  --apply        Perform the merge instead of previewing it.
+  --project <p>  Target project.
+
+Effects:
+- Durable write: Move every association from the merged-away label onto the surviving one, and record a labels_changed event per affected Ticket.
+- Durable write: Retire the merged-away Label as an alias, so its old name keeps resolving to the survivor.
+- Human sees: Affected Ticket cards show the surviving label, and the merged-away one leaves the board's Label filter.
+- Does not: No Ticket moves, no Ticket loses a Label it was wearing, and the retired name is not re-created later.
+
+Example: volli label merge --from front-end --into frontend
+
+Notes:
+- Previews by default: without --apply nothing is written.
+- Case variants are already one label, so this is for names that merely mean the same thing.
+- Every Ticket wearing the merged-away name comes out wearing the surviving one.
+- The old name remains an alias, so using it later still resolves to the survivor.
+
+============================================================================
 volli help session start
 ============================================================================
 session start — Start an agent chat session on a ticket.
@@ -615,7 +646,7 @@ Example: volli session list --ticket VC-12
 
 Notes:
 - Prints each session's title and short id; session peek takes either type.
-- Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.
+- Chat rows carry liveness: working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.
 - Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.
 
 ============================================================================
@@ -909,7 +940,8 @@ Run volli help project <subcommand> for detail.
 volli help label
 ============================================================================
 label subcommands:
-  label list  List a project's labels. [Agent CLI]
+  label list   List a project's labels. [Agent CLI]
+  label merge  Fold one label into another, previewing the affected tickets. [Agent CLI]
 Run volli help label <subcommand> for detail.
 
 ============================================================================
@@ -1003,6 +1035,18 @@ Bundle identity
   Build id: reference-fixture
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
+
+VC-324 (after VC-6)
+Added
+- session_await, the named Agent Tool Surface tool that parks a Session until a watched Session finishes a turn (for: turn), signals done or blocked (verdict), or is stopped (stopped); any is the union. It takes one or many short session ids, the same timeoutSeconds, and the same opaque cursor discipline as ticket_await: begin with the cursor returned by session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed. A Board Session may await any Session in its project; a ticket Session only itself and the subagents it delegated. It replaces polling session list.
+- A turn that ended by interruption wakes as interrupted, never as ended: the two are distinct Session Events, and a fleet that read idle in a listing while four of its members had been cut off is the failure this tool was built for.
+Changed
+- session list and session peek now say interrupted, with why, for a chat Session whose latest turn ended by interruption and nothing has started since. It sits below working and above idle: stopped still outranks it, and a Session that resumed reads working again.
+- session_send returns once the target's Command is durable and its turn has opened, and says whether it opened a new turn or joined a running one. It no longer waits for the target's whole turn to end, so several sends in one turn no longer queue behind the slowest target, and a send whose own turn is withdrawn refuses by name instead of orphaning the call.
+Fixed
+- None in this record.
+Removed
+- None in this record.
 
 VC-6 (after VC-185)
 Added
@@ -1212,8 +1256,8 @@ A signal never moves the board. A deliberate ticket move is what changes a colum
 ticket show prints the latest signal per kind; --comments-only and --events 0 keep a poll cheap.
 volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.
 volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.
-No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command.
-Triage a fleet from session list — working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.
+No CLI verb waits. Nothing here blocks, and sleeping in a shell to poll is how sessions wedge — waiting is a named tool the runtime suspends the turn for, never a command. Two exist: ticket_await parks on a ticket's signals, comments and moves; session_await parks on a Session's turn ending (completed or interrupted), its done/blocked signal, or its stop. Begin Session Await with the cursor from session_start, session_send or session_delegate, then chain every wake or timeout cursor so nothing between calls is missed.
+Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes.
 Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.
 
 ============================================================================
@@ -1235,17 +1279,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1320,7 +1364,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, automation run, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, label merge, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, automation run, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1421,6 +1465,11 @@ WRONG_DOOR volli ticket archive exists in the app only; no agent surface execute
 volli worktree sync ORACLE-1 --not-an-option
 ============================================================================
 USAGE Unknown option --not-an-option (options: --abort, --dry-run) — see volli help worktree sync
+
+============================================================================
+volli label merge --not-an-option
+============================================================================
+USAGE Unknown option --not-an-option (options: --from, --into, --apply, --project) — see volli help label merge
 
 ============================================================================
 volli session start ORACLE-1 --not-an-option

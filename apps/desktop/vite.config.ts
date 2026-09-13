@@ -8,6 +8,7 @@ import { defineConfig } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 
 // Launch Electron after a pack only when BOTH hold:
 //  1. dev.mjs opted in by injecting VOLLI_DESKTOP_DEV=1 into the pack child's
@@ -113,6 +114,10 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
   },
   test: {
+    // One `vp test` invocation's share of a shared machine (VC-339). Stated
+    // once at the top level rather than per project: the worker pool is global
+    // to the invocation, and both projects below draw from it.
+    ...SHARED_MACHINE_TEST_WORKERS,
     projects: [
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
@@ -121,7 +126,19 @@ export default defineConfig(({ mode }) => ({
       // inheriting root src/renderer. @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
-        test: { name: "main", environment: "node", include: ["src/main/**/*.test.ts"] },
+        test: {
+          name: "main",
+          environment: "node",
+          include: ["src/main/**/*.test.ts"],
+          // Stated again here, and it is not redundant: `renderer` above
+          // INHERITS this cap through `extends: true` while this project
+          // inherits nothing, and vitest refuses a run whose projects disagree
+          // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
+          // exactly what a `--maxWorkers` flag on the command line produced
+          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // governs the pool they share.
+          ...SHARED_MACHINE_TEST_WORKERS,
+        },
       },
     ],
     coverage: {
@@ -213,6 +230,12 @@ export default defineConfig(({ mode }) => ({
         // (VC-55): the count that qualifies itself under a filter, and the live
         // pair that deliberately does not.
         "src/components/board/board-summary.ts",
+        // How many label chips fit on one line of a card, and how many the `+n`
+        // chip stands for (VC-310). Enrolled on `tab-scroll.ts`'s argument: it
+        // is arithmetic the view cannot show being wrong — in jsdom every width
+        // is zero, and on screen a one-off packing error looks like a design
+        // choice. The measuring shell beside it stays out, as view glue.
+        "src/components/board/label-overflow.ts",
         "src/components/chat/chat-plane-model.ts",
         // The Activity Island's shell feed (VC-270). `-model.ts` is the pure
         // half — one Session's shells as the island models them, the flash
@@ -229,6 +252,13 @@ export default defineConfig(({ mode }) => ({
         // a scope offers IS the identity signal, so a scope quietly gaining an
         // option it cannot fill is the failure worth a test.
         "src/components/chat/empty-visual.ts",
+        // How much of a transcript is in the document (VC-338). Gated because
+        // it decides what is on screen AT ALL: an off-by-one in the anchor
+        // clamp is a conversation that silently ends before its newest turn,
+        // and "mount the tail" measured from the end rather than from a row is
+        // a window that walks out from under a reader while the Session
+        // streams. Neither is visible in a screenshot of a short transcript.
+        "src/components/chat/transcript-window.ts",
         // ⌘K's list-shape decisions (VC-205): which section an @scope narrows
         // to, where it truncates behind "Show all", and the Ticket-priority
         // score wrapped around cmdk's matcher. One shared filter scores both
@@ -280,6 +310,13 @@ export default defineConfig(({ mode }) => ({
         // out of a rail that must add up to the total above it, or attributes
         // one person's Session to another.
         "src/components/usage/usage-rail-model.ts",
+        // Which subscriptions the chrome band's popover lists, which window of
+        // each is the one about to run out, and what order they sit in
+        // (VC-350). In the gate because a missed branch here is a bar that is
+        // not drawn: an account dropped from the list, or the wrong window
+        // chosen as the headline, is a person told they have room they do not
+        // have — and neither shows up as an error anywhere.
+        "src/components/usage-limits/accounts.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -293,6 +330,22 @@ export default defineConfig(({ mode }) => ({
         // The report mirrors the three data sets About already shows. Keeping
         // it at full coverage makes a newly added status row hard to omit.
         "src/components/settings/panes/about-report.ts",
+        // And what About is allowed to CLAIM from them (VC-293). In the gate
+        // because the defect it replaces was invisible on screen: an empty
+        // fault list read as a healthy install, so the pane said
+        // "Everything's working" before it had measured anything and again
+        // after a read failed. Every one of those paths is a branch here.
+        "src/components/settings/panes/about-health-model.ts",
+        // What Storage says about an orphaned worktree, before and after a
+        // destructive act (VC-284). Enrolled for the same reason as the row
+        // above: these are sentences about deletions, and the bug they answer
+        // was a label — every removed row read "Removed at launch", including
+        // the ones a person had just asked for by hand.
+        "src/components/settings/panes/storage-orphans-model.ts",
+        // Its sibling one section down (VC-341): which rows a "Reap all" names,
+        // and which are only killable one at a time. A missed branch there is
+        // a button that signals something the person never singled out.
+        "src/components/settings/panes/processes-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -365,6 +418,25 @@ export default defineConfig(({ mode }) => ({
         // Where a chat-named path opens (VC-120): the raw-tool-path translation
         // both transcript surfaces trust before touching any store or IPC.
         "src/lib/chat-open-target.ts",
+        // Where a notification click lands, and what this window reports as
+        // "already on screen" (VC-295). Enrolled because both answers are
+        // invisible until they are wrong: a target read too widely silences an
+        // alert nobody saw, and a route that disagrees with it opens somewhere
+        // the suppression rule was never talking about. The store work that
+        // carries the decision out (`notification-activation.ts`) stays outside,
+        // like every other glue module — and so does `notification-surface.ts`,
+        // which is the store calls that carry that decision out.
+        "src/lib/notification-target.ts",
+        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // project, open the Session, then reveal the item. Ported precisely so
+        // the sequence is assertable, because the failure it prevents — a card
+        // revealed in a Session nobody opened, or a harness alert opening a chat
+        // tab that does not exist — is invisible in a screenshot.
+        "src/lib/notification-activation.ts",
+        // And the slot that carries a reveal across the mount race, on the same
+        // argument `editor/reveal-line.ts` is enrolled under: single module
+        // state, claimed once, whose bug is a card that jumps for no reason.
+        "src/chat/session-item-reveal.ts",
         "src/lib/project-shortcut.ts",
         "src/lib/new-session-shortcut.ts",
         // The split chords (VC-202 §5), in the gate for the same reason the
@@ -450,11 +522,36 @@ export default defineConfig(({ mode }) => ({
         // reason the IPC handlers are: a missed branch is a privacy or a
         // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
         // `index.ts`: it is transport bootstrap around an SDK.
+        // The notification delivery boundary (VC-295). Enrolled for the same
+        // reason the IPC handlers are: a missed branch here is an alert that
+        // escapes a preference, a click that opens nothing, or a suppression
+        // that silences work a person is waiting on. `runtime.ts` stays
+        // outside, like `otlp.ts` and `index.ts`: it is Electron wiring around
+        // these parts, with no decision of its own.
+        "**/src/main/notifications/active-targets.ts",
+        "**/src/main/notifications/activation.ts",
+        "**/src/main/notifications/dispatch.ts",
+        "**/src/main/notifications/ipc.ts",
+        "**/src/main/notifications/settings.ts",
         "**/src/main/observability/genai.ts",
         "**/src/main/observability/ipc.ts",
         "**/src/main/observability/settings.ts",
         "**/src/main/observability/sink.ts",
+        // The orphan process sweep (VC-341). Enrolled for the same reason the
+        // IPC handlers and `quit-gate.ts` are, only more so: this is the one
+        // place in the app that calls `process.kill`, and every uncovered
+        // branch in it is a branch nobody has watched decide whether to signal
+        // a stranger's process. The ledger's storage rides along, because a row
+        // it hands back wrong is what that decision is made from.
+        "**/src/main/process/**",
+        "**/src/main/db/spawn-ledger-repo.ts",
         "**/src/main/project-roots.ts",
+        // About's support metadata (VC-293). Enrolled on the same argument as
+        // the IPC handlers around it: this module is an ALLOWLIST, and the
+        // guarantee it carries — five fields, one pragma, one app_state key,
+        // nothing that could reach a credential — is only as good as the test
+        // that walks every branch of it.
+        "**/src/main/support-info.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",
@@ -471,6 +568,12 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        // The Session concurrency budget (VC-339). In the gate because every
+        // branch of it is a rule about a machine nobody watches: a miscount
+        // hands one Session the whole box while three others build, and a
+        // missed no-clobber branch overwrites what a person put in their own
+        // login shell. Neither is visible anywhere until the laptop swaps.
+        "**/src/main/session-concurrency.ts",
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",

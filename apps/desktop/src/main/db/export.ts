@@ -157,6 +157,10 @@ export interface ExportLabel {
   projectId: string;
   name: string;
   color: string | null;
+  /** Retired Labels remain as aliases so an old name resolves to its survivor. */
+  mergedIntoId: string | null;
+  mergedAt: number | null;
+  mergedBy: string | null;
   rowVersion: number;
   createdAt: number;
   updatedAt: number;
@@ -509,6 +513,9 @@ interface LabelRow {
   project_id: string;
   name: string;
   color: string | null;
+  merged_into_id: string | null;
+  merged_at: number | null;
+  merged_by: string | null;
   row_version: number;
   created_at: number;
   updated_at: number;
@@ -521,6 +528,9 @@ function exportLabels(db: Database.Database): ExportLabel[] {
     projectId: row.project_id,
     name: row.name,
     color: row.color,
+    mergedIntoId: row.merged_into_id,
+    mergedAt: row.merged_at,
+    mergedBy: row.merged_by,
     rowVersion: row.row_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

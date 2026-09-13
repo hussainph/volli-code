@@ -26,7 +26,35 @@
  * rather than a guess here about whether the turn is still live.
  */
 
+import { sessionHostNoticeMetadata } from "@volli/shared";
+import type { SessionHostNoticeMetadata } from "@volli/shared";
+
 import type { BrowserHoldEvent } from "./tab-host";
+
+/**
+ * One line of Volli's own words steered into a Session's live turn, and the
+ * shared semantic metadata that tells every client it is Volli's (VC-330).
+ */
+export interface HoldNotice {
+  sessionId: string;
+  text: string;
+  metadata: SessionHostNoticeMetadata;
+}
+
+/**
+ * The durable transcript message for a hold notice.
+ *
+ * Kept beside the notice mapping so the required semantic metadata cannot be
+ * dropped by Electron bootstrap glue while it builds `message.submit`.
+ */
+export function holdNoticeMessage(notice: HoldNotice, messageId: string) {
+  return {
+    id: messageId,
+    role: "user" as const,
+    metadata: notice.metadata,
+    parts: [{ type: "text" as const, text: notice.text }],
+  };
+}
 
 /** The one line the displaced Session reads after a takeover. */
 export function takeoverNotice(tabId: string): string {
@@ -40,7 +68,7 @@ export function askToLeaveNotice(tabId: string): string {
 
 /** The steer door, narrowed to what the relay needs and what a test can fake. */
 export interface HoldNoticePorts {
-  steer(input: { sessionId: string; text: string }): Promise<void>;
+  steer(notice: HoldNotice): Promise<void>;
   log?(message: string): void;
 }
 
@@ -49,14 +77,34 @@ export interface HoldNoticePorts {
  * mapping is testable apart from the delivery: a takeover that displaced
  * nobody has nobody to tell.
  */
-export function holdNoticeFor(event: BrowserHoldEvent): { sessionId: string; text: string } | null {
+export function holdNoticeFor(event: BrowserHoldEvent): HoldNotice | null {
   switch (event.kind) {
     case "person-took":
       return event.displaced === null
         ? null
-        : { sessionId: event.displaced.sessionId, text: takeoverNotice(event.tabId) };
+        : {
+            sessionId: event.displaced.sessionId,
+            text: takeoverNotice(event.tabId),
+            metadata: sessionHostNoticeMetadata({
+              kind: "browser-hold",
+              tabId: event.tabId,
+              tabTitle: event.tabTitle,
+              tabHostname: event.tabHostname,
+              action: "person-took",
+            }),
+          };
     case "ask-to-leave":
-      return { sessionId: event.holder.sessionId, text: askToLeaveNotice(event.tabId) };
+      return {
+        sessionId: event.holder.sessionId,
+        text: askToLeaveNotice(event.tabId),
+        metadata: sessionHostNoticeMetadata({
+          kind: "browser-hold",
+          tabId: event.tabId,
+          tabTitle: event.tabTitle,
+          tabHostname: event.tabHostname,
+          action: "ask-to-leave",
+        }),
+      };
     case "taken":
     case "released":
     case "person-handed-back":

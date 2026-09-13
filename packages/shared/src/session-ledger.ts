@@ -5,6 +5,7 @@
 
 import type {
   CompactionReason,
+  CompactionWorkReason,
   ModelSelection,
   PromptResource,
   ReasoningDropCause,
@@ -435,6 +436,84 @@ export function sessionAwaitsUser(
   );
 }
 
+/**
+ * Why a Session's last turn ended by interruption, in the coarsest vocabulary
+ * that is honestly derivable from committed facts TODAY (VC-324).
+ *
+ * `stopped-by-runtime` is the runtime giving up on its transport: the retry
+ * budget ran out and it raised an `adapter_unrecoverable` /
+ * `adapter_disconnected` / `transport_retrying` Attention before writing the
+ * interruption. `crash-recovered` is the app finding the turn afterwards — the
+ * `partial_turn_interrupted` Attention recovery raises for a turn no process
+ * was left running. An interruption with no failure Attention is a deliberate
+ * cancellation or an incomplete record and does not enter the red listing
+ * state.
+ *
+ * Deliberately NOT a network/auth/provider vocabulary: which transport fault
+ * produced the dead end is classified inside the runtime and thrown away
+ * before the Attention is written, so a row that said "network" here would be
+ * guessing. Widening this vocabulary is a change to what the runtime RECORDS,
+ * not to what this function reads.
+ */
+export const SESSION_INTERRUPTION_REASONS = ["stopped-by-runtime", "crash-recovered"] as const;
+
+export type SessionInterruptionReason = (typeof SESSION_INTERRUPTION_REASONS)[number];
+
+/**
+ * The failure Attentions an interruption can be explained by, in the order
+ * they are asked — a list rather than a lookup, because an executor that both
+ * crashed and exhausted its retries leaves BOTH raised and the answer must not
+ * depend on which one the projection happens to hold first. `crash-recovered`
+ * leads: it is the more specific fact (a turn found dangling after the process
+ * died), and the transport Attentions are what any dead end raises.
+ */
+const INTERRUPTION_ATTENTIONS = [
+  ["partial_turn_interrupted", "crash-recovered"],
+  ["adapter_unrecoverable", "stopped-by-runtime"],
+  ["adapter_disconnected", "stopped-by-runtime"],
+  ["transport_retrying", "stopped-by-runtime"],
+] as const satisfies readonly (readonly [SessionAttentionKind, SessionInterruptionReason])[];
+
+/**
+ * Why this Session's LATEST turn ended by interruption, or `null` when it did
+ * not — the durable half of "the agent's turn died" (VC-324).
+ *
+ * Reads two committed facts and nothing else: `lastTurnOutcome`, which the fold
+ * sets from `turn.interrupted` and RESETS on `turn.started`, and `turnActive`.
+ * So "and nothing has started since" needs no history walk of its own — a
+ * Session that resumed is either mid-turn (`turnActive`) or carries the newer
+ * turn's own outcome. Silence is never read: a Session that has simply gone
+ * quiet has no `turn.interrupted` and is not this.
+ *
+ * The Attention only NAMES the interruption; it never creates one. A live
+ * `adapter_unrecoverable` on a Session whose turn completed is a failure the
+ * turn survived, and answering "interrupted" for it would be the Attention
+ * turning into a lifecycle fact it is explicitly not allowed to be.
+ */
+export function sessionInterruptionReason(
+  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+): SessionInterruptionReason | null {
+  if (projection.turnActive) return null;
+  if (projection.lastTurnOutcome !== "interrupted") return null;
+  for (const [kind, reason] of INTERRUPTION_ATTENTIONS) {
+    if (projection.attention.active.some((attention) => attention.kind === kind)) return reason;
+  }
+  return null;
+}
+
+/**
+ * Whether this Session's latest turn ended by interruption and nothing has
+ * started since — {@link sessionInterruptionReason} as the yes/no a listing
+ * asks. Exported beside {@link sessionAwaitsUser} for the same reason that one
+ * is: more than one surface says this word now (the chat listing row, the
+ * CLI's `session list`), and two hand-copies is how they come to disagree.
+ */
+export function sessionEndedInterrupted(
+  projection: Pick<SessionProjection, "turnActive" | "lastTurnOutcome" | "attention">,
+): boolean {
+  return sessionInterruptionReason(projection) !== null;
+}
+
 interface SessionAttentionBase {
   id: string;
   attachmentId: string | null;
@@ -579,19 +658,23 @@ export type SessionEventPayload =
   | {
       kind: "context.compacted";
       attachmentId: string;
-      reason: CompactionReason;
+      reason: CompactionWorkReason;
       entryId: string;
       /** Measured before, estimated after — see `CompactionObservation`. */
       tokensBefore: number;
       tokensAfter: number;
     }
   /**
-   * Compaction was attempted and produced nothing.
+   * Compaction was attempted and produced nothing — or a compaction that had
+   * already happened stopped being usable.
    *
    * Recorded because the silence is what hurts: the turn that paid for the
    * attempt was delivered on the context that was already there, and the refusal
    * that may follow reads as arbitrary unless history says the summary was tried
-   * first. It is not an Attention — nothing is blocked and nobody can clear it.
+   * first. `reason: "checkpoint"` is the second story on this arm — a
+   * provider-native checkpoint this Session can no longer use, whose history
+   * was restored in its place. It is not an Attention — nothing is blocked and
+   * nobody can clear it.
    */
   | {
       kind: "context.compaction_failed";

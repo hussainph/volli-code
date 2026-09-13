@@ -187,7 +187,7 @@ export async function inspectPiModelAccess(
           PROBE_TIMEOUT_MS,
           resolvedAuth.get(provider.id),
         ),
-        probeUsage(source.usageLimits, models, provider.id, input, now, PROBE_TIMEOUT_MS),
+        probeUsage(source, provider.id, input, now, PROBE_TIMEOUT_MS),
       ]);
       return { provider, probe, usageLimits };
     }),
@@ -414,31 +414,34 @@ function probeProvider(
  * should see when the endpoint is slow.
  */
 function probeUsage(
-  source: UsageLimitsSource | undefined,
-  models: Models,
+  source: PiModelAccessSource,
   providerId: string,
   input: InspectPiModelAccessInput,
   now: () => number,
   timeoutMs: number,
 ): Promise<UsageLimits | undefined> {
-  if (source === undefined || !USAGE_PROBE_PROVIDER_IDS.includes(providerId)) {
+  const usage = source.usageLimits;
+  if (usage === undefined || !USAGE_PROBE_PROVIDER_IDS.includes(providerId)) {
     return Promise.resolve(undefined);
   }
   return boundedProbe(
     async (signal) => {
       const outcome = await probeUsageLimits({
         providerId,
-        models,
-        fetch: source.fetch,
+        models: source.models,
+        // The same store the rest of the inspection reads, for the one reader
+        // whose endpoint does not take the token the turns use.
+        credentials: source.credentials,
+        fetch: usage.fetch,
         signal,
         now,
-        schedule: source.schedule,
+        schedule: usage.schedule,
         force: input.refresh === true,
       });
-      return source.holder.settle(providerId, outcome);
+      return usage.holder.settle(providerId, outcome);
     },
     () =>
-      source.holder.settle(providerId, {
+      usage.holder.settle(providerId, {
         kind: "verdict",
         limits: usageLimitsProbeFailed(now()),
       }),

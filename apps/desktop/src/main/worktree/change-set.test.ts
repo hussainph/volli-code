@@ -15,6 +15,21 @@ function z(...fields: string[]): string {
   return fields.length === 0 ? "" : `${fields.join("\0")}\0`;
 }
 
+/** Turns compact name-status fixtures into realistic `--raw -z` records. */
+function rawFromNameStatus(nameStatus: string): string {
+  const tokens = nameStatus.split("\0");
+  if (tokens[tokens.length - 1] === "") tokens.pop();
+  const raw: string[] = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const code = tokens[index++]!;
+    raw.push(`:100644 100644 1111111 2222222 ${code}`);
+    raw.push(tokens[index++] ?? "");
+    if (code.startsWith("R") || code.startsWith("C")) raw.push(tokens[index++] ?? "");
+  }
+  return z(...raw);
+}
+
 function runRepoGit(cwd: string, args: readonly string[]): string {
   return execFileSync("git", args, {
     cwd,
@@ -44,8 +59,10 @@ function scriptedChangeSetGit(opts: {
     if (args[0] === "merge-base") return "basesha\n";
     if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
     if (args[0] === "rev-parse" && args[1] === "HEAD") return "headsha\n";
-    if (args[0] === "diff" && args.includes("--name-status")) return opts.nameStatus ?? "";
-    if (args[0] === "diff" && args.includes("--numstat")) return opts.numstat ?? "";
+    if (args[0] === "diff" && args.includes("--raw")) {
+      const raw = rawFromNameStatus(opts.nameStatus ?? "");
+      return args.includes("--numstat") ? `${raw}${opts.numstat ?? ""}` : raw;
+    }
     if (args[0] === "status") return opts.status ?? "";
     return "";
   });
@@ -63,11 +80,9 @@ describe("changeSetSnapshot — merge-base stamping", () => {
     expect(calls.some((c) => c.args[0] === "merge-base")).toBe(true);
 
     const diffs = calls.filter((c) => c.args[0] === "diff");
-    expect(diffs).toHaveLength(2);
-    for (const diff of diffs) {
-      expect(diff.args).toContain("basesha");
-      expect(diff.args).not.toContain("tipsha");
-    }
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]?.args).toContain("basesha");
+    expect(diffs[0]?.args).not.toContain("tipsha");
   });
 
   it("reuses the remote-tracking probe's SHA rather than re-resolving the tip", async () => {
@@ -122,13 +137,12 @@ describe("changeSetSnapshot — clean worktree", () => {
     expect(result.value.deletions).toBe(0);
     expect(result.value.revision.length).toBeGreaterThan(0);
 
-    // Path-safety and rename detection are acceptance criteria — assert the argv contract.
-    const nameStatus = calls.find((c) => c.args[0] === "diff" && c.args.includes("--name-status"));
-    expect(nameStatus?.args).toContain("-z");
-    expect(nameStatus?.args).toContain("-M");
-    const numstat = calls.find((c) => c.args[0] === "diff" && c.args.includes("--numstat"));
-    expect(numstat?.args).toContain("-z");
-    expect(numstat?.args).toContain("-M");
+    // One path-safe process returns both status and counts with rename detection.
+    const diff = calls.find((c) => c.args[0] === "diff");
+    expect(diff?.args).toContain("--raw");
+    expect(diff?.args).toContain("--numstat");
+    expect(diff?.args).toContain("-z");
+    expect(diff?.args).toContain("-M");
   });
 });
 
@@ -356,7 +370,7 @@ describe("changeSetSnapshot — untracked", () => {
     expect(result.value.deletions).toBe(0);
     const statusCall = calls.find((c) => c.args[0] === "status");
     expect(statusCall?.args).toEqual(["status", "--porcelain=v2", "-z", "-uall"]);
-    expect(calls.filter((call) => call.args[0] === "diff")).toHaveLength(2);
+    expect(calls.filter((call) => call.args[0] === "diff")).toHaveLength(1);
   });
 
   it("keeps counts unknown when a racing untracked path cannot be read", async () => {

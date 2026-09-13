@@ -1,0 +1,3895 @@
+{
+  "meta": {
+    "ticket": "VC-291 reflow matrix",
+    "startedAt": "2026-09-10T12:35:25.324Z",
+    "commit": "596a76cfa6c001c4c797301ef378f87c3b833135",
+    "commitShort": "596a76cf",
+    "branch": "volli/VC-291-investigate-terminal-reflow-line-loss-and-access",
+    "treeDirty": true,
+    "appVersion": "0.2.0-canary.4",
+    "electron": "^44.0.0",
+    "macOS": "26.5.1",
+    "macOSBuild": "25F80",
+    "hardware": "Apple M1",
+    "displays": [
+      {
+        "name": "Color LCD",
+        "resolution": "1440 x 900 @ 60.00Hz",
+        "main": true,
+        "connection": "spdisplays_internal",
+        "virtual": false
+      },
+      {
+        "name": "DELL E2422HS",
+        "resolution": "1920 x 1080 @ 60.00Hz",
+        "main": false,
+        "connection": null,
+        "virtual": false
+      }
+    ],
+    "displayCount": 2,
+    "externalMonitorAttached": true,
+    "node": "v24.18.0",
+    "cases": [
+      "focus",
+      "hideshow"
+    ],
+    "runsPerCase": 1,
+    "surface": "home",
+    "panesPerRun": 16,
+    "expectBackend": "webgl2",
+    "minLiveTerminals": 17,
+    "forcedBackend": "webgl2 (navigator.gpu hidden by an init script — harness-only lever, VC-348)",
+    "fontWorkaround": "queryLocalFonts stubbed with real /System/Library/Fonts/SFNSMono.ttf bytes (VC-347)",
+    "window": {
+      "x": 20,
+      "y": 31,
+      "width": 1280,
+      "height": 811,
+      "scaleFactor": 2,
+      "displayId": 1,
+      "displaySize": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "backend": {
+      "webgpu": false,
+      "webgl2": true,
+      "navigatorGpu": false,
+      "contexts": 18
+    },
+    "paneShell": "/bin/zsh\n/bin/zsh\nsh=/bin/sh",
+    "consoleByLevel": {
+      "warning": 89
+    },
+    "contextMessages": [
+      {
+        "t": 1789043784623,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043843114,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043850677,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043852176,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043853663,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043855160,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043856661,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043858144,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043859626,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043861104,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043862612,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043864112,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043865600,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043867114,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043868615,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043870133,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043871620,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043872884,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043931386,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      }
+    ],
+    "consoleErrors": [],
+    "consoleAll": [
+      {
+        "t": 1789043754382,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043754384,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043762356,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043762356,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043763830,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043763831,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043765317,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043765324,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043766810,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043766810,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043768279,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043768280,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043769727,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043769727,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043771180,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043771180,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043772662,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043772662,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043774149,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043774149,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043775604,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043775604,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043777066,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043777066,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043778592,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043778592,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043780132,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043780132,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043781593,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043781593,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043783100,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043783100,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043784602,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043784602,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043784623,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043843110,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043843110,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043843114,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043850672,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043850672,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043850677,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043852166,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043852166,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043852176,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043853650,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043853650,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043853663,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043855145,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043855145,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043855160,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043856657,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043856657,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043856661,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043858133,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043858133,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043858144,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043859615,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043859615,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043859626,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043861092,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043861092,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043861104,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043862609,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043862609,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043862612,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043864098,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043864098,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043864112,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043865586,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043865586,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043865600,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043867099,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043867099,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043867114,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043868613,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043868613,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043868615,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043870119,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043870119,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043870133,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043871607,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043871607,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043871620,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043872869,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043872869,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043872884,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      },
+      {
+        "t": 1789043931383,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrainsmono nerd font, jetbrainsmononerdfont)"
+      },
+      {
+        "t": 1789043931383,
+        "type": "warning",
+        "text": "[font] optional local font missing (jetbrains mono, jetbrainsmono)"
+      },
+      {
+        "t": 1789043931386,
+        "type": "warning",
+        "text": "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+      }
+    ],
+    "finishedAt": "2026-09-10T12:39:50.398Z"
+  },
+  "runs": [
+    {
+      "case": "focus",
+      "run": 1,
+      "surface": "home",
+      "startedAt": "2026-09-10T12:35:56.829Z",
+      "events": [
+        {
+          "t": "seedpost",
+          "role": "seed",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 1540,
+            "max": 1540,
+            "height": 2256,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-seedpost-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2764
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-EN",
+                "tailTruncatedByOcr": true
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "short30": 1540,
+              "pwd": 1540,
+              "end": 1540
+            },
+            "shots": [
+              {
+                "file": "focus-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2884
+              },
+              {
+                "file": "focus-r1-seedpost-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2853
+              },
+              {
+                "file": "focus-r1-seedpost-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2784
+              },
+              {
+                "file": "focus-r1-seedpost-s03.png",
+                "requestedTop": 1540,
+                "actualTop": 1540,
+                "ocrChars": 2764
+              }
+            ],
+            "scrollMax": 1540,
+            "restored": {
+              "wanted": 1540,
+              "got": 1540
+            }
+          },
+          "at": 1789043761972
+        },
+        {
+          "t": "pressure-panes-created",
+          "role": "note",
+          "liveTerminalHosts": 17,
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 1610,
+            "max": 1610,
+            "height": 2326,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "backOnSeededPane": true,
+          "at": 1789043787728
+        },
+        {
+          "t": "focus-return-1",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 1078,
+            "max": 1694,
+            "height": 2410,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-1-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-1-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-1-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-1-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-1-s03.png",
+                "requestedTop": 1694,
+                "actualTop": 1694,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1694,
+            "restored": {
+              "wanted": 1078,
+              "got": 1078
+            }
+          },
+          "cycle": 1,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 767,
+            "max": 767,
+            "height": 1534,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": true,
+          "at": 1789043794302
+        },
+        {
+          "t": "focus-return-2",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 1036,
+            "max": 1834,
+            "height": 2550,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-2-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-2-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-2-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-2-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-2-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-2-s04.png",
+                "requestedTop": 1834,
+                "actualTop": 1834,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1834,
+            "restored": {
+              "wanted": 1036,
+              "got": 1036
+            }
+          },
+          "cycle": 2,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 672,
+            "max": 798,
+            "height": 1565,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043799034
+        },
+        {
+          "t": "focus-return-3",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 1008,
+            "max": 1974,
+            "height": 2690,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-3-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-3-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-3-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-3-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-3-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-3-s04.png",
+                "requestedTop": 1974,
+                "actualTop": 1974,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1974,
+            "restored": {
+              "wanted": 1008,
+              "got": 1008
+            }
+          },
+          "cycle": 3,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 658,
+            "max": 910,
+            "height": 1677,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043803722
+        },
+        {
+          "t": "focus-return-4",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 966,
+            "max": 2114,
+            "height": 2830,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-4-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-4-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-4-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-4-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-4-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-4-s04.png",
+                "requestedTop": 2114,
+                "actualTop": 2114,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2114,
+            "restored": {
+              "wanted": 966,
+              "got": 966
+            }
+          },
+          "cycle": 4,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 630,
+            "max": 1022,
+            "height": 1789,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043808481
+        },
+        {
+          "t": "focus-return-5",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 938,
+            "max": 2254,
+            "height": 2970,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-5-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-5-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-5-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-5-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-5-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-5-s04.png",
+                "requestedTop": 2254,
+                "actualTop": 2254,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2254,
+            "restored": {
+              "wanted": 938,
+              "got": 938
+            }
+          },
+          "cycle": 5,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 616,
+            "max": 1134,
+            "height": 1901,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043813334
+        },
+        {
+          "t": "focus-return-6",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 896,
+            "max": 2394,
+            "height": 3110,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-6-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-6-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-6-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-6-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-6-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-6-s04.png",
+                "requestedTop": 2394,
+                "actualTop": 2394,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2394,
+            "restored": {
+              "wanted": 896,
+              "got": 896
+            }
+          },
+          "cycle": 6,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 588,
+            "max": 1246,
+            "height": 2013,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043817961
+        },
+        {
+          "t": "focus-return-7",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 868,
+            "max": 2534,
+            "height": 3250,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-7-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-7-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-7-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-7-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-7-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-7-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-7-s05.png",
+                "requestedTop": 2534,
+                "actualTop": 2534,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2534,
+            "restored": {
+              "wanted": 868,
+              "got": 868
+            }
+          },
+          "cycle": 7,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 574,
+            "max": 1358,
+            "height": 2125,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043823119
+        },
+        {
+          "t": "focus-return-8",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 826,
+            "max": 2674,
+            "height": 3390,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-8-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-8-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-8-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-8-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-8-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-8-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-8-s05.png",
+                "requestedTop": 2674,
+                "actualTop": 2674,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2674,
+            "restored": {
+              "wanted": 826,
+              "got": 826
+            }
+          },
+          "cycle": 8,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 546,
+            "max": 1470,
+            "height": 2237,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043828320
+        },
+        {
+          "t": "focus-return-9",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 798,
+            "max": 2814,
+            "height": 3530,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-9-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-9-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-9-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-9-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-9-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-9-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-9-s05.png",
+                "requestedTop": 2814,
+                "actualTop": 2814,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2814,
+            "restored": {
+              "wanted": 798,
+              "got": 798
+            }
+          },
+          "cycle": 9,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 532,
+            "max": 1582,
+            "height": 2349,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043833505
+        },
+        {
+          "t": "focus-return-10",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 756,
+            "max": 2954,
+            "height": 3670,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-return-10-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-return-10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-10-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-10-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-10-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-10-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-return-10-s05.png",
+                "requestedTop": 2954,
+                "actualTop": 2954,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2954,
+            "restored": {
+              "wanted": 756,
+              "got": 756
+            }
+          },
+          "cycle": 10,
+          "enteredZen": true,
+          "leftZen": true,
+          "gridWhileFocused": "54 169",
+          "scrollWhileFocused": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 504,
+            "max": 1694,
+            "height": 2461,
+            "client": 767,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredWhileFocused": false,
+          "at": 1789043838736
+        },
+        {
+          "t": "focus-final",
+          "role": "final",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "top": 756,
+            "max": 3038,
+            "height": 3754,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": false,
+          "activePaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "focus-r1-focus-final-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "focus-r1-focus-final-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-final-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-final-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-final-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-final-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "focus-r1-focus-final-s05.png",
+                "requestedTop": 3038,
+                "actualTop": 3038,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 3038,
+            "restored": {
+              "wanted": 756,
+              "got": 756
+            }
+          },
+          "at": 1789043842750
+        }
+      ],
+      "referenceToken": "focus1mtvigm13",
+      "referenceFile": "/tmp/volli-reflow-focus1mtvigm13-1789043757.txt",
+      "seedVerification": {
+        "ok": true,
+        "lineCount": 63,
+        "shortsSeen": 30,
+        "longsSeen": 30,
+        "pwd": "/private/tmp/vc291-matrix-zDQkqd/project-Jd6yFg",
+        "problems": []
+      },
+      "seededPaneId": "dc1d3cd6-49a7-443d-ae3f-20b68b64d6ed",
+      "paneMetrics": {
+        "clip": {
+          "x": 322,
+          "y": 82,
+          "width": 645,
+          "height": 716
+        },
+        "dpr": 2
+      },
+      "finishedAt": "2026-09-10T12:37:22.750Z"
+    },
+    {
+      "case": "hideshow",
+      "run": 1,
+      "surface": "home",
+      "startedAt": "2026-09-10T12:37:25.533Z",
+      "events": [
+        {
+          "t": "seedpost",
+          "role": "seed",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1512,
+            "max": 1512,
+            "height": 2228,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-seedpost-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": true,
+              "long15": false,
+              "pwd": true,
+              "end": true
+            },
+            "ocrChars": 2766
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": true,
+              "short01": true,
+              "short15": true,
+              "short30": true,
+              "long15": true,
+              "pwd": true,
+              "end": true
+            },
+            "detail": {
+              "long15": {
+                "fill": 240,
+                "minFill": 180,
+                "tailSeen": "-EN",
+                "tailTruncatedByOcr": true
+              }
+            },
+            "whereFound": {
+              "begin": 0,
+              "short01": 0,
+              "short15": 602,
+              "long15": 602,
+              "short30": 1512,
+              "pwd": 1512,
+              "end": 1512
+            },
+            "shots": [
+              {
+                "file": "hideshow-r1-seedpost-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 2760
+              },
+              {
+                "file": "hideshow-r1-seedpost-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 2855
+              },
+              {
+                "file": "hideshow-r1-seedpost-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 2853
+              },
+              {
+                "file": "hideshow-r1-seedpost-s03.png",
+                "requestedTop": 1512,
+                "actualTop": 1512,
+                "ocrChars": 2766
+              }
+            ],
+            "scrollMax": 1512,
+            "restored": {
+              "wanted": 1512,
+              "got": 1512
+            }
+          },
+          "at": 1789043850317
+        },
+        {
+          "t": "pressure-panes-created",
+          "role": "note",
+          "liveTerminalHosts": 34,
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1582,
+            "max": 1582,
+            "height": 2298,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "backOnSeededPane": true,
+          "at": 1789043883079
+        },
+        {
+          "t": "board-return-1",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1582,
+            "max": 1582,
+            "height": 2298,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-1-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-1-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-1-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-1-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-1-s03.png",
+                "requestedTop": 1582,
+                "actualTop": 1582,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1582,
+            "restored": {
+              "wanted": 1582,
+              "got": 1582
+            }
+          },
+          "cycle": 1,
+          "leg": "board",
+          "at": 1789043889929
+        },
+        {
+          "t": "board-return-2",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1666,
+            "max": 1666,
+            "height": 2382,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-2-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-2-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-2-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-2-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-2-s03.png",
+                "requestedTop": 1666,
+                "actualTop": 1666,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1666,
+            "restored": {
+              "wanted": 1666,
+              "got": 1666
+            }
+          },
+          "cycle": 2,
+          "leg": "board",
+          "at": 1789043894027
+        },
+        {
+          "t": "board-return-3",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1750,
+            "max": 1750,
+            "height": 2466,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-3-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 4,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-3-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-3-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-3-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-3-s03.png",
+                "requestedTop": 1750,
+                "actualTop": 1750,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1750,
+            "restored": {
+              "wanted": 1750,
+              "got": 1750
+            }
+          },
+          "cycle": 3,
+          "leg": "board",
+          "at": 1789043898235
+        },
+        {
+          "t": "board-return-4",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1834,
+            "max": 1834,
+            "height": 2550,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-4-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-4-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-4-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-4-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-4-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-4-s04.png",
+                "requestedTop": 1834,
+                "actualTop": 1834,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1834,
+            "restored": {
+              "wanted": 1834,
+              "got": 1834
+            }
+          },
+          "cycle": 4,
+          "leg": "board",
+          "at": 1789043902934
+        },
+        {
+          "t": "board-return-5",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 1918,
+            "max": 1918,
+            "height": 2634,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-5-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-5-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-5-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-5-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-5-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-5-s04.png",
+                "requestedTop": 1918,
+                "actualTop": 1918,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 1918,
+            "restored": {
+              "wanted": 1918,
+              "got": 1918
+            }
+          },
+          "cycle": 5,
+          "leg": "board",
+          "at": 1789043907706
+        },
+        {
+          "t": "board-return-6",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2002,
+            "max": 2002,
+            "height": 2718,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-6-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-6-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-6-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-6-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-6-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-6-s04.png",
+                "requestedTop": 2002,
+                "actualTop": 2002,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2002,
+            "restored": {
+              "wanted": 2002,
+              "got": 2002
+            }
+          },
+          "cycle": 6,
+          "leg": "board",
+          "at": 1789043912338
+        },
+        {
+          "t": "board-return-7",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2086,
+            "max": 2086,
+            "height": 2802,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-7-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-7-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-7-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-7-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-7-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-7-s04.png",
+                "requestedTop": 2086,
+                "actualTop": 2086,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2086,
+            "restored": {
+              "wanted": 2086,
+              "got": 2086
+            }
+          },
+          "cycle": 7,
+          "leg": "board",
+          "at": 1789043917054
+        },
+        {
+          "t": "board-return-8",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2170,
+            "max": 2170,
+            "height": 2886,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-8-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-8-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-8-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-8-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-8-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-8-s04.png",
+                "requestedTop": 2170,
+                "actualTop": 2170,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2170,
+            "restored": {
+              "wanted": 2170,
+              "got": 2170
+            }
+          },
+          "cycle": 8,
+          "leg": "board",
+          "at": 1789043921682
+        },
+        {
+          "t": "board-return-9",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2254,
+            "max": 2254,
+            "height": 2970,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-9-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-9-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-9-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-9-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-9-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-9-s04.png",
+                "requestedTop": 2254,
+                "actualTop": 2254,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2254,
+            "restored": {
+              "wanted": 2254,
+              "got": 2254
+            }
+          },
+          "cycle": 9,
+          "leg": "board",
+          "at": 1789043926432
+        },
+        {
+          "t": "board-return-10",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2338,
+            "max": 2338,
+            "height": 3054,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-board-return-10-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-board-return-10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-10-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-10-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-10-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-board-return-10-s04.png",
+                "requestedTop": 2338,
+                "actualTop": 2338,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2338,
+            "restored": {
+              "wanted": 2338,
+              "got": 2338
+            }
+          },
+          "cycle": 10,
+          "leg": "board",
+          "at": 1789043931037
+        },
+        {
+          "t": "tab-return-1",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2422,
+            "max": 2422,
+            "height": 3138,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-1-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 5,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-1-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-1-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-1-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-1-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-1-s04.png",
+                "requestedTop": 2422,
+                "actualTop": 2422,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2422,
+            "restored": {
+              "wanted": 2422,
+              "got": 2422
+            }
+          },
+          "cycle": 1,
+          "leg": "tab",
+          "at": 1789043939185
+        },
+        {
+          "t": "tab-return-2",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2492,
+            "max": 2492,
+            "height": 3208,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-2-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-2-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-2-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-2-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-2-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-2-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-2-s05.png",
+                "requestedTop": 2492,
+                "actualTop": 2492,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2492,
+            "restored": {
+              "wanted": 2492,
+              "got": 2492
+            }
+          },
+          "cycle": 2,
+          "leg": "tab",
+          "at": 1789043944463
+        },
+        {
+          "t": "tab-return-3",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2562,
+            "max": 2562,
+            "height": 3278,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-3-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-3-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-3-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-3-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-3-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-3-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-3-s05.png",
+                "requestedTop": 2562,
+                "actualTop": 2562,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2562,
+            "restored": {
+              "wanted": 2562,
+              "got": 2562
+            }
+          },
+          "cycle": 3,
+          "leg": "tab",
+          "at": 1789043949550
+        },
+        {
+          "t": "tab-return-4",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2632,
+            "max": 2632,
+            "height": 3348,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-4-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-4-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-4-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-4-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-4-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-4-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-4-s05.png",
+                "requestedTop": 2632,
+                "actualTop": 2632,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2632,
+            "restored": {
+              "wanted": 2632,
+              "got": 2632
+            }
+          },
+          "cycle": 4,
+          "leg": "tab",
+          "at": 1789043954637
+        },
+        {
+          "t": "tab-return-5",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2702,
+            "max": 2702,
+            "height": 3418,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-5-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-5-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-5-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-5-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-5-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-5-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-5-s05.png",
+                "requestedTop": 2702,
+                "actualTop": 2702,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2702,
+            "restored": {
+              "wanted": 2702,
+              "got": 2702
+            }
+          },
+          "cycle": 5,
+          "leg": "tab",
+          "at": 1789043959593
+        },
+        {
+          "t": "tab-return-6",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2772,
+            "max": 2772,
+            "height": 3488,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-6-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-6-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-6-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-6-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-6-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-6-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-6-s05.png",
+                "requestedTop": 2772,
+                "actualTop": 2772,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2772,
+            "restored": {
+              "wanted": 2772,
+              "got": 2772
+            }
+          },
+          "cycle": 6,
+          "leg": "tab",
+          "at": 1789043965000
+        },
+        {
+          "t": "tab-return-7",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2842,
+            "max": 2842,
+            "height": 3558,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-7-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-7-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-7-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-7-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-7-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-7-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-7-s05.png",
+                "requestedTop": 2842,
+                "actualTop": 2842,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2842,
+            "restored": {
+              "wanted": 2842,
+              "got": 2842
+            }
+          },
+          "cycle": 7,
+          "leg": "tab",
+          "at": 1789043970083
+        },
+        {
+          "t": "tab-return-8",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2912,
+            "max": 2912,
+            "height": 3628,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-8-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-8-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-8-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-8-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-8-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-8-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-8-s05.png",
+                "requestedTop": 2912,
+                "actualTop": 2912,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2912,
+            "restored": {
+              "wanted": 2912,
+              "got": 2912
+            }
+          },
+          "cycle": 8,
+          "leg": "tab",
+          "at": 1789043975232
+        },
+        {
+          "t": "tab-return-9",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 2982,
+            "max": 2982,
+            "height": 3698,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-9-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 6,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-9-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-9-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-9-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-9-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-9-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-9-s05.png",
+                "requestedTop": 2982,
+                "actualTop": 2982,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 2982,
+            "restored": {
+              "wanted": 2982,
+              "got": 2982
+            }
+          },
+          "cycle": 9,
+          "leg": "tab",
+          "at": 1789043980380
+        },
+        {
+          "t": "tab-return-10",
+          "role": "boundary",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 3052,
+            "max": 3052,
+            "height": 3768,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-tab-return-10-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-tab-return-10-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-tab-return-10-s06.png",
+                "requestedTop": 3052,
+                "actualTop": 3052,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 3052,
+            "restored": {
+              "wanted": 3052,
+              "got": 3052
+            }
+          },
+          "cycle": 10,
+          "leg": "tab",
+          "at": 1789043986015
+        },
+        {
+          "t": "hideshow-final",
+          "role": "final",
+          "grid": "51 86",
+          "scroll": {
+            "paneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "top": 3136,
+            "max": 3136,
+            "height": 3852,
+            "client": 716,
+            "dpr": 2,
+            "focusedPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+            "ringActivePaneId": null,
+            "paneCount": 1
+          },
+          "anchoredAtBottom": true,
+          "activePaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+          "ringActivePaneId": null,
+          "onSeededPane": true,
+          "atRest": {
+            "file": "hideshow-r1-hideshow-final-atrest.png",
+            "visibleMarkers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "ocrChars": 1
+          },
+          "shots": {
+            "steps": 7,
+            "markers": {
+              "begin": false,
+              "short01": false,
+              "short15": false,
+              "short30": false,
+              "long15": false,
+              "pwd": false,
+              "end": false
+            },
+            "detail": {},
+            "whereFound": {},
+            "shots": [
+              {
+                "file": "hideshow-r1-hideshow-final-s00.png",
+                "requestedTop": 0,
+                "actualTop": 0,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s01.png",
+                "requestedTop": 608,
+                "actualTop": 602,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s02.png",
+                "requestedTop": 1216,
+                "actualTop": 1218,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s03.png",
+                "requestedTop": 1824,
+                "actualTop": 1820,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s04.png",
+                "requestedTop": 2432,
+                "actualTop": 2436,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s05.png",
+                "requestedTop": 3040,
+                "actualTop": 3038,
+                "ocrChars": 1
+              },
+              {
+                "file": "hideshow-r1-hideshow-final-s06.png",
+                "requestedTop": 3136,
+                "actualTop": 3136,
+                "ocrChars": 1
+              }
+            ],
+            "scrollMax": 3136,
+            "restored": {
+              "wanted": 3136,
+              "got": 3136
+            }
+          },
+          "at": 1789043990398
+        }
+      ],
+      "referenceToken": "hideshow1mtviii9a",
+      "referenceFile": "/tmp/volli-reflow-hideshow1mtviii9a-1789043845.txt",
+      "seedVerification": {
+        "ok": true,
+        "lineCount": 63,
+        "shortsSeen": 30,
+        "longsSeen": 30,
+        "pwd": "/private/tmp/vc291-matrix-zDQkqd/project-Jd6yFg",
+        "problems": []
+      },
+      "seededPaneId": "60d3c71f-b8f5-4b8f-a25d-abb5ab86b574",
+      "paneMetrics": {
+        "clip": {
+          "x": 322,
+          "y": 82,
+          "width": 645,
+          "height": 716
+        },
+        "dpr": 2
+      },
+      "finishedAt": "2026-09-10T12:39:50.398Z"
+    }
+  ]
+}

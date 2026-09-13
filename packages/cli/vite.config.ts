@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 
+import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
+
 const packageRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(packageRoot, "../..");
 
@@ -39,6 +41,8 @@ const buildId =
 export default defineConfig({
   test: {
     environment: "node",
+    // One `vp test` invocation's share of a shared machine (VC-339).
+    ...SHARED_MACHINE_TEST_WORKERS,
     coverage: {
       // Sources, not fixtures: `src/__snapshots__` holds the captured CLI
       // reference, which is text to compare against rather than code to run.

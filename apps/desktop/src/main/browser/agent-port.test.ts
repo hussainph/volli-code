@@ -1,5 +1,5 @@
 import { BrowserRefusal } from "@volli/agent-runtime";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { BrowserTabHolder } from "@volli/shared";
 import type { BrowserTabState } from "../../ipc/contract";
@@ -9,6 +9,7 @@ import {
   loadWaiter,
   type AgentBrowserHost,
 } from "./agent-port";
+import { BrowserAgentCoordinator } from "./agent-coordinator";
 import type { CdpTransport, TabCursorDriver } from "./cdp-controller";
 import { BrowserSessionTabLimitError, type BrowserSessionHolder } from "./tab-host";
 
@@ -32,6 +33,8 @@ const BUTTON_TREE = {
     },
   ],
 };
+
+const BUTTON_BOX = { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
 
 function state(overrides: Partial<BrowserTabState> & { tabId: string }): BrowserTabState {
   const createdBy = overrides.createdBy ?? "user";
@@ -104,6 +107,7 @@ function fakeHost(
     { kind: "session"; holder: BrowserSessionHolder } | { kind: "person" }
   >();
   const ended: string[] = [];
+  const agentOperations = new BrowserAgentCoordinator();
   let openCount = 0;
   const holderView = (tabId: string): BrowserTabHolder | null => {
     const hold = holds.get(tabId);
@@ -139,6 +143,7 @@ function fakeHost(
     holds,
     ended,
     host: {
+      agentOperations,
       hold: (tabId, holder) => {
         if (!tabs.has(tabId)) throw new Error("Unknown Browser Tab");
         const current = holds.get(tabId);
@@ -211,7 +216,10 @@ function fakeHost(
         const closing = [...tabs.values()]
           .filter((one) => one.ownerSessionId === sessionId && one.presentation === "headless")
           .map((one) => one.tabId);
-        for (const tabId of closing) tabs.delete(tabId);
+        for (const tabId of closing) {
+          tabs.delete(tabId);
+          agentOperations.closeTab(tabId);
+        }
         return closing;
       },
       navigate: (tabId, url) => {
@@ -239,7 +247,7 @@ function transportFor(): CdpTransport {
       if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
       if (method === "DOM.getBoxModel")
         return { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } };
-      if (method === "Page.captureScreenshot") return { data: "cGl4ZWxz" };
+      if (method === "Page.captureScreenshot") return { data: "iVBORw0KGgoAAAANSUhEUgAABkAAAASw" };
       if (method === "Page.getLayoutMetrics") {
         return { cssVisualViewport: { clientWidth: 800, clientHeight: 600 } };
       }
@@ -795,6 +803,56 @@ describe("createAgentBrowserPort", () => {
     expect(settled).toBe(true);
   });
 
+  it.each(["destroyed", "render-process-gone", "abort", "gap"])(
+    "ends a load wait on %s and removes every listener",
+    async (end) => {
+      vi.useFakeTimers();
+      try {
+        const listeners = new Map<string, () => void>();
+        let reads = 0;
+        const contents = {
+          isLoading: () => ++reads === 1 || end !== "gap",
+          on: (event: string, listener: () => void) => listeners.set(event, listener),
+          removeListener: (event: string) => listeners.delete(event),
+        };
+        const abort = new AbortController();
+        const pending = loadWaiter(() => contents as never)("one", abort.signal);
+        if (end === "abort") abort.abort();
+        else if (end !== "gap") listeners.get(end)?.();
+        await pending;
+        expect(listeners.size).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("does not resume debugger initialization after disposal", async () => {
+    const domain = Promise.withResolvers<unknown>();
+    let attached = false;
+    const sendCommand = vi.fn(() => domain.promise);
+    const transport = debuggerTransport({
+      debugger: {
+        isAttached: () => attached,
+        attach: () => {
+          attached = true;
+        },
+        detach: () => {
+          attached = false;
+        },
+        sendCommand,
+      },
+    } as never);
+    const pending = transport.send("Accessibility.getFullAXTree");
+    transport.dispose?.();
+    domain.resolve({});
+    await expect(pending).rejects.toThrow(/disposed/i);
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+    expect(attached).toBe(false);
+    await expect(transport.send("Page.enable")).rejects.toThrow(/disposed/i);
+  });
+
   it("answers a screenshot with the tab's own record beside the engine's pixels", async () => {
     const scoped = port({
       tabs: [state({ tabId: "user-1", createdBy: "user", url: "https://example.com/page" })],
@@ -808,12 +866,12 @@ describe("createAgentBrowserPort", () => {
       title: "Example",
       ownerSessionId: null,
       error: null,
-      base64Png: "cGl4ZWxz",
+      base64Png: "iVBORw0KGgoAAAANSUhEUgAABkAAAASw",
       // The same bytes, kept for the person (VC-238): the tool description
       // promises the picture to both parties, and the id is how the card gets it.
-      picture: "kept:user-1:cGl4ZWxz",
-      width: 800,
-      height: 600,
+      picture: "kept:user-1:iVBORw0KGgoAAAANSUhEUgAABkAAAASw",
+      width: 1600,
+      height: 1200,
     });
   });
 
@@ -892,6 +950,237 @@ describe("createAgentBrowserPort", () => {
 
     await expect(driven.port.snapshot({ tabId: "user-1", signal })).rejects.toThrow(BrowserRefusal);
     expect(driven.wakeEvents).toEqual(["hold user-1", "wait user-1", "release user-1"]);
+  });
+});
+
+describe("Browser port concurrent calls and teardown", () => {
+  function harness() {
+    const host = fakeHost([state({ tabId: "one" }), state({ tabId: "two" })]).host;
+    const ready = Promise.withResolvers<void>();
+    const disposed = vi.fn();
+    const base = transportFor();
+    const send = vi.fn(base.send);
+    const createTransport = vi.fn(() => ({
+      ...base,
+      send,
+      ensureReady: () => ready.promise,
+      dispose: disposed,
+    }));
+    const browser = createAgentBrowserPort({
+      host,
+      scope: { projectId: "p1", ticketId: null },
+      session: ME,
+      transportFor: createTransport,
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    return { port: browser, ready, disposed, createTransport, send, host };
+  }
+
+  it("serializes one tab's snapshots without duplicating controllers or reusing refs", async () => {
+    const h = harness();
+    const first = h.port.snapshot({ tabId: "one", signal });
+    const second = h.port.snapshot({ tabId: "one", signal });
+    await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalled());
+    h.ready.resolve();
+    const [a, b] = await Promise.all([first, second]);
+    expect(h.createTransport).toHaveBeenCalledTimes(1);
+    expect(refIn(a.snapshotText)).not.toBe(refIn(b.snapshotText));
+    h.port.dispose();
+    expect(h.disposed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps different tabs concurrent", async () => {
+    const h = harness();
+    const first = h.port.snapshot({ tabId: "one", signal });
+    const second = h.port.snapshot({ tabId: "two", signal });
+    await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalledTimes(2));
+    h.ready.resolve();
+    await Promise.all([first, second]);
+    h.port.dispose();
+  });
+
+  it("withdraws queued work without letting the next call jump the running call", async () => {
+    const h = harness();
+    const first = h.port.snapshot({ tabId: "one", signal });
+    const cancelled = new AbortController();
+    const second = h.port.snapshot({ tabId: "one", signal: cancelled.signal });
+    const rejected = expect(second).rejects.toThrow("withdrawn");
+    const third = h.port.snapshot({ tabId: "one", signal });
+    cancelled.abort(new Error("withdrawn"));
+    await rejected;
+    h.ready.resolve();
+    const [a, c] = await Promise.all([first, third]);
+    expect(h.createTransport).toHaveBeenCalledTimes(1);
+    expect(refIn(a.snapshotText)).not.toBe(refIn(c.snapshotText));
+    expect(
+      h.send.mock.calls.filter(([method]) => method === "Accessibility.getFullAXTree"),
+    ).toHaveLength(2);
+    h.port.dispose();
+  });
+
+  it("shares one debugger transport and one queue across two Session ports on the same tab", async () => {
+    const shared = fakeHost([state({ tabId: "one", createdBy: "user" })]);
+    const firstSnapshot = Promise.withResolvers<void>();
+    let snapshotsStarted = 0;
+    let snapshotsActive = 0;
+    let maximumActive = 0;
+    const disposed = vi.fn();
+    const createTransport = vi.fn((): CdpTransport => ({
+      send: async (method) => {
+        if (method === "Accessibility.getFullAXTree") {
+          snapshotsStarted += 1;
+          snapshotsActive += 1;
+          maximumActive = Math.max(maximumActive, snapshotsActive);
+          if (snapshotsStarted === 1) await firstSnapshot.promise;
+          snapshotsActive -= 1;
+          return BUTTON_TREE;
+        }
+        return {};
+      },
+      dispose: disposed,
+    }));
+    const makePort = (session: BrowserSessionHolder) =>
+      createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session,
+        transportFor: createTransport,
+        waitForLoad: async () => undefined,
+        holdAwake: () => () => undefined,
+      });
+    const a = makePort(ME);
+    const b = makePort(OTHER);
+
+    const aSnapshot = a.snapshot({ tabId: "one", signal });
+    await vi.waitFor(() => expect(snapshotsStarted).toBe(1));
+    const bSnapshot = b.snapshot({ tabId: "one", signal });
+    await Promise.resolve();
+    expect(snapshotsStarted).toBe(1);
+    firstSnapshot.resolve();
+    const [fromA, fromB] = await Promise.all([aSnapshot, bSnapshot]);
+
+    expect(maximumActive).toBe(1);
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    // Ref maps stay attachment-local even though their wire is shared.
+    expect(refIn(fromA.snapshotText)).toBe("e1");
+    expect(refIn(fromB.snapshotText)).toBe("e1");
+
+    a.dispose();
+    expect(disposed).not.toHaveBeenCalled();
+    await expect(b.snapshot({ tabId: "one", signal })).resolves.toMatchObject({ tabId: "one" });
+    b.dispose();
+    expect(disposed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the hold until an aborted active click has released its mouse button", async () => {
+    const shared = fakeHost([state({ tabId: "one", createdBy: "user" })]);
+    const release = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    let releaseStarted = false;
+    const browser = createAgentBrowserPort({
+      host: shared.host,
+      scope: { projectId: "p1", ticketId: null },
+      session: ME,
+      transportFor: () => ({
+        send: async (method, params) => {
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          const type = (params as { type?: string } | undefined)?.type;
+          if (type === "mousePressed") {
+            abort.abort(new Error("withdrawn"));
+            return await new Promise<never>(() => undefined);
+          }
+          if (type === "mouseReleased") {
+            releaseStarted = true;
+            await release.promise;
+          }
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    const snapshot = await browser.snapshot({ tabId: "one", signal });
+    const acting = browser.act({
+      tabId: "one",
+      generation: snapshot.generation,
+      kind: "click",
+      ref: refIn(snapshot.snapshotText),
+      signal: abort.signal,
+    });
+    await vi.waitFor(() => expect(releaseStarted).toBe(true));
+
+    browser.turnEnded();
+    expect(shared.holds.get("one")).toEqual({ kind: "session", holder: ME });
+    expect(shared.ended).toEqual([]);
+
+    release.resolve();
+    await expect(acting).rejects.toThrow("withdrawn");
+    await vi.waitFor(() => expect(shared.holds.has("one")).toBe(false));
+    expect(shared.ended).toEqual(["turn-end:one"]);
+    browser.dispose();
+  });
+
+  it("does not detach the debugger or end the attachment during active input cleanup", async () => {
+    const shared = fakeHost([state({ tabId: "one", createdBy: "user" })]);
+    const release = Promise.withResolvers<void>();
+    const disposed = vi.fn();
+    let releaseStarted = false;
+    const browser = createAgentBrowserPort({
+      host: shared.host,
+      scope: { projectId: "p1", ticketId: null },
+      session: ME,
+      transportFor: () => ({
+        send: async (method, params) => {
+          if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          const type = (params as { type?: string } | undefined)?.type;
+          if (type === "mousePressed") return await new Promise<never>(() => undefined);
+          if (type === "mouseReleased") {
+            releaseStarted = true;
+            await release.promise;
+          }
+          return {};
+        },
+        dispose: disposed,
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    const snapshot = await browser.snapshot({ tabId: "one", signal });
+    const acting = browser.act({
+      tabId: "one",
+      generation: snapshot.generation,
+      kind: "click",
+      ref: refIn(snapshot.snapshotText),
+      signal,
+    });
+    await vi.waitFor(() => expect(shared.holds.has("one")).toBe(true));
+
+    browser.dispose();
+    await vi.waitFor(() => expect(releaseStarted).toBe(true));
+    expect(disposed).not.toHaveBeenCalled();
+    expect(shared.ended).toEqual([]);
+    expect(shared.closedHeadlessFor).toEqual([]);
+
+    release.resolve();
+    await expect(acting).rejects.toThrow(/disposed/i);
+    await vi.waitFor(() => expect(disposed).toHaveBeenCalledTimes(1));
+    expect(shared.ended).toEqual(["attachment-end:one", "forget:ses-me"]);
+    expect(shared.closedHeadlessFor).toEqual([ME.sessionId]);
+  });
+
+  it("disposal withdraws readiness and prevents later calls resurrecting the port", async () => {
+    const h = harness();
+    const first = h.port.snapshot({ tabId: "one", signal });
+    const rejected = expect(first).rejects.toThrow(/disposed/i);
+    await vi.waitFor(() => expect(h.createTransport).toHaveBeenCalledTimes(1));
+    h.port.dispose();
+    await rejected;
+    h.ready.resolve();
+    await expect(h.port.snapshot({ tabId: "one", signal })).rejects.toThrow(/disposed/i);
+    expect(h.disposed).toHaveBeenCalledTimes(1);
   });
 });
 

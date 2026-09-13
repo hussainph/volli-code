@@ -28,6 +28,7 @@ import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
 import { useProjectRootsSync } from "@renderer/hooks/use-project-roots-sync";
 import { useProjectShortcuts } from "@renderer/hooks/use-project-shortcuts";
+import { useNotificationTargetReport } from "@renderer/hooks/use-notification-target";
 import { useBootNotice, useCliLaunchNotice } from "@renderer/hooks/use-startup-notices";
 import { useZoomCommands } from "@renderer/hooks/use-zoom-commands";
 import { cn } from "@renderer/lib/utils";
@@ -51,6 +52,17 @@ const SHADOW_ALLOWANCE = 16;
  * that no shadow ever reaches it, so those three edges behave as if unclipped.
  */
 const CLIP_SPILL = 60;
+/**
+ * How much wider the arming strip gets when the workspace rail is down. With
+ * the rail standing, {@link ZONE_WIDTH} is the gutter the rail already leaves
+ * and the sliver says where to aim. With the rail down that same 8px is the
+ * bare window edge — in a windowed window, an invisible line floating
+ * mid-screen, in exactly the state the reveal is most needed and hardest to
+ * fire. The extra is one shell inset: 16px total, still only 8px into the
+ * card's own border-and-radius margin, where no page draws anything
+ * interactive — an aim tolerance, not a new trigger surface.
+ */
+const RAIL_OFF_ZONE_EXTRA = SHELL_INSET;
 
 /**
  * Window shell: the chrome band, the workspace rail, the sidebar panel and the
@@ -136,6 +148,9 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useZoomCommands();
   useBootNotice();
   useCliLaunchNotice();
+  // What this window is showing, reported to main so an alert for a Session or
+  // ticket already in front of the person is not also posted by the OS (VC-295).
+  useNotificationTargetReport();
   const sidebarWidth = useUiStore((state) => state.sidebarWidth);
   const workspaceRailHidden = useUiStore((state) => state.workspaceRailHidden);
   const pinChoice = useUiStore((state) => state.sidebarPinned);
@@ -579,9 +594,11 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
 
         {/* The standing evidence that any of this exists, in the 8px canvas
             gutter between the rail and the card — and ONLY there. With the rail
-            hidden the whole window edge is the target and needs no hint; with it
-            standing the remaining strip is thin enough that the user has to aim,
-            and this is what they aim at. A hint, not a handle. */}
+            standing the remaining strip is thin enough that the user has to
+            aim, and this is what they aim at. With the rail down the target is
+            the zone below, which widens by one shell inset to answer the aiming
+            problem itself; the owner's call is that a hint there is not worth
+            the ink. A hint, not a handle. */}
         {!pinned && !terminalFocused && !workspaceRailHidden ? (
           <div
             aria-hidden
@@ -607,7 +624,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           ref={zoneRef}
           aria-hidden
           className="pointer-events-none absolute z-30"
-          style={{ top: ZONE_TOP_DEAD_BAND, bottom: 0, left: panelLeft, width: ZONE_WIDTH }}
+          style={{
+            top: ZONE_TOP_DEAD_BAND,
+            bottom: 0,
+            left: panelLeft,
+            width: workspaceRailHidden ? ZONE_WIDTH + RAIL_OFF_ZONE_EXTRA : ZONE_WIDTH,
+          }}
         />
       </div>
       <Toaster />

@@ -8,7 +8,10 @@ import { DATA_EXPORT_LIMITS } from "../../../../../data-export-copy";
 import type {
   PiSessionOrphanInventory,
   PiSessionOrphanScanResult,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
 } from "../../../../../ipc/contract";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
 
 const INVENTORY: PiSessionOrphanInventory = {
@@ -25,6 +28,47 @@ const INVENTORY: PiSessionOrphanInventory = {
   candidateCount: 1,
   candidateBytes: 1_024,
   skipped: [],
+};
+
+/** One worktree carrying artifacts and one that is off limits — the two rows the table has. */
+const TRIM_SCAN: WorktreeTrimScanEntry[] = [
+  {
+    path: "/wt/volli-code/VC-1-alpha",
+    projectId: "project-1",
+    ticketId: "t1",
+    branch: "volli/VC-1-alpha",
+    artifactCount: 3,
+    activeReason: null,
+  },
+  {
+    path: "/wt/volli-code/VC-2-beta",
+    projectId: "project-1",
+    ticketId: "t2",
+    branch: "volli/VC-2-beta",
+    artifactCount: 2,
+    activeReason: "An agent is still running in this worktree. Stop it first.",
+  },
+];
+
+const TRIM_REPORT: WorktreeTrimSweepReport = {
+  worktrees: [
+    {
+      worktreePath: "/wt/volli-code/VC-1-alpha",
+      removed: [{ path: "node_modules/", bytes: 2_048 }],
+      kept: [{ path: ".env", reason: "it matches .env" }],
+      totalBytes: 2_048,
+      dryRun: false,
+    },
+  ],
+  skipped: [
+    {
+      path: "/wt/volli-code/VC-2-beta",
+      reason: "An agent is still running in this worktree. Stop it first.",
+    },
+  ],
+  totalBytes: 2_048,
+  removedCount: 1,
+  dryRun: false,
 };
 
 let root: Root | null = null;
@@ -53,6 +97,12 @@ function bridge(
     if (current.scan instanceof Error) throw current.scan;
     return current.scan;
   });
+  const trimScan = vi.fn(async () => ({ ok: true as const, worktrees: TRIM_SCAN }));
+  const trim = vi.fn(async () => ({ ok: true as const, report: TRIM_REPORT }));
+  const setTrimSettings = vi.fn(async (input: { trimOnFinish?: boolean }) => ({
+    ok: true as const,
+    settings: { keepPatterns: [".env"], trimOnFinish: input.trimOnFinish ?? true },
+  }));
   const reclaimOrphans = vi.fn(async () => ({
     ok: true as const,
     report: {
@@ -72,17 +122,33 @@ function bridge(
     worktree: {
       orphans: vi.fn(async () => ({
         ok: true as const,
-        pruned: [],
-        removedClean: [],
+        revision: "worktree-scan-revision-1",
+        scannedAt: 1_700_000_000_000,
+        retentionDays: 30,
+        prunable: [],
+        removable: [],
         keptRecent: [],
+        keptMetadata: [],
+        unreadableProjects: [],
         dirty: [],
+        runs: [],
       })),
       deleteOrphan: vi.fn(async () => ({ ok: true as const })),
+      trimScan,
+      trim,
+      trimSettings: vi.fn(async () => ({
+        ok: true as const,
+        settings: { keepPatterns: [".env"], trimOnFinish: true },
+      })),
+      setTrimSettings,
     },
   });
   return {
     scanOrphans,
     reclaimOrphans,
+    trimScan,
+    trim,
+    setTrimSettings,
     answerScan: (answer: PiSessionOrphanScanResult | Error) => {
       current.scan = answer;
     },
@@ -90,7 +156,15 @@ function bridge(
 }
 
 async function open(): Promise<void> {
-  await act(async () => root?.render(<StoragePane />));
+  // The provider the app shell supplies: a list row's action is a tooltip
+  // trigger, and this pane's rows only mount one once a scan returns something.
+  await act(async () =>
+    root?.render(
+      <TooltipProvider>
+        <StoragePane />
+      </TooltipProvider>,
+    ),
+  );
 }
 
 function buttonNamed(name: string): HTMLButtonElement {
@@ -144,6 +218,67 @@ describe("Settings → Storage Pi session logs", () => {
   });
 });
 
+// VC-340. The action removes files, so what the surface says before and after it
+// runs is the feature: which worktrees are in scope, which are refused and why,
+// and what a finished pass actually took.
+describe("Settings → Storage build artifacts", () => {
+  it("keeps the trim disabled until a scan, then names only the worktrees in scope", async () => {
+    const main = bridge();
+    await open();
+
+    expect(buttonNamed("Trim…").disabled).toBe(true);
+    await act(async () => buttonNamed("Scan for build artifacts").click());
+    expect(main.trimScan).toHaveBeenCalledTimes(1);
+
+    // Both rows are listed; the busy one says why rather than disappearing.
+    expect(document.body.textContent).toContain("VC-1-alpha");
+    expect(document.body.textContent).toContain("3 ignored path(s).");
+    expect(document.body.textContent).toContain("An agent is still running in this worktree");
+
+    await act(async () => buttonNamed("Trim…").click());
+    expect(document.body.textContent).toContain("Trim build artifacts?");
+    // The confirm lists the trimmable worktree only — never the refused one.
+    const dialog = document.querySelector("[role='alertdialog']")?.textContent ?? "";
+    expect(dialog).toContain("/wt/volli-code/VC-1-alpha");
+    expect(dialog).not.toContain("/wt/volli-code/VC-2-beta");
+    expect(dialog).toContain("1 worktree(s)");
+  });
+
+  it("reports what a finished trim took, kept, and refused", async () => {
+    const main = bridge();
+    await open();
+    await act(async () => buttonNamed("Scan for build artifacts").click());
+    await act(async () => buttonNamed("Trim…").click());
+
+    await act(async () => buttonNamed("Trim").click());
+
+    expect(main.trim).toHaveBeenCalledTimes(1);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Freed");
+    expect(text).toContain("2.0 KB");
+    expect(text).toContain("kept 1");
+    // Named, not just counted (review r2): a person reading "kept 1" cannot tell
+    // whether their .env is the one.
+    expect(text).toContain(".env");
+    expect(text).toContain("Kept — it matches .env");
+    expect(text).toContain("node_modules/");
+    expect(text).toContain("Skipped — An agent is still running in this worktree. Stop it first.");
+    // The table it was based on is re-read, since every trimmed row changed.
+    expect(main.trimScan).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists the automatic-trim opt-out", async () => {
+    const main = bridge();
+    await open();
+
+    const toggle = document.querySelector("#trim-on-finish");
+    if (!(toggle instanceof HTMLElement)) throw new Error("no trim-on-finish switch");
+    await act(async () => toggle.click());
+
+    expect(main.setTrimSettings).toHaveBeenCalledWith({ trimOnFinish: false });
+  });
+});
+
 describe("Settings → Storage database section", () => {
   it("names the action as a data export rather than a database export", () => {
     const html = renderToStaticMarkup(<StoragePane />);
@@ -162,5 +297,31 @@ describe("Settings → Storage database section", () => {
     // and setting", which is what made it read as a backup.
     expect(html).not.toContain("every project");
     expect(html.toLowerCase()).not.toContain("backup");
+  });
+});
+
+describe("StoragePane", () => {
+  // A02: the one button on this pane said "Rescan orphaned worktrees" and sent
+  // a request that pruned git metadata and deleted directories. The label a
+  // person reads before pressing it is part of the fix, so it is asserted.
+  it("offers a scan, never a rescan, before anything has loaded", () => {
+    const html = renderToStaticMarkup(<StoragePane />);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    const worktrees = [...host.querySelectorAll("section")].find(
+      (section) => section.querySelector("h2")?.textContent === "Orphaned worktrees",
+    );
+
+    expect(html).toContain("Scan for orphaned worktrees");
+    expect(html).not.toContain("Rescan");
+    // The worktree cleanup action is not reachable until a scan has produced one.
+    expect(worktrees?.textContent).not.toContain("Clean up…");
+  });
+
+  it("says what retention takes and what it keeps, including the Keep exemption", () => {
+    const html = renderToStaticMarkup(<StoragePane />);
+
+    expect(html).toContain("keeps the branch, its commits, the pull-request link, and the ticket");
+    expect(html).toContain("Keep on a ticket holds its folder");
   });
 });

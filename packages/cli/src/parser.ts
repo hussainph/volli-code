@@ -382,6 +382,21 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
   "label.list": PROJECT_ONLY,
+  // No `--dry-run` here on purpose: omitting `--apply` IS the preview, and a
+  // second way to ask for one would only invite the belief that the plain form
+  // writes (VC-310).
+  "label.merge": {
+    options: {
+      "--from": { kind: "value", key: "from" },
+      "--into": { kind: "value", key: "into" },
+      "--apply": { kind: "flag", key: "apply", value: true },
+      "--project": { kind: "value", key: "project" },
+    },
+    required: {
+      from: "label merge requires --from",
+      into: "label merge requires --into",
+    },
+  },
   "model.list": { options: {} },
   cost: {
     options: {

@@ -105,6 +105,28 @@ const MAX_WAIT_MS = 5_000;
  */
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 
+/** The one error #bounded raises itself, so callers can tell clock from fault. */
+class CommandTimeoutError extends Error {}
+
+function isTimeout(error: unknown): boolean {
+  return error instanceof CommandTimeoutError;
+}
+
+type TimeoutOperation = "readiness" | "snapshot" | "screenshot" | "action";
+
+function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string {
+  switch (operation) {
+    case "readiness":
+      return `The Browser Tab did not become ready within ${timeoutMs}ms. Try the Browser Tab command again.`;
+    case "snapshot":
+      return `The Browser Tab did not finish taking a snapshot within ${timeoutMs}ms. Wait for the page to settle, then try the snapshot again.`;
+    case "screenshot":
+      return `The Browser Tab did not finish taking a screenshot within ${timeoutMs}ms. The page may still be busy or too heavy to capture in time. Take a snapshot to check its current state, then try the screenshot again.`;
+    case "action":
+      return `The Browser Tab did not finish the requested action within ${timeoutMs}ms. The action may or may not have reached the page; check its current state before trying again.`;
+  }
+}
+
 function narrowedLimit(requested: number | undefined, maximum: number): number {
   return Math.min(Math.max(requested ?? maximum, 0), maximum);
 }
@@ -132,18 +154,21 @@ async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
  * data rather than code.
  */
 const SELECT_OPTION_FUNCTION = `function(value) {
-  if (this.tagName !== "SELECT") return false;
+  if (!this.isConnected) return "detached";
+  if (this.tagName !== "SELECT") return "unavailable";
   const option = Array.from(this.options).find(function(o) { return o.value === value || o.label === value; });
-  if (!option) return false;
+  if (!option) return "unavailable";
   this.value = option.value;
   this.dispatchEvent(new Event("input", { bubbles: true }));
   this.dispatchEvent(new Event("change", { bubbles: true }));
-  return true;
+  return "selected";
 }`;
 
 /** Keys `press` understands beyond single characters, in CDP's spellings. */
-const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number }> = {
-  enter: { key: "Enter", code: "Enter", keyCode: 13 },
+const NAMED_KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
+  // CDP needs Enter's text payload to run browser default actions such as form
+  // submission; rawKeyDown alone dispatches key listeners but not that action.
+  enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
   tab: { key: "Tab", code: "Tab", keyCode: 9 },
   escape: { key: "Escape", code: "Escape", keyCode: 27 },
   backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
@@ -161,6 +186,46 @@ const MODIFIER_BITS: Record<string, number> = {
   meta: 4,
   cmd: 4,
   shift: 8,
+};
+
+/** US keyboard pairs for the single-character `press` surface. */
+const SHIFTED_PRINTABLES: Readonly<Record<string, string>> = {
+  "`": "~",
+  "1": "!",
+  "2": "@",
+  "3": "#",
+  "4": "$",
+  "5": "%",
+  "6": "^",
+  "7": "&",
+  "8": "*",
+  "9": "(",
+  "0": ")",
+  "-": "_",
+  "=": "+",
+  "[": "{",
+  "]": "}",
+  "\\": "|",
+  ";": ":",
+  "'": '"',
+  ",": "<",
+  ".": ">",
+  "/": "?",
+};
+
+const PRINTABLE_CODES: Readonly<Record<string, { code: string; keyCode: number }>> = {
+  "`": { code: "Backquote", keyCode: 192 },
+  "-": { code: "Minus", keyCode: 189 },
+  "=": { code: "Equal", keyCode: 187 },
+  "[": { code: "BracketLeft", keyCode: 219 },
+  "]": { code: "BracketRight", keyCode: 221 },
+  "\\": { code: "Backslash", keyCode: 220 },
+  ";": { code: "Semicolon", keyCode: 186 },
+  "'": { code: "Quote", keyCode: 222 },
+  ",": { code: "Comma", keyCode: 188 },
+  ".": { code: "Period", keyCode: 190 },
+  "/": { code: "Slash", keyCode: 191 },
+  " ": { code: "Space", keyCode: 32 },
 };
 
 export class BrowserTabController {
@@ -194,12 +259,12 @@ export class BrowserTabController {
     // leave one attached behind it.
     signal?.throwIfAborted();
     if (this.#ensureReady !== undefined) {
-      await this.#bounded(this.#ensureReady(), "its CDP attachment", signal);
+      await this.#bounded(this.#ensureReady(), "readiness", signal);
       return;
     }
-    await this.#command("Accessibility.enable", undefined, signal);
-    await this.#command("DOM.enable", undefined, signal);
-    await this.#command("Page.enable", undefined, signal);
+    await this.#command("Accessibility.enable", undefined, signal, "readiness");
+    await this.#command("DOM.enable", undefined, signal, "readiness");
+    await this.#command("Page.enable", undefined, signal, "readiness");
   }
 
   /**
@@ -208,11 +273,20 @@ export class BrowserTabController {
    * promise stays harmlessly attached — a late answer settles a promise
    * nobody reads, never a session.
    */
-  async #bounded<T>(answer: Promise<T>, what: string, signal?: AbortSignal): Promise<T> {
+  async #bounded<T>(
+    answer: Promise<T>,
+    operation: TimeoutOperation,
+    signal?: AbortSignal,
+  ): Promise<T> {
     // An already-aborted signal never dispatches `abort` to a listener added
     // after the fact, so the race below would wait out the whole clock for a
     // turn that is already gone. Answer it here instead.
-    if (signal?.aborted === true) throw signal.reason;
+    if (signal?.aborted === true) {
+      // The answer is already in flight and nobody will read it now; give its
+      // rejection a sink so it never reports as an unhandled rejection.
+      answer.catch(() => undefined);
+      throw signal.reason;
+    }
     return await new Promise<T>((resolve, reject) => {
       let settled = false;
       const finish = (settle: () => void): void => {
@@ -227,11 +301,7 @@ export class BrowserTabController {
       };
       const timer = setTimeout(() => {
         finish(() =>
-          reject(
-            new Error(
-              `The Browser Tab's engine did not answer ${what} within ${this.#limits.maxCommandMs}ms.`,
-            ),
-          ),
+          reject(new CommandTimeoutError(timeoutMessage(operation, this.#limits.maxCommandMs))),
         );
       }, this.#limits.maxCommandMs);
       signal?.addEventListener("abort", abort, { once: true });
@@ -243,9 +313,47 @@ export class BrowserTabController {
   }
 
   /** Every CDP command this controller speaks goes through the bounded wire. */
-  async #command(method: string, params?: object, signal?: AbortSignal): Promise<unknown> {
+  async #command(
+    method: string,
+    params?: object,
+    signal?: AbortSignal,
+    operation: TimeoutOperation = "action",
+  ): Promise<unknown> {
     signal?.throwIfAborted();
-    return await this.#bounded(this.#send(method, params), method, signal);
+    return await this.#bounded(this.#send(method, params), operation, signal);
+  }
+
+  /**
+   * A command addressed to a node a snapshot minted. The page can drop that
+   * node between the snapshot and the action — an SPA swap removes elements
+   * without navigating, so no generation bumps — and CDP answers such a call
+   * with a raw `No node with given id` error. That is not a broken host: it is
+   * the same fact the map itself refuses on, so it becomes the same refusal.
+   * Aborts and command timeouts are real faults and pass through untouched.
+   */
+  async #nodeCommand(method: string, params: object, signal?: AbortSignal): Promise<unknown> {
+    try {
+      return await this.#command(method, params, signal);
+    } catch (error: unknown) {
+      if (signal?.aborted === true || isTimeout(error)) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no node with given id|could not find node|node.*(detached|not found)/i.test(message)) {
+        throw new BrowserRefusal(
+          "browser.unknown-ref",
+          "The element behind that ref is gone from the page: take a fresh snapshot.",
+        );
+      }
+      if (
+        /could not compute box model|does not have a layout object|not focusable/i.test(message)
+      ) {
+        throw new BrowserRefusal(
+          "browser.unactionable",
+          "That element has no visible, focusable surface for this action: take a fresh snapshot.",
+        );
+      }
+      // A debugger refusal, crash, or transport fault is NOT a missing node.
+      throw error;
+    }
   }
 
   /**
@@ -262,12 +370,13 @@ export class BrowserTabController {
    * what the caller hears; the release only ever adds to that, never replaces
    * it.
    */
-  async #releaseHalf(method: string, params: object): Promise<void> {
+  async #releaseHalf(method: string, params: object, alreadyFailed: boolean): Promise<void> {
     try {
-      await this.#bounded(this.#send(method, params), method);
-    } catch {
-      // Nothing left to try. The engine is gone, wedged, or tearing down —
-      // all three end the same way, and the caller already has the real fault.
+      await this.#bounded(this.#send(method, params), "action");
+    } catch (error) {
+      // Preserve an earlier fault, but never report a successful click when
+      // mouse-up (the event that actually clicks) failed to reach the page.
+      if (!alreadyFailed) throw error;
     }
   }
 
@@ -298,7 +407,12 @@ export class BrowserTabController {
 
   async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
     signal?.throwIfAborted();
-    const answer = (await this.#command("Accessibility.getFullAXTree", undefined, signal)) as {
+    const answer = (await this.#command(
+      "Accessibility.getFullAXTree",
+      undefined,
+      signal,
+      "snapshot",
+    )) as {
       nodes?: AXNodeLike[];
     };
     signal?.throwIfAborted();
@@ -357,7 +471,7 @@ export class BrowserTabController {
           if (point !== null) await this.#cursor.moveTo(point, "type", signal);
         }
         try {
-          await this.#command("DOM.focus", { backendNodeId }, signal);
+          await this.#nodeCommand("DOM.focus", { backendNodeId }, signal);
           await this.#command("Input.insertText", { text: request.text }, signal);
         } finally {
           this.#cursor?.gesture(null);
@@ -374,7 +488,11 @@ export class BrowserTabController {
             "select needs the option value or label to choose.",
           );
         }
-        const resolved = (await this.#command("DOM.resolveNode", { backendNodeId }, signal)) as {
+        const resolved = (await this.#nodeCommand(
+          "DOM.resolveNode",
+          { backendNodeId },
+          signal,
+        )) as {
           object?: { objectId?: string };
         };
         const objectId = resolved.object?.objectId;
@@ -394,7 +512,13 @@ export class BrowserTabController {
           },
           signal,
         )) as { result?: { value?: unknown } };
-        if (selected.result?.value !== true) {
+        if (selected.result?.value === "detached") {
+          throw new BrowserRefusal(
+            "browser.unknown-ref",
+            "The element behind that ref is gone from the page: take a fresh snapshot.",
+          );
+        }
+        if (selected.result?.value !== "selected") {
           throw new BrowserRefusal(
             "browser.unactionable",
             "That ref is not a select element with the requested option: take a fresh snapshot and choose one it shows.",
@@ -433,20 +557,32 @@ export class BrowserTabController {
     signal?: AbortSignal,
   ): Promise<{ base64Png: string; width: number; height: number }> {
     signal?.throwIfAborted();
-    const captured = (await this.#command("Page.captureScreenshot", { format: "png" }, signal)) as {
+    const captured = (await this.#command(
+      "Page.captureScreenshot",
+      { format: "png" },
+      signal,
+      "screenshot",
+    )) as {
       data?: string;
     };
     if (typeof captured.data !== "string" || captured.data.length === 0) {
-      throw new Error("Chromium returned no Browser Tab screenshot data");
+      throw new Error("The Browser Tab's page produced no screenshot pixels to return");
     }
-    const metrics = (await this.#command("Page.getLayoutMetrics", undefined, signal)) as {
-      cssVisualViewport?: { clientWidth?: number; clientHeight?: number };
-    };
-    return {
-      base64Png: captured.data,
-      width: Math.round(metrics.cssVisualViewport?.clientWidth ?? 0),
-      height: Math.round(metrics.cssVisualViewport?.clientHeight ?? 0),
-    };
+    // Layout metrics are CSS pixels (and exclude scrollbars); the image is
+    // device pixels. On Retina the old answer described 2560×1440 pixels as
+    // 1265×720. Read the PNG's IHDR, not a later layout that may have resized.
+    const png = Buffer.from(captured.data, "base64");
+    if (
+      png.length < 24 ||
+      png.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a" ||
+      png.toString("ascii", 12, 16) !== "IHDR"
+    )
+      throw new Error("The Browser Tab returned an invalid PNG screenshot");
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    if (width === 0 || height === 0)
+      throw new Error("The Browser Tab returned an empty PNG screenshot");
+    return { base64Png: captured.data, width, height };
   }
 
   #resolve(ref: string | undefined): number {
@@ -469,7 +605,7 @@ export class BrowserTabController {
     backendNodeId: number,
     signal?: AbortSignal,
   ): Promise<{ x: number; y: number } | null> {
-    const box = (await this.#command("DOM.getBoxModel", { backendNodeId }, signal)) as {
+    const box = (await this.#nodeCommand("DOM.getBoxModel", { backendNodeId }, signal)) as {
       model?: { content?: number[] };
     };
     const quad = box.model?.content;
@@ -485,7 +621,7 @@ export class BrowserTabController {
     kind: "click" | "hover",
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.#command("DOM.scrollIntoViewIfNeeded", { backendNodeId }, signal);
+    await this.#nodeCommand("DOM.scrollIntoViewIfNeeded", { backendNodeId }, signal);
     const point = await this.#centreOf(backendNodeId, signal);
     if (point === null) {
       throw new BrowserRefusal(
@@ -501,22 +637,28 @@ export class BrowserTabController {
       await this.#command("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, signal);
       return;
     }
+    let pressed = false;
     try {
       await this.#command(
         "Input.dispatchMouseEvent",
         { type: "mousePressed", x, y, button: "left", clickCount: 1 },
         signal,
       );
+      pressed = true;
     } finally {
       // The press may have reached the page and only failed to answer, so the
       // page gets its mouse-up either way and no tab is left mid-click.
-      await this.#releaseHalf("Input.dispatchMouseEvent", {
-        type: "mouseReleased",
-        x,
-        y,
-        button: "left",
-        clickCount: 1,
-      });
+      await this.#releaseHalf(
+        "Input.dispatchMouseEvent",
+        {
+          type: "mouseReleased",
+          x,
+          y,
+          button: "left",
+          clickCount: 1,
+        },
+        !pressed,
+      );
     }
   }
 
@@ -544,10 +686,22 @@ export class BrowserTabController {
         "press needs one character or a supported key, e.g. Enter or Control+a.",
       );
     }
+    const shifted = (modifiers & 8) !== 0;
+    const printable = shifted ? (SHIFTED_PRINTABLES[keyPart] ?? keyPart.toUpperCase()) : keyPart;
+    const letter = /^[a-z]$/i.test(keyPart);
+    const digit = /^\d$/.test(keyPart);
+    const printableCode = PRINTABLE_CODES[keyPart];
     const key = named ?? {
-      key: keyPart,
-      code: `Key${keyPart.toUpperCase()}`,
-      keyCode: keyPart.toUpperCase().charCodeAt(0),
+      key: printable,
+      code: letter
+        ? `Key${keyPart.toUpperCase()}`
+        : digit
+          ? `Digit${keyPart}`
+          : (printableCode?.code ?? "Unidentified"),
+      keyCode:
+        letter || digit
+          ? keyPart.toUpperCase().charCodeAt(0)
+          : (printableCode?.keyCode ?? printable.charCodeAt(0)),
     };
     const keyUp = {
       type: "keyUp",
@@ -556,31 +710,41 @@ export class BrowserTabController {
       code: key.code,
       windowsVirtualKeyCode: key.keyCode,
     };
+    const namedText = (modifiers & ~8) === 0 ? named?.text : undefined;
+    // CDP key events do not run macOS's native editing bindings. Both the
+    // documented Control+a and macOS Meta+a must select text rather than
+    // silently doing nothing. This fixed editing command touches no clipboard.
+    const selectAll = (modifiers === 2 || modifiers === 4) && keyPart.toLowerCase() === "a";
+    let pressed = false;
     try {
       await this.#command(
         "Input.dispatchKeyEvent",
         {
-          type: "rawKeyDown",
+          type: namedText === undefined ? "rawKeyDown" : "keyDown",
           modifiers,
           key: key.key,
           code: key.code,
           windowsVirtualKeyCode: key.keyCode,
+          ...(namedText === undefined ? {} : { text: namedText, unmodifiedText: namedText }),
+          ...(selectAll ? { commands: ["selectAll"] } : {}),
         },
         signal,
       );
       // A printable single character also produces its char event, so text
       // inputs actually receive it the way a keyboard would deliver it.
       if (named === undefined && keyPart.length === 1 && (modifiers & ~8) === 0) {
+        // The key events and inserted text must agree on the shifted letter.
         await this.#command(
           "Input.dispatchKeyEvent",
-          { type: "char", modifiers, text: keyPart, key: key.key },
+          { type: "char", modifiers, text: printable, key: key.key },
           signal,
         );
       }
+      pressed = true;
     } finally {
       // A key down with no key up is a key the page believes is still held —
       // modifiers latch, and every later keystroke arrives wearing them.
-      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp);
+      await this.#releaseHalf("Input.dispatchKeyEvent", keyUp, !pressed);
     }
   }
 

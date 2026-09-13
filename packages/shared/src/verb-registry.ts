@@ -43,6 +43,7 @@ import { COLUMN_VOCABULARY } from "./agent-surface";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
 import { SESSION_USAGE_GROUPINGS } from "./session-usage-report";
 import { FIRST_CLASS_HARNESS_IDS } from "./ticket";
+import { MAX_SESSION_AWAIT_TARGETS, SESSION_AWAIT_FOR } from "./session-await";
 import { MAX_TICKET_AWAIT_TARGETS, TICKET_AWAIT_FOR } from "./ticket-await";
 import { TICKET_SIGNAL_KINDS, TICKET_SIGNAL_VERDICTS } from "./ticket-events";
 
@@ -244,6 +245,22 @@ export interface VerbEntry {
   readonly notes?: readonly string[];
   /** Structured writes and person-visible effects; the canonical side-effect contract. */
   readonly effects?: VerbEffects;
+  /**
+   * The verb previews unless told to write, inverting the CLI's ordinary rule
+   * that a coordination verb writes and `--dry-run` previews (VC-310).
+   *
+   * Declared rather than inferred, because the registry is where a caller
+   * learns what a verb DOES before running it, and "the plain form is safe"
+   * is exactly that kind of fact. It is also what lets the invariant "every
+   * voluntary coordination write offers a preview" stay a real check: such a
+   * verb satisfies it by construction rather than by an exemption.
+   *
+   * Reserve it for a write that is destructive and not usefully reversible. A
+   * comment can be answered and a move can be moved back, so those keep the
+   * ordinary shape; folding one label into another deletes a row and rewrites
+   * the organisation of tickets nobody is looking at.
+   */
+  readonly previewsByDefault?: boolean;
   /** How this verb appears on the Agent Tool Surface; required by a `tool` access mode. */
   readonly tool?: VerbToolProjection;
   /** Whether the verb takes a leading `<id>`, and whether it is required. */
@@ -955,6 +972,67 @@ export const VERB_REGISTRY = [
     options: [{ name: "--project", kind: "value", placeholder: "<p>", help: "Target project." }],
   },
   {
+    // The one verb whose PREVIEW is the default and whose write needs a flag
+    // (VC-310). It declares no `--dry-run`, because omitting `--apply` already
+    // is one; see `label-verbs.ts` for why this verb inverts the rule.
+    key: "label.merge",
+    accessModes: ["cli"],
+    actor: "session",
+    handler: { site: "main", id: "label.merge" },
+    listed: true,
+    referenceOrder: 20,
+    group: "Write",
+    previewsByDefault: true,
+    summary: "Fold one label into another, previewing the affected tickets.",
+    example: "volli label merge --from front-end --into frontend",
+    notes: [
+      "Previews by default: without --apply nothing is written.",
+      "Case variants are already one label, so this is for names that merely mean the same thing.",
+      "Every Ticket wearing the merged-away name comes out wearing the surviving one.",
+      "The old name remains an alias, so using it later still resolves to the survivor.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "ticket-label",
+          operation: "update",
+          summary:
+            "Move every association from the merged-away label onto the surviving one, and record a labels_changed event per affected Ticket.",
+        },
+        {
+          resource: "label",
+          operation: "update",
+          summary:
+            "Retire the merged-away Label as an alias, so its old name keeps resolving to the survivor.",
+        },
+      ],
+      humanVisible: [
+        "Affected Ticket cards show the surviving label, and the merged-away one leaves the board's Label filter.",
+      ],
+      nonEffects: [
+        "No Ticket moves, no Ticket loses a Label it was wearing, and the retired name is not re-created later.",
+      ],
+    },
+    options: [
+      {
+        name: "--from",
+        kind: "value",
+        placeholder: "<name>",
+        required: true,
+        help: "Label to merge away.",
+      },
+      {
+        name: "--into",
+        kind: "value",
+        placeholder: "<name>",
+        required: true,
+        help: "Label that survives.",
+      },
+      { name: "--apply", kind: "flag", help: "Perform the merge instead of previewing it." },
+      { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
+    ],
+  },
+  {
     // Model discovery (VC-78): the same Model Access snapshot the app reads,
     // narrowed to models the runtime can use — never a parallel provider probe
     // or a signed-out catalog in an agent's context.
@@ -1047,13 +1125,13 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.list" },
     listed: true,
-    referenceOrder: 24,
+    referenceOrder: 25,
     group: "Session",
     summary: "List a project's active terminal and chat sessions.",
     example: "volli session list --ticket VC-12",
     notes: [
       "Prints each session's title and short id; session peek takes either type.",
-      "Chat rows carry liveness: working, waiting (with what on), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
+      "Chat rows carry liveness: working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — triage from the list before spending a peek.",
       "Chat rows also name their model and reasoning level, led by the tier (fast, deep, visual, ticket, global) the start resolved it from, when one was named.",
     ],
     options: [
@@ -1069,7 +1147,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.peek" },
     listed: true,
-    referenceOrder: 25,
+    referenceOrder: 26,
     group: "Session",
     summary: "Peek at what a session is doing: terminal output, or a chat's tail.",
     example: "volli session peek a1b2c3 --lines 60",
@@ -1102,7 +1180,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "session.answer" },
     listed: true,
-    referenceOrder: 26,
+    referenceOrder: 27,
     group: "Session",
     summary: "Read a chat session's final message in full: a subagent's answer.",
     example: "volli session answer a1b2c3",
@@ -1145,7 +1223,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.start" },
     listed: true,
-    referenceOrder: 20,
+    referenceOrder: 21,
     group: "Session",
     summary: "Start an agent chat session on a ticket.",
     example: 'volli session start VC-12 -m "Fix the flaky auth test"',
@@ -1190,6 +1268,7 @@ export const VERB_REGISTRY = [
         "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own and does not report back into this one.",
         "When the person names a saved Automation, preserve that workflow rather than copying or rewriting its Instructions into a kickoff. If this Session holds `automation_run`, use that tool instead so the saved definition and Run history stay connected. If it does not, explain the missing tool and ask for a Board Session or a manual Run; do not bypass the missing tool with an improvised kickoff.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
+        "Its receipt includes a Session cursor; pass that cursor to session_await so a fast completion between these calls is replayed rather than missed.",
         "It does not move the Ticket on the board, and it does not wait for the work to finish.",
         "Volli binds the calling Session and scope itself: name the Ticket and nothing about yourself.",
       ].join(" "),
@@ -1297,7 +1376,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.done" },
     listed: true,
-    referenceOrder: 27,
+    referenceOrder: 28,
     group: "Session",
     summary: "Record that this session's work is finished.",
     example: 'volli session done --reason "Tests pass"',
@@ -1346,7 +1425,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.blocked" },
     listed: true,
-    referenceOrder: 28,
+    referenceOrder: 29,
     group: "Session",
     summary: "Signal the current session is blocked and needs a person.",
     example: 'volli session blocked --reason "Needs credentials"',
@@ -1392,7 +1471,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "session.link" },
     listed: true,
-    referenceOrder: 29,
+    referenceOrder: 30,
     group: "Session",
     summary: "Record the harness's own session id on the current Volli session.",
     example: "volli session link 4f1c9a2e-8b7d-4e5a-9c3f-2a1b0d6e5f4c",
@@ -1452,7 +1531,7 @@ export const VERB_REGISTRY = [
     actor: "session",
     handler: { site: "main", id: "notify" },
     listed: true,
-    referenceOrder: 30,
+    referenceOrder: 31,
     group: "Session",
     summary: "Send a native notification to the user.",
     example: 'volli notify -m "Needs input"',
@@ -1511,7 +1590,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "doctor" },
     listed: true,
-    referenceOrder: 33,
+    referenceOrder: 34,
     group: "App",
     summary: "Audit the harness integration and report what it is actually doing.",
     example: "volli doctor --fix",
@@ -1556,7 +1635,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "main", id: "prompt.baseline" },
     listed: true,
-    referenceOrder: 32,
+    referenceOrder: 33,
     group: "App",
     summary: "Measure the prompt baseline a fresh chat Session starts with, per section.",
     example: "volli prompt baseline",
@@ -1593,7 +1672,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "app.launch" },
     listed: true,
-    referenceOrder: 31,
+    referenceOrder: 32,
     group: "App",
     summary: "Launch the Volli app if it isn't already running.",
     example: "volli app launch",
@@ -1618,7 +1697,7 @@ export const VERB_REGISTRY = [
     actor: "any",
     handler: { site: "cli", id: "help" },
     listed: true,
-    referenceOrder: 34,
+    referenceOrder: 35,
     group: "App",
     summary: "Show this reference, a command's help, or a topic.",
     example: "volli help ticket create",
@@ -1741,7 +1820,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "automation.run" },
     listed: true,
-    referenceOrder: 35,
+    referenceOrder: 36,
     example: 'volli automation run "Nightly sweep" VC-12',
     notes: [
       "Runs as a named tool in the Board Session's tool bundle; the shell never executes it.",
@@ -1820,7 +1899,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.stop" },
     listed: true,
-    referenceOrder: 21,
+    referenceOrder: 22,
     group: "Session",
     summary: "Stop another agent session's work, recording who stopped it.",
     example: "volli session stop a1b2c3d4",
@@ -1886,7 +1965,7 @@ export const VERB_REGISTRY = [
     actor: "role",
     handler: { site: "main", id: "session.send" },
     listed: true,
-    referenceOrder: 22,
+    referenceOrder: 23,
     group: "Session",
     summary: "Steer a message into another running agent session.",
     example: 'volli session send a1b2c3d4 -m "Use the thinking-orbs library"',
@@ -1917,7 +1996,8 @@ export const VERB_REGISTRY = [
       description: [
         "Steer a message into another agent Session in this project: mid-turn the model reads it now, between turns it opens a new turn.",
         "Use it to redirect running work — a correction, a constraint, an owner decision — instead of stopping the Session and starting over.",
-        "The message is delivered marked as steering from this Session; it does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
+        "The message is delivered marked as steering from this Session; the receipt says whether it opened or joined a turn and includes a Session cursor for a lossless later session_await.",
+        "It does not wait for a reply, and nothing reports back — use `volli session peek` to observe the effect.",
         "Volli binds the calling Session and project itself: name the target session and nothing about yourself.",
       ].join(" "),
       input: [
@@ -1968,7 +2048,7 @@ export const VERB_REGISTRY = [
     // teach its real door rather than answer UNSUPPORTED_COMMAND. It prints
     // beside `session send`, the verb it is most often mistaken for.
     listed: true,
-    referenceOrder: 23,
+    referenceOrder: 24,
     group: "Session",
     summary: "Delegate one task to a subagent Session that answers back here.",
     example: 'volli session delegate "Find where the auth token is refreshed"',
@@ -2011,7 +2091,7 @@ export const VERB_REGISTRY = [
       // The last line is the same one every control-tier tool ends on.
       description: [
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own. When it finishes, a notice from Volli arrives in this Session naming it, and `volli session answer <handle>` reads its final message in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll or wait for it. Several may run at once.",
+        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check — and keep working while it runs; do not poll. If this turn must park, use session_await with the Session cursor in this receipt. Several may run at once.",
         "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
@@ -2054,6 +2134,86 @@ export const VERB_REGISTRY = [
           type: "enum",
           values: REASONING_LEVELS,
           description: "Reasoning level override; the chosen model must support it.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // The watch/wake tool over Sessions (VC-324 item 3), and the LAST entry in
+    // this file for the reason `session.stop` and `session.delegate` were
+    // appended rather than filed beside their siblings: registry declaration
+    // order IS the frozen tool order, so anything inserted earlier shifts every
+    // verb after it inside every already-frozen surface record, and a shifted
+    // tool array invalidates the Cache Prefix — including the system prompt,
+    // where the provider orders tools first.
+    //
+    // A separate tool rather than a `sessions` field on `ticket.await`, for the
+    // same arithmetic seen from the other side: appending a tool shifts
+    // nothing, while growing an existing tool's schema changes bytes for every
+    // Session already born — none of which could ever call the new field, since
+    // a Session's surface is frozen at birth.
+    //
+    // Tool-only and off the socket, exactly as `ticket.await` is: a CLI verb
+    // must never wait, and the socket's ten-second request timeout enforces
+    // that mechanically. Blocking belongs where the runtime can suspend the
+    // turn and wake it.
+    key: "session.await",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "session.await" },
+    listed: false,
+    group: "Session",
+    summary: "Block until a watched Session finishes a turn, signals, or is stopped.",
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "The calling Session shows as waiting until an event arrives, the wait times out, or the turn is interrupted.",
+      ],
+      nonEffects: [
+        "No Session is contacted, steered or stopped: nothing is written and nothing moves.",
+        "Waiting costs no model turns; the Session is suspended until it wakes.",
+      ],
+    },
+    tool: {
+      name: "session_await",
+      // Written for the model, and mostly about when to stop doing something
+      // else: an orchestrator that cannot wait polls `session list`, and a poll
+      // is a full turn re-sending the whole conversation. The interruption line
+      // is load-bearing — the failure this tool was built for is a fleet that
+      // read `idle` in a listing while four of its members had been cut off.
+      description: [
+        "Wait until one of the named Sessions finishes or is interrupted mid-turn, signals done or blocked, or is stopped, then wake with that one event.",
+        "Use it after delegating or steering work: it replaces polling `volli session list` in a loop and sleeping in bash, both of which waste turns or wedge the session.",
+        "The wait costs nothing while parked and ends at the first matching event, at timeoutSeconds if given, or when the turn is interrupted.",
+        "Begin with the Session cursor returned by session_start, session_send or session_delegate; every wake and timeout returns the next cursor to chain so nothing committed in between is missed.",
+        "A Board Session may await any Session in its project; a Ticket Session may await itself and the subagents it delegated. What may be awaited is project policy; a refusal names what the policy allows.",
+      ].join(" "),
+      input: [
+        {
+          name: "sessions",
+          type: "string",
+          required: true,
+          description: `One to ${MAX_SESSION_AWAIT_TARGETS} short session ids in this project, as \`volli session list\` prints them, separated by spaces or commas, for example 'a1b2c3d4 e5f6a7b8'.`,
+        },
+        {
+          name: "for",
+          type: "enum",
+          values: SESSION_AWAIT_FOR,
+          description:
+            "What wakes the wait: a turn ending (completed or interrupted), a done/blocked signal, a stop, or any of the three. Defaults to any.",
+        },
+        {
+          name: "timeoutSeconds",
+          type: "number",
+          description:
+            "Give up after this many seconds. The wake then says the wait timed out; omit to wait until an event or interruption.",
+        },
+        {
+          name: "cursor",
+          type: "string",
+          description:
+            "Wake immediately on the first matching event after this opaque cursor. Start with the cursor returned by session_start, session_send or session_delegate, then copy each wake or timeout cursor unchanged; omit it only to start watching from now.",
         },
       ],
     },

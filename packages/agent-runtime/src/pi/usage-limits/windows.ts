@@ -20,6 +20,13 @@ export function headerReader(headers: HeaderMap): (name: string) => string | und
   return (name) => lowered.get(name.toLowerCase());
 }
 
+/** A JSON-style object, or nothing when the value is null, scalar, or an array. */
+export function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 /** A finite number, or nothing — a header is text and a body field is `unknown`. */
 export function finiteNumber(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;

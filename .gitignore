@@ -23,3 +23,13 @@ docs/ROADMAP.md
 .claude/scheduled_tasks.lock
 vite.config.ts.timestamp-*.mjs
 volli.db*
+# The chat-window bench's built page (VC-338) — rebuilt by its runner on demand.
+apps/desktop/e2e/bench/**/dist/
+
+# Captures from the e2e shot scripts (onboarding-shots, tab-strip-shots): both
+# default to a repo-relative dir rather than a predictable shared-temp path, so
+# the output needs ignoring rather than collecting as untracked cruft.
+/shots/
+
+# VC-291 investigation evidence (screenshots, OCR sidecars, matrix JSON)
+/evidence/

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>One machine, three harnesses — agent usage, mid-2026</title>
+    <style>
+      :root {
+        --ink: #1c1b1a;
+        --muted: #8a8783;
+        --faint: #e8e5e0;
+        --bg: #fafaf8;
+        --cc: #d97757;
+        --cx: #10a37f;
+        --vo: #5b6ee1;
+        --side: #eec5b5;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          15px/1.55 -apple-system,
+          "SF Pro Text",
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        padding: 72px 24px 96px;
+      }
+      main {
+        max-width: 680px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+      .sub {
+        color: var(--muted);
+        margin-top: 6px;
+        font-size: 13.5px;
+      }
+      section {
+        margin-top: 64px;
+      }
+      h2 {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .lede {
+        font-size: 14px;
+        margin-bottom: 20px;
+      }
+      .lede strong {
+        font-weight: 650;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 64px 1fr 84px;
+        gap: 12px;
+        align-items: center;
+        margin-top: 10px;
+      }
+      .row .lbl {
+        font-size: 12.5px;
+        color: var(--muted);
+        text-align: right;
+      }
+      .row .val {
+        font-size: 12.5px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .track {
+        height: 20px;
+        display: flex;
+        border-radius: 3px;
+        overflow: hidden;
+        background: var(--faint);
+      }
+      .seg {
+        height: 100%;
+      }
+      .cc {
+        background: var(--cc);
+      }
+      .cx {
+        background: var(--cx);
+      }
+      .vo {
+        background: var(--vo);
+      }
+      .legend {
+        display: flex;
+        gap: 18px;
+        margin-top: 14px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .legend span::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        margin-right: 6px;
+        vertical-align: baseline;
+      }
+      .l-cc::before {
+        background: var(--cc);
+      }
+      .l-cx::before {
+        background: var(--cx);
+      }
+      .l-vo::before {
+        background: var(--vo);
+      }
+      .l-side::before {
+        background: var(--side);
+      }
+      .l-main::before {
+        background: var(--cc);
+      }
+      .split {
+        height: 34px;
+        display: flex;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-top: 16px;
+      }
+      .split div {
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        font-size: 12.5px;
+        color: #fff;
+        white-space: nowrap;
+      }
+      .split .b {
+        background: var(--side);
+        color: #8c4a2f;
+        justify-content: flex-end;
+      }
+      .big {
+        display: flex;
+        gap: 48px;
+        margin-top: 18px;
+      }
+      .big figure .n {
+        font-size: 30px;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+      }
+      .big figure figcaption {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      footer {
+        margin-top: 80px;
+        padding-top: 20px;
+        border-top: 1px solid var(--faint);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      footer p + p {
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>One machine, three harnesses</h1>
+      <p class="sub">
+        Agent usage measured from local ledgers &amp; transcripts · Claude Code, Codex, and Volli ·
+        generated 2026&#8209;08&#8209;29
+      </p>
+
+      <section>
+        <h2>The ramp</h2>
+        <p class="lede">
+          Tokens per month, all harnesses. <strong>0.14B &rarr; 5.0B &rarr; 27.5B</strong> — roughly
+          5&times; a month. The laptop is the next bottleneck.
+        </p>
+        <div class="row">
+          <span class="lbl">June</span>
+          <div class="track"><div class="seg cc" style="width: 0.5%"></div></div>
+          <span class="val">0.14B</span>
+        </div>
+        <div class="row">
+          <span class="lbl">July</span>
+          <div class="track">
+            <div class="seg cc" style="width: 12.6%"></div>
+            <div class="seg cx" style="width: 5.6%"></div>
+          </div>
+          <span class="val">5.0B</span>
+        </div>
+        <div class="row">
+          <span class="lbl">August</span>
+          <div class="track">
+            <div class="seg cc" style="width: 38.8%"></div>
+            <div class="seg cx" style="width: 57.8%"></div>
+            <div class="seg vo" style="width: 3.3%"></div>
+          </div>
+          <span class="val">27.5B</span>
+        </div>
+        <div class="legend">
+          <span class="l-cc">Claude Code 10.7B</span><span class="l-cx">Codex 15.9B</span
+          ><span class="l-vo">Volli 0.9B <em>(4 days)</em></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Where Claude Code's tokens actually go</h2>
+        <p class="lede">
+          <strong>71% of all Claude Code tokens are subagent (sidechain) work</strong> — 10.15B of
+          14.26B, present in 808 of 894 sessions. Per-session cost <em>does</em> include them; the
+          fan-out just hides in the same file.
+        </p>
+        <div class="split">
+          <div class="cc" style="width: 28.8%">main thread &nbsp;4.11B</div>
+          <div class="b" style="width: 71.2%">subagents &nbsp;10.15B</div>
+        </div>
+        <div class="legend">
+          <span class="l-main">orchestrator-visible ~4.6M / session</span
+          ><span class="l-side">fan-out multiplier ~3.4&times;</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Volli spend by model &mdash; routing is real</h2>
+        <p class="lede">
+          <strong>26% of Volli spend runs on OpenAI models.</strong> One ledger, two providers — the
+          record neither harness can hold alone. (~$742 est. over 4 metered days.)
+        </p>
+        <div class="row">
+          <span class="lbl">Opus 5</span>
+          <div class="track"><div class="seg cc" style="width: 95%"></div></div>
+          <span class="val">~$393</span>
+        </div>
+        <div class="row">
+          <span class="lbl">Fable 5</span>
+          <div class="track"><div class="seg cc" style="width: 38%"></div></div>
+          <span class="val">~$157</span>
+        </div>
+        <div class="row">
+          <span class="lbl">5.6&#8209;sol</span>
+          <div class="track"><div class="seg cx" style="width: 28%"></div></div>
+          <span class="val">~$116</span>
+        </div>
+        <div class="row">
+          <span class="lbl">5.6&#8209;terra</span>
+          <div class="track"><div class="seg cx" style="width: 18%"></div></div>
+          <span class="val">~$75</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Volli, day by day</h2>
+        <p class="lede">
+          Peak day: <strong>474M tokens, 2,549 metered operations</strong>, ~$411 list-price
+          equivalent — mostly parallel ticket work.
+        </p>
+        <div class="row">
+          <span class="lbl">Aug 25</span>
+          <div class="track"><div class="seg vo" style="width: 4.6%"></div></div>
+          <span class="val">~$19</span>
+        </div>
+        <div class="row">
+          <span class="lbl">Aug 26</span>
+          <div class="track"><div class="seg vo" style="width: 100%"></div></div>
+          <span class="val">~$411</span>
+        </div>
+        <div class="row">
+          <span class="lbl">Aug 27</span>
+          <div class="track"><div class="seg vo" style="width: 57.8%"></div></div>
+          <span class="val">~$238</span>
+        </div>
+        <div class="row">
+          <span class="lbl">Aug 28</span>
+          <div class="track"><div class="seg vo" style="width: 17.9%"></div></div>
+          <span class="val">~$74</span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Cache discipline has converged</h2>
+        <p class="lede">
+          Cached input share is no longer a differentiator — every harness sits at the ceiling.
+          Efficiency claims now need an outcome denominator:
+          <strong>tokens per merged change</strong>.
+        </p>
+        <div class="big">
+          <figure>
+            <div class="n">97%</div>
+            <figcaption>Claude Code</figcaption>
+          </figure>
+          <figure>
+            <div class="n">98%</div>
+            <figcaption>Codex</figcaption>
+          </figure>
+          <figure>
+            <div class="n">97%</div>
+            <figcaption>Volli</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <footer>
+        <p>
+          Method: Claude Code — per-message <code>usage</code> summed across 909 transcript files in
+          <code>~/.claude/projects</code>, subagent share via the <code>isSidechain</code> flag.
+          Codex — final cumulative <code>token_count</code> per session file in
+          <code>~/.codex/sessions</code> (812 files). Volli — <code>volli cost</code> usage
+          projection, catalog-estimate basis.
+        </p>
+        <p>
+          Caveats: Volli figures are list-price equivalents for largely subscription-backed traffic,
+          not an invoice. Volli metering began 2026&#8209;08&#8209;25, so its August bar is 4 days
+          against full months. Codex cumulative counters may double-count resumed sessions. All data
+          local to this machine.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

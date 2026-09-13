@@ -32,7 +32,7 @@ These are interaction references, not a specification to transplant unchanged: S
 
 The interactive preview exposed a real `Maximum update depth exceeded` failure. A clean Chrome reproduction reached dnd-kit's sortable derived-transform reset. Keeping only same-column order stable was insufficient: the rollback stress case subsequently reached core's active-node `measureRect` loop through cross-column reparenting.
 
-The final Board implementation keeps **all measured card order and parentage fixed for the entire gesture**, for single tickets as well as groups. The existing pure `resolveGroupDrop` resolves the intended slot from that frozen snapshot. The detached card and sortable transforms preview the gesture; the board store is changed only on release. The earlier dnd-kit scroll-ancestry patch remains unchanged; no errors or listener warnings are suppressed.
+The final Board implementation keeps **all measured card order and parentage fixed for the entire gesture**, for single tickets as well as groups. The existing pure `resolveGroupDrop` resolves the intended slot from that frozen snapshot. The detached card and sortable transforms preview the gesture, while a paint-only ring names the aimed column without changing a measured rectangle; the board store is changed only on release. The earlier dnd-kit scroll-ancestry patch remains unchanged; no errors or listener warnings are suppressed.
 
 The review hub now supplies in-memory `tickets.move` and `moveMany` handlers using the shared board operations. These return authoritative fixture snapshots rather than making every drop roll back as an unstubbed failure. They never start agents. Moved fixture tickets survive switching between the review views.
 
@@ -46,5 +46,5 @@ Validation of the final fix:
 Reproduce against the running Lab:
 
 ```sh
-VOLLI_LAB_PORT=5189 node apps/desktop/e2e/board-sort-loop-smoke.mjs
+VOLLI_LAB_PORT=5189 pnpm smoke:board-sort-loop
 ```

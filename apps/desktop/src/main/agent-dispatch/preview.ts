@@ -60,6 +60,16 @@ function undeclaredPreviewRefusal(request: AgentRequest): AgentResponse | null {
   if (request.args["dryRun"] !== true) return null;
   const entry = verbEntry(request.cmd);
   if (entry?.options.some((option) => option.name === "--dry-run") === true) return null;
+  // A verb that previews unless told to apply must not be told to "drop dryRun
+  // to perform the real operation" — dropping it previews, and the advice
+  // would be exactly backwards on the one verb where being wrong is expensive.
+  if (entry?.previewsByDefault === true) {
+    return failure(
+      "INVALID_REQUEST",
+      `${request.cmd} previews by default, so dryRun was refused rather than ignored.`,
+      `Run \`volli ${cliVerbName(request.cmd)}\` without dryRun to see the preview, and add --apply when you mean to write.`,
+    );
+  }
   return failure(
     "INVALID_REQUEST",
     `${request.cmd} declares no side-effect preview, so dryRun was refused rather than ignored on the way to a real write.`,

@@ -4,6 +4,7 @@ import type { CliToolStatus } from "../../../../ipc/contract";
 import {
   cliNeedsAttention,
   cliStatusDisclosure,
+  cliStatusFaultTitle,
   cliStatusRows,
   sessionPathComparison,
 } from "./cli-status-model";
@@ -165,6 +166,55 @@ describe("sessionPathComparison", () => {
   });
 });
 
+/**
+ * VC-293. About draws these rows as faults, where the row label was the whole
+ * heading — "Command", "App socket" — and the state that made it a fault was
+ * on the second line. A heading that names a subject and no problem is not a
+ * fault heading, so the title carries both.
+ */
+describe("cliStatusFaultTitle", () => {
+  it("names the subject and its failing state", () => {
+    const rows = cliStatusRows(
+      status({
+        link: { path: "/home/me/.local/bin/volli", state: "missing", target: null },
+        socket: { path: "/profiles/volli.sock", live: false },
+      }),
+    );
+
+    expect(cliStatusFaultTitle(row(rows, "link"))).toBe("Volli command: Not linked");
+    expect(cliStatusFaultTitle(row(rows, "socket"))).toBe("App socket: Not running");
+  });
+
+  it("stands alone for every warning a status read can produce", () => {
+    const warnings = [
+      status({ link: { path: "/p/volli", state: "foreign", target: "/opt/other/volli" } }),
+      status({ link: { path: "/p/volli", state: "not-symlink", target: null } }),
+      status({ path: { binDir: "/home/me/.local/bin", state: "missing" } }),
+      status({ socket: { path: "/profiles/volli.sock", live: false } }),
+      status({ shell: { name: "zsh", supported: true, chainActive: false } }),
+      status({ legacy: { path: "/usr/local/bin/volli", state: "foreign" } }),
+    ].flatMap((measured) => cliStatusDisclosure(cliStatusRows(measured)).attentionRows);
+
+    expect(warnings).toHaveLength(6);
+    expect(warnings.map(cliStatusFaultTitle)).toEqual([
+      "Volli command: Owned by another tool",
+      "Volli command: A file of yours holds the name",
+      "Volli on login PATH: Missing",
+      "App socket: Not running",
+      "Shell chain: Not generated",
+      "Legacy link: Another volli sits in /usr/local/bin",
+    ]);
+    // The detail is a measurement (a path, a consequence); the heading may
+    // never depend on it, and About receives a separate corrective action.
+    for (const warning of warnings) {
+      expect(cliStatusFaultTitle(warning)).not.toBe(warning.label);
+      expect(cliStatusFaultTitle(warning)).toContain(warning.value);
+      expect(warning.remedy).toBeTruthy();
+      expect(warning.remedy).not.toBe(warning.detail);
+    }
+  });
+});
+
 describe("cliStatusRows", () => {
   it("reads a healthy install as all-ok with no legacy row and no attention", () => {
     const rows = cliStatusRows(status());
@@ -267,11 +317,15 @@ describe("cliStatusRows", () => {
       "/home/me/.local/bin is not on the login shell's PATH. " +
         "Volli only manages zsh, so add it to your fish configuration yourself.",
     );
+    expect(row(fish, "path").remedy).toBe(
+      "Open Settings → CLI and add the listed bin directory to your fish configuration.",
+    );
 
     const zsh = cliStatusRows(
       status({ path: { binDir: "/home/me/.local/bin", state: "missing" } }),
     );
     expect(row(zsh, "path").detail).toBe("/home/me/.local/bin is not on the login shell's PATH.");
+    expect(row(zsh, "path").remedy).toBe("Select Fix, then open a new Volli terminal.");
   });
 
   it("covers the socket, wrapper, and shell-chain states", () => {

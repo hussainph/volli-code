@@ -57,11 +57,30 @@ describe("agent product guidance", () => {
     // lifecycle signal performs on its ticket.
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-6");
     expect(entry).toBeDefined();
-    // The newest build heads the record, and this is where that pin lives now.
     expect(entry).toMatchObject({ baseline: "VC-185" });
-    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
     expect(entry!.added.join("\n")).toContain("todo_write");
     expect(entry!.changed.join("\n")).toContain("session done");
+  });
+
+  it("records the Session await, the interrupted state and the steer receipt (VC-324)", () => {
+    // Three agent-facing changes from one audit: a tool an orchestrator can now
+    // park on, a listing word it will now read, and a send that no longer
+    // holds its turn. The newest build heads the record, and this is where
+    // that pin lives now.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-324");
+    expect(entry).toBeDefined();
+    expect(entry).toMatchObject({ baseline: "VC-6" });
+    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    const added = entry!.added.join("\n");
+    expect(added).toContain("session_await");
+    // The wake vocabulary and the cursor rule are what an agent needs to call
+    // it well; the interruption line is the failure it was built for.
+    for (const word of ["turn", "verdict", "stopped", "cursor", "interrupted"]) {
+      expect(added).toContain(word);
+    }
+    const changed = entry!.changed.join("\n");
+    expect(changed).toContain("interrupted");
+    expect(changed).toContain("session_send");
   });
 
   it("records the Role-scoped tool surface as an agent-facing capability (VC-162)", () => {

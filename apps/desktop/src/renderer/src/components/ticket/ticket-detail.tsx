@@ -84,6 +84,7 @@ import {
 import { SplitDropZones } from "@renderer/components/split/split-drop-zones";
 import { paneStripLabel, partitionPaneTabs } from "@renderer/components/split/split-tab-partition";
 import { SplitViewGrid } from "@renderer/components/split/split-view-grid";
+import { SplitViewTabBar } from "@renderer/components/split/split-view-tab-bar";
 import { TerminalPaneAnchor } from "@renderer/components/split/terminal-pane-anchor";
 import {
   TicketPaneTabStrip,
@@ -178,9 +179,9 @@ function documentFileSource(identity: DocumentIdentity): FileSource {
  *
  * SINCE VC-202 the plane is a SPLIT GRID (`split/split-view-grid.tsx`) rather
  * than a single box. Nothing about the paragraph above changes with it: an
- * unsplit workspace resolves to one pane and renders exactly what it did, the
- * full-width strip is the primary pane's strip, and a second pane simply draws
- * its own strip over its own content. What each pane's front tab renders is
+ * unsplit workspace resolves to one pane and renders exactly what it did.
+ * Top-edge panes divide the main tab bar; only panes below a down split draw
+ * an additional strip (VC-333). What each pane's front tab renders is
  * routed by kind below, once per pane rather than once per surface — which is
  * why the file/diff editors bind their dirty and view-state reports to their
  * own path instead of to "the active tab's".
@@ -1435,27 +1436,42 @@ export function TicketDetail({
       onNativeDrop={handleNativeDrop}
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* One full-width tab row above both the main column and the rail (the
-          browser-window metaphor). The active tab fuses with the content plane
-          in the main column below it. While split it is the PRIMARY pane's
-          strip — the pane that holds the Body tab and never moves. */}
         {terminalFocused ? null : (
-          <TicketTabStrip
-            projectId={projectId}
-            ticketId={ticket.id}
-            tabs={paneStrips[0]!.tabs}
-            activeTabId={split.panes[0]!.activeTabId ?? activeTab.id}
-            creating={creating || creatingChat}
-            onSelectTab={setActiveTab}
-            onReorderTabs={(movedId, ids) => reorderInPane(split.primaryPaneId, movedId, ids)}
-            onPinFileTab={(relPath) => pinTicketFile(projectId, ticket.id, relPath)}
-            onCloseTab={closeTab}
-            onRenameSessionTab={renameSessionTab}
-            onNewSession={() => void createSession()}
-            onNewChat={() => void createChat()}
-            onNewBrowser={() => void createBrowser()}
-            railCollapsed={railCollapsed}
-            onToggleRail={toggleRailCollapsed}
+          <SplitViewTabBar
+            view={split}
+            railWidth={railCollapsed ? 0 : railWidth}
+            onFocusPane={(paneId) => focusTicketPane(projectId, ticket.id, paneId)}
+            onResizeSplit={(splitId, ratio) =>
+              setTicketSplitRatio(projectId, ticket.id, splitId, ratio)
+            }
+            renderStrip={(pane, last) => {
+              const list = {
+                label: pane.isPrimary ? "Ticket tabs" : paneStripLabel(pane),
+                projectId,
+                ticketId: ticket.id,
+                tabs: paneStrips[pane.index]?.tabs ?? [],
+                activeTabId: pane.activeTabId ?? "",
+                onSelectTab: setActiveTab,
+                onReorderTabs: (movedId: string, ids: readonly string[]) =>
+                  reorderInPane(pane.id, movedId, ids),
+                onPinFileTab: (relPath: string) => pinTicketFile(projectId, ticket.id, relPath),
+                onCloseTab: closeTab,
+                onRenameSessionTab: renameSessionTab,
+              };
+              return last ? (
+                <TicketTabStrip
+                  {...list}
+                  creating={creating || creatingChat}
+                  onNewSession={() => void createSession()}
+                  onNewChat={() => void createChat()}
+                  onNewBrowser={() => void createBrowser()}
+                  railCollapsed={railCollapsed}
+                  onToggleRail={toggleRailCollapsed}
+                />
+              ) : (
+                <TicketPaneTabStrip {...list} />
+              );
+            }}
           />
         )}
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1471,11 +1487,9 @@ export function TicketDetail({
             <SplitViewGrid
               view={split}
               renderStrip={(pane) =>
-                // No strip on the primary pane (the surface's own is its) and
-                // none on a pane holding nothing: an empty tablist is a band of
-                // chrome about no tabs, and the pane's menu is the whole of
-                // what it has to say.
-                pane.isPrimary || pane.tabIds.length === 0 ? null : (
+                // Only lower panes render here; top-edge panes share the main
+                // bar. Empty lower panes keep just their menu.
+                pane.tabIds.length === 0 ? null : (
                   <TicketPaneTabStrip
                     label={paneStripLabel(pane)}
                     projectId={projectId}

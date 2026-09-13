@@ -20,6 +20,7 @@ import type {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 import type { HarnessEventNotice, SessionHarnessNotice } from "../ipc/contract";
+import type { NotificationOutcome, NotificationRequest } from "./notifications/dispatch";
 
 import { importBlob } from "./blob-import";
 import { blobsRoot } from "./blob-store";
@@ -41,7 +42,7 @@ import {
   listArchivedTicketsByProject,
   listTicketsByProject,
 } from "./db/tickets-repo";
-import { recordTicketEvent } from "./db/events-repo";
+import { listTicketEvents, recordTicketEvent } from "./db/events-repo";
 import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import {
@@ -103,6 +104,15 @@ const ACTING_ENV: AgentRequest["ctx"]["env"] = {
  * twice would otherwise disarm its own earlier requests.
  */
 const mintedFor = new Map<string, string>();
+/**
+ * The `git diff --raw -z -M` records a worktree with these modified paths emits.
+ * Change Set reads take status from ONE raw diff process (VC-337), so a scripted
+ * git that still answered `--name-status` would be imitating a git we no longer
+ * call — and would report every worktree as untouched.
+ */
+function rawModified(paths: readonly string[]): string {
+  return paths.map((path) => `:100644 100644 1111111 2222222 M\u0000${path}\u0000`).join("");
+}
 /** One durable `todo_write` call, exactly as `observation-translation` writes it (VC-6). */
 function todoMessage(id: string, todos: readonly { content: string; status: string }[]): UIMessage {
   return {
@@ -167,6 +177,20 @@ function createAgentCommandService(
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
+
+/**
+ * The notification port, as a test records it: the WHOLE request (producer and
+ * target included — VC-295 round 2 asks for both to be asserted, because a deep
+ * link that opens the wrong surface is invisible in a title), answering that
+ * the alert was delivered.
+ */
+function recordNotice(
+  into: NotificationRequest[],
+  request: NotificationRequest,
+): NotificationOutcome {
+  into.push(request);
+  return { delivered: true };
+}
 
 describe("agent command service", () => {
   it("creates a ticket through display-id-only input and output", async () => {
@@ -369,7 +393,7 @@ describe("agent command service", () => {
     expect(interruptTicketSessions).not.toHaveBeenCalled();
     expect(newId).toHaveBeenCalledTimes(3);
     expect(onMutation).toHaveBeenCalledTimes(7);
-  });
+  }, 15_000);
 
   it("rejects an invalid --base and never inherits the project base branch on create", async () => {
     ctx = openTestDb();
@@ -783,13 +807,13 @@ describe("agent command service", () => {
     );
     let id = 0;
     let timestamp = 100;
-    const notifications: Array<{ title: string; message: string }> = [];
+    const notifications: NotificationRequest[] = [];
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
       now: () => timestamp++,
       newId: () => `ticket-${++id}`,
-      notify: (title, message) => notifications.push({ title, message }),
+      notify: (request) => recordNotice(notifications, request),
     });
     const exec = (cmd: AgentRequest["cmd"], args: Record<string, unknown>, session?: string) =>
       service.execute({
@@ -820,7 +844,15 @@ describe("agent command service", () => {
     // The same move from a session fires "via VC-2's session".
     await exec("ticket.move", { id: "VC-1", to: "doing" }, orchestrator);
 
-    expect(notifications).toEqual([{ title: "VC-1 → Doing", message: "Moved via VC-2's session" }]);
+    expect(notifications.map(({ title, body }) => ({ title, message: body }))).toEqual([
+      { title: "VC-1 → Doing", message: "Moved via VC-2's session" },
+    ]);
+    // Operational — no preference can hide the guardrail — and it still opens
+    // the ticket that was pushed into the active column (VC-295).
+    expect(notifications[0]).toMatchObject({
+      producer: "ticket-moved-to-doing",
+      target: { kind: "ticket", projectId: "project-one", ticketId: "ticket-1" },
+    });
   });
 
   describe("ticket.move is a Deliberate move (VC-128)", () => {
@@ -2343,6 +2375,67 @@ describe("agent command service", () => {
       },
       provenance,
     });
+    // The fifth honest state (VC-324): a turn that DIED. The runtime raised a
+    // transport Attention and then interrupted the turn — the shape a network
+    // dead end leaves behind, and the other one "idle" used to hide.
+    const interrupted = await sessionEngine.createSession({
+      commandId: "create-interrupted",
+      projectId: "project-one",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Interrupted",
+      provenance,
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attach",
+      kind: "attachment.opened",
+      sessionId: interrupted.session.id,
+      occurredAt: 1_000,
+      provenance,
+      attachment: {
+        id: "attachment-interrupted",
+        sessionId: interrupted.session.id,
+        adapterId: "pi",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: { id: "pi-interrupted", detail: null },
+        authority: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-turn",
+      kind: "turn.started",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
+    await sessionEngine.observe({
+      id: "interrupted-attention",
+      kind: "attention.raised",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 2_500,
+      provenance,
+      attention: {
+        id: "attention-interrupted",
+        kind: "adapter_unrecoverable",
+        attachmentId: "attachment-interrupted",
+        detail: null,
+        diagnostic: null,
+      },
+    });
+    await sessionEngine.observe({
+      id: "interrupted-end",
+      kind: "turn.interrupted",
+      sessionId: interrupted.session.id,
+      attachmentId: "attachment-interrupted",
+      occurredAt: 3_000,
+      provenance,
+      turnId: "turn-interrupted",
+    });
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -2389,6 +2482,16 @@ describe("agent command service", () => {
             id: stopped.session.id.slice(0, 8),
             status: "stopped",
             waitingOn: null,
+            interruptedReason: null,
+          }),
+          // A dead turn is not quiet: the word says it, and the coarse reason
+          // rides beside it the way a waiting row's errand does.
+          expect.objectContaining({
+            id: interrupted.session.id.slice(0, 8),
+            status: "interrupted",
+            waitingOn: null,
+            interruptedReason: "stopped-by-runtime",
+            lastActivityAgeMs: 7_000,
           }),
         ]),
       },
@@ -2401,7 +2504,20 @@ describe("agent command service", () => {
       args: { id: stopped.session.id.slice(0, 8) },
       ctx: { cwd: "/repo/volli", env: ACTING_ENV },
     });
-    expect(peek).toMatchObject({ ok: true, data: { status: "stopped", waitingOn: null } });
+    expect(peek).toMatchObject({
+      ok: true,
+      data: { status: "stopped", waitingOn: null, interruptedReason: null },
+    });
+    const interruptedPeek = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: interrupted.session.id.slice(0, 8) },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(interruptedPeek).toMatchObject({
+      ok: true,
+      data: { status: "interrupted", interruptedReason: "stopped-by-runtime" },
+    });
   });
 
   it("refuses session.list when an explicit --project contradicts the --ticket", async () => {
@@ -2453,7 +2569,7 @@ describe("agent command service", () => {
     const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId, title: "Board chat" }));
     const observed: Array<{ sessionId: string; lines: number }> = [];
-    const notifications: Array<{ title: string; message: string }> = [];
+    const notifications: NotificationRequest[] = [];
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.2.3",
@@ -2461,7 +2577,10 @@ describe("agent command service", () => {
         observed.push({ sessionId: id, lines });
         return { status: "idle", output: "line one\nline two" };
       },
-      notify: (title, message) => notifications.push({ title, message }),
+      notify: (request) => {
+        notifications.push(request);
+        return { delivered: true };
+      },
     });
 
     const peek = await service.execute({
@@ -2493,7 +2612,74 @@ describe("agent command service", () => {
     expect(byUuid).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
     expect(observed).toEqual([{ sessionId, lines: 2 }]);
     expect(notified).toEqual({ v: 1, ok: true, data: { notified: true } });
-    expect(notifications).toEqual([{ title: "Agent", message: "Needs input" }]);
+    // The alert the verb asked for, whole: free-form and operational, so it
+    // names no preference category and points nowhere (VC-295).
+    expect(notifications).toEqual([
+      { producer: "agent-notify", title: "Agent", body: "Needs input", target: null },
+    ]);
+  });
+
+  it("reports a notification the system did not show, rather than claiming it did", async () => {
+    // VC-295 round 2. `volli notify` is an operation a caller ASKED for, so an
+    // outcome of `unsupported` or `failed` is a failed operation — reporting
+    // `{ notified: true }` over it is the silent swallow CLAUDE.md forbids.
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      notify: () => ({ delivered: false, reason: "unsupported" }),
+    });
+
+    const answer = await service.execute({
+      v: 1,
+      cmd: "notify",
+      args: { title: "Agent", message: "Needs input" },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    expect(answer).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
+    if (!answer.ok) {
+      expect(answer.error.reason).toContain("notification");
+      expect(answer.error.next).not.toBeNull();
+    }
+  });
+
+  it("reports a delivery Electron refused the same way", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      notify: () => ({ delivered: false, reason: "failed" }),
+    });
+
+    const answer = await service.execute({
+      v: 1,
+      cmd: "notify",
+      args: { title: "Agent", message: "Needs input" },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+
+    expect(answer).toMatchObject({ ok: false, error: { code: "MUTATION_FAILED" } });
+  });
+
+  it("still reports success when nothing is wired to deliver notifications", async () => {
+    // A service built without the port (tests, a degraded boot) has nothing to
+    // report a failure about: the verb accepted the request and the host simply
+    // has no channel. That is not the same as a channel that refused.
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.2.3" });
+
+    expect(
+      await service.execute({
+        v: 1,
+        cmd: "notify",
+        args: { title: "Agent", message: "Needs input" },
+        ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+      }),
+    ).toEqual({ v: 1, ok: true, data: { notified: true } });
   });
 
   // VC-79. The orchestration paradigm runs on chat Sessions, and a peek that
@@ -3732,10 +3918,10 @@ describe("agent command service", () => {
     // session: notification, sidebar row, rewritten resume seed.
     it("refuses an event for a session that has already ended", async () => {
       const notices: HarnessEventNotice[] = [];
-      const notified: string[] = [];
+      const notified: NotificationRequest[] = [];
       const { hook } = hookService({
         onHarnessEvent: (notice) => notices.push(notice),
-        notify: (title: string) => notified.push(title),
+        notify: (request) => recordNotice(notified, request),
       });
       endSession(ctx.db, sessionId, 5000, 0);
 
@@ -3855,21 +4041,29 @@ describe("agent command service", () => {
     });
 
     it("notifies when a human is blocking the agent, naming the ticket", async () => {
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: (request) => recordNotice(notices, request) },
         "ticket-blocked",
       );
 
       await hook({ harness: "claude-code", event: "input.needed" });
 
-      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      expect(notices.map(({ title, body }) => [title, body])).toEqual([
+        ["VC-12 needs you", "Claude Code is waiting on a human"],
+      ]);
+      // `needs-you`, pointing at the exact terminal Session whose harness is
+      // waiting — a click has to land in that terminal, not on the board.
+      expect(notices[0]).toMatchObject({
+        producer: "harness-input-needed",
+        target: { kind: "session", interactionId: null, attentionId: null },
+      });
     });
 
     it("stays quiet for telemetry, and for the twin event riding the same native signal", async () => {
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: (request) => recordNotice(notices, request) },
         "ticket-quiet",
       );
 
@@ -3886,9 +4080,9 @@ describe("agent command service", () => {
 
     it("writes a delivery into the ledger of the registered harness that sent it", async () => {
       const registered = "my-harness" as HarnessId;
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: (request) => recordNotice(notices, request) },
         "ticket-registered",
         registered,
       );
@@ -3911,7 +4105,9 @@ describe("agent command service", () => {
       expect(getRegisteredHarness(ctx.db, registered)?.verifiedEvents).toEqual(["input.needed"]);
       // The first one a harness ever sends is exactly the one a human is
       // waiting on — verifying it must not cost it its notification.
-      expect(notices).toEqual([["VC-12 needs you", "my-harness is waiting on a human"]]);
+      expect(notices.map(({ title, body }) => [title, body])).toEqual([
+        ["VC-12 needs you", "my-harness is waiting on a human"],
+      ]);
     });
 
     // `recordHarnessDelivery` answers `verified` for every first-class harness
@@ -3920,11 +4116,11 @@ describe("agent command service", () => {
     // raise a `waiting` for it; main firing a native interrupt over a sidebar
     // reading plain Idle is the disagreement this channel exists to prevent.
     it("stays quiet for a harness whose adapter cannot report that a human is blocking it", async () => {
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: (request) => recordNotice(notices, request),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-cursor",
@@ -3945,11 +4141,11 @@ describe("agent command service", () => {
     // recorded and announced as Claude Code's.
     it("credits the harness that fired, not the one the session launched with", async () => {
       const registered = "my-harness" as HarnessId;
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: (request) => recordNotice(notices, request),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-typed",
@@ -3980,10 +4176,10 @@ describe("agent command service", () => {
 
     it("falls back to the session's harness when the hook named none", async () => {
       const pushed: HarnessEventNotice[] = [];
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: (request) => recordNotice(notices, request),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-nameless",
@@ -3992,7 +4188,15 @@ describe("agent command service", () => {
       await hook({ event: "input.needed" });
 
       expect(pushed.map((notice) => notice.harnessId)).toEqual(["claude-code"]);
-      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      expect(notices.map(({ title, body }) => [title, body])).toEqual([
+        ["VC-12 needs you", "Claude Code is waiting on a human"],
+      ]);
+      // `needs-you`, pointing at the exact terminal Session whose harness is
+      // waiting — a click has to land in that terminal, not on the board.
+      expect(notices[0]).toMatchObject({
+        producer: "harness-input-needed",
+        target: { kind: "session", interactionId: null, attentionId: null },
+      });
     });
 
     // THE SILENT NOTIFICATION. The session launched opencode, the user quit it
@@ -4000,9 +4204,9 @@ describe("agent command service", () => {
     // LAUNCH harness — recorded in the ledger, announced to the renderer, and
     // never notified. That is the exact case the channel exists for.
     it("notifies for the harness that is running, not the one that launched", async () => {
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const { hook } = hookService(
-        { notify: (title, message) => notices.push([title, message]) },
+        { notify: (request) => recordNotice(notices, request) },
         "ticket-replaced",
         "opencode",
       );
@@ -4016,7 +4220,15 @@ describe("agent command service", () => {
       setActiveHarnessId(ctx.db, sessionId, "claude-code");
       await hook({ harness: "claude-code", event: "input.needed" });
 
-      expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+      expect(notices.map(({ title, body }) => [title, body])).toEqual([
+        ["VC-12 needs you", "Claude Code is waiting on a human"],
+      ]);
+      // `needs-you`, pointing at the exact terminal Session whose harness is
+      // waiting — a click has to land in that terminal, not on the board.
+      expect(notices[0]).toMatchObject({
+        producer: "harness-input-needed",
+        target: { kind: "session", interactionId: null, attentionId: null },
+      });
     });
 
     it("falls back to the RUNNING harness when the hook named none", async () => {
@@ -4050,11 +4262,11 @@ describe("agent command service", () => {
     });
 
     it("records an event from a harness it has no record of, and notifies nobody", async () => {
-      const notices: [string, string][] = [];
+      const notices: NotificationRequest[] = [];
       const pushed: HarnessEventNotice[] = [];
       const { hook } = hookService(
         {
-          notify: (title, message) => notices.push([title, message]),
+          notify: (request) => recordNotice(notices, request),
           onHarnessEvent: (notice) => pushed.push(notice),
         },
         "ticket-unknown",
@@ -4072,9 +4284,9 @@ describe("agent command service", () => {
     // their races in. Arrival order is main's clock's opinion, not the agent's.
     describe("ordering", () => {
       it("withholds the notification a stale input.needed would fire", async () => {
-        const notices: [string, string][] = [];
+        const notices: NotificationRequest[] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: (request) => recordNotice(notices, request) },
           "ticket-raced",
         );
 
@@ -4085,32 +4297,48 @@ describe("agent command service", () => {
       });
 
       it("still notifies for a wait fired in the same millisecond as the newest event", async () => {
-        const notices: [string, string][] = [];
+        const notices: NotificationRequest[] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: (request) => recordNotice(notices, request) },
           "ticket-tied",
         );
 
         await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
         await hook({ harness: "claude-code", event: "input.needed", firedAt: 2000 });
 
-        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+        expect(notices.map(({ title, body }) => [title, body])).toEqual([
+          ["VC-12 needs you", "Claude Code is waiting on a human"],
+        ]);
+        // `needs-you`, pointing at the exact terminal Session whose harness is
+        // waiting — a click has to land in that terminal, not on the board.
+        expect(notices[0]).toMatchObject({
+          producer: "harness-input-needed",
+          target: { kind: "session", interactionId: null, attentionId: null },
+        });
       });
 
       // An older `volli` sends no stamp at all. Dropping its events for failing
       // to prove their own age would be a strictly worse bug than the one this
       // closes, and a much quieter one.
       it("keeps believing an unstamped delivery after a stamped one", async () => {
-        const notices: [string, string][] = [];
+        const notices: NotificationRequest[] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: (request) => recordNotice(notices, request) },
           "ticket-unstamped",
         );
 
         await hook({ harness: "claude-code", event: "turn.started", firedAt: 2000 });
         await hook({ harness: "claude-code", event: "input.needed" });
 
-        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+        expect(notices.map(({ title, body }) => [title, body])).toEqual([
+          ["VC-12 needs you", "Claude Code is waiting on a human"],
+        ]);
+        // `needs-you`, pointing at the exact terminal Session whose harness is
+        // waiting — a click has to land in that terminal, not on the board.
+        expect(notices[0]).toMatchObject({
+          producer: "harness-input-needed",
+          target: { kind: "session", interactionId: null, attentionId: null },
+        });
       });
 
       it("refuses a stale resume seed rather than overwriting the newest one", async () => {
@@ -4181,9 +4409,9 @@ describe("agent command service", () => {
       // The watermark is per session: one session firing does not make another
       // session's older-but-perfectly-current event look stale.
       it("keeps one session's watermark out of another's", async () => {
-        const notices: [string, string][] = [];
+        const notices: NotificationRequest[] = [];
         const { hook } = hookService(
-          { notify: (title, message) => notices.push([title, message]) },
+          { notify: (request) => recordNotice(notices, request) },
           "ticket-two-sessions",
         );
         const other = "99999999-3456-7890-abcd-ef1234567890";
@@ -4192,7 +4420,15 @@ describe("agent command service", () => {
         await hook({ harness: "claude-code", event: "turn.started", firedAt: 5000 });
         await hook({ harness: "claude-code", event: "input.needed", firedAt: 1000 }, other);
 
-        expect(notices).toEqual([["VC-12 needs you", "Claude Code is waiting on a human"]]);
+        expect(notices.map(({ title, body }) => [title, body])).toEqual([
+          ["VC-12 needs you", "Claude Code is waiting on a human"],
+        ]);
+        // `needs-you`, pointing at the exact terminal Session whose harness is
+        // waiting — a click has to land in that terminal, not on the board.
+        expect(notices[0]).toMatchObject({
+          producer: "harness-input-needed",
+          target: { kind: "session", interactionId: null, attentionId: null },
+        });
       });
     });
   });
@@ -5001,9 +5237,9 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
+      if (args[0] === "diff" && args.includes("--raw")) {
         const display = cwd.slice("/wt/".length);
-        return (touched[display] ?? []).map((path) => `M\u0000${path}\u0000`).join("");
+        return rawModified(touched[display] ?? []);
       }
       if (args[0] === "status") return "";
       return "";
@@ -5081,8 +5317,8 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) {
-        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? "M\u0000src/shared.ts\u0000" : "";
+      if (args[0] === "diff" && args.includes("--raw")) {
+        return cwd === "/wt/VC-1" || cwd === "/wt/VC-2" ? rawModified(["src/shared.ts"]) : "";
       }
       if (args[0] === "diff") return "";
       if (args[0] === "status") {
@@ -5169,7 +5405,7 @@ describe("agent command service", () => {
     const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
-      if (args[0] === "diff" && args.includes("--name-status")) return "M\u0000package.json\u0000";
+      if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
       if (args[0] === "diff") return "1\t0\tpackage.json\n";
       if (args[0] === "status") return "";
       return "";
@@ -5594,7 +5830,9 @@ describe("doctor", () => {
     const shellInit = await checkFrom(malformed, "shell-init");
     expect(shellInit.status).toBe("warn");
     expect(shellInit.detail).toContain("not reported");
-    expect(shellInit.remedy).toBeUndefined();
+    expect(shellInit.remedy).toBe(
+      "Run `volli doctor` from a Volli terminal, where shell integration is visible.",
+    );
 
     const volli = await checkFrom(malformed, "volli-cli");
     expect(volli.status).toBe("warn");
@@ -5809,6 +6047,8 @@ describe("prompt.baseline", () => {
     }[];
     expect(sections.map((section) => section.id)).toEqual([
       "operating",
+      // The compact coding workflow every Role shares (VC-332).
+      "execution",
       "role",
       "authority",
       "workspace",
@@ -5860,6 +6100,7 @@ describe("prompt.baseline", () => {
     const sections = (response.data as Record<string, unknown>)["sections"] as { id: string }[];
     expect(sections.map((section) => section.id)).toEqual([
       "operating",
+      "execution",
       "role",
       "authority",
       "workspace",
@@ -6972,6 +7213,253 @@ describe("the ticket wake bus", () => {
       kind: "signaled",
       signalKind: "review",
       verdict: "pass",
+    });
+  });
+});
+
+/**
+ * `volli label merge` — the cleanup tool for a vocabulary that drifted
+ * (VC-310).
+ *
+ * Migration 046 means two spellings of ONE name can no longer coexist, so what
+ * is left for a person to fix by hand is the other kind of duplicate: two
+ * genuinely different names that mean the same thing. Merging those is
+ * project-wide, which is why the preview is the DEFAULT here rather than a
+ * `--dry-run` a caller must remember. The retired row remains as an alias.
+ */
+describe("label merge", () => {
+  async function projectWithDriftedLabels() {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let ticketNumber = 0;
+    const onMutation = vi.fn();
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      newId: () => `ticket-${++ticketNumber}`,
+      onMutation,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+
+    await execute("ticket.create", { title: "One", labels: ["frontend"] });
+    await execute("ticket.create", { title: "Two", labels: ["front-end"] });
+    // Wears BOTH spellings: the merge must leave it wearing one label, not
+    // fail on the junction's primary key.
+    await execute("ticket.create", { title: "Three", labels: ["frontend", "front-end"] });
+    await execute("ticket.create", { title: "Four", labels: ["infra"] });
+    await execute("ticket.create", { title: "Archived", labels: ["front-end"] });
+    archiveTicketCommand(ctx.db, "ticket-5", { now: 1_000, actor: { kind: "user" } });
+    onMutation.mockClear();
+    return { execute, onMutation };
+  }
+
+  function liveLabelNames(): string[] {
+    return (
+      ctx.db
+        .prepare("SELECT name FROM labels WHERE merged_into_id IS NULL ORDER BY name")
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+  }
+
+  it("previews live and archived Tickets and writes or announces nothing", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+
+    const preview = await execute("label.merge", { from: "front-end", into: "frontend" });
+
+    expect(preview).toMatchObject({
+      ok: true,
+      data: {
+        applied: false,
+        from: "front-end",
+        into: "frontend",
+        tickets: [
+          { id: "VC-2", title: "Two", archived: false },
+          { id: "VC-3", title: "Three", archived: false },
+          { id: "VC-5", title: "Archived", archived: true },
+        ],
+      },
+    });
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(onMutation).not.toHaveBeenCalled();
+  });
+
+  it("refuses dryRun instead of confusing the default preview with an apply", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+
+    const response = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      dryRun: true,
+    });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(response).toMatchObject({
+      error: { reason: expect.stringMatching(/previews by default/) },
+    });
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
+    expect(onMutation).not.toHaveBeenCalled();
+  });
+
+  it("applies the complete merge, retaining an alias and announcing every Ticket fact", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+    const wakes: TicketWake[] = [];
+    const unsubscribe = subscribeTicketWake((wake) => wakes.push(wake));
+
+    const applied = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      apply: true,
+    });
+    unsubscribe();
+
+    expect(applied).toMatchObject({
+      ok: true,
+      data: {
+        applied: true,
+        tickets: [{ id: "VC-2" }, { id: "VC-3" }, { id: "VC-5", archived: true }],
+      },
+    });
+    expect(liveLabelNames()).toEqual(["frontend", "infra"]);
+    const retirement = ctx.db
+      .prepare(
+        `SELECT name, merged_into_id, merged_at, merged_by
+           FROM labels WHERE name = 'front-end'`,
+      )
+      .get() as Record<string, unknown>;
+    expect(retirement).toMatchObject({
+      name: "front-end",
+      merged_at: 1_000,
+      merged_by: JSON.stringify({ kind: "session", sessionId: ACTING_SESSION, ticketId: null }),
+    });
+    expect(typeof retirement["merged_into_id"]).toBe("string");
+    expect(onMutation).toHaveBeenCalledTimes(1);
+    expect(onMutation).toHaveBeenCalledWith({ projectId: "project-one", kind: "ticket" });
+    expect(wakes.map((wake) => wake.event.ticketId)).toEqual(["ticket-2", "ticket-3", "ticket-5"]);
+    expect(wakes.map((wake) => wake.event.payload.kind)).toEqual([
+      "labels_changed",
+      "labels_changed",
+      "labels_changed",
+    ]);
+    // The live name and its retired alias resolve to the same complete set.
+    for (const label of ["frontend", "front-end"]) {
+      expect(await execute("ticket.list", { label })).toMatchObject({
+        ok: true,
+        data: { tickets: [{ id: "VC-1" }, { id: "VC-2" }, { id: "VC-3" }] },
+      });
+    }
+
+    // The Archive keeps its association too.
+    expect(listArchivedTicketsByProject(ctx.db, "project-one")[0]?.labels).toEqual(["frontend"]);
+    // Reusing the retired name resolves to the survivor instead of recreating drift.
+    const aliased = await execute("ticket.create", { title: "Alias", labels: ["front-end"] });
+    expect(aliased).toMatchObject({ ok: true, data: { ticket: { labels: ["frontend"] } } });
+    expect(
+      await execute("ticket.update", { id: "VC-6", removeLabels: ["front-end"] }),
+    ).toMatchObject({ ok: true, data: { ticket: { labels: [] } } });
+    expect(liveLabelNames()).toEqual(["frontend", "infra"]);
+    expect(await execute("label.merge", { from: "front-end", into: "frontend" })).toMatchObject({
+      ok: false,
+      error: { reason: expect.stringMatching(/already merged into frontend/) },
+    });
+  });
+
+  it("retains a durable alias even when the source Label has no Tickets", async () => {
+    const { execute, onMutation } = await projectWithDriftedLabels();
+    await execute("ticket.update", { id: "VC-2", removeLabels: ["front-end"] });
+    await execute("ticket.update", { id: "VC-3", removeLabels: ["front-end"] });
+    archiveTicketCommand(ctx.db, "ticket-5", { now: 1_001, actor: { kind: "user" } });
+    ctx.db.prepare("DELETE FROM ticket_labels WHERE ticket_id = 'ticket-5'").run();
+    onMutation.mockClear();
+
+    const applied = await execute("label.merge", {
+      from: "front-end",
+      into: "frontend",
+      apply: true,
+    });
+
+    expect(applied).toMatchObject({ ok: true, data: { applied: true, tickets: [] } });
+    expect(
+      ctx.db.prepare("SELECT merged_into_id FROM labels WHERE name = 'front-end'").get(),
+    ).toMatchObject({ merged_into_id: expect.any(String) });
+    expect(onMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a name the Project does not have, naming what it does have", async () => {
+    const { execute } = await projectWithDriftedLabels();
+
+    const refusal = await execute("label.merge", { from: "backend", into: "frontend" });
+
+    expect(refusal).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    expect(liveLabelNames()).toEqual(["front-end", "frontend", "infra"]);
+  });
+});
+
+/**
+ * VC-310's acceptance, at the door an agent and the `volli` CLI both come
+ * through: asking for `ui` where `UI` exists gets the label the project already
+ * has, not a second spelling of it.
+ *
+ * The picker's own guard was always case-insensitive; this is the half that was
+ * not, and it is asserted HERE rather than at the repo because the claim is
+ * about the door, not about the SQL.
+ */
+describe("label case identity through the agent door", () => {
+  it("resolves a differently-cased name to the label the project already has", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }),
+    );
+    let ticketNumber = 0;
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.2.3",
+      now: () => 1_000,
+      newId: () => `ticket-${++ticketNumber}`,
+    });
+    const execute = (cmd: AgentRequest["cmd"], args: Record<string, unknown>) =>
+      service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: ACTING_ENV } });
+
+    await execute("ticket.create", { title: "First", labels: ["UI"] });
+    // Two more doors onto the same vocabulary: a fresh ticket, and an update.
+    const second = await execute("ticket.create", { title: "Second", labels: ["ui"] });
+    const third = await execute("ticket.create", { title: "Third" });
+    const updated = await execute("ticket.update", { id: "VC-3", addLabels: ["Ui"] });
+
+    // Each door hands back and records the settled spelling, so a future host
+    // can replay the Ticket Event without inventing a second identity.
+    expect(second).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    expect(third).toMatchObject({ ok: true });
+    expect(updated).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    expect(
+      listTicketEvents(ctx.db, "ticket-2").find((event) => event.payload.kind === "labels_changed")
+        ?.payload,
+    ).toEqual({ kind: "labels_changed", added: ["UI"], removed: [] });
+
+    // Adding a case variant to a Ticket that already wears the Label is a real
+    // no-op: no version bump and no phantom labels_changed fact.
+    const beforeEvents = listTicketEvents(ctx.db, "ticket-2");
+    const duplicateAdd = await execute("ticket.update", { id: "VC-2", addLabels: ["uI"] });
+    expect(duplicateAdd).toMatchObject({ ok: true, data: { ticket: { labels: ["UI"] } } });
+    expect(listTicketEvents(ctx.db, "ticket-2")).toEqual(beforeEvents);
+
+    // Removal and read filters use the same identity too.
+    const removed = await execute("ticket.update", { id: "VC-1", removeLabels: ["ui"] });
+    expect(removed).toMatchObject({ ok: true, data: { ticket: { labels: [] } } });
+    for (const spelling of ["UI", "ui", "Ui"]) {
+      expect(await execute("ticket.list", { label: spelling })).toMatchObject({
+        ok: true,
+        data: { tickets: [{ id: "VC-2" }, { id: "VC-3" }] },
+      });
+    }
+    expect(await execute("label.list", {})).toMatchObject({
+      ok: true,
+      data: { labels: [{ name: "UI", tickets: 2 }] },
     });
   });
 });

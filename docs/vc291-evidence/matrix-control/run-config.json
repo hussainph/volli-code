@@ -1,0 +1,54 @@
+{
+  "ticket": "VC-291 reflow matrix",
+  "startedAt": "2026-09-10T11:01:46.538Z",
+  "commit": "596a76cfa6c001c4c797301ef378f87c3b833135",
+  "commitShort": "596a76cf",
+  "branch": "volli/VC-291-investigate-terminal-reflow-line-loss-and-access",
+  "treeDirty": true,
+  "appVersion": "0.2.0-canary.4",
+  "electron": "^44.0.0",
+  "macOS": "26.5.1",
+  "macOSBuild": "25F80",
+  "hardware": "Apple M1",
+  "displays": [
+    {
+      "name": "Color LCD",
+      "resolution": "1440 x 900 @ 60.00Hz",
+      "main": true,
+      "connection": "spdisplays_internal",
+      "virtual": false
+    },
+    {
+      "name": "DELL E2422HS",
+      "resolution": "1920 x 1080 @ 60.00Hz",
+      "main": false,
+      "connection": null,
+      "virtual": false
+    }
+  ],
+  "displayCount": 2,
+  "externalMonitorAttached": true,
+  "node": "v24.18.0",
+  "cases": [
+    "control"
+  ],
+  "runsPerCase": 3,
+  "surface": "ticket",
+  "panesPerRun": 0,
+  "expectBackend": "webgpu",
+  "minLiveTerminals": 0,
+  "forcedBackend": "auto (production default)",
+  "fontWorkaround": "queryLocalFonts stubbed with real /System/Library/Fonts/SFNSMono.ttf bytes (VC-347)",
+  "window": {
+    "x": 20,
+    "y": 31,
+    "width": 1280,
+    "height": 811,
+    "scaleFactor": 2,
+    "displayId": 1,
+    "displaySize": {
+      "width": 1440,
+      "height": 900
+    }
+  }
+}

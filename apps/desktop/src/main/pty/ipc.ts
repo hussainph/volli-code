@@ -19,6 +19,7 @@ import type {
 import type { VolliIpcChannel } from "../../ipc/contract";
 import { blobsRoot } from "../blob-store";
 import type { DbHandle } from "../data-ipc";
+import { SpawnLedger } from "../process/spawn-ledger";
 import { quitAlreadyRefused, refuseQuit, updateInstallQuitInFlight } from "../quit-gate";
 import { createDesktopSessionEngine } from "../session-control";
 import type { AgentRuntimeEnvironment } from "./manager";
@@ -182,6 +183,9 @@ export function registerTerminalIpcHandlers(
         agentRuntime,
         blobsRootPath,
         sessionEngine,
+        // Every terminal shell lands in the spawn ledger (VC-341), so a shell
+        // that outlives this launch can still be attributed to its Session.
+        new SpawnLedger(handle.db),
       )
     : new PtyManager(null, handle.error, undefined, undefined, agentRuntime, blobsRootPath);
 

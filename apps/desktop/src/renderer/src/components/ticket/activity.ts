@@ -192,6 +192,25 @@ function worktreeFailureExcerpt(stderr: string): string {
 }
 
 /**
+ * Bytes as a feed line says them (VC-340): one unit, one decimal at most. The
+ * attachment list's `formatFileSize` is a component-layer helper and this file
+ * is deliberately React-free, so the trim line carries its own — it also wants
+ * a coarser reading, because "1.4 GB" is the whole news and "1,438,646,272 B"
+ * is not.
+ */
+function describeBytes(bytes: number): string {
+  let value = Math.max(0, bytes);
+  let unit = "B";
+  for (const larger of ["KB", "MB", "GB", "TB"] as const) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = larger;
+  }
+  const rounded = unit === "B" || value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${unit}`;
+}
+
+/**
  * The one-line sentence for a property-change event (`null` for `commented`,
  * which the feed renders as its comment instead). Verb-phrase style, no
  * subject — the feed row supplies the actor/timestamp chrome.
@@ -250,6 +269,13 @@ export function describeEvent(
       return payload.branch === null
         ? `removed the worktree folder after ${payload.daysInDone} days in Done`
         : `removed the worktree folder after ${payload.daysInDone} days in Done (branch ${payload.branch} kept)`;
+    // VC-340: what it took, and that it is recoverable, in one line. The kept
+    // count rides along because it is the difference between this and a blind
+    // `git clean -fdX` — the configuration in there was not disposable.
+    case "worktree_trimmed":
+      return payload.kept > 0
+        ? `trimmed ${payload.entries} ignored path(s) (${describeBytes(payload.bytes)}) from the worktree, keeping ${payload.kept}`
+        : `trimmed ${payload.entries} ignored path(s) (${describeBytes(payload.bytes)}) from the worktree`;
     case "pr_opened":
       return "opened a draft pull request";
     case "pr_merged":

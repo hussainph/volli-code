@@ -76,6 +76,34 @@ describe("renderCliSuccess", () => {
     expect(exitCodeForError("BODY_MATCH_FAILED")).toBe(1);
   });
 
+  it("renders Label merge previews with archived Tickets and applied receipts", () => {
+    const preview = {
+      applied: false,
+      from: "front-end",
+      into: "frontend",
+      tickets: [
+        { id: "VC-2", title: "Live", archived: false },
+        { id: "VC-5", title: "Old", archived: true },
+      ],
+      next: "Re-run with --apply.",
+    };
+    expect(renderCliSuccess("label.merge", preview, { json: false })).toBe(
+      "front-end → frontend would change 2 ticket(s).\n  VC-2  Live\n  VC-5  archived  Old\nRe-run with --apply.\n",
+    );
+    expect(
+      renderCliSuccess(
+        "label.merge",
+        { ...preview, applied: true, next: undefined },
+        { json: false },
+      ),
+    ).toBe(
+      "Merged front-end into frontend across 2 ticket(s).\n  VC-2  Live\n  VC-5  archived  Old\n",
+    );
+    // A malformed legacy response falls back to stable JSON instead of
+    // claiming a zero-Ticket preview it did not actually carry.
+    expect(renderCliSuccess("label.merge", {}, { json: false })).toBe("{}\n");
+  });
+
   it("renders the shared mutation plan as readable text or unchanged stable JSON", () => {
     const plan = buildMutationPlan(verbEntry("notify")!, {
       kind: "notification",
@@ -259,6 +287,24 @@ describe("renderCliSuccess", () => {
     expect(renderCliSuccess("label.list", { labels: [{ name: "bug", tickets: 2 }] }, options)).toBe(
       "bug  2 tickets\n",
     );
+    expect(
+      renderCliSuccess(
+        "label.merge",
+        {
+          applied: false,
+          from: "front-end",
+          into: "frontend",
+          tickets: [
+            { id: "VC-2", title: "Live", archived: false },
+            { id: "VC-9", title: "Old", archived: true },
+          ],
+          next: "Re-run with --apply.",
+        },
+        options,
+      ),
+    ).toBe(
+      "front-end → frontend would change 2 ticket(s).\n  VC-2  Live\n  VC-9  archived  Old\nRe-run with --apply.\n",
+    );
     // The cost and token cells sit before the title and are never dropped, so
     // the free-text title stays the last cell for anything cutting on columns.
     // An unmetered Session reads `\u2014  0` — unmeasured, never free.
@@ -345,6 +391,52 @@ describe("renderCliSuccess", () => {
     ).toBe(
       "fedcba98  chat  working  last 8s  VC-52  ~$1.50  184000  Validate VC-52\n" +
         "0a1b2c3d  chat  waiting on permission  last 7m  VC-53  \u2014  0  Review VC-53\n",
+    );
+    // A turn that died (VC-324) says so, with the coarse reason in a
+    // parenthetical: nobody is being asked to go and do `crash-recovered`, so
+    // it is not spelled as the errand `waiting on` is.
+    expect(
+      renderCliSuccess(
+        "session.list",
+        {
+          sessions: [
+            {
+              id: "d1def241",
+              kind: "chat",
+              status: "interrupted",
+              waitingOn: null,
+              interruptedReason: "stopped-by-runtime",
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-324",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Audit run",
+            },
+            // No reason to give: the state word stands alone, exactly as an
+            // idle row's does.
+            {
+              id: "930f6871",
+              kind: "chat",
+              status: "interrupted",
+              waitingOn: null,
+              interruptedReason: null,
+              lastActivityAgeMs: 8_000,
+              ticket: "VC-324",
+              costUsd: null,
+              costBasis: "unavailable",
+              costCoverage: "unavailable",
+              tokens: 0,
+              title: "Audit run",
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBe(
+      "d1def241  chat  interrupted (stopped-by-runtime)  last 8s  VC-324  \u2014  0  Audit run\n" +
+        "930f6871  chat  interrupted  last 8s  VC-324  \u2014  0  Audit run\n",
     );
     // The model cell (VC-259): the tier leads where the start named one, so a
     // `fast` Session and one a person pinned to the same model read apart.
@@ -1395,6 +1487,28 @@ describe("renderCliSuccess", () => {
     ).toBe("abcdef12  idle  last 0s  turn 0 depth 0\n");
   });
 
+  // The peek header and the list row are one cell read at two distances
+  // (VC-86's rule), so the reason renders identically in both.
+  it("names why a chat peek's last turn died", () => {
+    expect(
+      renderCliSuccess(
+        "session.peek",
+        {
+          session: "abcdef12",
+          status: "interrupted",
+          waitingOn: null,
+          interruptedReason: "crash-recovered",
+          lastActivityAgeMs: 0,
+          turns: 2,
+          turnDepth: 0,
+          unreadable: 0,
+          transcript: [],
+        },
+        { json: false },
+      ),
+    ).toBe("abcdef12  interrupted (crash-recovered)  last 0s  turn 2 depth 0\n");
+  });
+
   it("covers every usage exit-code spelling", () => {
     expect(exitCodeForError("USAGE")).toBe(2);
     expect(exitCodeForError("UNSUPPORTED_COMMAND")).toBe(2);
@@ -1933,6 +2047,7 @@ describe("renderCliSuccess — doctor", () => {
       {
         id: "path-position",
         title: "Volli's bin is first on PATH",
+        failureTitle: "Volli bin is not first on PATH",
         status: "fail",
         detail: "position 20 of 30",
         remedy: "Run `volli doctor --fix`.",
@@ -1944,10 +2059,63 @@ describe("renderCliSuccess — doctor", () => {
 
   it("renders the report a human reads, worst finding included", () => {
     const text = renderCliSuccess("doctor", data, { json: false });
-    expect(text).toContain("✗ Volli's bin is first on PATH");
+    expect(text).toContain("✗ Volli bin is not first on PATH");
     expect(text).toContain("position 20 of 30");
     expect(text).toContain("→ Run `volli doctor --fix`.");
     expect(text.trimEnd().endsWith("1 failed of 2 checks.")).toBe(true);
+  });
+
+  // The reply comes off a socket owned by whichever app build answers, which
+  // is not necessarily this CLI's own version. A finding from a build that
+  // predates VC-293 carries no failure title or remedy, and must neither print
+  // "✗ undefined", present its positive claim as the finding, nor omit repair guidance.
+  it("marks an older app's passing claim as not having held", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        checks: [
+          {
+            id: "path-position",
+            title: "Volli's bin is first on PATH",
+            status: "fail",
+            detail: "position 20 of 30",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+      { json: false },
+    );
+
+    expect(text).toContain("✗ Check did not pass — Volli's bin is first on PATH");
+    expect(text).toContain(
+      "→ Run `volli doctor` from a new Volli terminal for current repair guidance.",
+    );
+    expect(text).not.toContain("✗ Volli's bin is first on PATH");
+    expect(text).not.toContain("undefined");
+  });
+
+  it("normalizes an older app's finding in structured output too", () => {
+    const text = renderCliSuccess(
+      "doctor",
+      {
+        checks: [
+          {
+            id: "path-position",
+            title: "Volli's bin is first on PATH",
+            status: "fail",
+            detail: "position 20 of 30",
+          },
+        ],
+        summary: "1 failed of 1 checks.",
+      },
+      { json: true },
+    );
+
+    const finding = JSON.parse(text).checks[0];
+    expect(finding.failureTitle).toBe("Check did not pass — Volli's bin is first on PATH");
+    expect(finding.remedy).toBe(
+      "Run `volli doctor` from a new Volli terminal for current repair guidance.",
+    );
   });
 
   it("renders the path repair before this Session's stale checks", () => {
@@ -1971,7 +2139,7 @@ describe("renderCliSuccess — doctor", () => {
     expect(text).toContain("env.interactiveProvenance  already-complete");
     expect(text).toContain("This running Session keeps the environment it started with.");
     expect(text.indexOf("Session PATH repair")).toBeLessThan(
-      text.indexOf("✗ Volli's bin is first on PATH"),
+      text.indexOf("✗ Volli bin is not first on PATH"),
     );
   });
 
@@ -1992,7 +2160,7 @@ describe("renderCliSuccess — doctor", () => {
     );
 
     expect(text).not.toContain("Session PATH repair");
-    expect(text).toContain("✗ Volli's bin is first on PATH");
+    expect(text).toContain("✗ Volli bin is not first on PATH");
   });
 
   it("passes the structured report straight through with --json", () => {
@@ -2003,6 +2171,16 @@ describe("renderCliSuccess — doctor", () => {
     expect(() => renderCliSuccess("doctor", { unexpected: true }, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", null, { json: false })).not.toThrow();
     expect(() => renderCliSuccess("doctor", { checks: [] }, { json: false })).not.toThrow();
+    expect(() =>
+      renderCliSuccess("doctor", { checks: [null], summary: "malformed" }, { json: false }),
+    ).not.toThrow();
+    expect(() =>
+      renderCliSuccess(
+        "doctor",
+        { checks: [{ id: "a", title: "t", status: "maybe", detail: "d" }], summary: "bad" },
+        { json: false },
+      ),
+    ).not.toThrow();
   });
 });
 

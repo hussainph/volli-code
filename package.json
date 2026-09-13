@@ -1,6 +1,6 @@
 {
   "name": "volli-code",
-  "version": "0.2.0-canary.7",
+  "version": "0.2.0-canary.9",
   "private": true,
   "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
   "license": "Apache-2.0",
@@ -16,6 +16,8 @@
     "test": "vp run -r test",
     "test:coverage": "vp run -r test:coverage",
     "smoke:pi": "pnpm run build && node apps/desktop/e2e/pi-ticket-chat-smoke.mjs && node apps/desktop/e2e/pi-project-chat-smoke.mjs && node apps/desktop/e2e/pi-sessions-host-smoke.mjs",
+    "smoke:browser": "pnpm run build && pnpm run ensure:electron && node apps/desktop/e2e/browser-tools-stress.mjs && node apps/desktop/e2e/browser-recovery-smoke.mjs && node apps/desktop/e2e/browser-headless-capture-smoke.mjs && node apps/desktop/e2e/browser-page-navigation-smoke.mjs && node apps/desktop/e2e/browser-tab-smoke.mjs && node apps/desktop/e2e/browser-headless-smoke.mjs",
+    "smoke:board-sort-loop": "node apps/desktop/e2e/board-sort-loop-smoke.mjs",
     "smoke:docs-shots": "pnpm run build && env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/docs-shots.mjs",
     "lint": "vp lint",
     "fmt": "vp fmt",

@@ -58,6 +58,31 @@ const DENY = new Map([
   // create. It stays a local research probe.
   ["sigstop-smoke.mjs", "needs the `claude` CLI + memory_pressure; runner ships neither"],
 
+  // ---- research probes: hour-long, macOS-only, and they take the machine --
+  //
+  // VC-291's terminal reflow/accessibility investigation. These match the
+  // lane's `*-smoke.mjs` glob but are not acceptance probes: they exist to
+  // produce evidence for one ticket, and running them here would be actively
+  // harmful rather than merely slow.
+  //
+  //  - Each drives the ticket's whole matrix — 3 runs × up to 20 action
+  //    boundaries, every one screenshotted and OCRed. A full sweep is the
+  //    better part of an hour per case.
+  //  - Markers are read by OCRing canvas screenshots through the macOS Vision
+  //    framework (`lib/ocr.js`, JXA). There is no such bridge on Linux.
+  //  - The a11y probe TOGGLES VOICEOVER and OWNS THE SYSTEM CLIPBOARD, which
+  //    no shared runner should have done to it, and reads the macOS AX tree
+  //    through System Events (an unattended runner grants no such permission).
+  //  - They deliberately force the WebGL2 fallback and open 17+ live GPU
+  //    contexts, which is a hostile neighbour for concurrent smokes.
+  //
+  // Run them by hand with `apps/desktop/e2e/run-vc291-matrix.sh`.
+  ["reflow-matrix-smoke.mjs", "VC-291 research probe: ~1h, macOS Vision OCR, 17+ GPU contexts"],
+  [
+    "reflow-a11y-smoke.mjs",
+    "VC-291 research probe: toggles VoiceOver, owns the clipboard, macOS AX",
+  ],
+
   // ---- pass locally, do not hold on a GitHub runner ----------------------
   //
   // A category of their own, and the distinction matters to whoever reads this

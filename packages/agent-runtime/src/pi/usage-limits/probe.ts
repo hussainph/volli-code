@@ -1,22 +1,29 @@
 /**
- * The on-demand read: one GET per subscribed provider, no model call.
+ * The on-demand read: one bounded read per subscribed provider, no model call.
  *
- * Three providers have an endpoint that answers "how much of my subscription
- * is left" without spending any of it — Anthropic's `/api/oauth/usage`,
- * Codex's `/backend-api/wham/usage`, and OpenCode Go's `/zen/go/v1/usage`.
- * Each takes the same credential the turns use, so the probe asks Pi for it
- * through `Models.getAuth`, which runs Pi's own refresh under Pi's own lock;
- * nothing here reads `auth.json` or mints a token.
+ * Six providers have an endpoint that answers "how much of my subscription is
+ * left" without spending any of it — Anthropic's `/api/oauth/usage`, Codex's
+ * `/backend-api/wham/usage`, OpenCode Go's `/zen/go/v1/usage`, Kimi Code's
+ * `/coding/v1/usages`, xAI's `/v1/billing?format=credits`, and Copilot's
+ * `/copilot_internal/user`. Most take the same credential the turns use, so
+ * the probe asks Pi for it through `Models.getAuth`, which runs Pi's own
+ * refresh under Pi's own lock; nothing here mints a token.
  *
- * Three things the probe is careful about, in the order they bite:
+ * Four things the probe is careful about, in the order they bite:
  *
- * - **Which credential a subscription wears is the reader's to say.** On
- *   Anthropic and Codex an `api_key` is metered by invoice, and the endpoint
- *   would refuse it anyway: the probe reports `unsupported` without a request,
- *   and the fold treats that as final. OpenCode Go is a subscription driven by
- *   an API key, so its reader accepts one — and reads the console's 403
- *   ("OpenCode Go subscription required": a Zen-only key) as the same final
- *   `unsupported`, because no later read of that key will grow windows.
+ * - **Which credential a subscription wears is the reader's to say**, in both
+ *   senses. WHICH KIND: on Anthropic, Codex and xAI an `api_key` is metered by
+ *   invoice, and the endpoint would refuse it anyway, so the probe reports
+ *   `unsupported` without a request and the fold treats that as final; Go and
+ *   Kimi are subscriptions driven by a key, so their readers accept one — and
+ *   Go reads the console's 403 ("OpenCode Go subscription required": a
+ *   Zen-only key) as the same final `unsupported`, because no later read of
+ *   that key will grow windows. WHICH SECRET: Copilot's endpoint is not on the
+ *   host its turns talk to. An OAuth account therefore uses the stored GitHub
+ *   token that minted the request token, while `COPILOT_GITHUB_TOKEN` already
+ *   is the GitHub token. An Enterprise OAuth credential is not sent anywhere:
+ *   its usage host is not verified, and defaulting it to public github.com
+ *   would disclose it across origins.
  * - **The usage endpoint has its own rate limit**, independent of chat. A 429
  *   is honoured for `Retry-After` when stated and five minutes otherwise, and
  *   the attempt reports `probeFailed` — which the fold reads as "keep the last
@@ -37,15 +44,20 @@
  *
  * `fetch` is injected so no test reaches the network, and every request is
  * bounded by the caller's signal — `inspectPiModelAccess` runs each probe
- * under the same `PROBE_TIMEOUT_MS` the provider probes get.
+ * under the same `PROBE_TIMEOUT_MS` the provider probes get. xAI's one read is
+ * two sequential GETs because its billing route requires the account id from
+ * its authenticated identity route.
  */
 
-import type { Models } from "@earendil-works/pi-ai";
+import type { CredentialStore, ModelAuth, Models } from "@earendil-works/pi-ai";
 import { usageLimitsProbeFailed, usageLimitsUnsupported, type UsageLimits } from "@volli/shared";
 
 import { anthropicUsageFromEndpoint } from "./anthropic";
 import { codexUsageFromEndpoint } from "./codex";
+import { githubCopilotUsageFromEndpoint } from "./github-copilot";
+import { kimiUsageFromEndpoint } from "./kimi";
 import { opencodeGoUsageFromEndpoint } from "./opencode-go";
+import { xaiUsageFromEndpoint } from "./xai";
 
 /** How long a 429 holds the endpoint off when it names no `Retry-After`. */
 export const USAGE_PROBE_COOLDOWN_MS = 5 * 60_000;
@@ -63,10 +75,25 @@ const MAX_BODY_BYTES = 64 * 1024;
 /** The narrow view of Pi's collection a probe takes: the credential's kind, and the credential. */
 export type UsageProbeModels = Pick<Models, "checkAuth" | "getAuth">;
 
+/**
+ * The narrow view of the credential store a probe takes: ONE read, no writes.
+ *
+ * Only a reader whose endpoint refuses the request credential asks for this —
+ * today only Copilot's, whose account endpoint lives on a different host than
+ * its turns and knows a different token. Nothing here may write: a usage read
+ * has no business changing what a person is signed in as.
+ */
+export type UsageProbeCredentials = Pick<CredentialStore, "read">;
+
 /** Injected so tests never reach the network; production passes `globalThis.fetch`. */
 export type UsageProbeFetch = (
   url: string,
-  init: { method: "GET"; headers: Record<string, string>; signal: AbortSignal },
+  init: {
+    method: "GET";
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    redirect: "error";
+  },
 ) => Promise<Response>;
 
 /**
@@ -144,6 +171,13 @@ export type UsageProbeOutcome =
 export interface UsageProbeInput {
   providerId: string;
   models: UsageProbeModels;
+  /**
+   * The stored credentials, for the one reader whose endpoint takes something
+   * other than the request token. Null is "cannot tell" — the same reading
+   * `inspectPiModelAccess` gives a store it does not have — and a reader that
+   * needs one then reports a failed attempt rather than clearing a good read.
+   */
+  credentials: UsageProbeCredentials | null;
   fetch: UsageProbeFetch;
   signal: AbortSignal;
   now: () => number;
@@ -152,8 +186,8 @@ export interface UsageProbeInput {
   force: boolean;
 }
 
-/** One provider's usage endpoint and how to read it. */
-interface UsageReader {
+/** The facts every provider reader owns. */
+interface UsageReaderBase {
   url: string;
   /**
    * Whether an `api_key` credential is a subscription here. False for a
@@ -162,17 +196,62 @@ interface UsageReader {
    */
   acceptsApiKey: boolean;
   /**
+   * WHICH of the account's secrets this endpoint takes.
+   *
+   * `request` — the default and the ordinary case — is the credential the
+   * turns use, resolved through `Models.getAuth` so Pi's own refresh and lock
+   * govern it. `copilot-github` selects the GitHub token: the resolved API key,
+   * or an OAuth credential's stored refresh token after ruling out Enterprise.
+   */
+  credential?: "request" | "copilot-github";
+  /**
+   * The `authorization` scheme, when the endpoint wants something other than
+   * `Bearer`. GitHub's internal endpoints take `token`.
+   */
+  scheme?: string;
+  /**
    * A status the endpoint answers when the credential is valid but carries no
    * subscription — final for that credential, so it reads as `unsupported`
    * rather than a failed attempt. Absent means every refusal is an attempt.
    */
   noSubscriptionStatus?: number;
-  /** Headers beyond `authorization`, which every reader sends. */
-  headers(accessToken: string): Record<string, string>;
   parse(body: unknown, checkedAt: number): UsageLimits;
 }
 
+/** One ordinary GET, or a provider-owned multi-step read. */
+type UsageReader = UsageReaderBase &
+  (
+    | {
+        /** Headers beyond `authorization`, which every ordinary reader sends. */
+        headers(accessToken: string): Record<string, string>;
+        request?: never;
+      }
+    | {
+        headers?: never;
+        request(accessToken: string, input: UsageProbeInput): Promise<Response>;
+      }
+  );
+
+const XAI_USER_URL = "https://cli-chat-proxy.grok.com/v1/user";
+const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+/** The Grok Build contract revision this request shape was verified against. */
+const XAI_GROK_BUILD_PROTOCOL_VERSION = "0.1.220-alpha.4";
+
 const READERS: Readonly<Record<string, UsageReader>> = {
+  "github-copilot": {
+    url: "https://api.github.com/copilot_internal/user",
+    // A `COPILOT_GITHUB_TOKEN` arrives as an API-key credential but is already
+    // the GitHub token. OAuth stores that token as `refresh` beside the proxy
+    // token turns use.
+    acceptsApiKey: true,
+    credential: "copilot-github",
+    scheme: "token",
+    // The API version GitHub's own Copilot clients pin on this surface. No
+    // editor identity rides with it: pi-ai states one on the requests it makes
+    // as the Copilot editor client, and this is not one of those requests.
+    headers: () => ({ "x-github-api-version": "2025-04-01" }),
+    parse: githubCopilotUsageFromEndpoint,
+  },
   anthropic: {
     url: "https://api.anthropic.com/api/oauth/usage",
     acceptsApiKey: false,
@@ -191,6 +270,45 @@ const READERS: Readonly<Record<string, UsageReader>> = {
       return accountId === undefined ? {} : { "chatgpt-account-id": accountId };
     },
     parse: codexUsageFromEndpoint,
+  },
+  "kimi-coding": {
+    url: "https://api.kimi.com/coding/v1/usages",
+    // A Kimi membership is driven by an OAuth login or by a key minted in the
+    // console FROM that membership, and the endpoint answers either: unlike
+    // Anthropic's, a key here is the subscription rather than an invoice.
+    acceptsApiKey: true,
+    headers: () => ({}),
+    parse: kimiUsageFromEndpoint,
+  },
+  xai: {
+    // The shared-period meter, not `/v1/billing`'s dollar allowance: the query
+    // is the difference between a window and a credit balance.
+    url: XAI_BILLING_URL,
+    // A SuperGrok or X Premium subscription signs in; an `XAI_API_KEY` is the
+    // pay-as-you-go platform account, which is invoiced rather than windowed.
+    acceptsApiKey: false,
+    // Grok Build requires the authenticated account id on billing reads. Read
+    // it from the bounded `/user` response, use it once, and retain neither the
+    // identity body nor its id. Both requests carry the same reviewed auth,
+    // version and headless-client contract.
+    request: async (accessToken, input) => {
+      const identity = await input.fetch(XAI_USER_URL, {
+        method: "GET",
+        headers: xaiHeaders(accessToken),
+        signal: input.signal,
+        redirect: "error",
+      });
+      if (!identity.ok) return identity;
+      const userId = xaiUserId(await readJson(identity));
+      if (userId === undefined) throw new Error("xAI user response has no safe id");
+      return input.fetch(XAI_BILLING_URL, {
+        method: "GET",
+        headers: xaiHeaders(accessToken, userId),
+        signal: input.signal,
+        redirect: "error",
+      });
+    },
+    parse: xaiUsageFromEndpoint,
   },
   "opencode-go": {
     url: "https://opencode.ai/zen/go/v1/usage",
@@ -235,20 +353,11 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
     // inspections is the traffic worth stopping, and a broken endpoint is the
     // case where stopping it matters most.
     input.schedule.markAsked(input.providerId, input.now() + USAGE_PROBE_FRESH_MS);
-    const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
-    const accessToken = resolved?.auth.apiKey;
+    const accessToken = await readerCredential(reader, input, check.type);
     if (accessToken === undefined) {
       return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
     }
-    const response = await input.fetch(reader.url, {
-      method: "GET",
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        accept: "application/json",
-        ...reader.headers(accessToken),
-      },
-      signal: input.signal,
-    });
+    const response = await requestUsage(reader, accessToken, input);
     if (response.status === 429) {
       const retryAfterMs = retryAfterMillis(response.headers.get("retry-after"), input.now());
       input.schedule.holdOff(
@@ -266,6 +375,68 @@ async function readUsageLimits(input: UsageProbeInput): Promise<UsageProbeOutcom
   } catch {
     return { kind: "verdict", limits: usageLimitsProbeFailed(checkedAt) };
   }
+}
+
+/** Make the ordinary one GET, or let a multi-step reader own its wire contract. */
+function requestUsage(
+  reader: UsageReader,
+  accessToken: string,
+  input: UsageProbeInput,
+): Promise<Response> {
+  if (reader.request !== undefined) return reader.request(accessToken, input);
+  return input.fetch(reader.url, {
+    method: "GET",
+    headers: {
+      authorization: `${reader.scheme ?? "Bearer"} ${accessToken}`,
+      accept: "application/json",
+      ...reader.headers(accessToken),
+    },
+    signal: input.signal,
+    redirect: "error",
+  });
+}
+
+/** The secret this reader's endpoint takes, or nothing when it cannot be had. */
+async function readerCredential(
+  reader: UsageReader,
+  input: UsageProbeInput,
+  authType: "api_key" | "oauth",
+): Promise<string | undefined> {
+  if (reader.credential !== "copilot-github" || authType === "api_key") {
+    const resolved = await input.models.getAuth(input.providerId, { signal: input.signal });
+    return resolved === undefined ? undefined : bearerOf(resolved.auth);
+  }
+  const stored = await input.credentials?.read(input.providerId, { signal: input.signal });
+  if (stored?.type !== "oauth" || stored.refresh.length === 0) return undefined;
+  const enterpriseUrl = stored.enterpriseUrl;
+  if (
+    enterpriseUrl !== undefined &&
+    (typeof enterpriseUrl !== "string" || enterpriseUrl.trim().length > 0)
+  ) {
+    return undefined;
+  }
+  return stored.refresh;
+}
+
+/**
+ * The token a resolved credential carries, wherever the provider puts it.
+ *
+ * `apiKey` is where most providers leave it, and pi-ai then writes the
+ * `authorization` header itself. A provider whose gateway wants some other
+ * spelling supplies the whole header instead — Kimi's `toAuth` returns
+ * `headers.Authorization` and no `apiKey` at all — and a probe reading only
+ * `apiKey` would report a subscribed account as unreadable forever.
+ *
+ * Only a bearer is taken. Any other scheme is a credential this reader does
+ * not know how to present, and guessing at one would send a secret in a shape
+ * the endpoint never asked for.
+ */
+function bearerOf(auth: ModelAuth): string | undefined {
+  if (auth.apiKey !== undefined && auth.apiKey.length > 0) return auth.apiKey;
+  const header = auth.headers?.Authorization ?? auth.headers?.authorization;
+  if (typeof header !== "string") return undefined;
+  const bearer = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return bearer?.[1];
 }
 
 /**
@@ -290,6 +461,25 @@ export function retryAfterMillis(header: string | null, now: number): number | u
   }
   if (!(ms > 0)) return undefined;
   return Math.min(ms, MAX_RETRY_AFTER_MS);
+}
+
+/** The reviewed headers shared by xAI's identity and billing reads. */
+function xaiHeaders(accessToken: string, userId?: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${accessToken}`,
+    accept: "application/json",
+    "x-xai-token-auth": "xai-grok-cli",
+    "x-grok-client-version": XAI_GROK_BUILD_PROTOCOL_VERSION,
+    "x-grok-client-mode": "headless",
+    ...(userId === undefined ? {} : { "x-userid": userId }),
+  };
+}
+
+/** A bounded visible-ASCII id that is safe to put back into an HTTP header. */
+function xaiUserId(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+  const userId = (body as Record<string, unknown>).userId;
+  return typeof userId === "string" && /^[\x21-\x7e]{1,256}$/.test(userId) ? userId : undefined;
 }
 
 /**
