@@ -33,6 +33,7 @@ export function CollapsedColumnRail({
   animateEnter,
   offeredFor,
   dimmedFor,
+  aimedFor,
 }: {
   statuses: TicketStatus[];
   dragActive: boolean;
@@ -43,6 +44,8 @@ export function CollapsedColumnRail({
   offeredFor?: (status: TicketStatus) => ColumnOfferedPanelProps | undefined;
   /** Quieted because another column is currently grown into landing targets. */
   dimmedFor?: (status: TicketStatus) => boolean;
+  /** Whether the frozen drag snapshot currently resolves into this empty column. */
+  aimedFor?: (status: TicketStatus) => boolean;
 }) {
   if (statuses.length === 0) return null;
 
@@ -62,6 +65,7 @@ export function CollapsedColumnRail({
           animateEnter={animateEnter}
           offered={offeredFor?.(status)}
           dimmed={dimmedFor?.(status) ?? false}
+          aimed={aimedFor?.(status) ?? false}
         />
       ))}
     </div>
@@ -75,6 +79,7 @@ function CollapsedColumnTarget({
   animateEnter,
   offered,
   dimmed,
+  aimed,
 }: {
   status: TicketStatus;
   dragActive: boolean;
@@ -82,6 +87,7 @@ function CollapsedColumnTarget({
   animateEnter: boolean;
   offered: ColumnOfferedPanelProps | undefined;
   dimmed: boolean;
+  aimed: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: columnDroppableId(status) });
 
@@ -92,6 +98,7 @@ function CollapsedColumnTarget({
       // wrapper rather than on the button so the panel floating over the pill
       // still reads as this column.
       data-board-column={status}
+      data-drop-aimed={aimed || undefined}
       className={cn(
         "relative transition-opacity duration-200 ease-out motion-reduce:transition-none",
         // Quieted while another column holds the picker, like the standing
@@ -118,7 +125,7 @@ function CollapsedColumnTarget({
           // While any card is mid-drag every pill brightens into an affordance…
           dragActive && "border-border text-foreground/70",
           // …and the hovered one lights up as the drop target.
-          isOver && "border-transparent bg-accent ring-1 ring-primary/50",
+          (isOver || aimed) && "border-transparent bg-accent ring-1 ring-primary/50",
         )}
       >
         <span>{TICKET_STATUS_LABELS[status]}</span>
