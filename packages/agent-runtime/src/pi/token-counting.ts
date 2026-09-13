@@ -21,15 +21,24 @@ const SYSTEM_PROMPT_FRAMING = 8;
 const LITERAL_SPECIAL_TOKENS = { disallowedSpecial: new Set<string>() };
 
 type TokenCounter = (text: string) => number;
+type TokenizerFamily = "o200k" | "cl100k" | "conservative";
 
 const O200K_ID_PATTERN = /^(?:gpt-4o|gpt-4\.[15]|gpt-5|o[134](?:-|$)|chatgpt-4o|codex-mini)/;
 const CL100K_ID_PATTERN = /^(?:gpt-4(?:-|$)|gpt-3\.5)/;
 
-function exactTokenizerFor(model: Model<Api>): TokenCounter | undefined {
-  if (!model.api.startsWith("openai") && model.api !== "azure-openai-responses") return undefined;
+function tokenizerFamily(model: Model<Api>): TokenizerFamily {
+  if (!model.api.startsWith("openai") && model.api !== "azure-openai-responses")
+    return "conservative";
   const id = model.id.toLowerCase();
-  if (O200K_ID_PATTERN.test(id)) return (text) => countO200k(text, LITERAL_SPECIAL_TOKENS);
-  if (CL100K_ID_PATTERN.test(id)) return (text) => countCl100k(text, LITERAL_SPECIAL_TOKENS);
+  if (O200K_ID_PATTERN.test(id)) return "o200k";
+  if (CL100K_ID_PATTERN.test(id)) return "cl100k";
+  return "conservative";
+}
+
+function exactTokenizerFor(model: Model<Api>): TokenCounter | undefined {
+  const family = tokenizerFamily(model);
+  if (family === "o200k") return (text) => countO200k(text, LITERAL_SPECIAL_TOKENS);
+  if (family === "cl100k") return (text) => countCl100k(text, LITERAL_SPECIAL_TOKENS);
   return undefined;
 }
 
@@ -211,6 +220,24 @@ export function projectedContextTokens(
   systemPrompt?: string,
   tools?: readonly Tool[],
 ): number {
+  return projectContextTokens(messages, model, systemPrompt, tools, (message) =>
+    estimateMessageTokens(message, model),
+  );
+}
+
+function projectContextTokens(
+  messages: readonly AgentMessage[],
+  model: Model<Api>,
+  systemPrompt: string | undefined,
+  tools: readonly Tool[] | undefined,
+  estimateMessage: (message: AgentMessage) => number,
+  estimatePrefix: () => number = () => {
+    const count = counterFor(model);
+    return (
+      (systemPrompt ? count(systemPrompt) + SYSTEM_PROMPT_FRAMING : 0) + toolsTokens(tools, count)
+    );
+  },
+): number {
   let measured: number | undefined;
   let measuredIndex = -1;
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -228,11 +255,100 @@ export function projectedContextTokens(
     }
   }
   if (measured === undefined) {
-    return estimateContextTokens(messages, model, systemPrompt, tools);
+    let estimated = estimatePrefix();
+    for (const message of messages) estimated += estimateMessage(message);
+    return estimated;
   }
   let suffix = 0;
   for (let index = measuredIndex + 1; index < messages.length; index++) {
-    suffix += estimateMessageTokens(messages[index]!, model);
+    suffix += estimateMessage(messages[index]!);
   }
   return measured + suffix;
+}
+
+export interface ContextTokenProjector {
+  /**
+   * Project one settled request context. Values already seen by this projector
+   * are reused by identity; callers must not mutate settled messages or tool
+   * definitions in place.
+   */
+  projectedContextTokens(
+    messages: readonly AgentMessage[],
+    model: Model<Api>,
+    systemPrompt?: string,
+    tools?: readonly Tool[],
+  ): number;
+}
+
+interface FamilyEstimateCache {
+  readonly count: TokenCounter;
+  readonly messages: WeakMap<object, number>;
+  readonly prompts: Map<string, number>;
+  readonly tools: WeakMap<readonly Tool[], number>;
+}
+
+/**
+ * Per-attachment token projector for the repeated preflight checks made before
+ * a turn and again before its provider request. Pi messages are append-only
+ * once settled, and system/tool request metadata is frozen for an attachment,
+ * so rescanning those identical values cannot improve the estimate.
+ */
+export function createContextTokenProjector(): ContextTokenProjector {
+  const families = new Map<TokenizerFamily, FamilyEstimateCache>();
+  const cacheFor = (model: Model<Api>): FamilyEstimateCache => {
+    const family = tokenizerFamily(model);
+    const existing = families.get(family);
+    if (existing !== undefined) return existing;
+    const created: FamilyEstimateCache = {
+      count: counterFor(model),
+      messages: new WeakMap<object, number>(),
+      prompts: new Map<string, number>(),
+      tools: new WeakMap<readonly Tool[], number>(),
+    };
+    families.set(family, created);
+    return created;
+  };
+
+  return {
+    projectedContextTokens(messages, model, systemPrompt, tools) {
+      const cache = cacheFor(model);
+      const estimateMessage = (message: AgentMessage): number => {
+        const key = message as object;
+        const existing = cache.messages.get(key);
+        if (existing !== undefined) return existing;
+        const estimated = estimateMessageTokens(message, model);
+        cache.messages.set(key, estimated);
+        return estimated;
+      };
+      const estimatePrefix = (): number => {
+        let promptTokens = 0;
+        if (systemPrompt) {
+          const existing = cache.prompts.get(systemPrompt);
+          if (existing !== undefined) promptTokens = existing;
+          else {
+            promptTokens = cache.count(systemPrompt) + SYSTEM_PROMPT_FRAMING;
+            cache.prompts.set(systemPrompt, promptTokens);
+          }
+        }
+        let toolTokens = 0;
+        if (tools && tools.length > 0) {
+          const existing = cache.tools.get(tools);
+          if (existing !== undefined) toolTokens = existing;
+          else {
+            toolTokens = toolsTokens(tools, cache.count);
+            cache.tools.set(tools, toolTokens);
+          }
+        }
+        return promptTokens + toolTokens;
+      };
+      return projectContextTokens(
+        messages,
+        model,
+        systemPrompt,
+        tools,
+        estimateMessage,
+        estimatePrefix,
+      );
+    },
+  };
 }

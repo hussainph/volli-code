@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  createContextTokenProjector,
   estimateContextTokens,
   estimateMessageTokens,
   projectedContextTokens,
@@ -288,5 +289,33 @@ describe("projectedContextTokens", () => {
       }),
     ];
     expect(projectedContextTokens(messages, model())).toBeGreaterThanOrEqual(5010);
+  });
+
+  it("reuses settled prefixes without changing projections as messages are appended", () => {
+    const projector = createContextTokenProjector();
+    const anthropic = model();
+    const openai = model({ id: "gpt-4o", api: "openai-completions", provider: "openai" });
+    const messages: AgentMessage[] = [user("first ".repeat(100)), user("second ".repeat(100))];
+    const systemPrompt = "system instructions ".repeat(100);
+    const tools = [tool];
+
+    for (const currentModel of [anthropic, openai]) {
+      expect(projector.projectedContextTokens(messages, currentModel, systemPrompt, tools)).toBe(
+        projectedContextTokens(messages, currentModel, systemPrompt, tools),
+      );
+    }
+
+    messages.push(user("appended tail ".repeat(100)));
+    expect(projector.projectedContextTokens(messages, anthropic, systemPrompt, tools)).toBe(
+      projectedContextTokens(messages, anthropic, systemPrompt, tools),
+    );
+  });
+
+  it("matches the direct projection when no system prompt or tools are provided", () => {
+    const messages = [user("plain context")];
+    const currentModel = model();
+    expect(createContextTokenProjector().projectedContextTokens(messages, currentModel)).toBe(
+      projectedContextTokens(messages, currentModel),
+    );
   });
 });

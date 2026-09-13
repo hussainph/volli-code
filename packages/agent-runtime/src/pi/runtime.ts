@@ -84,7 +84,7 @@ import {
   type CompactionOutcome,
   type ConversationReader,
 } from "./compaction";
-import { projectedContextTokens } from "./token-counting";
+import { createContextTokenProjector } from "./token-counting";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -1184,6 +1184,10 @@ async function attachSession(
   if (model === undefined) {
     return rejectUnavailableModel(spec, observe);
   }
+  // Compaction preflight and provider output-ceiling checks see the same
+  // settled prefix in succession. Keep their pure estimates attachment-local
+  // so neither re-tokenizes immutable messages and tool metadata.
+  const contextTokenProjector = createContextTokenProjector();
 
   const sidecarEnv = new NodeExecutionEnv({ cwd: host.sessionDataDir });
   let sidecarPath: string | undefined;
@@ -1871,7 +1875,7 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = projectedContextTokens(
+      const occupied = contextTokenProjector.projectedContextTokens(
         context.messages,
         requestModel,
         context.systemPrompt,
@@ -2330,7 +2334,7 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
-        const occupied = projectedContextTokens(
+        const occupied = contextTokenProjector.projectedContextTokens(
           [...agent.state.messages, ...additional],
           agent.state.model,
           agent.state.systemPrompt,
