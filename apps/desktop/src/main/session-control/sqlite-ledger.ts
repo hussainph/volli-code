@@ -32,6 +32,7 @@ import {
   UnknownSessionEventKindError,
 } from "@volli/shared";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
+import { prepared } from "../db/prepared";
 
 type SqlRow = Record<string, unknown>;
 
@@ -91,11 +92,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
 
   getSession(sessionId: string): Session | null {
     this.assertOpen();
-    const row = this.db
-      .prepare(
-        "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
-      )
-      .get(sessionId) as unknown;
+    const row = prepared(
+      this.db,
+
+      "SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at FROM sessions WHERE id = ?",
+    ).get(sessionId) as unknown;
     return row === undefined ? null : decodeSession(row, "sessions row");
   }
 
@@ -107,14 +108,14 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         : query.scope === "project"
           ? " AND ticket_id IS NULL"
           : "";
-    const rows = this.db
-      .prepare(
-        `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at
+    const rows = prepared(
+      this.db,
+
+      `SELECT id, project_id, ticket_id, role, parent_session_id, title, created_at
            FROM sessions
           WHERE project_id = @projectId${scope}
           ORDER BY created_at DESC, id COLLATE BINARY DESC`,
-      )
-      .all(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown[];
+    ).all(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown[];
     return rows.map((row) => decodeSession(row, "sessions row"));
   }
 
@@ -126,13 +127,13 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
         : query.scope === "project"
           ? " AND ticket_id IS NULL"
           : "";
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS count
+    const row = prepared(
+      this.db,
+
+      `SELECT COUNT(*) AS count
            FROM sessions
           WHERE project_id = @projectId${scope}`,
-      )
-      .get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
+    ).get(query.scope === "ticket" ? query : { projectId: query.projectId }) as unknown;
     return readInteger(rowValue(row, "count", "session count"), "session count");
   }
 
@@ -143,14 +144,14 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     // else. `sessions_project(project_id, created_at)` does not serve an
     // unscoped range, so this is a scan of one integer column over a table with
     // one row per Session ever started.
-    const rows = this.db
-      .prepare(
-        `SELECT created_at
+    const rows = prepared(
+      this.db,
+
+      `SELECT created_at
            FROM sessions
           WHERE created_at >= @sinceMs
           ORDER BY created_at ASC`,
-      )
-      .all(query) as unknown[];
+    ).all(query) as unknown[];
     return rows.map((row) =>
       readInteger(rowValue(row, "created_at", "session start"), "session start"),
     );
@@ -158,9 +159,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
 
   listLatestTicketSignals(query: ListLatestTicketSignalsQuery): readonly LatestSessionSignal[] {
     this.assertOpen();
-    const rows = this.db
-      .prepare(
-        `WITH latest_session_signals AS (
+    const rows = prepared(
+      this.db,
+
+      `WITH latest_session_signals AS (
            SELECT s.ticket_id AS ticket_id,
                   s.id AS session_id,
                   json_extract(e.payload, '$.signal') AS signal,
@@ -190,8 +192,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
            FROM latest_ticket_signals
           WHERE ticket_rank = 1
           ORDER BY ticket_id COLLATE BINARY ASC`,
-      )
-      .all(query) as unknown[];
+    ).all(query) as unknown[];
     return rows.map((row) => {
       const value = asRecord(row, "latest ticket signal row");
       return {
@@ -219,22 +220,22 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     const window =
       (query.since === undefined ? "" : " AND occurred_at >= @since") +
       (query.until === undefined ? "" : " AND occurred_at < @until");
-    const rows = this.db
-      .prepare(
-        `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
+    const rows = prepared(
+      this.db,
+
+      `SELECT session_id, project_id, ticket_id, occurred_at, cause, provider_id, model_id,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                 cost_usd, cost_basis
            FROM session_usage
           WHERE 1 = 1${scope}${window}
           ORDER BY occurred_at DESC, event_id COLLATE BINARY DESC`,
-      )
-      .all({
-        ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
-        ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
-        ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
-        ...(query.since === undefined ? {} : { since: query.since }),
-        ...(query.until === undefined ? {} : { until: query.until }),
-      }) as unknown[];
+    ).all({
+      ...(query.scope.kind === "project" ? { projectId: query.scope.projectId } : {}),
+      ...(query.scope.kind === "ticket" ? { ticketId: query.scope.ticketId } : {}),
+      ...(query.scope.kind === "session" ? { sessionId: query.scope.sessionId } : {}),
+      ...(query.since === undefined ? {} : { since: query.since }),
+      ...(query.until === undefined ? {} : { until: query.until }),
+    }) as unknown[];
     return rows.map((row) => decodeUsageEntry(row, "session_usage row"));
   }
 
@@ -249,9 +250,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
    */
   usageMeteredFrom(): number {
     this.assertOpen();
-    const row = this.db
-      .prepare("SELECT metered_from FROM session_usage_coverage WHERE id = 1")
-      .get() as unknown;
+    const row = prepared(
+      this.db,
+      "SELECT metered_from FROM session_usage_coverage WHERE id = 1",
+    ).get() as unknown;
     /* v8 ignore next -- migration 027 inserts the row in the same statement that creates the table. */
     if (row === undefined) return 0;
     return readInteger(asRecord(row, "session_usage_coverage row").metered_from, "metered_from");
@@ -268,9 +270,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     occurredAt: number;
     usage: SessionUsage;
   }): void {
-    this.db
-      .prepare(
-        `INSERT INTO session_usage
+    prepared(
+      this.db,
+
+      `INSERT INTO session_usage
            (event_id, session_id, project_id, ticket_id, occurred_at, cause,
             provider_id, model_id, input_tokens, output_tokens,
             cache_read_tokens, cache_write_tokens, cost_usd, cost_basis)
@@ -278,23 +281,22 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
            (@eventId, @sessionId, @projectId, @ticketId, @occurredAt, @cause,
             @providerId, @modelId, @inputTokens, @outputTokens,
             @cacheReadTokens, @cacheWriteTokens, @costUsd, @costBasis)`,
-      )
-      .run({
-        eventId: entry.eventId,
-        sessionId: entry.sessionId,
-        projectId: entry.attribution.projectId,
-        ticketId: entry.attribution.ticketId,
-        occurredAt: entry.occurredAt,
-        cause: entry.usage.cause,
-        providerId: entry.usage.providerId,
-        modelId: entry.usage.modelId,
-        inputTokens: entry.usage.inputTokens,
-        outputTokens: entry.usage.outputTokens,
-        cacheReadTokens: entry.usage.cacheReadTokens,
-        cacheWriteTokens: entry.usage.cacheWriteTokens,
-        costUsd: entry.usage.costUsd,
-        costBasis: entry.usage.costBasis,
-      });
+    ).run({
+      eventId: entry.eventId,
+      sessionId: entry.sessionId,
+      projectId: entry.attribution.projectId,
+      ticketId: entry.attribution.ticketId,
+      occurredAt: entry.occurredAt,
+      cause: entry.usage.cause,
+      providerId: entry.usage.providerId,
+      modelId: entry.usage.modelId,
+      inputTokens: entry.usage.inputTokens,
+      outputTokens: entry.usage.outputTokens,
+      cacheReadTokens: entry.usage.cacheReadTokens,
+      cacheWriteTokens: entry.usage.cacheWriteTokens,
+      costUsd: entry.usage.costUsd,
+      costBasis: entry.usage.costBasis,
+    });
   }
 
   /**
@@ -309,14 +311,14 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   rebuildUsageProjection(): void {
     this.assertOpen();
     this.db.exec("DELETE FROM session_usage");
-    const events = this.db
-      .prepare(
-        `SELECT e.id, e.session_id, e.occurred_at, e.payload
+    const events = prepared(
+      this.db,
+
+      `SELECT e.id, e.session_id, e.occurred_at, e.payload
            FROM session_events e
           WHERE json_extract(e.payload, '$.kind') = 'usage.recorded'
           ORDER BY e.session_id COLLATE BINARY ASC, e.sequence ASC`,
-      )
-      .all() as unknown[];
+    ).all() as unknown[];
     for (const row of events) {
       const value = asRecord(row, "usage rebuild row");
       const payload = decodeSessionEventPayload(
@@ -339,25 +341,25 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     assertSession(session, "Session");
     this.assertGloballyUnusedId(session.id);
-    this.db
-      .prepare(
-        `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
+    prepared(
+      this.db,
+
+      `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
          VALUES (@id, @projectId, @ticketId, @role, @parentSessionId, @title, @createdAt)`,
-      )
-      .run(session);
+    ).run(session);
   }
 
   getEvent(eventId: string): SessionEvent | null {
     this.assertOpen();
-    const row = this.db
-      .prepare(
-        `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+    const row = prepared(
+      this.db,
+
+      `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
                 p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
            FROM session_events e
            LEFT JOIN session_provenances p ON p.id = e.provenance_id
           WHERE e.id = ?`,
-      )
-      .get(eventId) as unknown;
+    ).get(eventId) as unknown;
     if (row === undefined) return null;
     try {
       return decodeEvent(row, "session_events row");
@@ -372,11 +374,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     assertSessionEvent(event, "Session event");
     this.#touchedSessionIds.add(event.sessionId);
     this.assertGloballyUnusedId(event.id);
-    const prior = this.db
-      .prepare(
-        "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM session_events WHERE session_id = ?",
-      )
-      .get(event.sessionId) as unknown;
+    const prior = prepared(
+      this.db,
+
+      "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM session_events WHERE session_id = ?",
+    ).get(event.sessionId) as unknown;
     const previousSequence = readInteger(
       rowValue(prior, "sequence", "event sequence"),
       "event sequence",
@@ -387,24 +389,24 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.insertAttachmentEvidence(event);
     this.assertEventForeignKeys(event);
     const provenanceId = internSessionEventProvenance(this.db, encodeSessionJson(event.provenance));
-    this.db
-      .prepare(
-        `INSERT INTO session_events
+    prepared(
+      this.db,
+
+      `INSERT INTO session_events
            (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
          VALUES
            (@id, @sessionId, @sequence, @occurredAt, @recordedAt, @provenanceId, @attachmentId, @commandId, @payload)`,
-      )
-      .run({
-        id: event.id,
-        sessionId: event.sessionId,
-        sequence: event.sequence,
-        occurredAt: event.occurredAt,
-        recordedAt: event.recordedAt,
-        provenanceId,
-        attachmentId: event.attachmentId ?? null,
-        commandId: event.commandId ?? null,
-        payload: encodeSessionJson(event.payload),
-      });
+    ).run({
+      id: event.id,
+      sessionId: event.sessionId,
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      recordedAt: event.recordedAt,
+      provenanceId,
+      attachmentId: event.attachmentId ?? null,
+      commandId: event.commandId ?? null,
+      payload: encodeSessionJson(event.payload),
+    });
     // Projected in the same transaction that appends the fact. A projection
     // written afterwards would have a window in which the ledger and its read
     // model disagree, and the disagreement would survive a crash.
@@ -459,7 +461,8 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 0)) {
       throw new Error("Event pagination limit must be a non-negative integer");
     }
-    const statement = this.db.prepare(
+    const statement = prepared(
+      this.db,
       `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
               p.provenance AS provenance, e.attachment_id, e.command_id, e.payload
          FROM session_events e
@@ -517,11 +520,11 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
 
   getCommand(commandId: string): SessionCommand | null {
     this.assertOpen();
-    const row = this.db
-      .prepare(
-        "SELECT id, session_id, created_at, intent, route FROM session_commands WHERE id = ?",
-      )
-      .get(commandId) as unknown;
+    const row = prepared(
+      this.db,
+
+      "SELECT id, session_id, created_at, intent, route FROM session_commands WHERE id = ?",
+    ).get(commandId) as unknown;
     return row === undefined ? null : decodeCommand(row, "session_commands row");
   }
 
@@ -529,41 +532,41 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     this.assertOpen();
     assertCommand(command, "Session command");
     this.assertGloballyUnusedId(command.id);
-    this.db
-      .prepare(
-        `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+    prepared(
+      this.db,
+
+      `INSERT INTO session_commands (id, session_id, created_at, intent, route)
          VALUES (@id, @sessionId, @createdAt, @intent, @route)`,
-      )
-      .run({
-        id: command.id,
-        sessionId: command.sessionId,
-        createdAt: command.createdAt,
-        intent: encodeSessionJson(command.intent),
-        route: command.route === null ? null : encodeSessionJson(command.route),
-      });
+    ).run({
+      id: command.id,
+      sessionId: command.sessionId,
+      createdAt: command.createdAt,
+      intent: encodeSessionJson(command.intent),
+      route: command.route === null ? null : encodeSessionJson(command.route),
+    });
   }
 
   getReceipt(receiptId: string): CommandReceipt | null {
     this.assertOpen();
-    const row = this.db
-      .prepare(
-        `SELECT id, session_id, command_id, sequence, recorded_at, receipt
+    const row = prepared(
+      this.db,
+
+      `SELECT id, session_id, command_id, sequence, recorded_at, receipt
            FROM session_command_receipts WHERE id = ?`,
-      )
-      .get(receiptId) as unknown;
+    ).get(receiptId) as unknown;
     return row === undefined ? null : decodeReceiptRow(row, "session_command_receipts row");
   }
 
   listReceipts(commandId: string): readonly CommandReceipt[] {
     this.assertOpen();
-    const rows = this.db
-      .prepare(
-        `SELECT id, session_id, command_id, sequence, recorded_at, receipt
+    const rows = prepared(
+      this.db,
+
+      `SELECT id, session_id, command_id, sequence, recorded_at, receipt
            FROM session_command_receipts
           WHERE command_id = ?
           ORDER BY sequence ASC, id COLLATE BINARY ASC`,
-      )
-      .all(commandId) as unknown[];
+    ).all(commandId) as unknown[];
     return rows.map((row) => decodeReceiptRow(row, "session_command_receipts row"));
   }
 
@@ -574,20 +577,20 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     const command = this.getCommand(receipt.commandId);
     if (!command) throw new Error(`Command ${receipt.commandId} was not found`);
     this.#touchedSessionIds.add(command.sessionId);
-    this.db
-      .prepare(
-        `INSERT INTO session_command_receipts
+    prepared(
+      this.db,
+
+      `INSERT INTO session_command_receipts
            (id, session_id, command_id, sequence, recorded_at, receipt)
          VALUES (@id, @sessionId, @commandId, @sequence, @recordedAt, @receipt)`,
-      )
-      .run({
-        id: receipt.id,
-        sessionId: command.sessionId,
-        commandId: receipt.commandId,
-        sequence: receipt.sequence,
-        recordedAt: receipt.recordedAt,
-        receipt: encodeSessionJson(receipt),
-      });
+    ).run({
+      id: receipt.id,
+      sessionId: command.sessionId,
+      commandId: receipt.commandId,
+      sequence: receipt.sequence,
+      recordedAt: receipt.recordedAt,
+      receipt: encodeSessionJson(receipt),
+    });
   }
 
   /** Called at the transaction boundary, after every append has happened. */
@@ -643,33 +646,32 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     if (attachment.sessionId !== event.sessionId) {
       throw new Error(`Attachment ${attachment.id} belongs to another Session`);
     }
-    const existing = this.db
-      .prepare("SELECT id FROM session_attachments WHERE id = ?")
-      .get(attachment.id) as unknown;
+    const existing = prepared(this.db, "SELECT id FROM session_attachments WHERE id = ?").get(
+      attachment.id,
+    ) as unknown;
     if (existing !== undefined) throw new Error(`Attachment ${attachment.id} already exists`);
-    this.db
-      .prepare(
-        `INSERT INTO session_attachments
+    prepared(
+      this.db,
+
+      `INSERT INTO session_attachments
            (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
             native_detail, observed_kind, failure, created_sequence)
          VALUES
            (@id, @sessionId, @adapterId, @venueId, @venueKind, @continuity, @nativeId,
             @nativeDetail, @observedKind, @failure, @createdSequence)`,
-      )
-      .run({
-        id: attachment.id,
-        sessionId: attachment.sessionId,
-        adapterId: attachment.adapterId,
-        venueId: attachment.venue.id,
-        venueKind: attachment.venue.kind,
-        continuity: attachment.continuity,
-        nativeId: attachment.native?.id ?? null,
-        nativeDetail:
-          attachment.native === null ? null : encodeSessionJson(attachment.native.detail),
-        observedKind: payload.kind === "attachment.opened" ? "opened" : "failed",
-        failure: payload.kind === "attachment.failed" ? encodeSessionJson(payload.failure) : null,
-        createdSequence: event.sequence,
-      });
+    ).run({
+      id: attachment.id,
+      sessionId: attachment.sessionId,
+      adapterId: attachment.adapterId,
+      venueId: attachment.venue.id,
+      venueKind: attachment.venue.kind,
+      continuity: attachment.continuity,
+      nativeId: attachment.native?.id ?? null,
+      nativeDetail: attachment.native === null ? null : encodeSessionJson(attachment.native.detail),
+      observedKind: payload.kind === "attachment.opened" ? "opened" : "failed",
+      failure: payload.kind === "attachment.failed" ? encodeSessionJson(payload.failure) : null,
+      createdSequence: event.sequence,
+    });
   }
 
   private assertEventForeignKeys(event: SessionEvent): void {
@@ -693,16 +695,16 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   }
 
   private assertGloballyUnusedId(id: string): void {
-    const row = this.db
-      .prepare(
-        `SELECT id FROM sessions WHERE id = @id
+    const row = prepared(
+      this.db,
+
+      `SELECT id FROM sessions WHERE id = @id
          UNION ALL SELECT id FROM session_attachments WHERE id = @id
          UNION ALL SELECT id FROM session_commands WHERE id = @id
          UNION ALL SELECT id FROM session_events WHERE id = @id
          UNION ALL SELECT id FROM session_command_receipts WHERE id = @id
          LIMIT 1`,
-      )
-      .get({ id }) as unknown;
+    ).get({ id }) as unknown;
     if (row !== undefined) throw new Error(`Ledger id ${id} already exists`);
   }
 

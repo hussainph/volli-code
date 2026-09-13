@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
@@ -1682,5 +1682,21 @@ describe("the Session usage projection", () => {
     await expect(
       control.reportUsage({ scope: { kind: "ticket", ticketId: "ticket-gone" } }),
     ).resolves.toMatchObject({ total: { knownCostUsd: 4, requestCount: 1 } });
+  });
+
+  it("routes reads through the per-handle prepared-statement cache (VC-355)", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project" }));
+    const prepare = vi.spyOn(ctx.db, "prepare");
+    const ledger = createSqliteSessionLedger(ctx.db);
+    // Each distinct SQL text prepares once; repeats are cache hits.
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.countSessions({ scope: "project", projectId: "project" }));
+    const preparesAfterWarmup = prepare.mock.calls.length;
+    expect(preparesAfterWarmup).toBeGreaterThan(0);
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.countSessions({ scope: "project", projectId: "project" }));
+    await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
+    expect(prepare.mock.calls.length).toBe(preparesAfterWarmup);
   });
 });
