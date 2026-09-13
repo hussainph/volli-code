@@ -248,20 +248,20 @@ function appendTurn(sessionId: string): void {
 }
 
 // The measured reply opens with roughly 4 KB of TypeScript, then grows that
-// fence across 44 more token snapshots before it closes. The former
+// fence across 96 more token snapshots before it closes. The former
 // 107-character fence completed too quickly to reproduce Shiki's append-only
 // cache misses: its owner-machine baseline reported zero dropped frames before
 // the optimization. This keeps the production live Markdown branch and the
-// reader's scroll in the same frame loop while giving every cache miss the
+// reader's scroll in the same paint loop while giving every cache miss the
 // realistic long-fence input VC-357 was opened for.
 const streamCodeLine = (prefix: string, index: number): string => {
-  const suffix = String(index + 1).padStart(2, "0");
+  const suffix = String(index + 1).padStart(3, "0");
   return `  const ${prefix}${suffix} = Math.max(0, delta${suffix} - budget) + history[${index}]!.duration + samples[${index}]!.cost;\n`;
 };
 const STREAM_CODE_BASE = Array.from({ length: 42 }, (_value, index) =>
   streamCodeLine("baseline", index),
 ).join("");
-const STREAM_CODE_TOKENS = Array.from({ length: 42 }, (_value, index) =>
+const STREAM_CODE_TOKENS = Array.from({ length: 96 }, (_value, index) =>
   streamCodeLine("frame", index),
 );
 const STREAM_TOKENS = [
@@ -392,7 +392,7 @@ async function streamAndScroll(
   const base = (
     slice as unknown as { transcript: { messages: readonly UIMessage[] } }
   ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
-  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 800);
+  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 120);
   await settle();
 
   const refreshFrames: number[] = [];
@@ -425,9 +425,49 @@ async function streamAndScroll(
   const resizeObserverCallbacksBefore = resizeObserverCallbacks;
   let scrollDistancePx = 0;
   let priorTop = scroller.scrollTop;
-  let direction = -1;
+  let readerOffsetPx = 120;
+  let readerDirection = 1;
   let streamedCharacters = 0;
   let priorTokenCount = 0;
+  let liveCodeBlocks = 0;
+  let liveHighlightedCodeBlocks = 0;
+  let liveHighlightedTokens = 0;
+  const codeState = (): { blocks: number; highlighted: number; highlightedTokens: number } => {
+    const plane = document.querySelectorAll<HTMLElement>("[data-bench-plane]")[index];
+    const block = [
+      ...(plane?.querySelectorAll<HTMLElement>('[data-streamdown="code-block"]') ?? []),
+    ].findLast((candidate) => candidate.textContent?.includes("measureFrames") === true);
+    const highlightedTokens = [
+      ...(block?.querySelectorAll<HTMLElement>("pre code > span > span") ?? []),
+    ].filter((token) => {
+      const color = token.style.getPropertyValue("--sdm-c");
+      return color !== "" && color !== "inherit";
+    }).length;
+    return {
+      blocks: block === undefined ? 0 : 1,
+      highlighted: highlightedTokens > 0 ? 1 : 0,
+      highlightedTokens,
+    };
+  };
+  const moveScroller = (): void => {
+    // Stay inside the live code row while moving. An absolute scroll offset lets
+    // the growing tail run below the viewport, where Streamdown intentionally
+    // defers Shiki with content-visibility and the probe becomes vacuous.
+    const maxReaderOffset = Math.max(80, Math.min(360, scroller.clientHeight * 0.45));
+    readerOffsetPx += readerDirection * 18;
+    if (readerOffsetPx <= 24 || readerOffsetPx >= maxReaderOffset) readerDirection *= -1;
+    readerOffsetPx = Math.max(24, Math.min(maxReaderOffset, readerOffsetPx));
+    scroller.scrollTop = Math.max(
+      0,
+      scroller.scrollHeight - scroller.clientHeight - readerOffsetPx,
+    );
+  };
+  const recordScroll = (): void => {
+    const actualTop = scroller.scrollTop;
+    scrollDistancePx += Math.abs(actualTop - priorTop);
+    priorTop = actualTop;
+  };
+
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
     busyWait(slowdownMs);
@@ -436,17 +476,20 @@ async function streamAndScroll(
       streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
       priorTokenCount = tokenCount;
     }
-    const nextTop = Math.max(
-      0,
-      Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + direction * 18),
-    );
-    scroller.scrollTop = nextTop;
-    frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
-    const actualTop = scroller.scrollTop;
-    scrollDistancePx += Math.abs(actualTop - priorTop);
-    priorTop = actualTop;
-    if (actualTop <= 0 || actualTop >= scroller.scrollHeight - scroller.clientHeight)
-      direction *= -1;
+    // The second paint is load-bearing. Streamdown hands the code source to its
+    // lazy highlighter after React commits. Starting the next update in the
+    // first rAF callback can supersede that work before it runs, which measures
+    // a renderer that skipped intermediate deltas rather than one that painted
+    // the stream. The reader still moves on BOTH frames.
+    for (let paint = 0; paint < 2; paint += 1) {
+      moveScroller();
+      frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
+      recordScroll();
+    }
+    const code = codeState();
+    liveCodeBlocks = Math.max(liveCodeBlocks, code.blocks);
+    liveHighlightedCodeBlocks = Math.max(liveHighlightedCodeBlocks, code.highlighted);
+    liveHighlightedTokens = Math.max(liveHighlightedTokens, code.highlightedTokens);
   }
   const streamedSlice = (
     store.getState() as unknown as {
@@ -455,12 +498,43 @@ async function streamAndScroll(
   ).sessions[sessionId];
   const streamedWhileWorking = streamedSlice?.lifecycle === "working";
   const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
-  settleStream(sessionId);
-  await settle();
-  observer?.disconnect();
   const latencyMs = performance.now() - started;
+  for (const entry of observer?.takeRecords() ?? []) longTasks.push(entry.duration);
+  observer?.disconnect();
   const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
   const frameTimesMs = frames.slice(1).map((value, at) => value - frames[at]!);
+
+  // Settle is deliberately outside the concurrent frame window. VC-357 moves
+  // one final Shiki pass here, so mixing it into the stream would hide the
+  // sustained-frame improvement and also hide the remaining settle cost.
+  const settleLongTasks: number[] = [];
+  const settleObserver =
+    typeof PerformanceObserver === "undefined"
+      ? null
+      : new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) settleLongTasks.push(entry.duration);
+        });
+  try {
+    settleObserver?.observe({ type: "longtask", buffered: false });
+  } catch {
+    // Same compatibility rule as the stream observer above.
+  }
+  const settleStarted = performance.now();
+  settleStream(sessionId);
+  await settle();
+  let settledCode = codeState();
+  const highlightDeadline = performance.now() + 2_000;
+  while (
+    settledCode.blocks > 0 &&
+    settledCode.highlighted === 0 &&
+    performance.now() < highlightDeadline
+  ) {
+    await frame();
+    settledCode = codeState();
+  }
+  const settleLatencyMs = performance.now() - settleStarted;
+  for (const entry of settleObserver?.takeRecords() ?? []) settleLongTasks.push(entry.duration);
+  settleObserver?.disconnect();
   const droppedFrames =
     refreshIntervalMs === null
       ? null
@@ -483,6 +557,14 @@ async function streamAndScroll(
     frameTimesMs,
     droppedFrames,
     longTasksMs: longTasks,
+    liveCodeBlocks,
+    liveHighlightedCodeBlocks,
+    liveHighlightedTokens,
+    settledCodeBlocks: settledCode.blocks,
+    settledHighlightedCodeBlocks: settledCode.highlighted,
+    settledHighlightedTokens: settledCode.highlightedTokens,
+    settleLatencyMs,
+    settleLongTasksMs: settleLongTasks,
     resizeObserverCallbacks: observedResizeCallbacks,
     resizeObserverCallbacksPerSecond:
       latencyMs === 0 ? 0 : (observedResizeCallbacks * 1_000) / latencyMs,

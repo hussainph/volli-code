@@ -145,13 +145,21 @@ export function summarize(values) {
 function aggregateInteraction(id, label, samples) {
   const frames = samples.flatMap((sample) => sample.frameTimesMs ?? []);
   const longTasks = samples.flatMap((sample) => sample.longTasksMs ?? []);
+  const settleLongTasks = samples.flatMap((sample) => sample.settleLongTasksMs ?? []);
   const extra = {};
   for (const key of [
     "firstPaintMs",
     "openMs",
     "closeMs",
+    "settleLatencyMs",
     "scrollDistancePx",
     "streamedCharacters",
+    "liveCodeBlocks",
+    "liveHighlightedCodeBlocks",
+    "liveHighlightedTokens",
+    "settledCodeBlocks",
+    "settledHighlightedCodeBlocks",
+    "settledHighlightedTokens",
     "resizeObserverCallbacks",
     "resizeObserverCallbacksPerSecond",
   ]) {
@@ -171,6 +179,11 @@ function aggregateInteraction(id, label, samples) {
         observedCount: longTasks.length,
         countPerSample: summarize(samples.map((sample) => sample.longTasksMs?.length ?? 0)),
         durationMs: summarize(longTasks),
+      },
+      settleLongTasks: {
+        observedCount: settleLongTasks.length,
+        countPerSample: summarize(samples.map((sample) => sample.settleLongTasksMs?.length ?? 0)),
+        durationMs: summarize(settleLongTasks),
       },
       ...extra,
     },
@@ -811,7 +824,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
         rendererErrors.push(...result.rendererErrors);
       }
     }
-    console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} frames`);
+    console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} stream steps`);
     const chat = await runChatBench({
       manifest,
       repetitions: args.repetitions,
@@ -833,7 +846,10 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
           sample.streamedWhileWorking !== true ||
           sample.streamedWhileTurnActive !== true ||
           sample.codeFenceOpened !== true ||
-          sample.codeFenceClosed !== true,
+          sample.codeFenceClosed !== true ||
+          sample.liveCodeBlocks < 1 ||
+          sample.settledCodeBlocks < 1 ||
+          sample.settledHighlightedCodeBlocks < 1,
       )
     ) {
       throw new Error(
@@ -845,7 +861,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
       name,
       busyCores: load?.workers ?? 0,
       streamTokenRate: args.streamTokenRate,
-      streamContent: "live-prose-4kb-open-code-fence-close-prose",
+      streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
       slowdownMs: args.slowdownMs,
       interactions: INTERACTIONS.flatMap(([id, label]) =>
         byInteraction[id].length === 0 ? [] : [aggregateInteraction(id, label, byInteraction[id])],
@@ -923,7 +939,7 @@ function markdown(report) {
     "- The app measurements launch the production Vite/Electron build against a fresh APFS-cloned copy of the deterministic, file-backed migrated fixture for every repetition.",
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
-    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 44 more growing snapshots → a closed fence → prose, and moves the transcript scroller every animation frame in the same loop.`,
+    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
     "- The loaded arm is named `N-busy-core`: N Node worker threads run the fixed integer-mixing loop in `busy-worker.mjs` continuously from before Electron launch through the last sample; actual arm duration and worker checksums are recorded in JSON.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",
@@ -992,7 +1008,7 @@ async function main() {
       busyCores: args.busyCores,
       streamSteps: args.streamSteps,
       streamTokenRate: args.streamTokenRate,
-      streamContent: "live-prose-4kb-open-code-fence-close-prose",
+      streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
       slowdownMs: args.slowdownMs,
       arms: args.arms,
     },
