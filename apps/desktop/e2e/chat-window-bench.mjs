@@ -42,6 +42,11 @@ const flag = (name, fallback) => {
 const SESSIONS = flag("sessions", "10");
 const TURNS = flag("turns", "2000");
 const LABEL = flag("label", "run");
+const STREAM_SAMPLES = flag("stream-samples", "8");
+const STREAM_STEPS = flag("stream-steps", "120");
+const STREAM_TOKEN_RATE = flag("stream-token-rate", "30");
+const SLOWDOWN_MS = flag("slowdown-ms", "0");
+const SKIP_BUILD = args.includes("--skip-build");
 
 function run(command, commandArgs, options = {}) {
   return new Promise((resolve, reject) => {
@@ -64,9 +69,11 @@ const electron = (await import(join(APP, "node_modules", "electron", "index.js")
 // workspace (the app builds through `vp`), and a bench that shells out to a
 // binary that may not be there fails for a reason that has nothing to do with
 // what it measures.
-console.log(`building the bench page (${BENCH})`);
-const { build } = await import("vite");
-await build({ configFile: join(BENCH, "vite.config.ts") });
+if (!SKIP_BUILD) {
+  console.log(`building the bench page (${BENCH})`);
+  const { build } = await import("vite");
+  await build({ configFile: join(BENCH, "vite.config.ts"), logLevel: "warn" });
+}
 
 console.log(`\nrunning: ${SESSIONS} sessions x ${TURNS} turns`);
 const output = await run(
@@ -81,6 +88,14 @@ const output = await run(
     TURNS,
     "--label",
     LABEL,
+    "--stream-samples",
+    STREAM_SAMPLES,
+    "--stream-steps",
+    STREAM_STEPS,
+    "--stream-token-rate",
+    STREAM_TOKEN_RATE,
+    "--slowdown-ms",
+    SLOWDOWN_MS,
   ],
   { cwd: APP, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
 );
@@ -102,6 +117,21 @@ if (match?.groups?.json === undefined) {
         .join("\n"),
   );
   console.log("\nchecks:", JSON.stringify(report.checks, null, 2));
+  if (report.streamingSamples?.length > 0) {
+    const latencies = report.streamingSamples.map((sample) =>
+      sample.ok === true ? sample.latencyMs.toFixed(1) : "failed",
+    );
+    const dropped = report.streamingSamples.map((sample) =>
+      sample.ok === true ? sample.droppedFrames : "failed",
+    );
+    const longTasks = report.streamingSamples.map((sample) =>
+      sample.ok === true ? sample.longTasksMs.length : "failed",
+    );
+    console.log(
+      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s, ${SLOWDOWN_MS}ms slowdown): latency ms [${latencies.join(", ")}], ` +
+        `dropped [${dropped.join(", ")}], long tasks [${longTasks.join(", ")}]`,
+    );
+  }
   if (report.errors?.length > 0) console.log("console errors:", report.errors.slice(0, 5));
   if (report.failure !== undefined) {
     console.error("\nbench failed:", report.failure);
