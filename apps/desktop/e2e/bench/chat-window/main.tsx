@@ -416,13 +416,18 @@ async function streamAndScroll(
     slice as unknown as { transcript: { messages: readonly UIMessage[] } }
   ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
   // Every repetition starts from the same Turn and window state. If the prior
-  // sample's settled row is replaced while the reader is detached, a large
+  // sample's settled row is replaced only after the reader detaches, a large
   // transcript can anchor its 60-row window above the new Turn and leave the
-  // live fence unmounted. Return to the bottom first so ChatTranscript retires
-  // that anchor, then mount one cheap prose snapshot before the measured reader
-  // moves inside the stable row.
-  scroller.scrollTop = scroller.scrollHeight;
-  await settle();
+  // live fence unmounted. Mount one cheap prose snapshot while bottom-locked,
+  // then let the measured reader move inside that stable row.
+  //
+  // DO NOT ADD `scroller.scrollTop = scroller.scrollHeight` ABOVE THIS. It looks
+  // like it would retire the previous sample's anchor more firmly, and it was
+  // tried (VC-357, reverted). Measured: every sample then reported
+  // `liveCodeBlocks: 0` and `settledCodeBlocks: 0` — the fence never mounted at
+  // all, so the probe measured a transcript with no code in it and reported a
+  // flawless 0 dropped frames. `run.mjs`'s per-sample live-fence contract is
+  // what caught it; without that check it would have read as a clean result.
   resetStream(sessionId, base);
   await settle();
   streamSnapshot(sessionId, base, 1);
