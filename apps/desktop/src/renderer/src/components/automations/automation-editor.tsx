@@ -545,11 +545,19 @@ export function AutomationEditorPanel({
     }),
     [name, instructions, ownershipChoice, triggerChoice, columns, schedule, runtime],
   );
+  const ownershipDirty =
+    ownershipChoice !==
+    (automation !== null && automation.projectId === null ? "global" : "project");
   const dirty =
     automation === null
-      ? name.trim() !== "" || instructions.trim() !== ""
+      ? name.trim() !== "" ||
+        instructions.trim() !== "" ||
+        ownershipDirty ||
+        triggerChoice !== "none" ||
+        runtime !== null
       : name !== automation.name ||
         instructions !== automation.instructions ||
+        ownershipDirty ||
         JSON.stringify(trigger) !== JSON.stringify(automation.trigger) ||
         JSON.stringify(runtime) !== JSON.stringify(automation.runtime);
 

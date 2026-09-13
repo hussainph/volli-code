@@ -366,6 +366,27 @@ describe("automation editor drafts (VC-329)", () => {
     });
   });
 
+  it("keeps an ownership-only choice as a draft", async () => {
+    await mountEditor();
+    const ownership = document.querySelector('[aria-label="Ownership"]') as HTMLButtonElement;
+    ownership.focus();
+    await act(async () => {
+      ownership.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const globalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes("All projects"),
+    );
+    expect(globalOption).toBeDefined();
+    await act(async () => {
+      globalOption?.focus();
+    });
+    await act(async () => {
+      globalOption?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+
+    expect(loadEditorDraft("p1")?.ownership).toBe("global");
+  });
+
   it("restores a stored draft on mount, visibly, with a discard", async () => {
     saveEditorDraft("p1", seededDraft());
     await mountEditor();

@@ -68,10 +68,14 @@ describe("saveEditorDraft/loadEditorDraft", () => {
     expect(loadEditorDraft("p1", storage)).toEqual(withFields);
   });
 
-  it("treats a content-empty draft as a discard: the stored slot is dropped", () => {
+  it("treats a default-empty draft as a discard: the stored slot is dropped", () => {
     const storage = fakeStorage();
     saveEditorDraft("p1", draft(), storage);
-    saveEditorDraft("p1", draft({ name: "  ", instructions: "\n" }), storage);
+    saveEditorDraft(
+      "p1",
+      draft({ name: "  ", instructions: "\n", triggerChoice: "none" }),
+      storage,
+    );
     expect(loadEditorDraft("p1", storage)).toBeNull();
   });
 
@@ -138,9 +142,21 @@ describe("loadEditorDraft defensiveness", () => {
 });
 
 describe("isEmptyEditorDraft", () => {
-  it("is content only when a name or instructions survives trimming", () => {
-    expect(isEmptyEditorDraft(draft({ name: "", instructions: "" }))).toBe(true);
-    expect(isEmptyEditorDraft(draft({ name: " ", instructions: "" }))).toBe(true);
-    expect(isEmptyEditorDraft(draft({ name: "", instructions: "/x" }))).toBe(false);
+  const blank = (): AutomationEditorDraft =>
+    draft({
+      name: "",
+      instructions: "",
+      ownership: "project",
+      triggerChoice: "none",
+      runtime: null,
+    });
+
+  it("only discards a draft that still matches the new editor's meaningful defaults", () => {
+    expect(isEmptyEditorDraft(blank())).toBe(true);
+    expect(isEmptyEditorDraft({ ...blank(), name: " " })).toBe(true);
+    expect(isEmptyEditorDraft({ ...blank(), instructions: "/x" })).toBe(false);
+    expect(isEmptyEditorDraft({ ...blank(), ownership: "global" })).toBe(false);
+    expect(isEmptyEditorDraft({ ...blank(), triggerChoice: "schedule" })).toBe(false);
+    expect(isEmptyEditorDraft({ ...blank(), runtime: { kind: "tier", tier: "fast" } })).toBe(false);
   });
 });

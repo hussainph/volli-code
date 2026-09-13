@@ -82,9 +82,15 @@ function isEditorDraft(value: unknown): value is AutomationEditorDraft {
   );
 }
 
-/** Whether the draft carries no content worth protecting (see module doc). */
+/** Whether the draft still matches a new editor's meaningful defaults. */
 export function isEmptyEditorDraft(draft: AutomationEditorDraft): boolean {
-  return draft.name.trim() === "" && draft.instructions.trim() === "";
+  return (
+    draft.name.trim() === "" &&
+    draft.instructions.trim() === "" &&
+    draft.ownership === "project" &&
+    draft.triggerChoice === "none" &&
+    draft.runtime === null
+  );
 }
 
 function readDrafts(storage: SyncStateStorage): Record<string, AutomationEditorDraft> {
