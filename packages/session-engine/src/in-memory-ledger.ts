@@ -12,6 +12,7 @@ import type {
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionProjectionCheckpoint,
   SessionUsageAttribution,
   SessionUsageEntry,
   SessionUsageScope,
@@ -53,6 +54,7 @@ class InMemorySessionLedger implements SessionLedger {
   #events = new Map<string, SessionEvent>();
   #commands = new Map<string, SessionCommand>();
   #receipts = new Map<string, CommandReceipt>();
+  #projectionCheckpoints = new Map<string, SessionProjectionCheckpoint>();
   #tail: Promise<void> = Promise.resolve();
 
   async transaction<T>(
@@ -119,6 +121,18 @@ class InMemorySessionLedger implements SessionLedger {
       listEvents: (query) => {
         assertOpen();
         return this.#listEvents(query);
+      },
+      latestEventSequence: (sessionId) => {
+        assertOpen();
+        return this.#latestEventSequence(sessionId);
+      },
+      getProjectionCheckpoint: (sessionId) => {
+        assertOpen();
+        return this.#getProjectionCheckpoint(sessionId);
+      },
+      saveProjectionCheckpoint: (checkpoint) => {
+        assertOpen();
+        this.#saveProjectionCheckpoint(checkpoint);
       },
       getCommand: (commandId) => {
         assertOpen();
@@ -300,6 +314,33 @@ class InMemorySessionLedger implements SessionLedger {
       .map(clone);
   }
 
+  #latestEventSequence(sessionId: string): number {
+    return this.#eventsFor(sessionId).at(-1)?.sequence ?? 0;
+  }
+
+  #getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null {
+    const checkpoint = this.#projectionCheckpoints.get(sessionId);
+    if (!checkpoint) return null;
+    const latestSequence = this.#latestEventSequence(sessionId);
+    return checkpoint.throughSequence <= latestSequence ? clone(checkpoint) : null;
+  }
+
+  #saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
+    if (
+      checkpoint.sessionId !== checkpoint.projection.session.id ||
+      !this.#sessions.has(checkpoint.sessionId)
+    ) {
+      throw new Error("Session projection checkpoint identity is invalid");
+    }
+    const latestSequence = this.#latestEventSequence(checkpoint.sessionId);
+    if (checkpoint.throughSequence > latestSequence) {
+      throw new Error("Session projection checkpoint is ahead of durable history");
+    }
+    const existing = this.#projectionCheckpoints.get(checkpoint.sessionId);
+    if (existing && existing.throughSequence > checkpoint.throughSequence) return;
+    this.#projectionCheckpoints.set(checkpoint.sessionId, clone(checkpoint));
+  }
+
   #getCommand(commandId: string): SessionCommand | null {
     const command = this.#commands.get(commandId);
     return command ? clone(command) : null;
@@ -354,6 +395,7 @@ class InMemorySessionLedger implements SessionLedger {
       events: cloneMap(this.#events),
       commands: cloneMap(this.#commands),
       receipts: cloneMap(this.#receipts),
+      projectionCheckpoints: cloneMap(this.#projectionCheckpoints),
     };
   }
 
@@ -362,6 +404,7 @@ class InMemorySessionLedger implements SessionLedger {
     this.#events = checkpoint.events;
     this.#commands = checkpoint.commands;
     this.#receipts = checkpoint.receipts;
+    this.#projectionCheckpoints = checkpoint.projectionCheckpoints;
   }
 }
 
@@ -376,6 +419,7 @@ interface LedgerCheckpoint {
   events: Map<string, SessionEvent>;
   commands: Map<string, SessionCommand>;
   receipts: Map<string, CommandReceipt>;
+  projectionCheckpoints: Map<string, SessionProjectionCheckpoint>;
 }
 
 export function createInMemorySessionLedger(): SessionLedger {

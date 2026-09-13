@@ -3296,7 +3296,11 @@ describe("SessionRuntime native adapter contract", () => {
     stop();
     expect(adapter.releaseReasons).toContain("shutdown");
 
-    const emptyEvents: SessionEngine = { ...engine, listEvents: async () => [] };
+    const emptyEvents: SessionEngine = {
+      ...engine,
+      listEvents: async () => [],
+      getProjectionCheckpoint: async () => null,
+    };
     const external = composition({
       engine: emptyEvents,
       adapter: new FakeAdapter(),
@@ -3613,6 +3617,37 @@ describe("SessionRuntime native adapter contract", () => {
     expect(appended.projection.attention.primary?.kind).toBe("auth_required");
     expect(appended.throughSequence).toBeGreaterThan(folded.throughSequence);
     expect(reads).toEqual([sessionId]);
+  });
+
+  it("restores a cold projection from a checkpoint and folds only its durable tail", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+    const checkpoint = await base.engine.getProjectionCheckpoint({ sessionId });
+    expect(checkpoint?.throughSequence).toBe(before.throughSequence);
+
+    await base.engine.submit({
+      commandId: "command-after-checkpoint",
+      sessionId,
+      intent: { kind: "session.signal", signal: "done", reason: "Tail applied" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue },
+    });
+    const cursors: (number | undefined)[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        cursors.push(query.afterSequence);
+        return base.engine.listEvents(query);
+      },
+    };
+    const restarted = composition({ engine: counting }).runtime;
+
+    const after = await restarted.projection({ sessionId });
+
+    expect(after.projection.signal).toMatchObject({ signal: "done", reason: "Tail applied" });
+    expect(after.throughSequence).toBe(before.throughSequence + 3);
+    expect(cursors).toEqual([before.throughSequence]);
   });
 
   it("bounds how many folded histories it keeps", async () => {

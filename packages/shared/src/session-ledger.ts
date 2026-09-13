@@ -13,7 +13,11 @@ import type {
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
 import type { ModelTier } from "./model-access-policy";
-import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  mergeSessionUsageSummaries,
+  summarizeSessionUsage,
+} from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 import type { SessionUsageEntry } from "./session-usage-report";
 
@@ -1390,6 +1394,24 @@ export interface SessionProjection {
 }
 
 /**
+ * The resumable state behind a persisted Session projection.
+ *
+ * `projection` is the public read model. `pendingExecutorStarts` is the one
+ * reducer detail that read model intentionally collapses to its latest item;
+ * retaining the complete set makes a later rejection able to reveal an older
+ * still-pending start exactly as a whole-log fold would.
+ */
+export interface SessionProjectionCheckpoint {
+  version: typeof SESSION_PROJECTION_CHECKPOINT_VERSION;
+  sessionId: string;
+  throughSequence: number;
+  projection: SessionProjection;
+  pendingExecutorStarts: readonly SessionCommand[];
+}
+
+export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
+
+/**
  * Derives UI-ready Session state from ordered facts. Turn and executor end
  * events intentionally never close a Session; only `session.archived` does.
  */
@@ -1397,32 +1419,82 @@ export function projectSession(
   session: Session,
   events: readonly SessionEvent[],
 ): SessionProjection {
-  const attachments = new Map<string, SessionAttachmentProjection>();
-  const attention = new Map<string, SessionAttention>();
-  const interactions = new Map<string, SessionInteraction>();
-  const resolvedInteractions: SessionInteractionProjection["resolved"][number][] = [];
-  const commands: SessionCommand[] = [];
-  const receipts: CommandReceipt[] = [];
-  const pendingExecutorStarts = new Map<string, SessionCommand>();
-  let status: SessionProjection["status"] = "open";
-  let title = session.title;
-  let signal: SessionProjection["signal"] = null;
-  let stopped: SessionProjection["stopped"] = null;
-  let modelSelection: ModelSelection | null = null;
-  let modelTier: ModelTier | null = null;
-  let turnActive = false;
-  let lastTurnOutcome: SessionTurnOutcome | null = null;
-  let authorityDenials = 0;
+  return createSessionProjectionCheckpoint(session, events).projection;
+}
+
+/** Folds a whole Session log into state that can later resume from its tail. */
+export function createSessionProjectionCheckpoint(
+  session: Session,
+  events: readonly SessionEvent[],
+): SessionProjectionCheckpoint {
+  return foldSessionProjection(session, events, null);
+}
+
+/**
+ * Applies only facts after a checkpoint. Callers treat an invalid checkpoint
+ * as a cache miss; this function rejects mixed Sessions and non-tail input so
+ * a bad cache row can never become a second durable opinion about history.
+ */
+export function advanceSessionProjection(
+  checkpoint: SessionProjectionCheckpoint,
+  events: readonly SessionEvent[],
+): SessionProjectionCheckpoint {
+  if (
+    checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+    checkpoint.sessionId !== checkpoint.projection.session.id ||
+    !Number.isInteger(checkpoint.throughSequence) ||
+    checkpoint.throughSequence < 0
+  ) {
+    throw new Error("Invalid Session projection checkpoint");
+  }
+  return foldSessionProjection(checkpoint.projection.session, events, checkpoint);
+}
+
+function foldSessionProjection(
+  session: Session,
+  events: readonly SessionEvent[],
+  checkpoint: SessionProjectionCheckpoint | null,
+): SessionProjectionCheckpoint {
+  const base = checkpoint?.projection;
+  const attachments = new Map<string, SessionAttachmentProjection>(
+    base?.attachments.map((attachment) => [attachment.id, attachment]) ?? [],
+  );
+  const attention = new Map<string, SessionAttention>(
+    base?.attention.active.map((item) => [item.id, item]) ?? [],
+  );
+  const interactions = new Map<string, SessionInteraction>(
+    base?.interactions.active.map((interaction) => [interaction.id, interaction]) ?? [],
+  );
+  const resolvedInteractions: SessionInteractionProjection["resolved"][number][] = [
+    ...(base?.interactions.resolved ?? []),
+  ];
+  const commands: SessionCommand[] = [...(base?.commands ?? [])];
+  const receipts: CommandReceipt[] = [...(base?.receipts ?? [])];
+  const pendingExecutorStarts = new Map<string, SessionCommand>(
+    checkpoint?.pendingExecutorStarts.map((command) => [command.id, command]) ?? [],
+  );
+  let status: SessionProjection["status"] = base?.status ?? "open";
+  let title = base?.session.title ?? session.title;
+  let signal: SessionProjection["signal"] = base?.signal ?? null;
+  let stopped: SessionProjection["stopped"] = base?.stopped ?? null;
+  let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
+  let modelTier: ModelTier | null = base?.modelTier ?? null;
+  let turnActive = base?.turnActive ?? false;
+  let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
+  let authorityDenials = base?.authorityDenials ?? 0;
   const usage: SessionUsage[] = [];
-  let lastActivityAt = session.createdAt;
+  let lastActivityAt = base?.lastActivityAt ?? session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
   // event (a degenerate/partial event list) still has an honest answer;
   // every real Session's `session.created` immediately overrides it with the
   // immutable birth fact below.
-  let bornTicketless = session.ticketId === null;
+  let bornTicketless = base?.bornTicketless ?? session.ticketId === null;
+  const throughSequence = checkpoint?.throughSequence ?? 0;
 
   const ordered = [...events]
-    .filter((event) => event.sessionId === session.id)
+    .filter(
+      (event) => event.sessionId === session.id && event.sequence > throughSequence,
+    )
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {
@@ -1666,7 +1738,7 @@ export function projectSession(
   const activeAttention = [...attention.values()];
   const pendingExecutorStart = [...pendingExecutorStarts.values()].at(-1) ?? null;
 
-  return {
+  const projection: SessionProjection = {
     session: { ...session, title },
     status,
     commands,
@@ -1686,9 +1758,22 @@ export function projectSession(
     turnActive,
     lastTurnOutcome,
     authorityDenials,
-    usage: usage.length === 0 ? EMPTY_SESSION_USAGE_SUMMARY : summarizeSessionUsage(usage),
+    usage:
+      usage.length === 0
+        ? (base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY)
+        : mergeSessionUsageSummaries([
+            base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY,
+            summarizeSessionUsage(usage),
+          ]),
     lastActivityAt,
     bornTicketless,
+  };
+  return {
+    version: SESSION_PROJECTION_CHECKPOINT_VERSION,
+    sessionId: session.id,
+    throughSequence: ordered.at(-1)?.sequence ?? throughSequence,
+    projection,
+    pendingExecutorStarts: [...pendingExecutorStarts.values()],
   };
 }
 
@@ -1800,6 +1885,16 @@ export interface SessionLedgerTransaction {
   appendEvent(event: SessionEvent): void;
   /** Returns events in ascending per-Session sequence order. */
   listEvents(query: ListSessionEventsQuery): readonly SessionEvent[];
+  /** Metadata-only event head; does not decode payload or provenance JSON. */
+  latestEventSequence(sessionId: string): number;
+  /**
+   * Latest valid derived projection for this Session, or null on a cache miss.
+   * A checkpoint is never canonical: adapters must discard a malformed, stale-
+   * ahead, or unsupported row and let the immutable event log rebuild it.
+   */
+  getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null;
+  /** Replaces only the derived read model; Session rows and events stay insert-only. */
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void;
   getCommand(commandId: string): SessionCommand | null;
   saveCommand(command: SessionCommand): void;
   getReceipt(receiptId: string): CommandReceipt | null;

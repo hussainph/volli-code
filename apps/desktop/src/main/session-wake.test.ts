@@ -94,6 +94,9 @@ function writingEngine(db: TestDb["db"]): {
     listSessionStarts: unusedRead,
     listLatestTicketSignals: unusedRead,
     listEvents: unusedRead,
+    latestEventSequence: unusedRead,
+    getProjectionCheckpoint: unusedRead,
+    saveProjectionCheckpoint: unusedRead,
     reportUsage: unusedRead,
   };
   return { engine, append };

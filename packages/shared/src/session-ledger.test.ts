@@ -7,6 +7,8 @@ import {
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
   observationPayload,
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
   projectSession,
   sameCommandReceipt,
   sameCommandReceiptOutcome,
@@ -1101,6 +1103,56 @@ describe("projectSession", () => {
   });
 });
 
+describe("Session projection checkpoints", () => {
+  it("resumes every split with the same projection as a whole-log fold", () => {
+    const first = {
+      id: "command-start-a",
+      sessionId: session.id,
+      createdAt: 1,
+      route: { adapterId: "pi", attachmentId: null },
+      intent: { kind: "executor.start" as const, adapterId: "pi", continuity: "fresh" as const },
+    };
+    const second = {
+      ...first,
+      id: "command-start-b",
+      createdAt: 2,
+    };
+    const events = [
+      event(1, { kind: "command.recorded", command: first }),
+      event(2, { kind: "command.recorded", command: second }),
+      event(3, { kind: "session.retitled", title: "Checkpoint title" }),
+      event(4, {
+        kind: "command.receipt.recorded",
+        receipt: {
+          id: "receipt-start-b-rejected",
+          commandId: second.id,
+          status: "rejected" as const,
+          code: "adapter_rejected",
+          detail: null,
+          recordedAt: 40,
+          sequence: 4,
+        },
+      }),
+      event(5, { kind: "session.signaled", signal: "done" as const, reason: "Tail applied" }),
+    ];
+    const whole = projectSession(session, events);
+
+    for (let split = 0; split <= events.length; split += 1) {
+      const checkpoint = createSessionProjectionCheckpoint(session, events.slice(0, split));
+      const resumed = advanceSessionProjection(checkpoint, events.slice(split));
+      expect(resumed.projection).toEqual(whole);
+      expect(resumed.throughSequence).toBe(5);
+    }
+  });
+
+  it("rejects a checkpoint whose identity cannot describe its projection", () => {
+    const checkpoint = createSessionProjectionCheckpoint(session, []);
+    expect(() =>
+      advanceSessionProjection({ ...checkpoint, sessionId: "another-session" }, []),
+    ).toThrow("Invalid Session projection checkpoint");
+  });
+});
+
 // The executor's own process status (VC-290). `outcome` says completed or
 // failed; only this fact can say WHICH code, and only when something actually
 // watched the process end.
@@ -1573,6 +1625,23 @@ describe("projectSession usage", () => {
     expect(usage.knownCostUsd).toBe(0.31);
     expect(usage.costCoverage).toBe("complete");
     expect(usage.cachedInputShare).toBe(0.8);
+  });
+
+  it("merges usage before and after a projection checkpoint without losing coverage", () => {
+    const before = recorded(1, metered({ costUsd: 0.25 }));
+    const after = recorded(2, metered({ costUsd: null, costBasis: "unavailable" }));
+    const resumed = advanceSessionProjection(
+      createSessionProjectionCheckpoint(session, [before]),
+      [after],
+    );
+
+    expect(resumed.projection.usage).toEqual(projectSession(session, [before, after]).usage);
+    expect(resumed.projection.usage).toMatchObject({
+      requestCount: 2,
+      pricedRequestCount: 1,
+      knownCostUsd: 0.25,
+      costCoverage: "partial",
+    });
   });
 
   // Telemetry arriving is not the agent doing something. A backfill or a

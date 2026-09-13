@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
   CommandReceipt,
@@ -12,12 +13,14 @@ import type {
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionProjectionCheckpoint,
   SessionUsage,
   SessionUsageAttribution,
   SessionUsageEntry,
 } from "@volli/shared";
 import {
   COST_BASES,
+  SESSION_PROJECTION_CHECKPOINT_VERSION,
   SESSION_ROLES,
   SESSION_USAGE_CAUSES,
   assertSession,
@@ -484,12 +487,18 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
     for (;;) {
       const remaining = wanted === undefined ? undefined : wanted - decoded.length;
       if (remaining !== undefined && remaining <= 0) break;
-      const rows = statement.all({
+      // `iterate()` avoids materialising a second full raw-row array while the
+      // decoded events are accumulated for the caller. This matters when an
+      // unbounded maintenance read walks the whole log; bounded runtime pages
+      // keep the same semantics and simply stop after `remaining` rows.
+      const rows = statement.iterate({
         sessionId: query.sessionId,
         afterSequence: cursor,
         limit: remaining,
-      }) as unknown[];
+      }) as Iterable<unknown>;
+      let rowCount = 0;
       for (const row of rows) {
+        rowCount += 1;
         // Advanced from the row, not from the decoded event, so a dropped row
         // still moves the cursor past itself.
         const sequence = (row as SqlRow).sequence;
@@ -506,7 +515,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       // limit, a short page is the only honest signal that nothing is left;
       // a full one means at least one row was consumed, so the cursor moved
       // and the next pass makes progress.
-      if (remaining === undefined || rows.length < remaining) break;
+      if (remaining === undefined || rowCount < remaining) break;
     }
     if (dropped > 0) {
       // Named, not just counted: the whole point of dropping is that this build
@@ -516,6 +525,100 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
     }
     return decoded;
+  }
+
+  latestEventSequence(sessionId: string): number {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM session_events WHERE session_id = ?",
+    ).get(sessionId) as unknown;
+    return readInteger(rowValue(row, "sequence", "latest event sequence"), "latest event sequence");
+  }
+
+  getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null {
+    this.assertOpen();
+    const row = prepared(
+      this.db,
+      `SELECT c.schema_version, c.through_sequence, c.checkpoint, c.digest
+         FROM session_projection_checkpoints c
+        WHERE c.session_id = ?
+          AND c.through_sequence <= COALESCE(
+            (SELECT MAX(e.sequence) FROM session_events e WHERE e.session_id = c.session_id),
+            0
+          )`,
+    ).get(sessionId) as unknown;
+    if (row === undefined) return null;
+    try {
+      const value = asRecord(row, "session projection checkpoint row");
+      const schemaVersion = readInteger(value.schema_version, "checkpoint schema version");
+      const throughSequence = readInteger(value.through_sequence, "checkpoint sequence");
+      const encoded = readString(value.checkpoint, "checkpoint JSON");
+      const digest = readString(value.digest, "checkpoint digest");
+      if (
+        schemaVersion !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+        checkpointDigest(encoded) !== digest
+      ) {
+        return null;
+      }
+      const checkpoint = JSON.parse(encoded) as SessionProjectionCheckpoint;
+      if (
+        checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+        checkpoint.sessionId !== sessionId ||
+        checkpoint.throughSequence !== throughSequence ||
+        checkpoint.projection?.session?.id !== sessionId ||
+        !Array.isArray(checkpoint.pendingExecutorStarts)
+      ) {
+        return null;
+      }
+      return checkpoint;
+    } catch {
+      // Derived cache only. A malformed row is indistinguishable from a miss;
+      // immutable events are the recovery path and overwrite it after folding.
+      return null;
+    }
+  }
+
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
+    this.assertOpen();
+    if (
+      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+      checkpoint.sessionId !== checkpoint.projection.session.id ||
+      !Number.isInteger(checkpoint.throughSequence) ||
+      checkpoint.throughSequence < 0
+    ) {
+      throw new Error("Session projection checkpoint is invalid");
+    }
+    const latestSequence = this.latestEventSequence(checkpoint.sessionId);
+    if (checkpoint.throughSequence > latestSequence) {
+      throw new Error("Session projection checkpoint is ahead of durable history");
+    }
+    const encoded = encodeSessionJson(checkpoint);
+    prepared(
+      this.db,
+      `INSERT INTO session_projection_checkpoints
+         (session_id, schema_version, through_sequence, checkpoint, digest, updated_at)
+       VALUES (
+         @sessionId, @schemaVersion, @throughSequence, @checkpoint, @digest,
+         COALESCE(
+           (SELECT MAX(recorded_at) FROM session_events WHERE session_id = @sessionId),
+           (SELECT created_at FROM sessions WHERE id = @sessionId)
+         )
+       )
+       ON CONFLICT(session_id) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         through_sequence = excluded.through_sequence,
+         checkpoint = excluded.checkpoint,
+         digest = excluded.digest,
+         updated_at = excluded.updated_at
+       WHERE excluded.through_sequence >= session_projection_checkpoints.through_sequence`,
+    ).run({
+      sessionId: checkpoint.sessionId,
+      schemaVersion: checkpoint.version,
+      throughSequence: checkpoint.throughSequence,
+      checkpoint: encoded,
+      digest: checkpointDigest(encoded),
+    });
   }
 
   getCommand(commandId: string): SessionCommand | null {
@@ -876,6 +979,10 @@ function readNullableNumber(value: unknown, context: string): number | null {
     throw new Error(`${context} must be a finite number`);
   }
   return value;
+}
+
+function checkpointDigest(encoded: string): string {
+  return createHash("sha256").update(encoded).digest("hex");
 }
 
 function readInteger(value: unknown, context: string): number {

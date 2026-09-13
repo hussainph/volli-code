@@ -2050,6 +2050,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
   WHERE merged_into_id IS NULL;
 `;
 
+/**
+ * Migration 047: rebuildable per-Session projection checkpoints (VC-355).
+ *
+ * The immutable event log remains canonical. This table is an additive cache:
+ * a missing, stale-ahead, unsupported, or malformed row is ignored and the
+ * Session refolds from event one. `ON DELETE CASCADE` keeps the cache's lifetime
+ * no longer than the immutable Session row it summarizes.
+ */
+const MIGRATION_047_SESSION_PROJECTION_CHECKPOINTS = `
+CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
+  session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  schema_version   INTEGER NOT NULL CHECK (schema_version > 0),
+  through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+  checkpoint       TEXT NOT NULL CHECK (json_valid(checkpoint)),
+  digest           TEXT NOT NULL CHECK (length(digest) = 64),
+  updated_at       INTEGER NOT NULL
+);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2288,6 +2307,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "labels — one live identity per NOCASE name, with retained merge aliases",
     sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
     apply: applyMigration046LabelCaseIdentity,
+  },
+  {
+    version: 47,
+    name: "session_projection_checkpoints — rebuildable per-Session read models",
+    sql: MIGRATION_047_SESSION_PROJECTION_CHECKPOINTS,
   },
 ];
 

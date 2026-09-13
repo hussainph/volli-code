@@ -35,6 +35,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  SessionProjectionCheckpoint,
   SessionUsageReport,
   SessionUsageReportQuery,
   LatestSessionSignal,
@@ -127,6 +128,12 @@ export interface SessionEngine {
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
+  /** Metadata-only event head, without payload/provenance decoding. */
+  latestEventSequence(query: GetSessionQuery): Promise<number>;
+  /** A derived projection cache row; null means the immutable log must be folded. */
+  getProjectionCheckpoint(query: GetSessionQuery): Promise<SessionProjectionCheckpoint | null>;
+  /** Persists only a rebuildable read model, never a Session fact. */
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void>;
   /**
    * What a scope consumed, over a window, optionally broken down.
    *
@@ -614,6 +621,24 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async listEvents(query) {
       return ports.ledger.transaction((transaction) => transaction.listEvents(query));
+    },
+
+    async latestEventSequence(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.latestEventSequence(query.sessionId),
+      );
+    },
+
+    async getProjectionCheckpoint(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.getProjectionCheckpoint(query.sessionId),
+      );
+    },
+
+    async saveProjectionCheckpoint(checkpoint) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.saveProjectionCheckpoint(checkpoint),
+      );
     },
 
     async reportUsage(query) {

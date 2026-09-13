@@ -3312,6 +3312,32 @@ function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   return db;
 }
 
+describe("migrate — 047, Session projection checkpoints (VC-355)", () => {
+  it("adds an empty, JSON-checked cache table to an existing profile", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 46 });
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "session_projection_checkpoints")).toEqual([
+      "session_id",
+      "schema_version",
+      "through_sequence",
+      "checkpoint",
+      "digest",
+      "updated_at",
+    ]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get(),
+    ).toEqual({ count: 0 });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
 describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", () => {
   it("folds the stray spelling into a retained alias and preserves every association", () => {
     const dbPath = tempDbPath();

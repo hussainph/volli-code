@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
-import { roleImpliedByTicket } from "@volli/shared";
+import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { internSessionEventProvenance } from "../db/session-event-provenance";
@@ -89,6 +89,74 @@ describe("SqliteSessionLedger", () => {
         [helper.session.id, parent.session.id],
       ]),
     );
+  });
+
+  it("round-trips a rebuildable projection checkpoint and rejects corrupt or ahead rows", async () => {
+    const { control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-checkpoint",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Checkpoint",
+      provenance,
+    });
+    const events = await control.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+
+    await control.saveProjectionCheckpoint(checkpoint);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toEqual(checkpoint);
+
+    ctx.db
+      .prepare(
+        "UPDATE session_projection_checkpoints SET checkpoint = json_set(checkpoint, '$.sessionId', 'corrupt') WHERE session_id = ?",
+      )
+      .run(created.session.id);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
+
+    await control.saveProjectionCheckpoint(checkpoint);
+    ctx.db
+      .prepare(
+        "UPDATE session_projection_checkpoints SET through_sequence = 999 WHERE session_id = ?",
+      )
+      .run(created.session.id);
+    await expect(
+      control.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
+  });
+
+  it("rolls a checkpoint back with its transaction", async () => {
+    const { control, ledger, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-checkpoint-rollback",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance,
+    });
+    const checkpoint = createSessionProjectionCheckpoint(
+      created.session,
+      await control.listEvents({ sessionId: created.session.id }),
+    );
+
+    await expect(
+      ledger.transaction((transaction) => {
+        transaction.saveProjectionCheckpoint(checkpoint);
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(
+      ctx.db
+        .prepare("SELECT 1 FROM session_projection_checkpoints WHERE session_id = ?")
+        .get(created.session.id),
+    ).toBeUndefined();
   });
 
   it("commits a complete create fact set once, replays it idempotently, and orders cloned reads", async () => {

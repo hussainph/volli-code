@@ -173,6 +173,9 @@ export function createSessionWakeBus(
     listSessionStarts: (query) => engine.listSessionStarts(query),
     listLatestTicketSignals: (query) => engine.listLatestTicketSignals(query),
     listEvents: (query) => engine.listEvents(query),
+    latestEventSequence: (query) => engine.latestEventSequence(query),
+    getProjectionCheckpoint: (query) => engine.getProjectionCheckpoint(query),
+    saveProjectionCheckpoint: (checkpoint) => engine.saveProjectionCheckpoint(checkpoint),
     reportUsage: (query) => engine.reportUsage(query),
   };
 
