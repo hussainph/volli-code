@@ -1194,7 +1194,12 @@
 }
 
 /* The framed content card, floating on the canvas — the other half of the unit. */
-[data-volli-shell="framed"] [data-slot="sidebar-inset"] {
+/* The surface owns this marker separately from the shell while a pin opens:
+ * its wide ephemeral layout stays put under the compositor translate until the
+ * endpoint, then both the marker and spacer settle in one layout pass. Keying
+ * this rule to the shell would resize terminals once at animation start and
+ * again at the end just to exchange the card's 8px left inset. */
+[data-slot="sidebar-inset"][data-sidebar-layout="framed"] {
   /* 0, not −1px.
    *
    * The lab carried a 1px overlap justified by a `--sidebar-width` rounding tax

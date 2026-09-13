@@ -145,6 +145,7 @@ vi.mock("./worktree", async () => ({
   },
 }));
 
+import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { createDesktopSessionEngine } from "./session-control";
 import { insertSession } from "./session-control/test-support";
@@ -189,6 +190,13 @@ function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
   return (handler as (...callArgs: unknown[]) => T)(fakeEvent, ...args);
 }
 
+/** The production invalidation is frame-window coalesced; handler tests await its delivery. */
+async function expectDataChanged(payload: unknown): Promise<void> {
+  await vi.waitFor(() => {
+    expect(dataChangedSends).toContainEqual({ channel: "volli:data-changed", payload });
+  });
+}
+
 let ctx: TestDb;
 
 // `volli:project-create` now requires an existing directory (main-side path
@@ -219,6 +227,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Drain a mutation this test did not inspect before the next test clears the
+  // shared send log and creates unrelated ids.
+  flushDataChangedForTest();
   ctx.cleanup();
   for (const dir of createdProjectDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -889,9 +900,11 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
       usesWorktree: true,
     });
 
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -945,7 +958,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
     expect(ensure).not.toHaveBeenCalled();
   });
 
-  it("broadcasts a worktree change when scope is switched OFF, so a venue reader stops waiting (VC-286)", () => {
+  it("broadcasts a worktree change when scope is switched OFF, so a venue reader stops waiting (VC-286)", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId); // worktree-scoped, no worktree yet
     dataChangedSends.length = 0;
@@ -954,9 +967,11 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
 
     // The ticket's Session now binds the main checkout; a venue cached as
     // `resolving` for the worktree it will never get must be read again.
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -2144,10 +2159,7 @@ describe("volli:worktree-remove", () => {
     });
     // Targeted at the ticket whose worktree path was cleared (projectId is
     // undefined here — no ticket row was seeded — and undefined keys are ignored).
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: "ticket-1", kind: "worktree" },
-    });
+    await expectDataChanged({ entity: "tickets", ticketId: "ticket-1", kind: "worktree" });
   });
 
   it("refuses (main-side) when a terminal runs in the ticket's worktree, never calling remove", async () => {
@@ -2379,9 +2391,11 @@ describe("volli:worktree-recreate", () => {
     });
 
     expect(result).toEqual({ ok: true, worktreePath: "/wt/VC-1-a-ticket" });
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -2957,10 +2971,7 @@ describe("the build-artifact channels", () => {
     const result = await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
 
     expect(result).toEqual({ ok: true, report });
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: expect.objectContaining({ kind: "worktree" }),
-    });
+    await expectDataChanged(expect.objectContaining({ kind: "worktree" }));
   });
 
   it("broadcasts nothing when a real pass removed nothing", async () => {
@@ -3121,10 +3132,7 @@ describe("volli:worktree-orphan-delete", () => {
     expect(result).toEqual({ ok: true });
     expect(existsSync(target)).toBe(false);
     // An orphan is unlinked from any live ticket, so this broadcast is untargeted.
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", kind: "worktree" },
-    });
+    await expectDataChanged({ entity: "tickets", kind: "worktree" });
   });
 
   // Deleting a ticket only nulls `sessions.ticket_id`, so a Session can still be

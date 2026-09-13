@@ -22,14 +22,57 @@ import type {
 } from "../ipc/contract";
 
 /**
- * Fans the invalidation out to every open window. `change` carries the best
- * scope the caller knows: a `ticketId` (plus `projectId`/`kind` when it has
- * them) for a change it can pin to one ticket, or `{}` (the default —
- * untargeted) when it genuinely can't, which the renderer reads as "anything may
- * have changed". The `entity` discriminant is stamped here so call sites only
- * ever pass scope.
+ * One half-frame at 60Hz: long enough to fold a synchronous mutation burst into
+ * one recovery read, short enough that a socket-originated change still appears
+ * in the next painted frame. This is the same window the PTY output pipeline
+ * uses to turn raw chunks into one IPC send (`pty/output.ts`).
  */
-export function broadcastDataChanged(change: Omit<DataChangedEvent, "entity"> = {}): void {
+export const DATA_CHANGED_BATCH_WINDOW_MS = 8;
+
+type DataChangeScope = Omit<DataChangedEvent, "entity">;
+
+let pendingDataChange: DataChangeScope | null = null;
+let dataChangeTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Merge two invalidations without ever claiming a scope narrower than either
+ * input. A missing/different ticket or project becomes untargeted, so every
+ * relevant surface refreshes. `worktree` is the one load-bearing kind: it
+ * invalidates cached venue readings, so it survives a mixed-kind batch even at
+ * the cost of one harmless extra venue refresh. Other mixed kinds may collapse
+ * to no hint because every reader already re-hydrates the board wholesale.
+ */
+function mergeDataChange(current: DataChangeScope, next: DataChangeScope): DataChangeScope {
+  const ticketId =
+    current.ticketId !== undefined && current.ticketId === next.ticketId
+      ? current.ticketId
+      : undefined;
+  const projectId =
+    current.projectId !== undefined && current.projectId === next.projectId
+      ? current.projectId
+      : undefined;
+  const kind =
+    current.kind === "worktree" || next.kind === "worktree"
+      ? "worktree"
+      : current.kind !== undefined && current.kind === next.kind
+        ? current.kind
+        : undefined;
+  return {
+    ...(ticketId === undefined ? {} : { ticketId }),
+    ...(projectId === undefined ? {} : { projectId }),
+    ...(kind === undefined ? {} : { kind }),
+  };
+}
+
+/** Send the one pending invalidation to every live window, if there is one. */
+function flushDataChanged(): void {
+  if (dataChangeTimer !== null) {
+    clearTimeout(dataChangeTimer);
+    dataChangeTimer = null;
+  }
+  const change = pendingDataChange;
+  pendingDataChange = null;
+  if (change === null) return;
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.webContents.isDestroyed()) continue;
     window.webContents.send(
@@ -40,6 +83,31 @@ export function broadcastDataChanged(change: Omit<DataChangedEvent, "entity"> = 
       } satisfies DataChangedEvent,
     );
   }
+}
+
+/** Drain module state between tests that exercise mutation handlers indirectly. */
+export function flushDataChangedForTest(): void {
+  flushDataChanged();
+}
+
+/**
+ * Queue an invalidation for every open window. `change` carries the best scope
+ * the caller knows: a `ticketId` (plus `projectId`/`kind` when it has them) for
+ * a change it can pin to one ticket, or `{}` (the default — untargeted) when it
+ * genuinely cannot.
+ *
+ * Invalidations coalesce for one frame window. The renderer answers every event
+ * with a full SQLite bootstrap, so sending fifteen mutation notices in one
+ * synchronous burst does not make the result fifteen times fresher — it starts
+ * fifteen competing recovery reads and hydrations. One conservatively merged
+ * notice preserves the same recovery guarantee and scopes only what every call
+ * agreed on.
+ */
+export function broadcastDataChanged(change: DataChangeScope = {}): void {
+  pendingDataChange =
+    pendingDataChange === null ? { ...change } : mergeDataChange(pendingDataChange, change);
+  if (dataChangeTimer !== null) return;
+  dataChangeTimer = setTimeout(flushDataChanged, DATA_CHANGED_BATCH_WINDOW_MS);
 }
 
 /**
