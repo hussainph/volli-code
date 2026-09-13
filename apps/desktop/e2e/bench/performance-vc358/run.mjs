@@ -8,14 +8,12 @@ import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 
 import {
-  APP_DIR,
   REPO,
   assertBuiltRendererLoaded,
   assertProfileIsolated,
   cardById,
   closeAppBounded,
   launch,
-  startTerminalSession,
   tabStrip,
   tabStripNewChatButton,
   TICKET_TAB_STRIP,
@@ -24,7 +22,6 @@ import { generateFixture, verifyFixture } from "./fixture.mjs";
 import { DEFAULT_SEED, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 
 const execFileAsync = promisify(execFile);
-const CHAT_BENCH = join(APP_DIR, "e2e", "chat-window-bench.mjs");
 const WARNING =
   "Performance numbers are comparable only on the same machine, in the same power/thermal state, with the same load arm.";
 // VC-358 validation uses VC-353's frozen fixture and measurement seam, but
@@ -46,7 +43,6 @@ function parseArgs(argv) {
     slowdownMs: 0,
     skipBuild: false,
     keepFixture: false,
-    streamOnly: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -63,7 +59,6 @@ function parseArgs(argv) {
     else if (argument === "--output") args.output = argv[++index];
     else if (argument === "--skip-build") args.skipBuild = true;
     else if (argument === "--keep-fixture") args.keepFixture = true;
-    else if (argument === "--stream-only") args.streamOnly = true;
     else if (argument === "--help") args.help = true;
     else throw new Error(`Unknown benchmark argument ${argument}`);
   }
@@ -102,7 +97,6 @@ function usage() {
     "  --fixture DIR              reuse a generated fixture profile",
     "  --stream-token-rate N      scripted stream rate in tokens/s (default: 30)",
     "  --skip-build               use current built app and chat bench",
-    "  --stream-only              run only the stream+scroll renderer bench",
     "  --slowdown-ms N            opt-in renderer slow path for sensitivity proof",
     "  --keep-fixture             keep generated fixture and run profiles",
     "",
@@ -384,10 +378,6 @@ async function startCapture(page) {
   });
 }
 
-async function captureElapsed(page) {
-  return page.evaluate(() => performance.now() - window.vc353Capture.started);
-}
-
 async function stopCapture(page) {
   return page.evaluate(() => {
     const capture = window.vc353Capture;
@@ -451,40 +441,6 @@ async function clickTicketBody(page, displayId) {
   await tabStrip(page, TICKET_TAB_STRIP).getByRole("tab", { name: displayId, exact: true }).click();
 }
 
-async function measureLongChat(page, app, title) {
-  const row = page.getByText(title, { exact: true }).first();
-  await row.waitFor({ state: "visible", timeout: 30_000 });
-  await startCapture(page);
-  try {
-    await row.click();
-    await page.locator('[role="log"] .is-user, [role="log"] .is-assistant').first().waitFor({
-      state: "visible",
-      timeout: 120_000,
-    });
-    const firstPaintMs = await captureElapsed(page);
-    const responsiveness = await page.evaluate(async () => {
-      const scroller = document.querySelector('[role="log"] > div');
-      if (!(scroller instanceof HTMLElement)) return false;
-      const before = scroller.scrollTop;
-      const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      const target = before > 0 ? Math.max(0, before - 16) : Math.min(maximum, 16);
-      scroller.scrollTop = target;
-      await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
-      await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
-      return maximum === 0 || Math.abs(scroller.scrollTop - target) < 1;
-    });
-    if (!responsiveness) throw new Error("long-chat scroller did not become interactive");
-    return {
-      ...(await stopCapture(page)),
-      firstPaintMs,
-      rendererRssMb: await rendererRssMb(app),
-    };
-  } catch (error) {
-    await stopCapture(page).catch(() => null);
-    throw error;
-  }
-}
-
 async function measureNewChat(page, app, displayId) {
   await clickTicketBody(page, displayId);
   const textarea = page.locator('textarea[aria-label="Message"]:visible');
@@ -519,138 +475,6 @@ async function measureNewChat(page, app, displayId) {
       }
     },
   );
-}
-
-async function measureNewTerminal(page, app, readyFile) {
-  await page.getByRole("button", { name: "Home", exact: true }).first().click();
-  await tabStrip(page, "Home tabs").waitFor({ state: "visible", timeout: 30_000 });
-  const before = await page.locator('[aria-label^="Close Terminal"]').count();
-  return measured(
-    page,
-    app,
-    () => startTerminalSession(page),
-    async () => {
-      await page.waitForFunction(
-        (expected) => document.querySelectorAll('[aria-label^="Close Terminal"]').length > expected,
-        before,
-        { timeout: 30_000 },
-      );
-      const terminalHost = page.locator("[data-terminal-renderer]:visible").last();
-      await terminalHost.waitFor({ state: "visible", timeout: 30_000 });
-      const terminalId = await terminalHost.getAttribute("data-terminal-renderer");
-      if (terminalId === null) throw new Error("new terminal has no durable id");
-      const shellCommand = `stty size > '${readyFile.replaceAll("'", "'\\\"'\\\"'")}'`;
-      const result = await page.evaluate(
-        ({ sessionId, shellCommand: input }) => window.api.terminal.run(sessionId, input),
-        { sessionId: terminalId, shellCommand },
-      );
-      if (!result.ok || result.exitCode !== 0) {
-        throw new Error(`new terminal readiness command failed: ${JSON.stringify(result)}`);
-      }
-      const value = await fs.readFile(readyFile, "utf8").catch(() => "");
-      if (!/^\d+\s+\d+\s*$/.test(value)) {
-        throw new Error(`new terminal returned an invalid grid: ${JSON.stringify(value)}`);
-      }
-    },
-  );
-}
-
-async function measureSidebar(page, app) {
-  const toggle = page.getByRole("button", { name: "Toggle navigation sidebar", exact: true });
-  const state = () => page.locator("[data-volli-shell]").getAttribute("data-volli-shell");
-  const phase = async () => {
-    const before = await state();
-    return measured(
-      page,
-      app,
-      () => toggle.click(),
-      async () => {
-        await page.waitForFunction(
-          (previous) =>
-            document.querySelector("[data-volli-shell]")?.getAttribute("data-volli-shell") !==
-            previous,
-          before,
-          { timeout: 5_000 },
-        );
-        await settleFrames(page, 16);
-      },
-    );
-  };
-  const close = await phase();
-  const open = await phase();
-  return {
-    latencyMs: close.latencyMs + open.latencyMs,
-    closeMs: close.latencyMs,
-    openMs: open.latencyMs,
-    frameTimesMs: [...close.frameTimesMs, ...open.frameTimesMs],
-    droppedFrames: close.droppedFrames + open.droppedFrames,
-    longTasksMs: [...close.longTasksMs, ...open.longTasksMs],
-    refreshIntervalMs: close.refreshIntervalMs ?? open.refreshIntervalMs,
-    rendererRssMb: open.rendererRssMb,
-  };
-}
-
-async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
-  await page.getByRole("button", { name: "Search tickets and sessions", exact: true }).click();
-  const input = page.getByPlaceholder("Search tickets and sessions…");
-  await input.waitFor({ state: "visible", timeout: 10_000 });
-  await input.fill(targetDisplayId);
-  const row = page.getByText(targetTitle, { exact: true });
-  await row.waitFor({ state: "visible", timeout: 30_000 });
-  await row.click();
-}
-
-async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
-  return measured(
-    page,
-    app,
-    () => selectTicketFromPalette(page, targetTitle, targetDisplayId),
-    async () => {
-      await tabStrip(page, TICKET_TAB_STRIP)
-        .getByRole("tab", { name: targetDisplayId, exact: true })
-        .waitFor({ state: "visible", timeout: 30_000 });
-    },
-  );
-}
-
-async function measureBoardRender(page, app, ticketCount) {
-  return measured(
-    page,
-    app,
-    async () => {
-      await page.getByRole("button", { name: "Home", exact: true }).first().click();
-      const boardTab = tabStrip(page, "Home tabs").getByRole("tab", {
-        name: "Board",
-        exact: true,
-      });
-      if (await boardTab.isVisible().catch(() => false)) await boardTab.click();
-    },
-    () => waitForBoard(page, ticketCount),
-  );
-}
-
-async function measureRpc(page, app, sessionId) {
-  await startCapture(page);
-  try {
-    const rpc = await page.evaluate(async (id) => {
-      const started = performance.now();
-      const response = await window.api.sessionRpc.request({
-        procedure: "session.projection",
-        input: { sessionId: id },
-      });
-      return { response, latencyMs: performance.now() - started };
-    }, sessionId);
-    if (!rpc.response.ok) throw new Error(`RPC failed: ${JSON.stringify(rpc.response)}`);
-    await settleFrames(page);
-    return {
-      ...(await stopCapture(page)),
-      latencyMs: rpc.latencyMs,
-      rendererRssMb: await rendererRssMb(app),
-    };
-  } catch (error) {
-    await stopCapture(page).catch(() => null);
-    throw error;
-  }
 }
 
 async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, manifest }) {
@@ -712,44 +536,6 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
   }
 }
 
-async function runChatBench({
-  manifest,
-  repetitions,
-  streamSteps,
-  streamTokenRate,
-  slowdownMs,
-  skipBuild,
-  label,
-}) {
-  const output = await command(
-    process.execPath,
-    [
-      CHAT_BENCH,
-      "--sessions",
-      "1",
-      "--turns",
-      String(manifest.counts.transcriptMessages),
-      "--stream-samples",
-      String(repetitions),
-      "--stream-steps",
-      String(streamSteps),
-      "--stream-token-rate",
-      String(streamTokenRate),
-      "--slowdown-ms",
-      String(slowdownMs),
-      "--label",
-      label,
-      ...(skipBuild ? ["--skip-build"] : []),
-    ],
-    { cwd: APP_DIR, env: { ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
-  );
-  const match = /__BENCH__(?<json>.*)__BENCH__/s.exec(output);
-  if (match?.groups?.json === undefined) throw new Error("chat window bench printed no report");
-  const report = JSON.parse(match.groups.json);
-  if (report.failure !== undefined) throw new Error(`chat window bench failed: ${report.failure}`);
-  return report;
-}
-
 async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatBuilt }) {
   const load = loaded ? await startBusyLoad(args.busyCores) : null;
   const name = load?.name ?? "idle";
@@ -758,19 +544,17 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
   const rendererErrors = [];
   let armResult;
   try {
-    if (!args.streamOnly) {
-      for (let index = 0; index < args.repetitions; index += 1) {
-        console.log(`full app sample ${index + 1}/${args.repetitions}`);
-        const result = await fullAppIteration({
-          fixtureDirectory,
-          runRoot,
-          armName: name,
-          index,
-          manifest,
-        });
-        for (const [id, sample] of Object.entries(result.samples)) byInteraction[id].push(sample);
-        rendererErrors.push(...result.rendererErrors);
-      }
+    for (let index = 0; index < args.repetitions; index += 1) {
+      console.log(`full app sample ${index + 1}/${args.repetitions}`);
+      const result = await fullAppIteration({
+        fixtureDirectory,
+        runRoot,
+        armName: name,
+        index,
+        manifest,
+      });
+      for (const [id, sample] of Object.entries(result.samples)) byInteraction[id].push(sample);
+      rendererErrors.push(...result.rendererErrors);
     }
     // The renderer-only streaming probe is orthogonal to VC-358 and would
     // contaminate the loaded arm before its + Chat samples.
@@ -858,7 +642,6 @@ function markdown(report) {
     "- The app measurements launch the production Vite/Electron build against a fresh APFS-cloned copy of the deterministic, file-backed migrated fixture for every repetition.",
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
-    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production working/live lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → an incrementally growing open TypeScript fence → a closed fence → prose, and moves the transcript scroller every animation frame in the same loop.`,
     "- The loaded arm is named `N-busy-core`: N Node worker threads run the fixed integer-mixing loop in `busy-worker.mjs` continuously from before Electron launch through the last sample; actual arm duration and worker checksums are recorded in JSON.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",
