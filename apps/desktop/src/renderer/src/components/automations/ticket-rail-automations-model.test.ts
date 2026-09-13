@@ -3,6 +3,7 @@ import type { Automation, ColumnArming } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  automationGroupsFor,
   modelOverrideRows,
   overridePressable,
   railRunLabel,
@@ -50,6 +51,7 @@ describe("ticketRailAutomations", () => {
       armings: [arming()],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: true,
     });
 
@@ -63,6 +65,7 @@ describe("ticketRailAutomations", () => {
       armings: [],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: true,
     });
 
@@ -79,6 +82,7 @@ describe("ticketRailAutomations", () => {
       armings: [arming({ status: "todo" })],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: true,
     });
 
@@ -98,6 +102,7 @@ describe("ticketRailAutomations", () => {
         armings: [arming()],
         status: "doing",
         rankedAutomationIds: ["a1", "a2"],
+        orders: [],
         ready: true,
       }).offered.map((entry) => entry.id),
     ).toEqual(["a1", "a2"]);
@@ -109,6 +114,7 @@ describe("ticketRailAutomations", () => {
         armings: [arming()],
         status: "doing",
         rankedAutomationIds: [],
+        orders: [],
         ready: true,
       }).offered.map((entry) => entry.id),
     ).toEqual(["a2", "a1"]);
@@ -120,6 +126,7 @@ describe("ticketRailAutomations", () => {
       armings: [],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: true,
     });
 
@@ -136,6 +143,7 @@ describe("ticketRailAutomations", () => {
       armings: [],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: true,
     });
 
@@ -154,6 +162,7 @@ describe("ticketRailAutomations", () => {
       armings: [arming()],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: false,
     });
 
@@ -163,6 +172,7 @@ describe("ticketRailAutomations", () => {
     // Nothing offered and no claim about the project either: a menu row here
     // would be a record read from a cache nobody has filled.
     expect(rail.offered).toEqual([]);
+    expect(rail.groups).toEqual([]);
     expect(rail.listsAny).toBe(false);
   });
 
@@ -174,10 +184,96 @@ describe("ticketRailAutomations", () => {
       armings: [arming()],
       status: "doing",
       rankedAutomationIds: [],
+      orders: [],
       ready: false,
     });
 
     expect(stale.primary).not.toEqual({ kind: "automation", automation: automation() });
+  });
+});
+
+describe("automationGroupsFor (VC-329 item 5)", () => {
+  it("groups every column's offer, this ticket's column first, board order after", () => {
+    const doing = automation(); // triggers doing
+    const todo = automation({
+      id: "a2",
+      name: "Triage",
+      trigger: { kind: "columns", columns: ["todo"] },
+    });
+
+    const groups = automationGroupsFor({ automations: [doing, todo], orders: [], status: "todo" });
+
+    expect(groups.map((group) => group.status)).toEqual(["todo", "doing"]);
+    expect(groups[0]?.current).toBe(true);
+    expect(groups[0]?.label).toBe("Todo");
+    expect(groups[1]?.current).toBe(false);
+    expect(groups[1]?.automations.map((entry) => entry.id)).toEqual(["a1"]);
+  });
+
+  it("orders each group by its own column's authored rank", () => {
+    const first = automation({ id: "a1", name: "Ranked first here" });
+    const second = automation({ id: "a2", name: "Ranked second here" });
+
+    const groups = automationGroupsFor({
+      automations: [second, first],
+      orders: [
+        { projectId: "p1", status: "doing", rankedAutomationIds: ["a1", "a2"], orderedAt: 1 },
+      ],
+      status: "todo",
+    });
+
+    expect(groups[0]?.automations.map((entry) => entry.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("offers a column that arms nothing, because the trigger decides membership", () => {
+    // Arming is a per-column act and these groups are hand-run doors; a column
+    // with no arming row still lists the Automations its trigger names.
+    const groups = automationGroupsFor({ automations: [automation()], orders: [], status: "todo" });
+
+    expect(groups.map((group) => group.status)).toEqual(["doing"]);
+  });
+
+  it("offers triggerless records on any ticket but excludes project schedules", () => {
+    const groups = automationGroupsFor({
+      automations: [
+        automation({ trigger: NO_AUTOMATION_TRIGGER }),
+        automation({
+          id: "scheduled",
+          trigger: {
+            kind: "schedule",
+            schedule: { preset: "daily", hour: 9, minute: 0, timeZone: "UTC" },
+          },
+        }),
+      ],
+      orders: [],
+      status: "doing",
+    });
+
+    expect(groups.map((group) => group.status)).toEqual(["any"]);
+    expect(groups[0]?.automations.map((record) => record.id)).toEqual(["a1"]);
+  });
+
+  it("contributes no group for an empty column, so the menu stays short", () => {
+    const groups = automationGroupsFor({ automations: [], orders: [], status: "doing" });
+
+    expect(groups).toEqual([]);
+  });
+
+  it("feeds ticketRailAutomations' cross-column answer", () => {
+    const doing = automation();
+    const rail = ticketRailAutomations({
+      automations: [doing],
+      armings: [],
+      status: "todo",
+      rankedAutomationIds: [],
+      orders: [],
+      ready: true,
+    });
+
+    // The ticket sits in Todo; the Doing automation is still offered, in its
+    // own labelled group — the whole point of item 5.
+    expect(rail.groups.map((group) => group.status)).toEqual(["doing"]);
+    expect(rail.primary).toEqual({ kind: "run-once" });
   });
 });
 

@@ -137,6 +137,19 @@ export interface SubmitDeps {
    * there yet. Omitted by callers that cannot attach.
    */
   linkAttachments?(ticketId: string): Promise<void>;
+  /**
+   * Run a SAVED Automation on the just-created Ticket (VC-329 item 4) — the
+   * same one call every other hand-run door uses (`runAutomationOnTicket`),
+   * with its toasts and refusals. No model override: an Automation's own
+   * Runtime governs its Runs, and a composer model picked for a kickoff chat
+   * has no business silently retuning someone's saved record.
+   */
+  runAutomation(input: {
+    automationId: string;
+    automationName: string;
+    ticketId: string;
+    ticketDisplayId: string;
+  }): Promise<void>;
 }
 
 /** The shared outcome: whether a ticket was actually created (drives the form's reset/close). */
@@ -154,18 +167,23 @@ function baseBranchFor(fields: ComposerFields): string | null {
   return fields.usesWorktree ? fields.baseBranch : null;
 }
 
-/** Create a ticket in the chip's status. Toasts the display id on success. */
-export async function runPlainCreate(
-  fields: ComposerFields,
-  deps: SubmitDeps,
-): Promise<SubmitResult> {
-  const ticket = await deps.addTicket(fields.projectId, fields.status, fields.title, {
+/** Create a ticket in the chip's status. Returns it, or null when the create failed. */
+async function createTicket(fields: ComposerFields, deps: SubmitDeps): Promise<Ticket | null> {
+  return deps.addTicket(fields.projectId, fields.status, fields.title, {
     priority: fields.priority,
     body: fields.body,
     labels: fields.labels,
     usesWorktree: fields.usesWorktree,
     baseBranch: baseBranchFor(fields),
   });
+}
+
+/** Create a ticket in the chip's status. Toasts the display id on success. */
+export async function runPlainCreate(
+  fields: ComposerFields,
+  deps: SubmitDeps,
+): Promise<SubmitResult> {
+  const ticket = await createTicket(fields, deps);
   if (ticket === null) return { created: false };
   await deps.linkAttachments?.(ticket.id);
   deps.toastSuccess(`${displayTicketId(fields.ticketPrefix, ticket.ticketNumber)} created`);
@@ -220,5 +238,40 @@ export async function runKickoff(
   // tab active, which is the sane retry surface.
   deps.openTicketWorkspace(fields.projectId, ticket.id);
   await deps.startChat(fields.projectId, ticket.id, chat);
+  return { created: true };
+}
+
+/**
+ * Create the ticket in the CHIP's status — never moved to make an Automation's
+ * column match (VC-329: a manual launch is a hand-run, and hand-runs do not
+ * reposition work or arm anything) — and then run the chosen saved Automation
+ * on it.
+ *
+ * NOT a rewritten prompt. The whole point of the third commit is that the
+ * project's Automations are the durable, editable definition of the work; inlining
+ * the Automation's Instructions into a kickoff message would fork it from the
+ * record the moment the record changed. What runs here is the record itself,
+ * through the same service a rail press or a card right-click reaches — same
+ * toasts, same refusals, same Run history under the ticket. The ticket create
+ * is plain create exactly, attachments included: a failed Automation Run
+ * surfaces on its own and leaves the ticket standing, which is a sane place to
+ * retry from.
+ */
+export async function runCreateWithAutomation(
+  fields: ComposerFields,
+  deps: SubmitDeps,
+  opts: { automation: { id: string; name: string } },
+): Promise<SubmitResult> {
+  const ticket = await createTicket(fields, deps);
+  if (ticket === null) return { created: false };
+  await deps.linkAttachments?.(ticket.id);
+  const displayId = displayTicketId(fields.ticketPrefix, ticket.ticketNumber);
+  deps.toastSuccess(`${displayId} created`);
+  await deps.runAutomation({
+    automationId: opts.automation.id,
+    automationName: opts.automation.name,
+    ticketId: ticket.id,
+    ticketDisplayId: displayId,
+  });
   return { created: true };
 }
