@@ -33,7 +33,7 @@ if (!databasePath) throw new Error("--database /path/to/volli.db is required");
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 const mb = (bytes) => bytes / 1024 / 1024;
 function percentile(values, fraction) {
-  const ordered = [...values].sort((left, right) => left - right);
+  const ordered = values.toSorted((left, right) => left - right);
   return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))];
 }
 function distribution(values) {

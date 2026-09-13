@@ -1492,9 +1492,7 @@ function foldSessionProjection(
   const throughSequence = checkpoint?.throughSequence ?? 0;
 
   const ordered = [...events]
-    .filter(
-      (event) => event.sessionId === session.id && event.sequence > throughSequence,
-    )
+    .filter((event) => event.sessionId === session.id && event.sequence > throughSequence)
     .toSorted((left, right) => left.sequence - right.sequence);
 
   for (const event of ordered) {

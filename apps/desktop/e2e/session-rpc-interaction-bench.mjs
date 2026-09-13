@@ -26,6 +26,20 @@ if (!profile || !ticketQuery) {
   throw new Error("--profile DISPOSABLE_PROFILE and --ticket-query QUERY are required");
 }
 
+function summarize(samples) {
+  return {
+    roundTrips: samples.filter((sample) => sample.kind === "round-trip").length,
+    procedures: samples
+      .filter((sample) => sample.kind === "round-trip")
+      .map((sample) => sample.procedure),
+    pushFrames: samples.filter((sample) => sample.kind === "push").length,
+    maxPreAckBacklog: Math.max(
+      0,
+      ...samples.filter((sample) => sample.kind === "push").map((sample) => sample.bufferedFrames),
+    ),
+  };
+}
+
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const electronApp = await electron.launch({
   cwd: appDirectory,
@@ -39,27 +53,16 @@ const electronApp = await electron.launch({
 
 try {
   await electronApp.context().addInitScript(() => {
-    globalThis.__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__ = [];
-    globalThis.__VOLLI_SESSION_RPC_PERFORMANCE__ = {
+    globalThis["__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__"] = [];
+    globalThis["__VOLLI_SESSION_RPC_PERFORMANCE__"] = {
       record(sample) {
-        globalThis.__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__.push(sample);
+        globalThis["__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__"].push(sample);
       },
     };
   });
   const page = await electronApp.firstWindow();
   const drain = () =>
-    page.evaluate(() => globalThis.__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__.splice(0));
-  const summarize = (samples) => ({
-    roundTrips: samples.filter((sample) => sample.kind === "round-trip").length,
-    procedures: samples
-      .filter((sample) => sample.kind === "round-trip")
-      .map((sample) => sample.procedure),
-    pushFrames: samples.filter((sample) => sample.kind === "push").length,
-    maxPreAckBacklog: Math.max(
-      0,
-      ...samples.filter((sample) => sample.kind === "push").map((sample) => sample.bufferedFrames),
-    ),
-  });
+    page.evaluate(() => globalThis["__VOLLI_SESSION_RPC_PERFORMANCE_SAMPLES__"].splice(0));
   const openPalette = async () => {
     await page.keyboard.press("Meta+k");
     const search = page.getByRole("combobox");

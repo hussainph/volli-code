@@ -404,9 +404,9 @@ export function sessionRpcClient(): SessionRpcClient {
 function windowPerformanceObserver(): SessionRpcPerformanceObserver | undefined {
   const candidate = (
     window as unknown as {
-      __VOLLI_SESSION_RPC_PERFORMANCE__?: SessionRpcPerformanceObserver;
+      [key: string]: SessionRpcPerformanceObserver | undefined;
     }
-  ).__VOLLI_SESSION_RPC_PERFORMANCE__;
+  )["__VOLLI_SESSION_RPC_PERFORMANCE__"];
   return candidate && typeof candidate.record === "function" ? candidate : undefined;
 }
 

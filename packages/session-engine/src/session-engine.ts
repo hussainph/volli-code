@@ -599,7 +599,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async listSessions(query) {
       return ports.ledger.transaction((transaction) =>
-        transaction.listSessions(query).map((session) => projectStoredSession(transaction, session)),
+        transaction
+          .listSessions(query)
+          .map((session) => projectStoredSession(transaction, session)),
       );
     },
 

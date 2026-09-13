@@ -1630,10 +1630,9 @@ describe("projectSession usage", () => {
   it("merges usage before and after a projection checkpoint without losing coverage", () => {
     const before = recorded(1, metered({ costUsd: 0.25 }));
     const after = recorded(2, metered({ costUsd: null, costBasis: "unavailable" }));
-    const resumed = advanceSessionProjection(
-      createSessionProjectionCheckpoint(session, [before]),
-      [after],
-    );
+    const resumed = advanceSessionProjection(createSessionProjectionCheckpoint(session, [before]), [
+      after,
+    ]);
 
     expect(resumed.projection.usage).toEqual(projectSession(session, [before, after]).usage);
     expect(resumed.projection.usage).toMatchObject({

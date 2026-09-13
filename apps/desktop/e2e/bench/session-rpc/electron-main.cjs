@@ -64,8 +64,11 @@ ipcMain.handle("volli-bench:session-push", (event, options) => {
 });
 
 async function runRenderer(options) {
+  // This function is serialized into the renderer, so its helpers must remain
+  // inside it rather than capture declarations from the main-process scope.
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
   const percentile = (values, fraction) => {
-    const ordered = [...values].sort((left, right) => left - right);
+    const ordered = values.toSorted((left, right) => left - right);
     return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))];
   };
   const summary = (values) => ({
@@ -73,19 +76,21 @@ async function runRenderer(options) {
     p95: percentile(values, 0.95),
     mean: values.reduce((sum, value) => sum + value, 0) / values.length,
   });
-  const epochNow = () => performance.timeOrigin + performance.now();
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
+  const rendererEpochNow = () => performance.timeOrigin + performance.now();
   const payloadSizes = [0, 1_024, 16_384, 262_144, 1_048_576];
   const payloadCurve = [];
 
   for (const payloadBytes of payloadSizes) {
     const samples = [];
     const payload = "x".repeat(payloadBytes);
-    const count = payloadBytes >= 1_048_576 ? Math.min(40, options.repetitions) : options.repetitions;
+    const count =
+      payloadBytes >= 1_048_576 ? Math.min(40, options.repetitions) : options.repetitions;
     for (let index = 0; index < 30; index += 1) await window.sessionRpcBench.roundTrip(payload);
     for (let index = 0; index < count; index += 1) {
-      const rendererStart = epochNow();
+      const rendererStart = rendererEpochNow();
       const response = await window.sessionRpcBench.roundTrip(payload);
-      const rendererEnd = epochNow();
+      const rendererEnd = rendererEpochNow();
       if (response.payload.length !== payloadBytes) throw new Error("payload length changed");
       const total = rendererEnd - rendererStart;
       const handler = response.mainOut - response.mainIn;
@@ -116,7 +121,7 @@ async function runRenderer(options) {
     });
   }
 
-  const push = await new Promise(async (resolve, reject) => {
+  const push = await new Promise((resolve, reject) => {
     const handlerTimes = [];
     const animationFrameGaps = [];
     let animationFrame = 0;
@@ -159,18 +164,19 @@ async function runRenderer(options) {
       checksum += frame.data.length;
       handlerTimes.push(performance.now() - handlerStartedAt);
     });
-    try {
-      // Establish the renderer's normal frame cadence before the burst.
-      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-      await window.sessionRpcBench.startPush({
-        frames: options.frames,
-        payloadBytes: 256,
-        sessions: 4,
-      });
-    } catch (error) {
-      detach();
-      reject(error);
-    }
+    // Establish the renderer's normal frame cadence before the burst.
+    setTimeout(() => {
+      void window.sessionRpcBench
+        .startPush({
+          frames: options.frames,
+          payloadBytes: 256,
+          sessions: 4,
+        })
+        .catch((error) => {
+          detach();
+          reject(error);
+        });
+    }, 100);
   });
 
   return { payloadCurve, push };
