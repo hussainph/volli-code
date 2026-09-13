@@ -10,6 +10,7 @@ import {
   sessionRpcClient,
   type SessionRpcBridge,
   type SessionRpcClient,
+  type SessionRpcPerformanceSample,
 } from "./session-rpc-ipc-link";
 
 function assertPresentationClient(client: SessionRpcClient): void {
@@ -117,6 +118,33 @@ describe("query and mutation", () => {
       projection: {},
       throughSequence: 4,
     });
+  });
+
+  it("reports payload-free round-trip timings to an optional benchmark observer", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 10;
+    const client = createSessionRpcClient(bridge, {
+      now: () => (now += 2),
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+
+    expect(samples).toEqual([
+      {
+        kind: "round-trip",
+        procedure: "session.projection",
+        durationMs: 2,
+        requestBytes: 68,
+        responseBytes: 56,
+        outcome: "ok",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-1");
   });
 
   it("routes a mutation the same way", async () => {
@@ -262,6 +290,38 @@ describe("subscription", () => {
     expect(record.data).toEqual([
       { id: "3", data: { sequence: 3 } },
       { id: "4", data: { sequence: 4 } },
+    ]);
+  });
+
+  it("measures pre-ack buffering and live renderer handler cost", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 0;
+    const client = createSessionRpcClient(bridge, {
+      now: () => ++now,
+      record: (sample) => samples.push(sample),
+    });
+
+    client.session.subscribe.subscribe({ sessionId: "session-1" }, { onData: () => undefined });
+    await flush();
+    bridge.emit({ kind: "data", subscriptionId: "sub-1", eventId: "3", data: { sequence: 3 } });
+    bridge.reply({ ok: true, subscriptionId: "sub-1" });
+    await flush();
+    bridge.emit({ kind: "data", subscriptionId: "sub-1", eventId: "4", data: { sequence: 4 } });
+
+    expect(samples.filter((sample) => sample.kind === "push")).toEqual([
+      expect.objectContaining({
+        disposition: "buffered-before-ack",
+        awaitingAck: 1,
+        bufferedFrames: 1,
+        durationMs: 1,
+      }),
+      expect.objectContaining({
+        disposition: "delivered",
+        awaitingAck: 0,
+        bufferedFrames: 0,
+        durationMs: 1,
+      }),
     ]);
   });
 
@@ -545,13 +605,28 @@ describe("subscription", () => {
 describe("sessionRpcClient", () => {
   // A StrictMode double render must not stack a second event listener onto the
   // bridge: every frame would then arrive twice.
-  it("builds the app's client once, on first use", () => {
+  it("builds the app's client once and attaches an init-script benchmark observer", async () => {
     const bridge = fakeBridge();
-    vi.stubGlobal("window", { api: { sessionRpc: bridge } });
+    const samples: SessionRpcPerformanceSample[] = [];
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      __VOLLI_SESSION_RPC_PERFORMANCE__: {
+        now: () => 1,
+        record: (sample: SessionRpcPerformanceSample) => samples.push(sample),
+      },
+    });
 
     expect(bridge.listenerCount()).toBe(0);
     const first = sessionRpcClient();
     expect(sessionRpcClient()).toBe(first);
     expect(bridge.listenerCount()).toBe(1);
+
+    const answer = first.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+    expect(samples).toEqual([
+      expect.objectContaining({ kind: "round-trip", procedure: "session.projection" }),
+    ]);
   });
 });

@@ -40,6 +40,37 @@ export interface SessionRpcBridge {
   cancel(subscriptionId: string): void;
 }
 
+/** One payload-free observation from the renderer side of the Session RPC edge. */
+export type SessionRpcPerformanceSample =
+  | {
+      kind: "round-trip";
+      procedure: SessionRpcIpcProcedure;
+      durationMs: number;
+      requestBytes: number;
+      responseBytes: number;
+      outcome: "ok" | "rpc-error" | "transport-error";
+    }
+  | {
+      kind: "push";
+      procedure: "session.subscribe";
+      eventKind: SessionRpcIpcEvent["kind"];
+      durationMs: number;
+      eventBytes: number;
+      disposition: "delivered" | "buffered-before-ack" | "discarded";
+      awaitingAck: number;
+      bufferedFrames: number;
+    };
+
+/**
+ * Optional benchmark tap. It receives only names, counts, sizes, and timings;
+ * request and response values never enter it. A throwing tap is ignored so
+ * diagnostics cannot alter the transport they are measuring.
+ */
+export interface SessionRpcPerformanceObserver {
+  now?(): number;
+  record(sample: SessionRpcPerformanceSample): void;
+}
+
 type AppSessionRpcClient = TRPCClient<AppRouter>;
 type AppSessionProcedures = AppSessionRpcClient["session"];
 type AppSessionSubscribeParameters = Parameters<AppSessionProcedures["subscribe"]["subscribe"]>;
@@ -88,25 +119,92 @@ export type SessionRpcClient = Omit<AppSessionRpcClient, "session"> & {
  * arrive before the renderer knows what to call them. A per-subscription
  * listener could not exist early enough to catch them.
  */
-export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter> {
+export function sessionRpcIpcLink(
+  bridge: SessionRpcBridge,
+  performanceObserver?: SessionRpcPerformanceObserver,
+): TRPCLink<AppRouter> {
   const consumers = new Map<string, (event: SessionRpcIpcEvent) => void>();
   const unclaimed = new Map<string, SessionRpcIpcEvent[]>();
   let awaitingAck = 0;
 
+  const now = () => {
+    try {
+      return performanceObserver?.now?.() ?? performance.now();
+    } catch {
+      return performance.now();
+    }
+  };
+  const bufferedFrameCount = () => {
+    let count = 0;
+    for (const frames of unclaimed.values()) count += frames.length;
+    return count;
+  };
+  const record = (sample: SessionRpcPerformanceSample): void => {
+    try {
+      performanceObserver?.record(sample);
+    } catch {
+      // A benchmark observer is never allowed to break the measured path.
+    }
+  };
+  const measuredRequest = async (value: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> => {
+    if (!performanceObserver) return bridge.request(value);
+    const startedAt = now();
+    try {
+      const response = await bridge.request(value);
+      record({
+        kind: "round-trip",
+        procedure: value.procedure,
+        durationMs: now() - startedAt,
+        requestBytes: jsonBytes(value),
+        responseBytes: jsonBytes(response),
+        outcome: response.ok ? "ok" : "rpc-error",
+      });
+      return response;
+    } catch (error) {
+      record({
+        kind: "round-trip",
+        procedure: value.procedure,
+        durationMs: now() - startedAt,
+        requestBytes: jsonBytes(value),
+        responseBytes: 0,
+        outcome: "transport-error",
+      });
+      throw error;
+    }
+  };
+
   bridge.onEvent((event) => {
+    const startedAt = performanceObserver ? now() : 0;
+    let disposition: Extract<SessionRpcPerformanceSample, { kind: "push" }>["disposition"];
     const consumer = consumers.get(event.subscriptionId);
     if (consumer) {
       consumer(event);
-      return;
+      disposition = "delivered";
+    } else if (awaitingAck === 0) {
+      // No acknowledgement can claim this late frame.
+      disposition = "discarded";
+    } else {
+      // A frame for an unknown id is either an in-flight subscription's head
+      // start — hold it until the ack names it — or a straggler for one that
+      // already ended, which nobody will ever claim. `awaitingAck` is exactly
+      // that distinction, and draining to zero retires whatever is left over.
+      const buffered = unclaimed.get(event.subscriptionId);
+      if (buffered) buffered.push(event);
+      else unclaimed.set(event.subscriptionId, [event]);
+      disposition = "buffered-before-ack";
     }
-    // A frame for an unknown id is either an in-flight subscription's head
-    // start — hold it until the ack names it — or a straggler for one that
-    // already ended, which nobody will ever claim. `awaitingAck` is exactly
-    // that distinction, and draining to zero retires whatever is left over.
-    if (awaitingAck === 0) return;
-    const buffered = unclaimed.get(event.subscriptionId);
-    if (buffered) buffered.push(event);
-    else unclaimed.set(event.subscriptionId, [event]);
+    if (performanceObserver) {
+      record({
+        kind: "push",
+        procedure: "session.subscribe",
+        eventKind: event.kind,
+        durationMs: now() - startedAt,
+        eventBytes: jsonBytes(event),
+        disposition,
+        awaitingAck,
+        bufferedFrames: bufferedFrameCount(),
+      });
+    }
   });
 
   const settleAck = (): void => {
@@ -128,7 +226,7 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
         if (op.type !== "subscription") {
           void (async () => {
             try {
-              const reply = await bridge.request(request);
+              const reply = await measuredRequest(request);
               // A caller's `signal` is the only handle it has on a call, so
               // this path honors it — after the fact. Main answers every
               // request it accepted, and there is nothing on the far side to
@@ -194,7 +292,7 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
         awaitingAck += 1;
         void (async () => {
           try {
-            const reply = await bridge.request(request);
+            const reply = await measuredRequest(request);
             if (!reply.ok) {
               observer.error(failure(reply.error.code, reply.error.message, op.path));
               return;
@@ -238,13 +336,25 @@ export function sessionRpcIpcLink(bridge: SessionRpcBridge): TRPCLink<AppRouter>
 }
 
 /** Creates a Session RPC client over one bridge. */
-export function createSessionRpcClient(bridge: SessionRpcBridge): SessionRpcClient {
+export function createSessionRpcClient(
+  bridge: SessionRpcBridge,
+  performanceObserver?: SessionRpcPerformanceObserver,
+): SessionRpcClient {
   // tRPC's untransformed client types model JSON damage; the router's
   // SessionRouterJsonSafety proof makes these raw payload types stable on every
   // transport, so the Electron client can expose them without that rewrite.
   return createTRPCClient<AppRouter>({
-    links: [sessionRpcIpcLink(bridge)],
+    links: [sessionRpcIpcLink(bridge, performanceObserver)],
   }) as unknown as SessionRpcClient;
+}
+
+function jsonBytes(value: unknown): number {
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? 0 : new TextEncoder().encode(json).byteLength;
+  } catch {
+    return 0;
+  }
 }
 
 let client: SessionRpcClient | null = null;
@@ -265,13 +375,16 @@ export function sessionRpcClient(): SessionRpcClient {
   if (client === null) {
     const bridge = window.api.sessionRpc;
     let detach: (() => void) | null = null;
-    client = createSessionRpcClient({
-      ...bridge,
-      onEvent: (listener) => {
-        detach = bridge.onEvent(listener);
-        return detach;
+    client = createSessionRpcClient(
+      {
+        ...bridge,
+        onEvent: (listener) => {
+          detach = bridge.onEvent(listener);
+          return detach;
+        },
       },
-    });
+      windowPerformanceObserver(),
+    );
     /* v8 ignore next 4 -- `import.meta.hot` exists only under the dev server;
        tests and production builds cannot take this branch. */
     import.meta.hot?.dispose(() => {
@@ -280,6 +393,21 @@ export function sessionRpcClient(): SessionRpcClient {
     });
   }
   return client;
+}
+
+/**
+ * E2E benchmarks install this object with an init script before app modules
+ * execute. Ordinary windows have no such global and pay no measurement cost;
+ * keeping the observer outside the preload API also avoids creating a new IPC
+ * surface merely for diagnostics.
+ */
+function windowPerformanceObserver(): SessionRpcPerformanceObserver | undefined {
+  const candidate = (
+    window as unknown as {
+      __VOLLI_SESSION_RPC_PERFORMANCE__?: SessionRpcPerformanceObserver;
+    }
+  ).__VOLLI_SESSION_RPC_PERFORMANCE__;
+  return candidate && typeof candidate.record === "function" ? candidate : undefined;
 }
 
 /**

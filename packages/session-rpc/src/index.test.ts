@@ -852,6 +852,31 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("reports router, validation, and handler time without retaining payloads", async () => {
+    const fixture = runtimeFixture();
+    const samples: unknown[] = [];
+    let now = 20;
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => (now += 3),
+        record: (sample) => samples.push(sample),
+      },
+    });
+
+    await caller.session.projection({ sessionId: "session-private" });
+
+    expect(samples).toEqual([
+      {
+        procedure: "session.projection",
+        durationMs: 3,
+        outcome: "success",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-private");
+  });
+
   it("exposes Model Access without adapter, profile, or credential inputs", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];
