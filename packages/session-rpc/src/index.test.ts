@@ -1426,6 +1426,56 @@ describe("Session tRPC router", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("carries a client-requested Session id on create, UUID-checked at the edge (VC-358)", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // A provisional chat promotes under the id it minted; absent, nothing
+    // changes for callers that never state one.
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      requestedSessionId: requested,
+    });
+    await caller.sessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ requestedSessionId: requested }),
+      {
+        operationId: "operation-2",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      },
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+        requestedSessionId: "not a uuid",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

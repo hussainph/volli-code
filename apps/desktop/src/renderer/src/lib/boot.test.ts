@@ -1,8 +1,10 @@
 import type { BootstrapPayload } from "../../../ipc/contract";
-import type { VenueSnapshot } from "@volli/shared";
+import { CHAT_DRAFTS_APP_STATE_KEY, type VenueSnapshot } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
@@ -396,6 +398,89 @@ describe("boot", () => {
     expect(useUiStore.getState().sidebarWidth).toBe(500);
     expect(useUiStore.getState().uiScale).toBe(1.25);
     expect(useWorkspaceStore.getState().byProject.p1?.boardView).toBe("list");
+  });
+
+  it("reopens a persisted unsent chat Draft without creating a resident Session", async () => {
+    const draftId = "550e8400-e29b-41d4-a716-446655440000";
+    const chatDrafts = JSON.stringify({
+      state: {
+        drafts: {
+          [draftId]: {
+            text: "survive a relaunch",
+            attachments: [],
+            held: [],
+            touchedAt: 10,
+            provisional: {
+              projectId: "p1",
+              ticketId: "t1",
+              operationId: "stable-create-operation",
+              title: null,
+              phase: "draft",
+            },
+          },
+        },
+      },
+      version: 1,
+    });
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({
+          projects: [
+            {
+              id: "p1",
+              name: "P1",
+              path: "/p1",
+              ticketPrefix: "P1",
+              colorIndex: 0,
+              sortOrder: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          ticketsByProject: {
+            p1: [
+              {
+                id: "t1",
+                projectId: "p1",
+                ticketNumber: 1,
+                title: "Ticket",
+                body: "",
+                status: "backlog",
+                priority: "medium",
+                labels: [],
+                usesWorktree: true,
+                preferredHarnessId: "claude-code",
+                order: 0,
+                worktreePath: null,
+                branch: null,
+                baseBranch: null,
+                prUrl: null,
+                createdAt: 0,
+                updatedAt: 0,
+              },
+            ],
+          },
+          appState: { [CHAT_DRAFTS_APP_STATE_KEY]: chatDrafts },
+        }),
+      })),
+    });
+    useChatDraftsStore.setState({ drafts: {} });
+    useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });
+
+    try {
+      await boot(gateway, fakeStorage());
+
+      expect(useChatDraftsStore.getState().drafts[draftId]).toMatchObject({
+        text: "survive a relaunch",
+        provisional: { operationId: "stable-create-operation", phase: "draft" },
+      });
+      expect(useChatSessionsStore.getState().openTabs).toEqual({ t1: [draftId] });
+      expect(useChatSessionsStore.getState().sessions).toEqual({});
+    } finally {
+      useChatDraftsStore.setState({ drafts: {} });
+      useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });
+    }
   });
 });
 

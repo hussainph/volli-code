@@ -58,6 +58,7 @@ import { join } from "node:path";
 // change to Monaco's input strategy is a one-file fix.
 import {
   clickMonaco,
+  closeAppBounded,
   isMonacoEditable,
   launch as launchSmokeApp,
   readDocumentLine,
@@ -591,7 +592,7 @@ async function main() {
       return typeof raw === "string" && raw.includes(`file:${ARTIFACT_REL}`);
     });
 
-    await app.close();
+    await closeAppBounded(app);
     app = await launch(DB_PATH);
     page = await app.firstWindow();
     await page.waitForLoadState("domcontentloaded");
@@ -635,7 +636,7 @@ async function main() {
       },
     );
   } finally {
-    await app.close();
+    await closeAppBounded(app).catch(() => {});
   }
 
   const failures = results.filter((r) => !r.ok);

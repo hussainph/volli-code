@@ -206,6 +206,21 @@ export interface SessionStartInput {
    */
   parentSessionId?: string;
   title: string | null;
+  /**
+   * The Session id a client already minted (VC-358), honored when present so a
+   * provisional chat can be promoted under the id it carried all along. There
+   * is no swap to manage because there is no second id: the ledger takes this
+   * one as the Session's. Forwarded ONLY inside the `session.create` intent —
+   * never the model record or an attach — and the command id stays derived
+   * from {@link operationId}, so a replayed promotion restates the same id
+   * under the same key, which is what lets the engine's dedup collapse it (its
+   * replay guard refuses a replay naming a different id than the create was
+   * accepted under). Absent — every existing caller, whose doors name no such
+   * field — keeps the ledger's own id derivation, untouched. Format is the RPC
+   * door's contract (`z.string().uuid()` there); this facade forwards, it does
+   * not re-validate.
+   */
+  requestedSessionId?: string;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */
   skills?: readonly string[];
   /**
@@ -555,6 +570,12 @@ export function createSessions(options: SessionsOptions): Sessions {
         role,
         parentSessionId: input.parentSessionId ?? null,
         title: input.title,
+        // The client-minted id rides only this intent (VC-358); a legacy
+        // caller that names none omits the key entirely, so its durable
+        // create intent is byte-identical to what it always wrote.
+        ...(input.requestedSessionId === undefined
+          ? {}
+          : { requestedSessionId: input.requestedSessionId }),
       },
     });
     // The Session now exists durably, so planner history says so — whatever

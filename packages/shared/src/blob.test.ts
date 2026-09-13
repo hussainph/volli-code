@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import {
   BLOB_URL_SCHEME,
+  CHAT_DRAFTS_APP_STATE_KEY,
   MAX_INLINE_IMAGE_BYTES,
   MAX_SESSION_INLINE_IMAGE_BYTES,
   NEW_TICKET_DRAFT_APP_STATE_KEY,
@@ -9,6 +10,7 @@ import {
   blobRelPath,
   blobsSectionInput,
   blobUrl,
+  chatDraftAttachmentHashes,
   draftAttachmentHashes,
   fitsSessionImageBudget,
   isBlobHash,
@@ -301,6 +303,11 @@ function envelope(attachments: unknown): string {
   return JSON.stringify({ version: 1, draft: { attachments } });
 }
 
+/** Wraps persisted chat Drafts in Zustand's app_state envelope. */
+function chatEnvelope(drafts: unknown): string {
+  return JSON.stringify({ state: { drafts }, version: 1 });
+}
+
 describe("draftAttachmentHashes", () => {
   it("reads the Blob hashes a stored new-Ticket draft still names", () => {
     expect(draftAttachmentHashes(envelope([{ blobHash: HASH }, { blobHash: OTHER_HASH }]))).toEqual(
@@ -330,5 +337,68 @@ describe("draftAttachmentHashes", () => {
 
   it("names the same app_state key both processes read and write", () => {
     expect(NEW_TICKET_DRAFT_APP_STATE_KEY).toBe("volli:new-ticket-draft");
+  });
+});
+
+describe("chatDraftAttachmentHashes", () => {
+  it("reads ownerless Blobs from both the composer strip and held first messages", () => {
+    expect(
+      chatDraftAttachmentHashes(
+        chatEnvelope({
+          chatA: {
+            provisional: { phase: "draft" },
+            attachments: [{ linkId: null, blobHash: HASH }],
+            held: [
+              { attachments: [{ linkId: null, blobHash: OTHER_HASH }] },
+              { text: "without files" },
+            ],
+          },
+        }),
+      ),
+    ).toEqual([HASH, OTHER_HASH]);
+  });
+
+  it("drops malformed branches and entries without hiding valid neighboring Drafts", () => {
+    expect(
+      chatDraftAttachmentHashes(
+        chatEnvelope({
+          broken: null,
+          arrayDraft: [],
+          durable: { attachments: [{ linkId: null, blobHash: OTHER_HASH }] },
+          badProvisional: {
+            provisional: [],
+            attachments: [{ linkId: null, blobHash: OTHER_HASH }],
+          },
+          chatA: {
+            provisional: {},
+            attachments: "not an array",
+            held: [null, [], { attachments: [null, [], { linkId: null, blobHash: "bad" }] }],
+          },
+          chatB: {
+            provisional: {},
+            attachments: [
+              { linkId: "already-linked", blobHash: OTHER_HASH },
+              { linkId: null, blobHash: HASH },
+            ],
+            held: "not an array",
+          },
+        }),
+      ),
+    ).toEqual([HASH]);
+  });
+
+  it("retains nothing rather than throwing on malformed envelopes", () => {
+    expect(chatDraftAttachmentHashes(undefined)).toEqual([]);
+    expect(chatDraftAttachmentHashes("not json")).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify(null))).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify([]))).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify({ state: null }))).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify({ state: [] }))).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify({ state: { drafts: null } }))).toEqual([]);
+    expect(chatDraftAttachmentHashes(JSON.stringify({ state: { drafts: [] } }))).toEqual([]);
+  });
+
+  it("names the same app_state key main and the renderer use", () => {
+    expect(CHAT_DRAFTS_APP_STATE_KEY).toBe("volli:chat-drafts");
   });
 });

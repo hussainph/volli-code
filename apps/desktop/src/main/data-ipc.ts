@@ -1027,7 +1027,10 @@ export function registerDataIpcHandlers(
         const now = Date.now();
         // One transaction: a composer's attachments arrive together, and a
         // Ticket that kept three of five would be worse than one that kept none
-        // and said so.
+        // and said so. The same atomicity is what a promoted Draft needs
+        // (VC-358): the Session it names already exists by the time this runs,
+        // and its staged blobs must adopt it all-or-nothing — a retry that
+        // half-adopted would leave the chat unsure what it is holding.
         db.transaction(() => {
           for (const draft of input.blobs) {
             createBlobLink(
@@ -1035,14 +1038,28 @@ export function registerDataIpcHandlers(
               {
                 blobHash: draft.blobHash,
                 ...(draft.label === undefined ? {} : { label: draft.label }),
-                ticketId: input.ticketId,
+                // Exactly one owner, admitted by the descriptor; a session
+                // link simply leaves `eventActor` unused — `createBlobLink`
+                // attributes ticket links only.
+                ...(input.ticketId !== undefined
+                  ? { ticketId: input.ticketId }
+                  : { sessionId: input.sessionId }),
                 eventActor: { kind: "user" },
               },
               now,
             );
           }
         })();
-        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+        // The caller reads back the owner it named: the Ticket composer its
+        // strip, the promoted chat its Session's — the links it just made and
+        // any that were already there.
+        return {
+          ok: true,
+          blobs:
+            input.ticketId !== undefined
+              ? listLinkViews(db, { ticketId: input.ticketId })
+              : listLinkViews(db, { sessionId: input.sessionId }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

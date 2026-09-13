@@ -1,6 +1,12 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorMessage, type LatestSessionSignal, type Project, type Ticket } from "@volli/shared";
+import {
+  errorMessage,
+  PERSON_STARTED,
+  type LatestSessionSignal,
+  type Project,
+  type Ticket,
+} from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import {
@@ -10,6 +16,7 @@ import {
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
   buildActiveSessionListing,
   groupPreviousByTicket,
@@ -40,6 +47,12 @@ import { delayUntil } from "@renderer/lib/boundary-timer";
 import { nextAgeChangeAt } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import {
+  isEmptyChatDraft,
+  isVisibleProvisionalChatDraft,
+  type ProvisionalChatDraft,
+  useChatDraftsStore,
+} from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
@@ -103,6 +116,21 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const containers = useSessionsStore((state) => state.byOwner);
   const openChatTabs = useChatSessionsStore((state) => state.openTabs);
+  const provisionalActive = useChatSessionsStore((state) => state.provisionalActive);
+  // Draft rows are renderer-owned and never enter the durable listing below.
+  // Shallow comparison holds this projection through text edits because the
+  // provisional launch record itself changes only for title/model/promotion.
+  const provisionalDrafts = useChatDraftsStore(
+    useShallow((state) => {
+      const drafts: Record<string, ProvisionalChatDraft> = {};
+      for (const [sessionId, draft] of Object.entries(state.drafts)) {
+        if (draft.provisional?.projectId === project.id && isVisibleProvisionalChatDraft(draft)) {
+          drafts[sessionId] = draft.provisional;
+        }
+      }
+      return drafts;
+    }),
+  );
   const residentChatTitles = useChatSessionsStore(
     useShallow((state) => {
       const titles: Record<string, string> = {};
@@ -357,13 +385,22 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   // The sidebar's durable read catches chats started outside this renderer.
   // A resident title overlays it immediately, so the first exchange does not
   // leave this surface behind the tab until its next activity refresh.
+  const provisionalIds = React.useMemo(
+    () => new Set(Object.keys(provisionalDrafts)),
+    [provisionalDrafts],
+  );
   const titledChatSessions = React.useMemo(
     () =>
-      chatSessions.map((record) => ({
-        ...record,
-        title: residentChatTitles[record.sessionId] ?? record.title,
-      })),
-    [chatSessions, residentChatTitles],
+      chatSessions
+        // A create that landed but has not transferred every Draft-owned Blob
+        // is still presented as one Draft row, never duplicated as a Session.
+        .filter((record) => !provisionalIds.has(record.sessionId))
+        .map((record) =>
+          Object.assign({}, record, {
+            title: residentChatTitles[record.sessionId] ?? record.title,
+          }),
+        ),
+    [chatSessions, provisionalIds, residentChatTitles],
   );
 
   const listing = React.useMemo(
@@ -409,6 +446,37 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   const previousEntries = React.useMemo(
     () => groupPreviousByTicket(listing.previous),
     [listing.previous],
+  );
+  const provisionalRows = React.useMemo<readonly ActiveSessionRow[]>(() => {
+    if (!filter.kinds.chat) return [];
+    return Object.entries(provisionalDrafts).flatMap(([sessionId, draft]) => {
+      const ticket =
+        draft.ticketId === null
+          ? null
+          : (tickets.find((candidate) => candidate.id === draft.ticketId) ?? null);
+      const scope = ticket === null ? "project" : "ticket";
+      if (!filter.scopes[scope]) return [];
+      const named = draft.title?.trim();
+      return [
+        {
+          id: sessionId,
+          ticket,
+          title: named === undefined || named.length === 0 ? "Draft" : `Draft · ${named}`,
+          source: "Draft",
+          activity: "idle",
+          activitySource: "reported",
+          attention: null,
+          waitingOn: null,
+          lastActivityAt: null,
+          provenance: PERSON_STARTED,
+          target: { kind: "chat", tabId: chatTabId(sessionId), sessionId },
+        },
+      ];
+    });
+  }, [filter.kinds.chat, filter.scopes, provisionalDrafts, tickets]);
+  const activeRows = React.useMemo(
+    () => [...provisionalRows, ...listing.active],
+    [listing.active, provisionalRows],
   );
 
   /**
@@ -487,14 +555,30 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
    * is worse than no highlight at all. A row with no target is a Session whose
    * tab is gone; it is never the tab in front of you.
    */
-  const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean =>
-    isProjectSessionRowSelected(row, nav === "home", projectContainer, homeActiveTab) ||
-    (row.ticket !== null &&
-      shownTicketId === row.ticket.id &&
-      row.target !== null &&
-      // A saved record has no tab, so it is never the tab in front (VC-290).
-      row.target.kind !== "session-detail" &&
-      activeTabId === row.target.tabId);
+  const isSelected = (row: ActiveSessionRow | PreviousSessionRow): boolean => {
+    const draft = provisionalDrafts[row.id];
+    if (draft !== undefined) {
+      // Off-board ticket Drafts retain their birth ticket for eventual create,
+      // but their live tab owner is Home. Selection follows where the tab was
+      // rehomed, not the immutable promotion scope.
+      const ownerId =
+        Object.entries(openChatTabs).find(([, tabs]) => tabs.includes(row.id))?.[0] ??
+        draft.ticketId ??
+        project.id;
+      if (provisionalActive[ownerId] === row.id) {
+        return ownerId === project.id ? nav === "home" : shownTicketId === ownerId;
+      }
+    }
+    return (
+      isProjectSessionRowSelected(row, nav === "home", projectContainer, homeActiveTab) ||
+      (row.ticket !== null &&
+        shownTicketId === row.ticket.id &&
+        row.target !== null &&
+        // A saved record has no tab, so it is never the tab in front (VC-290).
+        row.target.kind !== "session-detail" &&
+        activeTabId === row.target.tabId)
+    );
+  };
 
   /**
    * The ticket entry holding the Session in front of you, when the Previous
@@ -584,6 +668,14 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           return;
         }
         case "ticket-chat": {
+          const provisional = useChatDraftsStore.getState().drafts[route.sessionId];
+          if (provisional?.provisional !== undefined && isEmptyChatDraft(provisional)) {
+            const chat = useChatSessionsStore.getState();
+            chat.openChatTab(route.ticketId, route.sessionId);
+            chat.setProvisionalActive(route.ticketId, route.sessionId);
+            openTicketWorkspace(project.id, route.ticketId);
+            return;
+          }
           // The two store calls the ticket rail's own chat row makes, for the
           // same reason: a chat the strip has no tab for is not reachable by
           // activating its id — the activation falls back to the Ticket Body.
@@ -607,6 +699,14 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
           return;
         }
         case "home-chat": {
+          const provisional = useChatDraftsStore.getState().drafts[route.sessionId];
+          if (provisional?.provisional !== undefined && isEmptyChatDraft(provisional)) {
+            const chat = useChatSessionsStore.getState();
+            chat.openChatTab(project.id, route.sessionId);
+            chat.setProvisionalActive(project.id, route.sessionId);
+            openHome(project.id);
+            return;
+          }
           const chat = useChatSessionsStore.getState();
           chat.adoptChatSession(route.sessionId);
           chat.openChatTab(project.id, route.sessionId);
@@ -631,12 +731,12 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   return (
     <>
       <SidebarGroup data-session-band="active" className="gap-1">
-        <SessionBandHeader label="Active" count={listing.active.length} />
-        {listing.active.length === 0 ? (
+        <SessionBandHeader label="Active" count={activeRows.length} />
+        {activeRows.length === 0 ? (
           <p className={EMPTY_INLINE}>No active sessions</p>
         ) : (
           <SidebarMenu>
-            {listing.active.map((row) => (
+            {activeRows.map((row) => (
               <ActiveBandRow
                 key={row.id}
                 row={row}

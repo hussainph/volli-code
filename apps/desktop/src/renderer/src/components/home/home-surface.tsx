@@ -59,6 +59,7 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  activateTab as activateSplitTab,
   arrangeTabs,
   EMPTY_TAB_ORDER,
   errorMessage,
@@ -129,6 +130,11 @@ import {
   subscribeBrowserTabs,
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
+import {
+  isEmptyChatDraft,
+  isVisibleProvisionalChatDraft,
+  useChatDraftsStore,
+} from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { sessionPanes, useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
@@ -193,6 +199,35 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     useShallow((state) =>
       selectedId === null ? NO_OPEN_CHATS : (state.openTabs[selectedId] ?? NO_OPEN_CHATS),
     ),
+  );
+  const provisionalActiveId = useChatSessionsStore((state) =>
+    selectedId === null ? null : (state.provisionalActive[selectedId] ?? null),
+  );
+  const provisionalActiveDraft = useChatDraftsStore((state) =>
+    provisionalActiveId === null ? undefined : state.drafts[provisionalActiveId],
+  );
+  const provisionalActiveVisible =
+    provisionalActiveDraft !== undefined && isVisibleProvisionalChatDraft(provisionalActiveDraft);
+  const provisionalActive =
+    provisionalActiveId !== null && openChatIds.includes(provisionalActiveId)
+      ? provisionalActiveId
+      : null;
+  const provisionalWasPromoted =
+    provisionalActiveDraft !== undefined && provisionalActiveDraft.provisional === undefined;
+  // Empty Draft ids must never cross into workspace tab order or split state.
+  // They can still appear in the rendered split through `provisionalActive`;
+  // the first text/file write makes the id persistable in place.
+  const emptyProvisionalChatIds = useChatDraftsStore(
+    useShallow((state) =>
+      openChatIds.filter((sessionId) => {
+        const draft = state.drafts[sessionId];
+        return draft?.provisional !== undefined && isEmptyChatDraft(draft);
+      }),
+    ),
+  );
+  const emptyProvisionalTabIds = React.useMemo(
+    () => new Set(emptyProvisionalChatIds.map(chatTabId)),
+    [emptyProvisionalChatIds],
   );
   const recordedTab = useWorkspaceStore((state) =>
     selectedId === null
@@ -280,9 +315,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     ],
     [browserTabs, fileTabs, sessionTabIds],
   );
+  const provisionalTabId = provisionalActive === null ? null : chatTabId(provisionalActive);
   const { active: activeTabId, restore } = resolveHomeTabs({
     tabIds,
-    recorded: recordedTab,
+    // Empty Draft focus is an in-memory overlay, not a workspace write. Once
+    // the Draft has content the effect below commits this same id to layout.
+    recorded: provisionalTabId ?? recordedTab,
     containerActive,
     durableChatIds,
     browserTabsHydrated,
@@ -315,9 +353,46 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // what was stored. Held back while a restore is pending or in flight —
   // writing then would overwrite the very id the restore is about to use.
   React.useEffect(() => {
-    if (selectedId === null || restoreKind !== "settled" || activeTabId === recordedTab) return;
+    if (
+      selectedId === null ||
+      provisionalActive !== null ||
+      restoreKind !== "settled" ||
+      activeTabId === recordedTab
+    ) {
+      return;
+    }
     setHomeActiveTab(selectedId, activeTabId);
-  }, [selectedId, restoreKind, activeTabId, recordedTab, setHomeActiveTab]);
+  }, [selectedId, provisionalActive, restoreKind, activeTabId, recordedTab, setHomeActiveTab]);
+
+  // Typing or attaching turns the invisible empty Draft into persisted work.
+  // Commit its already-stable tab id to workspace layout at that boundary,
+  // then retire the renderer-only focus overlay.
+  React.useEffect(() => {
+    if (
+      selectedId === null ||
+      provisionalActive === null ||
+      (!provisionalActiveVisible && !provisionalWasPromoted)
+    ) {
+      return;
+    }
+    const tabId = chatTabId(provisionalActive);
+    // The renderer-only overlay activated this tab in the focused pane. Claim
+    // that same pane in persisted layout before removing the overlay, or split
+    // resolution would treat the newly durable tab as unassigned and move it
+    // to the primary pane.
+    if (splitView !== null) {
+      useWorkspaceStore.getState().moveHomeTabToPane(selectedId, tabId, splitView.focusedPaneId);
+    }
+    setHomeActiveTab(selectedId, tabId);
+    useChatSessionsStore.getState().setProvisionalActive(selectedId, null);
+  }, [
+    provisionalActive,
+    provisionalActiveVisible,
+    provisionalWasPromoted,
+    selectedId,
+    setHomeActiveTab,
+    splitView,
+  ]);
 
   // ── What is on screen ────────────────────────────────────────────────────
   const boardTabActive = isHomeBoardTab(activeTabId);
@@ -367,7 +442,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     [tabIds, tabOrder],
   );
   const split = resolveSplitView(
-    splitView ?? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID),
+    splitView === null
+      ? singlePaneSplitView([], activeTabId, SPLIT_VIEW_ROOT_PANE_ID)
+      : provisionalTabId === null
+        ? splitView
+        : activateSplitTab(splitView, provisionalTabId),
     orderedTabIds,
     HOME_BOARD_TAB_ID,
   );
@@ -380,7 +459,11 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for Home. The chord resolves which surface is in
   // front for itself, so this instance stands down while a ticket workspace has
   // taken Home over (`hooks/use-split-shortcuts.ts`).
-  useSplitShortcuts({ projectId: selectedId, ticketId: null, orderedTabIds });
+  useSplitShortcuts({
+    projectId: selectedId,
+    ticketId: null,
+    orderedTabIds: orderedTabIds.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+  });
 
   // Terminal focus is an in-app zen mode: one terminal takes the whole canvas
   // and every piece of chrome steps aside, this strip included — exactly as the
@@ -469,6 +552,16 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const handleSelect = React.useCallback(
     (descriptor: HomeTabDescriptor) => {
       if (selectedId === null) return;
+      if (descriptor.kind === "chat") {
+        const draft = useChatDraftsStore.getState().drafts[descriptor.sessionId];
+        if (draft?.provisional !== undefined && isEmptyChatDraft(draft)) {
+          // Returning to an empty Draft is another renderer-only focus change,
+          // not the content boundary that earns a persisted workspace tab.
+          useChatSessionsStore.getState().setProvisionalActive(selectedId, descriptor.sessionId);
+          return;
+        }
+      }
+      useChatSessionsStore.getState().setProvisionalActive(selectedId, null);
       if (descriptor.kind === "board") {
         // The one tab that discards state rather than preserving it, which
         // cuts against tab intuition and is the accepted cost of keeping the
@@ -531,9 +624,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
         return;
       }
       if (descriptor.kind === "chat") {
-        // No busy guard and no confirm: the Session is durable, so closing the
-        // view loses nothing — reopening it from the sidebar adopts the same
-        // history, and the next render re-derives which tab comes forward.
+        // No busy guard and no confirm: closing a provisional Draft explicitly
+        // abandons it; closing a durable Session loses no history and reopening
+        // it from the sidebar adopts the same record. The next render re-derives
+        // which tab comes forward in either case.
         // The pane that held it has to be told, though: a chat tab's lifetime
         // lives in the chat store, so nothing else drops its pane assignment
         // (a no-op while unsplit, where the MRU return is unchanged).
@@ -572,7 +666,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // Each Session kind has its own optimistic surface to move before the
     // durable write. Board and File tabs never raise this callback.
     if (descriptor.kind === "chat") {
-      void renameChatSession(descriptor.sessionId, title);
+      const draft = useChatDraftsStore.getState().drafts[descriptor.sessionId];
+      if (draft?.provisional !== undefined) {
+        useChatDraftsStore.getState().setProvisionalTitle(descriptor.sessionId, title);
+      } else {
+        void renameChatSession(descriptor.sessionId, title);
+      }
       return;
     }
     if (descriptor.kind === "terminal") renameTerminalSession(descriptor.tab.sessionId, title);
@@ -589,15 +688,65 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   const dropWrites = React.useMemo<SplitSurfaceWrites | null>(() => {
     if (selectedId === null) return null;
     return {
-      reorderSurface: (movedId, ids) => moveHomeTab(selectedId, movedId, ids),
-      reorderPane: (paneId, movedId, ids) => moveHomeTabInPane(selectedId, paneId, movedId, ids),
-      moveTabToPane: (tabId, paneId) => moveHomeTabToPane(selectedId, tabId, paneId),
-      splitPane: (paneId, edge, tabId, surfaceTabIds) =>
-        splitHomePane(selectedId, paneId, edge, { tabId, surfaceTabIds }),
+      reorderSurface: (movedId, ids) => {
+        if (emptyProvisionalTabIds.has(movedId)) return;
+        moveHomeTab(
+          selectedId,
+          movedId,
+          ids.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+        );
+      },
+      reorderPane: (paneId, movedId, ids) => {
+        if (emptyProvisionalTabIds.has(movedId)) return;
+        moveHomeTabInPane(
+          selectedId,
+          paneId,
+          movedId,
+          ids.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+        );
+      },
+      moveTabToPane: (tabId, paneId) => {
+        if (emptyProvisionalTabIds.has(tabId)) {
+          // Focus is durable layout; the Draft assignment is not. Rendering
+          // overlays the active empty Draft into this focused pane, and its
+          // first content later commits that same assignment through activate.
+          focusHomePane(selectedId, paneId);
+          const sessionId = parseChatTabId(tabId);
+          if (sessionId !== null) {
+            useChatSessionsStore.getState().setProvisionalActive(selectedId, sessionId);
+          }
+          return;
+        }
+        moveHomeTabToPane(selectedId, tabId, paneId);
+      },
+      splitPane: (paneId, edge, tabId, surfaceTabIds) => {
+        const persistableIds = surfaceTabIds.filter(
+          (candidate) => !emptyProvisionalTabIds.has(candidate),
+        );
+        if (emptyProvisionalTabIds.has(tabId)) {
+          // Persist the pane itself, but not the empty Draft. The newly focused
+          // empty pane receives the renderer-only overlay until content exists.
+          splitHomePane(selectedId, paneId, edge, { surfaceTabIds: persistableIds });
+          const sessionId = parseChatTabId(tabId);
+          if (sessionId !== null) {
+            useChatSessionsStore.getState().setProvisionalActive(selectedId, sessionId);
+          }
+          return;
+        }
+        splitHomePane(selectedId, paneId, edge, { tabId, surfaceTabIds: persistableIds });
+      },
       // The door the row's own tab click takes: the tab comes to the front,
       // and a terminal onto the container's own ledger too — the same pair
       // `handleSelect` writes.
       activateTab: (tabId, payload) => {
+        if (emptyProvisionalTabIds.has(tabId)) {
+          const sessionId = parseChatTabId(tabId);
+          if (sessionId !== null) {
+            useChatSessionsStore.getState().setProvisionalActive(selectedId, sessionId);
+          }
+          return;
+        }
+        useChatSessionsStore.getState().setProvisionalActive(selectedId, null);
         setHomeActiveTab(selectedId, tabId);
         if (payload.type === "session" && payload.kind === "terminal") {
           setActiveSession(selectedId, tabId);
@@ -624,6 +773,8 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       },
     };
   }, [
+    emptyProvisionalTabIds,
+    focusHomePane,
     moveHomeTab,
     moveHomeTabInPane,
     moveHomeTabToPane,

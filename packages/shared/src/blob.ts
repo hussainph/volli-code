@@ -294,6 +294,9 @@ export function resolveAttachment(repoRelPath: string | null, mime: string): Att
 /** The `app_state` row holding the new-Ticket composer's draft. SHARED BETWEEN PROCESSES: the renderer writes it (`board/new-ticket/draft.ts`) and main reads it at boot to keep the draft's unowned Blobs alive — see {@link draftAttachmentHashes}. */
 export const NEW_TICKET_DRAFT_APP_STATE_KEY = "volli:new-ticket-draft";
 
+/** The persisted chat Draft envelope, shared so boot can retain its ownerless Blobs. */
+export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
+
 /**
  * The Blob hashes a stored new-Ticket draft still names, for boot-time
  * collection to retain (VC-137).
@@ -328,6 +331,61 @@ export function draftAttachmentHashes(value: unknown): string[] {
     if (typeof entry !== "object" || entry === null) continue;
     const hash = (entry as Record<string, unknown>)["blobHash"];
     if (typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
+  }
+  return hashes;
+}
+
+/**
+ * Blob hashes retained by persisted provisional chat Drafts (VC-358).
+ *
+ * A provisional chat Draft can name files in its live composer strip and in
+ * held first messages. Entries whose `linkId` is null are ownerless until
+ * promotion creates the Session and links them, so boot-time collection must
+ * read both locations before it sweeps. Durable Drafts and already-linked
+ * entries need no exception: their `blob_links` rows retain them normally.
+ * Like {@link draftAttachmentHashes}, this treats malformed renderer state as
+ * empty rather than letting a damaged preference row block startup.
+ */
+export function chatDraftAttachmentHashes(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return [];
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
+  const state = (parsed as Record<string, unknown>)["state"];
+  if (typeof state !== "object" || state === null || Array.isArray(state)) return [];
+  const drafts = (state as Record<string, unknown>)["drafts"];
+  if (typeof drafts !== "object" || drafts === null || Array.isArray(drafts)) return [];
+
+  const hashes: string[] = [];
+  const readAttachments = (attachments: unknown): void => {
+    if (!Array.isArray(attachments)) return;
+    for (const entry of attachments) {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+      const attachment = entry as Record<string, unknown>;
+      const hash = attachment["blobHash"];
+      if (attachment["linkId"] === null && typeof hash === "string" && isBlobHash(hash)) {
+        hashes.push(hash);
+      }
+    }
+  };
+  for (const draft of Object.values(drafts)) {
+    if (typeof draft !== "object" || draft === null || Array.isArray(draft)) continue;
+    const record = draft as Record<string, unknown>;
+    const provisional = record["provisional"];
+    if (typeof provisional !== "object" || provisional === null || Array.isArray(provisional)) {
+      continue;
+    }
+    readAttachments(record["attachments"]);
+    const held = record["held"];
+    if (!Array.isArray(held)) continue;
+    for (const message of held) {
+      if (typeof message !== "object" || message === null || Array.isArray(message)) continue;
+      readAttachments((message as Record<string, unknown>)["attachments"]);
+    }
   }
   return hashes;
 }

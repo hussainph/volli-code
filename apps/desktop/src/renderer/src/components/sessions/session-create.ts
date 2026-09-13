@@ -14,6 +14,7 @@ import { errorMessage, type HarnessId, type ModelSelection, type Project } from 
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
@@ -305,9 +306,10 @@ export interface ChatBoot {
   model?: ModelSelection;
   /**
    * Registers the tab against FRESH store state, returning whether it landed —
-   * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
+   * false ⇒ the owner vanished mid-flight, so this surface lets the identity go.
+   * `durable` distinguishes an immediate kickoff from a renderer-only Draft.
    */
-  land(sessionId: string): boolean;
+  land(sessionId: string, durable: boolean): boolean;
 }
 
 /**
@@ -382,9 +384,9 @@ export async function startProjectChat(
 ): Promise<void> {
   await bootChatSession(projectScope(projectId), {
     skills,
-    land: (sessionId) => {
+    land: (sessionId, durable) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
+      if (durable) useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -467,16 +469,20 @@ export async function startTicketChat(
     skills,
     title,
     model,
-    land: (booted) => {
+    eager: message !== undefined,
+    land: (booted, durable) => {
       // The ticket itself may have been deleted while the create was in flight;
       // a tab on a card that no longer exists is unreachable, so let the Session
       // go (its durable row stands — see {@link bootChatSession}).
       const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
-      useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
-      // So the rail's row for it appears without waiting on a terminal event.
-      void useTicketSessionRecordsStore.getState().refresh(ticketId);
+      if (durable) {
+        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
+        // So the rail's row for an immediate kickoff appears without waiting on
+        // a terminal event. Draft promotion performs the same refresh later.
+        void useTicketSessionRecordsStore.getState().refresh(ticketId);
+      }
       return true;
     },
   });
@@ -500,10 +506,34 @@ function newMessageId(): string {
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, title, model, land }: ChatBoot,
+  { skills, title, model, land, eager = false }: ChatBoot & { eager?: boolean },
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
+      if (!eager) {
+        // A Draft is deliberately not a Session. Both UUIDs are minted in the
+        // browser: `sessionId` remains the tab/draft/durable identity through
+        // promotion, while `operationId` makes every create retry one command.
+        // This path performs no IPC and writes no workspace state.
+        const sessionId = crypto.randomUUID();
+        useChatDraftsStore.getState().openProvisional(sessionId, {
+          projectId: scope.projectId,
+          ticketId: scope.kind === "ticket" ? scope.ticketId : null,
+          operationId: crypto.randomUUID(),
+          title: title ?? null,
+          ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
+          ...(model === undefined ? {} : { model }),
+        });
+        if (trackedProject(scope.projectId) === undefined || !land(sessionId, false)) {
+          useChatDraftsStore.getState().discardProvisional(sessionId);
+          return null;
+        }
+        useChatSessionsStore.getState().setProvisionalActive(ownerKey(scope), sessionId);
+        return sessionId;
+      }
+
+      // Kickoff already has a first message, so it keeps the explicit eager
+      // create/attach route used by every other non-interactive creator.
       const sessionId = await useChatSessionsStore.getState().createChatSession({
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
@@ -515,7 +545,7 @@ export async function bootChatSession(
       // The owner may have been removed while `session.create` was in flight;
       // `land` re-checks its own owner (a ticket must still be on the board) the
       // way a split re-checks its source pane.
-      if (trackedProject(scope.projectId) === undefined || !land(sessionId)) {
+      if (trackedProject(scope.projectId) === undefined || !land(sessionId, true)) {
         abandonChat(sessionId);
         return null;
       }

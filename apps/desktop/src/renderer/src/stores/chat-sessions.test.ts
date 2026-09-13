@@ -14,6 +14,7 @@ import {
   type ChatSessionTransport,
   type ChatStreamCursor,
 } from "@volli/session-presentation";
+import { useChatDraftsStore } from "./chat-drafts";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
 
@@ -86,7 +87,11 @@ function fakeTransport() {
   const subscriptions: ChatStreamCursor[] = [];
   const state = {
     answer: (() => ACCEPTED) as (request: ChatCommandRequest) => CommandAnswer,
-    createAnswer: (() => ({ sessionId: SESSION.id })) as () => { sessionId: string },
+    createAnswer: ((input: { requestedSessionId?: string }) => ({
+      sessionId: input.requestedSessionId ?? SESSION.id,
+    })) as (input: {
+      requestedSessionId?: string;
+    }) => { sessionId: string } | Promise<{ sessionId: string }>,
     attachAnswer: (() => ({
       ...ACCEPTED,
       state: "ready",
@@ -141,7 +146,7 @@ function fakeTransport() {
           title: input.title,
         });
       } else ticketStarts.push(input);
-      return state.createAnswer();
+      return state.createAnswer(input);
     },
     attachSession: async (input) => {
       attaches.push(input);
@@ -178,6 +183,8 @@ afterEach(() => {
     }
   }
   opened.length = 0;
+  useChatDraftsStore.setState({ drafts: {} });
+  vi.unstubAllGlobals();
   vi.mocked(toast.error).mockClear();
 });
 
@@ -407,7 +414,394 @@ describe("createChatSession", () => {
   });
 });
 
+describe("promoteChatSession", () => {
+  const DRAFT_ID = "550e8400-e29b-41d4-a716-446655440000";
+
+  function openDraft(withBlob = false) {
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts: vi.fn() },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    useChatDraftsStore.getState().openProvisional(DRAFT_ID, {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "promotion-op",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft(DRAFT_ID, "first message");
+    if (withBlob) {
+      useChatDraftsStore.getState().setDraftAttachments(DRAFT_ID, [
+        {
+          linkId: null,
+          blobHash: "ab".repeat(32),
+          label: "shot.png",
+          originalName: "shot.png",
+          mime: "image/png",
+          sizeBytes: 2048,
+        },
+      ]);
+    }
+  }
+
+  it("creates under the Draft id and connects only after ownerless Blobs are linked", async () => {
+    const { attaches, store, subscriptions, ticketStarts } = fixture();
+    openDraft(true);
+    let releaseLink!: () => void;
+    const linked = new Promise<void>((resolve) => (releaseLink = resolve));
+    const firstLinked = {
+      linkId: "link-1",
+      blobHash: "ab".repeat(32),
+      label: "shot.png",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 2048,
+    };
+    const lateLinked = {
+      ...firstLinked,
+      linkId: "link-2",
+      blobHash: "cd".repeat(32),
+      label: "late.png",
+      originalName: "late.png",
+    };
+    const linkDrafts = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await linked;
+        return { ok: true as const, blobs: [firstLinked] };
+      })
+      .mockResolvedValue({ ok: true as const, blobs: [firstLinked, lateLinked] });
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() => expect(linkDrafts).toHaveBeenCalledOnce());
+
+    expect(ticketStarts).toEqual([
+      {
+        operationId: "promotion-op",
+        projectId: "p1",
+        ticketId: "t1",
+        title: null,
+        requestedSessionId: DRAFT_ID,
+      },
+    ]);
+    expect(attaches).toEqual([]);
+    expect(subscriptions).toEqual([]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+      "session-created",
+    );
+
+    // An import that finishes while the first transfer is waiting must join a
+    // second batch before attach; after promotion there is no Draft link path.
+    useChatDraftsStore
+      .getState()
+      .setDraftAttachments(DRAFT_ID, [
+        useChatDraftsStore.getState().drafts[DRAFT_ID]!.attachments[0]!,
+        { ...lateLinked, linkId: null },
+      ]);
+    releaseLink();
+    await expect(promotion).resolves.toBe(true);
+    expect(linkDrafts).toHaveBeenCalledTimes(2);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+      "session-created",
+    );
+    useChatDraftsStore.getState().completePromotion(DRAFT_ID);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional).toBeUndefined();
+    expect(
+      useChatDraftsStore
+        .getState()
+        .drafts[DRAFT_ID]?.attachments.map((attachment) => attachment.linkId),
+    ).toEqual(["link-1", "link-2"]);
+    expect(attaches).toEqual([{ operationId: "cmd-1", sessionId: DRAFT_ID }]);
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+  });
+
+  it("does not attach a resident runtime when the tab closes during Blob transfer", async () => {
+    const { attaches, store, subscriptions } = fixture();
+    openDraft(true);
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, {
+      id: "first-send",
+      text: "first message",
+    });
+    store.getState().openChatTab("t1", DRAFT_ID);
+    let releaseLink!: () => void;
+    const linkWait = new Promise<void>((resolve) => (releaseLink = resolve));
+    vi.mocked(window.api.attachments.linkDrafts).mockImplementation(async ({ blobs }) => {
+      await linkWait;
+      return {
+        ok: true as const,
+        blobs: blobs.map((blob, index) => ({
+          linkId: `linked-${index}`,
+          blobHash: blob.blobHash,
+          label: blob.label ?? "attachment",
+          originalName: blob.label ?? "attachment",
+          mime: "image/png",
+          sizeBytes: 2048,
+        })),
+      };
+    });
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+        "session-created",
+      ),
+    );
+    store.getState().closeChatTab("t1", DRAFT_ID);
+    releaseLink();
+
+    await expect(promotion).resolves.toBe(true);
+    expect(attaches).toEqual([]);
+    expect(subscriptions).toEqual([]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional).toBeUndefined();
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held[0]?.state).toBe("unsent");
+  });
+
+  it("does not attach a runtime when project teardown lands during Blob transfer", async () => {
+    const { attaches, store, subscriptions } = fixture();
+    openDraft(true);
+    store.getState().openChatTab("p1", DRAFT_ID);
+    let releaseLink!: () => void;
+    const linkWait = new Promise<void>((resolve) => (releaseLink = resolve));
+    vi.mocked(window.api.attachments.linkDrafts).mockImplementation(async ({ blobs }) => {
+      await linkWait;
+      return {
+        ok: true as const,
+        blobs: blobs.map((blob, index) => ({
+          linkId: `linked-${index}`,
+          blobHash: blob.blobHash,
+          label: blob.label ?? "attachment",
+          originalName: blob.label ?? "attachment",
+          mime: "image/png",
+          sizeBytes: 2048,
+        })),
+      };
+    });
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+        "session-created",
+      ),
+    );
+    store.getState().dropChatTabs(["p1"]);
+    releaseLink();
+
+    await expect(promotion).resolves.toBe(true);
+    expect(attaches).toEqual([]);
+    expect(subscriptions).toEqual([]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
+  });
+
+  it("waits for an import that began before Send but finishes after the first Blob scan", async () => {
+    const { attaches, store, ticketStarts } = fixture();
+    openDraft();
+    const finishImport = useChatDraftsStore.getState().beginAttachmentImport(DRAFT_ID);
+    const linked = {
+      linkId: "link-late",
+      blobHash: "ef".repeat(32),
+      label: "late.png",
+      originalName: "late.png",
+      mime: "image/png",
+      sizeBytes: 1024,
+    };
+    const linkDrafts = vi.fn(async () => ({ ok: true as const, blobs: [linked] }));
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() => expect(ticketStarts).toHaveLength(1));
+    await Promise.resolve();
+    expect(linkDrafts).not.toHaveBeenCalled();
+    expect(attaches).toEqual([]);
+
+    useChatDraftsStore.getState().setDraftAttachments(DRAFT_ID, [{ ...linked, linkId: null }]);
+    finishImport();
+
+    await expect(promotion).resolves.toBe(true);
+    expect(linkDrafts).toHaveBeenCalledWith({
+      sessionId: DRAFT_ID,
+      blobs: [{ blobHash: linked.blobHash, label: "late.png" }],
+    });
+    expect(attaches).toEqual([{ operationId: "cmd-1", sessionId: DRAFT_ID }]);
+  });
+
+  it("stops before client connect or attach when close abandons the Draft during create", async () => {
+    const { attaches, state, store, subscriptions, ticketStarts } = fixture();
+    openDraft();
+    store.getState().openChatTab("t1", DRAFT_ID);
+    let finishCreate!: (created: { sessionId: string }) => void;
+    state.createAnswer = () => new Promise((resolve) => (finishCreate = resolve));
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() => expect(ticketStarts).toHaveLength(1));
+    store.getState().closeChatTab("t1", DRAFT_ID);
+    finishCreate({ sessionId: DRAFT_ID });
+
+    await expect(promotion).resolves.toBe(true);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+    expect(subscriptions).toEqual([]);
+    expect(attaches).toEqual([]);
+  });
+
+  it("shares one promotion flight across rapid sends", async () => {
+    const { store, ticketStarts } = fixture();
+    openDraft();
+
+    const first = store.getState().promoteChatSession(DRAFT_ID);
+    const second = store.getState().promoteChatSession(DRAFT_ID);
+
+    expect(second).toBe(first);
+    await expect(first).resolves.toBe(true);
+    expect(ticketStarts).toHaveLength(1);
+  });
+
+  it("keeps post-create metadata and retries Blob transfer under the same create operation", async () => {
+    const { attaches, store, subscriptions, ticketStarts } = fixture();
+    openDraft(true);
+    const frozenModel = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high" as const,
+    };
+    useChatDraftsStore.getState().setProvisionalModel(DRAFT_ID, frozenModel);
+    const linkDrafts = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, error: "disk full" })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        blobs: [
+          {
+            linkId: "link-1",
+            blobHash: "ab".repeat(32),
+            label: "shot.png",
+            originalName: "shot.png",
+            mime: "image/png",
+            sizeBytes: 2048,
+          },
+        ],
+      });
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+    expect(attaches).toEqual([]);
+    expect(subscriptions).toEqual([]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+      "session-created",
+    );
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+    expect(ticketStarts).toHaveLength(2);
+    expect(ticketStarts.map((input) => (input as { operationId: string }).operationId)).toEqual([
+      "promotion-op",
+      "promotion-op",
+    ]);
+    expect(ticketStarts).toEqual([
+      expect.objectContaining({ model: frozenModel }),
+      expect.objectContaining({ model: frozenModel }),
+    ]);
+    expect(linkDrafts).toHaveBeenCalledTimes(2);
+    expect(attaches).toEqual([{ operationId: "cmd-1", sessionId: DRAFT_ID }]);
+    await vi.waitFor(() => expect(subscriptions).toHaveLength(1));
+  });
+
+  it("uses a fresh attach operation when session-created recovery replays create", async () => {
+    const { attaches, state, store } = fixture();
+    openDraft();
+    state.attachAnswer = () => ({
+      sessionId: DRAFT_ID,
+      receipt: REJECTED_RECEIPT,
+      state: "needs-recovery",
+      throughSequence: 0,
+    });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+    await vi.waitFor(() => expect(attaches).toHaveLength(1));
+    store.getState().closeChatSession(DRAFT_ID);
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+    await vi.waitFor(() => expect(attaches).toHaveLength(2));
+
+    expect(attaches).toEqual([
+      { operationId: "cmd-1", sessionId: DRAFT_ID },
+      { operationId: "cmd-2", sessionId: DRAFT_ID },
+    ]);
+  });
+
+  it("restores persisted provisional Drafts as tabs without making resident Session slices", () => {
+    const { store } = fixture();
+    openDraft();
+
+    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+
+    expect(store.getState().openTabs).toEqual({ t1: [DRAFT_ID] });
+    expect(store.getState().provisionalActive).toEqual({ t1: DRAFT_ID });
+    expect(store.getState().sessions).toEqual({});
+  });
+
+  it("drops a restored Draft whose project no longer exists", () => {
+    const { store } = fixture();
+    openDraft();
+
+    store
+      .getState()
+      .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, undefined, new Set());
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
+    expect(store.getState().sessions).toEqual({});
+  });
+
+  it("rehomes a restored Draft whose ticket is off the live board without changing its birth scope", () => {
+    const { store } = fixture();
+    openDraft();
+
+    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set());
+
+    expect(store.getState().openTabs).toEqual({ p1: [DRAFT_ID] });
+    expect(store.getState().provisionalActive).toEqual({ p1: DRAFT_ID });
+    expect(store.getState().rehomedTicketBySession).toEqual({ [DRAFT_ID]: "t1" });
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.ticketId).toBe("t1");
+    expect(store.getState().sessions).toEqual({});
+  });
+});
+
 describe("adoptChatSession", () => {
+  it("does not make a resident client when a split or sidebar opens a provisional Draft", () => {
+    const { store, subscriptions } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-9", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "draft-operation",
+      title: null,
+    });
+
+    store.getState().adoptChatSession("draft-9");
+
+    expect(store.getState().sessions["draft-9"]).toBeUndefined();
+    expect(getChatClient("draft-9")).toBeUndefined();
+    expect(subscriptions).toEqual([]);
+  });
+
   it("seeds a slice and opens the stream for a Session that is already durable", async () => {
     const { store, subscriptions } = fixture();
 
@@ -814,6 +1208,64 @@ describe("open chat tabs", () => {
     expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
   });
 
+  it("discards an empty provisional Draft and its renderer-only focus when its tab closes", () => {
+    const { store } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-1", {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "draft-operation",
+      title: null,
+    });
+    store.getState().openChatTab("t1", "draft-1");
+    store.getState().setProvisionalActive("t1", "draft-1");
+
+    store.getState().closeChatTab("t1", "draft-1");
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(store.getState().provisionalActive).toEqual({});
+    expect(useChatDraftsStore.getState().drafts["draft-1"]).toBeUndefined();
+    expect(getChatClient("draft-1")).toBeUndefined();
+  });
+
+  it("abandons a typed provisional Draft when its tab closes", () => {
+    const { store, subscriptions } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-1", {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "draft-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft("draft-1", "come back to this");
+    store.getState().openChatTab("t1", "draft-1");
+
+    store.getState().closeChatTab("t1", "draft-1");
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(useChatDraftsStore.getState().drafts["draft-1"]).toBeUndefined();
+    expect(store.getState().sessions["draft-1"]).toBeUndefined();
+    expect(subscriptions).toEqual([]);
+  });
+
+  it("keeps recovery metadata when close races a create that already landed", () => {
+    const { store } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-1", {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "draft-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft("draft-1", "already sent");
+    useChatDraftsStore.getState().markProvisionalSessionCreated("draft-1");
+    store.getState().openChatTab("t1", "draft-1");
+
+    store.getState().closeChatTab("t1", "draft-1");
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(useChatDraftsStore.getState().drafts["draft-1"]?.provisional?.phase).toBe(
+      "session-created",
+    );
+  });
+
   /** Closing the view retires the client; the Session itself is untouched. */
   it("drops the resident Session with the tab that held it", () => {
     const { store } = fixture();
@@ -908,6 +1360,20 @@ describe("reconcileTicketChatTabs", () => {
 
     expect(store.getState().openTabs).toEqual({ p1: ["durable-1"] });
     expect(store.getState().rehomedTicketBySession).toEqual({ "durable-1": "t1" });
+  });
+
+  it("moves renderer-only provisional focus with a departed and returning ticket", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { t1: ["draft-1"] },
+      provisionalActive: { t1: "draft-1" },
+    });
+
+    store.getState().reconcileTicketChatTabs("p1", ["t1"], []);
+
+    expect(store.getState().provisionalActive).toEqual({ p1: "draft-1" });
+    store.getState().reconcileTicketChatTabs("p1", [], ["t1"]);
+    expect(store.getState().provisionalActive).toEqual({ t1: "draft-1" });
   });
 
   it("returns only the matching ticket's tabs, preserving unrelated project order and single ownership", () => {
@@ -1032,6 +1498,29 @@ describe("clearRehomedTicketProvenance", () => {
     expect(store.getState().rehomedTicketBySession).toEqual({ "from-t2": "t2" });
   });
 
+  it("abandons an uncreated Draft whose immutable ticket scope was deleted", () => {
+    const { store } = fixture();
+    const draftId = "deleted-ticket-draft";
+    useChatDraftsStore.getState().openProvisional(draftId, {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "deleted-ticket-operation",
+      title: null,
+    });
+    store.setState({
+      openTabs: { p1: [draftId, "durable-2"] },
+      provisionalActive: { p1: draftId },
+      rehomedTicketBySession: { [draftId]: "t1", "durable-2": "t2" },
+    });
+
+    store.getState().clearRehomedTicketProvenance("t1");
+
+    expect(useChatDraftsStore.getState().drafts[draftId]).toBeUndefined();
+    expect(store.getState().openTabs).toEqual({ p1: ["durable-2"] });
+    expect(store.getState().provisionalActive).toEqual({});
+    expect(store.getState().rehomedTicketBySession).toEqual({ "durable-2": "t2" });
+  });
+
   it("is a no-op when no tab was rehomed from the ticket", () => {
     const { store } = fixture();
     store.setState({ rehomedTicketBySession: { "from-t2": "t2" } });
@@ -1055,6 +1544,25 @@ describe("dropChatTabs", () => {
 
     expect(store.getState().openTabs).toEqual({ t2: ["durable-3"] });
     expect(store.getState().rehomedTicketBySession).toEqual({ "durable-3": "t2" });
+  });
+
+  it("discards provisional Drafts and focus when their project owner disappears", () => {
+    const { store } = fixture();
+    useChatDraftsStore.getState().openProvisional("draft-1", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "draft-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft("draft-1", "orphan me");
+    store.getState().openChatTab("p1", "draft-1");
+    store.getState().setProvisionalActive("p1", "draft-1");
+
+    store.getState().dropChatTabs(["p1"]);
+
+    expect(store.getState().openTabs).toEqual({});
+    expect(store.getState().provisionalActive).toEqual({});
+    expect(useChatDraftsStore.getState().drafts["draft-1"]).toBeUndefined();
   });
 
   it("retires resident clients as it drops their project owner tabs", () => {

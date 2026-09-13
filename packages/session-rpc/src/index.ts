@@ -89,6 +89,14 @@ export interface SessionCreateInput {
   ticketId: string | null;
   title: string | null;
   /**
+   * A client-minted UUID the durable Session takes as its own id (VC-358), so
+   * a provisional chat can be promoted under the id it carried all along.
+   * Absent — every caller that has not opted in — keeps the ledger's own id
+   * derivation. Format-checked here; the engine refuses a replay that names a
+   * different id than the one its command was accepted under.
+   */
+  requestedSessionId?: string;
+  /**
    * Skill slugs to inject at attach time as system-prompt RESOURCE sections.
    * Absent means none — injection is explicit selection, never ambient.
    */
@@ -659,6 +667,10 @@ export function createSessionRouter() {
             // records durably.
             ticketId: nonEmptyString.nullable(),
             title: nullableString,
+            // A client-minted UUID the durable Session adopts (VC-358), so a
+            // provisional chat needs no id swap on promotion. UUID-checked at
+            // this edge: a malformed id must never reach the ledger.
+            requestedSessionId: z.string().uuid().optional(),
             // The optimistic-open path mints the Session, so it is the path
             // that has to carry the skills: `attach` composes the prompt from
             // the record `create` wrote, and never sees this input.

@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { toast } from "sonner";
 
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
@@ -64,7 +65,8 @@ function stubChatStore(createChatSession: () => Promise<string | null>) {
 beforeEach(() => {
   useProjectsStore.setState({ projects: [PROJECT] });
   useBoardStore.setState({ ticketsByProject: { p1: [TICKET] } });
-  useChatSessionsStore.setState({ starting: {} });
+  useChatDraftsStore.setState({ drafts: {} });
+  useChatSessionsStore.setState({ starting: {}, openTabs: {}, provisionalActive: {} });
 });
 
 afterEach(() => {
@@ -72,49 +74,63 @@ afterEach(() => {
 });
 
 describe("bootChatSession", () => {
-  it("mints the Session under the scope's ticket and lands its tab", async () => {
+  it("opens a ticket Draft immediately without creating a Session", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
     const land = vi.fn(() => true);
 
     const sessionId = await bootChatSession(SCOPE, { land });
 
-    expect(sessionId).toBe("durable-1");
-    expect(create).toHaveBeenCalledWith({
+    expect(sessionId).toEqual(expect.any(String));
+    expect(create).not.toHaveBeenCalled();
+    expect(land).toHaveBeenCalledWith(sessionId, false);
+    expect(useChatDraftsStore.getState().drafts[sessionId!]?.provisional).toMatchObject({
       projectId: "p1",
       ticketId: "t1",
       title: null,
+      phase: "draft",
+      operationId: expect.any(String),
     });
-    expect(land).toHaveBeenCalledWith("durable-1");
+    expect(useChatSessionsStore.getState().provisionalActive).toEqual({ t1: sessionId });
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 
-  it("routes a scratch scope as a ticketless Session", async () => {
+  it("records a scratch Draft as ticketless while still performing no create RPC", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
 
-    await bootChatSession(
+    const sessionId = await bootChatSession(
       { kind: "project", projectId: "p1" },
-      {
-        land: () => true,
-      },
+      { land: () => true },
     );
 
-    expect(create).toHaveBeenCalledWith({
+    expect(create).not.toHaveBeenCalled();
+    expect(useChatDraftsStore.getState().drafts[sessionId!]?.provisional).toMatchObject({
       projectId: "p1",
       ticketId: null,
-      title: null,
     });
   });
 
-  it("holds one create per owner, and hands the second nothing", async () => {
+  it("keeps kickoff on the eager durable path", async () => {
+    const create = vi.fn(async () => "durable-1");
+    stubChatStore(create);
+    const land = vi.fn(() => true);
+
+    await expect(bootChatSession(SCOPE, { eager: true, land })).resolves.toBe("durable-1");
+
+    expect(create).toHaveBeenCalledWith({ projectId: "p1", ticketId: "t1", title: null });
+    expect(land).toHaveBeenCalledWith("durable-1", true);
+    expect(useChatDraftsStore.getState().drafts).toEqual({});
+  });
+
+  it("holds one eager create per owner, and hands the second nothing", async () => {
     let release!: (sessionId: string) => void;
     const create = vi.fn(() => new Promise<string | null>((resolve) => (release = resolve)));
     stubChatStore(create);
 
-    const first = bootChatSession(SCOPE, { land: () => true });
+    const first = bootChatSession(SCOPE, { eager: true, land: () => true });
     expect(useChatSessionsStore.getState().starting).toEqual({ t1: true });
-    const second = await bootChatSession(SCOPE, { land: () => true });
+    const second = await bootChatSession(SCOPE, { eager: true, land: () => true });
 
     expect(second).toBeNull();
     expect(create).toHaveBeenCalledOnce();
@@ -124,7 +140,7 @@ describe("bootChatSession", () => {
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 
-  it("never creates into a project the renderer has stopped tracking", async () => {
+  it("never opens a Draft into a project the renderer has stopped tracking", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
     useProjectsStore.setState({ projects: [] });
@@ -132,59 +148,42 @@ describe("bootChatSession", () => {
     await expect(bootChatSession(SCOPE, { land: () => true })).resolves.toBeNull();
 
     expect(create).not.toHaveBeenCalled();
+    expect(useChatDraftsStore.getState().drafts).toEqual({});
   });
 
-  /** A refused ATTACH still resolves an id (see chat-sessions.test.ts): the
-   * Session exists, and the tab it opens carries its own Retry. Landing is
-   * gated on the create alone, so the boot cannot tell the two apart — which is
-   * the contract. */
-  it("opens the tab on whatever the create resolved", async () => {
+  it("discards a provisional Draft that cannot land", async () => {
     stubChatStore(async () => "durable-1");
-    const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { land })).resolves.toBe("durable-1");
+    await expect(bootChatSession(SCOPE, { land: () => false })).resolves.toBeNull();
 
-    expect(land).toHaveBeenCalledOnce();
+    expect(useChatDraftsStore.getState().drafts).toEqual({});
   });
 
-  it("opens no tab when the create itself left nothing durable behind", async () => {
+  it("opens no tab when an eager create left nothing durable behind", async () => {
     const { closeChatSession } = stubChatStore(async () => null);
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { land })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { eager: true, land })).resolves.toBeNull();
 
     expect(land).not.toHaveBeenCalled();
     expect(closeChatSession).not.toHaveBeenCalled();
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 
-  it("lets the Session go when the owner vanished mid-flight", async () => {
+  it("lets an eagerly created Session go when its owner vanished mid-flight", async () => {
     const { closeChatSession } = stubChatStore(async () => "durable-1");
 
-    await expect(bootChatSession(SCOPE, { land: () => false })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { eager: true, land: () => false })).resolves.toBeNull();
 
     expect(closeChatSession).toHaveBeenCalledWith("durable-1");
   });
 
-  it("lets it go for a project removed while the create was in flight", async () => {
-    const { closeChatSession } = stubChatStore(async () => {
-      useProjectsStore.setState({ projects: [] });
-      return "durable-1";
-    });
-    const land = vi.fn(() => true);
-
-    await expect(bootChatSession(SCOPE, { land })).resolves.toBeNull();
-
-    expect(land).not.toHaveBeenCalled();
-    expect(closeChatSession).toHaveBeenCalledWith("durable-1");
-  });
-
-  it("toasts and clears the flag when the create throws, rather than latching the surface shut", async () => {
+  it("toasts and clears the flag when an eager create throws", async () => {
     stubChatStore(async () => {
       throw new Error("socket hang up");
     });
 
-    await expect(bootChatSession(SCOPE, { land: () => true })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { eager: true, land: () => true })).resolves.toBeNull();
 
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't start chat: socket hang up",

@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { BlobLinkView } from "@volli/shared";
 
-import { createChatDraftsStore, MAX_DRAFTS, type ChatDraft } from "./chat-drafts";
+import {
+  createChatDraftsStore,
+  isVisibleProvisionalChatDraft,
+  MAX_DRAFTS,
+  type ChatDraft,
+} from "./chat-drafts";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
 function createMemoryStorage() {
@@ -43,6 +48,261 @@ function readPersisted(storage: ReturnType<typeof createMemoryStorage>) {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+const PROVISIONAL = {
+  projectId: "p1",
+  ticketId: "t1",
+  operationId: "op-1",
+  title: null,
+} as const;
+
+describe("provisional chat", () => {
+  it("keeps an empty Draft live without calling persistence", () => {
+    const storage = createMemoryStorage();
+    const write = vi.spyOn(storage, "setItem");
+    const store = createChatDraftsStore(storage);
+
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    expect(store.getState().drafts["draft-1"]?.provisional).toEqual({
+      ...PROVISIONAL,
+      phase: "draft",
+    });
+    expect(readPersisted(storage)).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps title/model-only Drafts out of persistence and sidebar visibility", () => {
+    const storage = createMemoryStorage();
+    const write = vi.spyOn(storage, "setItem");
+    const store = createChatDraftsStore(storage);
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    store.getState().setProvisionalTitle("draft-1", "Planning");
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "anthropic",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    });
+
+    expect(isVisibleProvisionalChatDraft(store.getState().drafts["draft-1"]!)).toBe(false);
+    expect(readPersisted(storage)).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("persists launch identity once the Draft has content and restores it on relaunch", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts["draft-1"]).toEqual({
+      text: "half typed",
+      attachments: [],
+      held: [],
+      touchedAt: expect.any(Number) as number,
+      provisional: { ...PROVISIONAL, phase: "draft" },
+    });
+  });
+
+  it("tracks post-create recovery, then promotes in place without changing the Draft key", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraft("draft-1", "hello");
+
+    store.getState().markProvisionalSessionCreated("draft-1");
+    expect(store.getState().drafts["draft-1"]?.provisional?.phase).toBe("session-created");
+
+    store.getState().completePromotion("draft-1");
+    expect(store.getState().drafts["draft-1"]).toEqual(
+      expect.objectContaining({ text: "hello" }) as unknown as ChatDraft,
+    );
+    expect(store.getState().drafts["draft-1"]?.provisional).toBeUndefined();
+  });
+
+  it("serializes concurrent promotion and retires a failed flight for retry", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    let release!: (promoted: boolean) => void;
+    const run = vi.fn(() => new Promise<boolean>((resolve) => (release = resolve)));
+
+    const first = store.getState().promote("draft-1", run);
+    const second = store.getState().promote("draft-1", run);
+
+    expect(second).toBe(first);
+    expect(run).toHaveBeenCalledOnce();
+    release(false);
+    await expect(first).resolves.toBe(false);
+    await expect(store.getState().promote("draft-1", async () => true)).resolves.toBe(true);
+  });
+
+  it("waits for every concurrent attachment import and makes completion idempotent", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const finishFirst = store.getState().beginAttachmentImport("draft-1");
+    const finishSecond = store.getState().beginAttachmentImport("draft-1");
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(true);
+    let settled = false;
+    const waiting = store
+      .getState()
+      .waitForAttachmentImports("draft-1")
+      .then(() => (settled = true));
+
+    const finishLater = store.getState().beginAttachmentImport("draft-1");
+    finishFirst();
+    finishFirst();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishSecond();
+    await waiting;
+    expect(settled).toBe(true);
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(true);
+    const waitingForLater = store.getState().waitForAttachmentImports("draft-1");
+    finishLater();
+    await expect(waitingForLater).resolves.toBeUndefined();
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(false);
+  });
+
+  it("does not let a late import callback resurrect a Draft closed while it was pending", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    const finishImport = store.getState().beginAttachmentImport("draft-1");
+
+    store.getState().discardProvisional("draft-1");
+    store.getState().setDraft("draft-1", "@late-file ");
+    store.getState().setDraftAttachments("draft-1", [blobView({ linkId: null })]);
+    finishImport();
+
+    expect(store.getState().drafts["draft-1"]).toBeUndefined();
+  });
+
+  it("adopts durable Blob links across the staged strip and held messages", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const ownerless = blobView({ linkId: null });
+    const linked = blobView({ linkId: "session-link" });
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraftAttachments("draft-1", [ownerless]);
+    store.getState().holdMessage("draft-1", {
+      id: "m1",
+      text: "look",
+      attachments: [ownerless],
+    });
+
+    store.getState().adoptLinkedAttachments("draft-1", [linked]);
+
+    expect(store.getState().drafts["draft-1"]?.attachments).toEqual([linked]);
+    expect(store.getState().drafts["draft-1"]?.held[0]?.attachments).toEqual([linked]);
+  });
+
+  it("can freeze the first resolved model after an earlier no-model refusal", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().holdMessage("draft-1", { id: "refused", text: "retry me" });
+
+    store.getState().setProvisionalModel("draft-1", model);
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    });
+
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
+  });
+
+  it("amends only the named held message while a captured import finishes", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().holdMessage("draft-1", { id: "m1", text: "first" });
+    store.getState().holdMessage("draft-1", { id: "m2", text: "second" });
+
+    store
+      .getState()
+      .amendHeldMessage("draft-1", "m1", (message) => ({ ...message, text: "first @late " }));
+    store
+      .getState()
+      .amendHeldMessage("draft-1", "missing", (message) => ({ ...message, text: "wrong" }));
+
+    expect(store.getState().drafts["draft-1"]?.held.map(({ text }) => text)).toEqual([
+      "first @late ",
+      "second",
+    ]);
+  });
+
+  it("freezes create metadata from the held Send boundary through promotion", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const originalModel = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high" as const,
+    };
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setProvisionalTitle("draft-1", "Before send");
+    store.getState().setProvisionalModel("draft-1", originalModel);
+    store.getState().holdMessage("draft-1", { id: "first-send", text: "go" });
+    store.getState().setProvisionalTitle("draft-1", "After send before create");
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    });
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      title: "Before send",
+      model: originalModel,
+    });
+    let finishPromotion!: () => void;
+    const promoting = store
+      .getState()
+      .promote(
+        "draft-1",
+        () => new Promise<boolean>((resolve) => (finishPromotion = () => resolve(false))),
+      );
+
+    store.getState().setProvisionalTitle("draft-1", "During create");
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    });
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      title: "Before send",
+      model: originalModel,
+    });
+
+    finishPromotion();
+    await promoting;
+    store.getState().markProvisionalSessionCreated("draft-1");
+    store.getState().setProvisionalTitle("draft-1", "After create");
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    });
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "session-created",
+      title: "Before send",
+      model: originalModel,
+    });
+  });
+
+  it("updates a provisional model and discards only identities that are still Drafts", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setProvisionalModel("draft-1", model);
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
+
+    store.getState().completePromotion("draft-1");
+    store.getState().discardProvisional("draft-1");
+    expect(store.getState().drafts).toHaveProperty("draft-1");
+
+    store.getState().openProvisional("draft-2", PROVISIONAL);
+    store.getState().discardProvisional("draft-2");
+    expect(store.getState().drafts).not.toHaveProperty("draft-2");
+  });
 });
 
 describe("setDraft", () => {

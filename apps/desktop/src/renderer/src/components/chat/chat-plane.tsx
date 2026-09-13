@@ -42,6 +42,7 @@ import {
   errorMessage,
   modelTierRow,
   offeredComposerVerbs,
+  resolveDefaultModel,
   readSkillResources,
   type ComposerVerbMoment,
   type ComposerVerbName,
@@ -185,6 +186,7 @@ import { useAttachments } from "@renderer/hooks/use-attachments";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { transcriptAttachments } from "@renderer/components/attachments/attachment-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
@@ -341,6 +343,10 @@ export function ChatPlane({
   // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
+  // Present only before the first message has promoted this identity into a
+  // Session. The rest of the plane can render its empty projections unchanged;
+  // the few operations that require durability branch explicitly below.
+  const provisional = useChatDraftsStore((state) => state.drafts[sessionId]?.provisional);
   const setDraft = useChatDraftsStore((state) => state.setDraft);
   const setDraftAttachments = useChatDraftsStore((state) => state.setDraftAttachments);
   const holdMessage = useChatDraftsStore((state) => state.holdMessage);
@@ -370,22 +376,38 @@ export function ChatPlane({
 
   const { messages, durableMessages, queue, working, deliverable, projection, liveCompaction } =
     session;
-  const modelSelection = projection?.modelSelection ?? null;
-  const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
+  const projectModel = useProjectsStore(
+    (state) => state.projects.find((project) => project.id === projectId)?.sessionModel ?? null,
+  );
   // The tier the model resolved from (VC-259), as the Settings row names it;
   // null for the ordinary Session whose model was chosen by exact id.
   const modelTier = projection?.modelTier ?? null;
   const selectionTier = modelTier === null ? null : modelTierRow(modelTier).label;
   const liveExecutorId = projection?.liveExecutor?.id ?? null;
   const { models, providers, hidden, defaults, catalogState, catalogError } = useModelAccess(
-    projection !== null,
+    projection !== null || provisional !== undefined,
   );
+  // Before promotion, show the same policy main will resolve at create: an
+  // explicit Draft choice, then the project's override, then the Role default.
+  // It stays a reading rather than being copied into the Draft, so changing a
+  // default before the first send still changes what the new Session will use.
+  const provisionalModel =
+    provisional === undefined
+      ? null
+      : (provisional.model ??
+        projectModel ??
+        resolveDefaultModel(defaults, provisional.ticketId === null ? "global" : "ticket"));
+  const modelSelection = projection?.modelSelection ?? provisionalModel;
+  const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   // A durable model is not enough to type: the row that says this Session is
   // pinned to something nobody can run waits on the catalog, and until the
   // catalog answers there is nothing to say it with. A box that takes a message
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
-  const composable = modelSelection !== null && catalogState !== "loading";
+  const composable =
+    provisional !== undefined
+      ? catalogState !== "loading"
+      : modelSelection !== null && catalogState !== "loading";
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
@@ -405,9 +427,16 @@ export function ChatPlane({
   const changeModel = React.useCallback(
     (next: ComposerModelSelection) => {
       const nextSelection = composerModelSelection(next);
-      if (nextSelection !== null) void selectModel(nextSelection);
+      if (nextSelection === null) return;
+      const launch = useChatDraftsStore.getState().drafts[sessionId]?.provisional;
+      if (launch !== undefined) {
+        if (launch.phase === "session-created") return;
+        useChatDraftsStore.getState().setProvisionalModel(sessionId, nextSelection);
+      } else {
+        void selectModel(nextSelection);
+      }
     },
-    [selectModel],
+    [selectModel, sessionId],
   );
 
   /**
@@ -499,13 +528,58 @@ export function ChatPlane({
    */
   const deliver = React.useCallback(
     async (message: QueuedMessage, intent: ComposerIntent): Promise<MessageDelivery | "held"> => {
+      if (provisional !== undefined) {
+        // First Send cannot defer a still-unknown model choice into main: doing
+        // so would let a Settings change between retries alter one create
+        // operation. No default is the existing Model Access recovery.
+        if (provisionalModel === null) {
+          setSettingsOpen(true, "model-access");
+          return "refused";
+        }
+        // `dispatch` persisted the held copy before this runs. Promotion can
+        // therefore create, transfer Draft-owned Blob links, and start attach
+        // without any crash window in which these words exist only in memory.
+        // Concurrent sends share the Draft store's one promotion Promise.
+        if (!(await sessionsStore.getState().promoteChatSession(sessionId))) return "refused";
+        // A close or explicit queue edit can withdraw renderer-owned intent
+        // while promotion is awaiting main. Never resurrect a message whose
+        // held copy no longer exists merely because the Session mint finished.
+        const drafts = useChatDraftsStore.getState();
+        const stillHeld = drafts.drafts[sessionId]?.held.some(({ id }) => id === message.id);
+        if (stillHeld !== true) {
+          drafts.completePromotion(sessionId);
+          return "delivered";
+        }
+        const stillOpen = Object.values(sessionsStore.getState().openTabs).some((tabs) =>
+          tabs.includes(sessionId),
+        );
+        if (!stillOpen) {
+          drafts.completePromotion(sessionId);
+          return "refused";
+        }
+        sessionsStore.getState().enqueue(sessionId, message);
+        // Queue first, then remove the recovery marker. If the renderer exits
+        // before this synchronous handoff finishes, hydration turns the held
+        // `sending` row into a visible `unsent` retry instead of stranding it.
+        drafts.completePromotion(sessionId);
+        return "held";
+      }
       if (messageRoute(intent, deliverable) === "hold") {
         enqueue(message);
         return "held";
       }
       return submit(message, intent === "steer" ? "steer" : "queue");
     },
-    [deliverable, enqueue, submit],
+    [
+      deliverable,
+      enqueue,
+      provisional,
+      provisionalModel,
+      sessionId,
+      sessionsStore,
+      setSettingsOpen,
+      submit,
+    ],
   );
 
   /**
@@ -548,6 +622,21 @@ export function ChatPlane({
    * reference is appended to the draft — the same text the `@` picker would
    * have inserted, so both routes to a repository file end in one thing.
    */
+  const readAttachmentOwner = React.useCallback(
+    () =>
+      useChatDraftsStore.getState().drafts[sessionId]?.provisional === undefined
+        ? ({ sessionId } as const)
+        : ({ unowned: true } as const),
+    [sessionId],
+  );
+  const amendHeldMessage = useChatDraftsStore((state) => state.amendHeldMessage);
+  // If a file import was already under way when first Send was pressed, its
+  // async callbacks still belong to that first message even though the box has
+  // optimistically emptied. This target exists only for that captured cohort;
+  // later attach gestures are held until promotion settles.
+  const importingFirstMessage = React.useRef<{ id: string; settled: Promise<void> } | null>(null);
+  const provisionalDispatches = React.useRef(0);
+  const deferredAttachmentBatches = React.useRef<File[][]>([]);
   const {
     attachments,
     attachFiles,
@@ -555,20 +644,74 @@ export function ChatPlane({
     clear: clearAttachments,
     reset: resetAttachments,
   } = useAttachments({
-    owner: { sessionId },
+    // An empty Draft has no Session FK to own a link yet. Resolve this at import
+    // start rather than render time: promotion can finish between those events.
+    // Ownerless bytes remain available for preview/relaunch, and promotion
+    // links them before the worktree is materialized.
+    owner: readAttachmentOwner,
     onRefInsert: (relPath) => {
-      // `useAttachments` re-reads its callbacks every render, so `input` here
-      // is the draft as it stands, not as it stood when the drop began.
-      setDraft(sessionId, input.length === 0 ? `@${relPath} ` : `${input} @${relPath} `);
+      const importing = importingFirstMessage.current;
+      if (importing !== null) {
+        amendHeldMessage(sessionId, importing.id, (message) => ({
+          ...message,
+          text: message.text.length === 0 ? `@${relPath} ` : `${message.text} @${relPath} `,
+        }));
+        return;
+      }
+      const text = useChatDraftsStore.getState().drafts[sessionId]?.text ?? "";
+      setDraft(sessionId, text.length === 0 ? `@${relPath} ` : `${text} @${relPath} `);
     },
     onError: (message) => toast.error(message),
-    onChange: (next) => setDraftAttachments(sessionId, next),
+    onChange: (next) => {
+      const importing = importingFirstMessage.current;
+      if (importing === null || next.length === 0) {
+        setDraftAttachments(sessionId, next);
+        return;
+      }
+      amendHeldMessage(sessionId, importing.id, (message) => {
+        const attached = message.attachments ?? [];
+        const hashes = new Set(attached.map(({ blobHash }) => blobHash));
+        const additions = next.filter(({ blobHash }) => !hashes.has(blobHash));
+        return additions.length === 0
+          ? message
+          : { ...message, attachments: [...attached, ...additions] };
+      });
+      // `useAttachments` owns a local live strip too. It is cleared when the
+      // captured import cohort settles; until then, never persist its late Blob
+      // as the start of a second message.
+      setDraftAttachments(sessionId, []);
+    },
   });
   // Re-fetched whenever the strip changes, so a screenshot attached mid-session
   // is resolvable by the very next turn that mentions its path.
   const materializedAttachments = useMaterializedAttachments(
-    { sessionId, ...(ticketId === null ? {} : { ticketId }) },
+    provisional === undefined ? { sessionId, ...(ticketId === null ? {} : { ticketId }) } : {},
     attachmentsRevision(attachments),
+  );
+  const attachDraftFilesNow = React.useCallback(
+    (files: Iterable<File>) => {
+      const drafts = useChatDraftsStore.getState();
+      const finish =
+        drafts.drafts[sessionId]?.provisional === undefined
+          ? null
+          : drafts.beginAttachmentImport(sessionId);
+      const imported = attachFiles(files);
+      if (finish !== null) void imported.then(finish, finish);
+    },
+    [attachFiles, sessionId],
+  );
+  const attachDraftFiles = React.useCallback(
+    (files: Iterable<File>) => {
+      // Promotion links exactly the imports that were already part of the
+      // first message. Preserve a fresh gesture while that boundary is moving
+      // and import it once the Session either settles or returns to Draft.
+      if (provisionalDispatches.current > 0) {
+        deferredAttachmentBatches.current.push([...files]);
+        return;
+      }
+      attachDraftFilesNow(files);
+    },
+    [attachDraftFilesNow],
   );
   // Read at submit rather than closed over, so `send` keeps its identity while
   // the strip changes underneath it.
@@ -586,6 +729,22 @@ export function ChatPlane({
     const persisted = useChatDraftsStore.getState().drafts[sessionId]?.attachments ?? [];
     if (persisted.length > 0) resetAttachments(persisted);
   }, [resetAttachments, sessionId]);
+  // An import can finish after Send but before promotion's import barrier. The
+  // Draft store adopts its durable Session link; when promotion removes the
+  // provisional marker, mirror that adopted view back into this hook's local
+  // strip so it cannot redraw an ownerless duplicate for the next message.
+  const wasProvisional = React.useRef(provisional !== undefined);
+  React.useEffect(() => {
+    if (provisional !== undefined) {
+      wasProvisional.current = true;
+      return;
+    }
+    if (!wasProvisional.current) return;
+    wasProvisional.current = false;
+    const linked = useChatDraftsStore.getState().drafts[sessionId]?.attachments ?? [];
+    attachmentsRef.current = linked;
+    resetAttachments(linked);
+  }, [provisional, resetAttachments, sessionId]);
   /**
    * A pulled-back row's files rejoin the strip (VC-137) — the merge rule and
    * the links it strands both live in `restoreStripAttachments`.
@@ -607,21 +766,10 @@ export function ChatPlane({
 
   const dispatch = React.useCallback(
     (
-      text: string,
+      message: QueuedMessage,
       road: (message: QueuedMessage) => Promise<HeldDispatchOutcome>,
-      resources?: readonly PromptResource[],
-      attached?: readonly BlobLinkView[],
+      provisionalDispatch: boolean,
     ) => {
-      // Resources ride the message object itself — through hold, queue and
-      // steer — so a copy released later delivers exactly what `/skill`
-      // resolved to when ⏎ was pressed, not whatever the file says by then.
-      // Attachments ride it for the same reason (VC-50).
-      const message: QueuedMessage = {
-        id: nextId(),
-        text,
-        ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
-        ...(attached !== undefined && attached.length > 0 ? { attachments: attached } : {}),
-      };
       holdMessage(sessionId, message);
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -636,25 +784,108 @@ export function ChatPlane({
           else dropHeld(sessionId, message.id);
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
+      }).finally(async () => {
+        const importing = importingFirstMessage.current;
+        if (importing?.id === message.id) {
+          await importing.settled;
+          if (importingFirstMessage.current?.id === message.id) {
+            importingFirstMessage.current = null;
+            clearAttachments();
+            await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+          }
+        }
+        if (provisionalDispatch && provisionalDispatches.current > 0) {
+          provisionalDispatches.current -= 1;
+        }
+        if (provisionalDispatches.current === 0) {
+          const batches = deferredAttachmentBatches.current.splice(0);
+          // A tab switch leaves this identity in `openTabs`; an explicit close
+          // does not. Drop gestures queued behind a close even when create has
+          // already left `session-created` recovery metadata in the Draft.
+          const stillOpen = Object.values(sessionsStore.getState().openTabs).some((tabs) =>
+            tabs.includes(sessionId),
+          );
+          if (stillOpen) for (const batch of batches) attachDraftFilesNow(batch);
+        }
       });
     },
-    [dropHeld, holdMessage, markHeld, sessionId],
+    [
+      attachDraftFilesNow,
+      clearAttachments,
+      dropHeld,
+      holdMessage,
+      markHeld,
+      sessionId,
+      sessionsStore,
+    ],
   );
 
   const send = React.useCallback(
     (text: string, intent: ComposerIntent, resources?: readonly PromptResource[]) => {
+      const drafts = useChatDraftsStore.getState();
+      const launch = drafts.drafts[sessionId]?.provisional;
+      // A second Enter cannot overtake a file import already committed to the
+      // first Enter. Once that captured cohort settles, ordinary rapid sends
+      // resume and share promotion's single flight as before.
+      if (importingFirstMessage.current !== null) return;
+      // Defaults stay live while this is merely a Draft. Send is the boundary
+      // that freezes the resolved choice: a create that lands before a later
+      // Blob/setup failure must replay the same model even if Settings changes
+      // before retry or relaunch.
+      if (launch !== undefined && launch.model === undefined && provisionalModel !== null) {
+        drafts.setProvisionalModel(sessionId, provisionalModel);
+      }
+      // Resources ride the message object itself — through hold, queue and
+      // steer — so a copy released later delivers exactly what `/skill`
+      // resolved to when ⏎ was pressed, not whatever the file says by then.
+      // Attachments ride it for the same reason (VC-50).
+      const message: QueuedMessage = {
+        id: nextId(),
+        text,
+        ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
+        ...(attachmentsRef.current.length > 0 ? { attachments: attachmentsRef.current } : {}),
+      };
+      let importBarrier: Promise<void> | null = null;
+      if (launch !== undefined) {
+        provisionalDispatches.current += 1;
+        if (drafts.hasAttachmentImports(sessionId)) {
+          importBarrier = drafts.waitForAttachmentImports(sessionId);
+          importingFirstMessage.current = { id: message.id, settled: importBarrier };
+        }
+      }
       // The strip's durable copy empties BEFORE the hold, so the one flush
       // `dispatchHeldMessage` performs carries both halves of the same
       // transition — the message leaving the box WITH its files, and the box
       // no longer holding them — in a single durable write window.
       if (attachmentsRef.current.length > 0) setDraftAttachments(sessionId, []);
-      dispatch(text, (message) => deliver(message, intent), resources, attachmentsRef.current);
+      dispatch(
+        message,
+        async (original) => {
+          if (importBarrier !== null) {
+            await importBarrier;
+            if (importingFirstMessage.current?.id === original.id) {
+              importingFirstMessage.current = null;
+            }
+            // Late imported Blobs were routed into the held copy above. Remove
+            // the hook's local preview of them before the durable Session adopts
+            // those same links, then persist the amended hold before create.
+            clearAttachments();
+            if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) return "refused";
+          }
+          const prepared =
+            useChatDraftsStore
+              .getState()
+              .drafts[sessionId]?.held.find(({ id }) => id === original.id) ?? original;
+          return deliver(prepared, intent);
+        },
+        launch !== undefined,
+      );
       // The strip belongs to the message that just left, not to the box. It is
       // cleared rather than detached: the links stay, because the message the
       // agent received refers to them.
       clearAttachments();
     },
-    [clearAttachments, deliver, dispatch, sessionId, setDraftAttachments],
+    [clearAttachments, deliver, dispatch, provisionalModel, sessionId, setDraftAttachments],
   );
 
   // What the Session is holding for you, from the two records that say it — see
@@ -671,8 +902,14 @@ export function ChatPlane({
   // content, so an unchanged strip stays the array it was.
   const strip = useStableList(
     React.useMemo(
-      () => heldStrip(held, queue, durableMessageIds, hasReconciledSessionSnapshot(projection)),
-      [durableMessageIds, held, projection, queue],
+      () =>
+        heldStrip(
+          held,
+          queue,
+          durableMessageIds,
+          provisional !== undefined || hasReconciledSessionSnapshot(projection),
+        ),
+      [durableMessageIds, held, projection, provisional, queue],
     ),
     sameQueuedMessage,
   );
@@ -1314,7 +1551,7 @@ export function ChatPlane({
               selectionProviderLabel={sessionModel?.providerLabel}
               selectionTier={selectionTier}
               onSelectionChange={changeModel}
-              modelChoiceDisabled={working}
+              modelChoiceDisabled={working || (provisional !== undefined && held.length > 0)}
               working={working}
               ready={composable}
               contextUsage={contextUsage}
@@ -1324,7 +1561,7 @@ export function ChatPlane({
               onSubmit={submitComposer}
               onStop={stopTurn}
               attachments={attachments}
-              onAttachFiles={(picked) => void attachFiles(picked)}
+              onAttachFiles={attachDraftFiles}
               onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
               onRestoreAttachments={restoreAttachments}
               imagesUnsupported={imagesUnsupported}

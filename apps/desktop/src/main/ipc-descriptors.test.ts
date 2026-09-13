@@ -1212,15 +1212,25 @@ describe("DATA_IPC descriptor table", () => {
       expect(guard([{ ticketId: "t1", blobs: [] }])).toBe(true);
     });
 
+    it("accepts a session owner — the same adoption a promoted Draft makes (VC-358)", () => {
+      expect(guard([{ sessionId: "s1", blobs: [{ blobHash: "a", label: "Staged" }] }])).toBe(true);
+      expect(guard([{ sessionId: "s1", blobs: [{ blobHash: "a" }] }])).toBe(true);
+      expect(guard([{ sessionId: "s1", blobs: [] }])).toBe(true);
+    });
+
     it("rejects a malformed draft entry", () => {
       expect(guard([{ ticketId: "t1", blobs: [{ blobHash: 1 }] }])).toBe(false);
       expect(guard([{ ticketId: "t1", blobs: [{ blobHash: "a", label: 1 }] }])).toBe(false);
       expect(guard([{ ticketId: "t1", blobs: [null] }])).toBe(false);
     });
 
-    it("rejects a missing ticket, a non-array list and a wrong arity", () => {
+    it("rejects two owners at once — a blob link hangs off exactly one", () => {
+      expect(guard([{ ticketId: "t1", sessionId: "s1", blobs: [] }])).toBe(false);
+    });
+
+    it("rejects a missing owner, a non-array list and a wrong arity", () => {
       expect(guard([{ blobs: [] }])).toBe(false);
-      expect(guard([{ ticketId: "t1", blobs: "nope" }])).toBe(false);
+      expect(guard([{ sessionId: "s1", blobs: "nope" }])).toBe(false);
       expect(guard([null])).toBe(false);
       expect(guard([])).toBe(false);
     });

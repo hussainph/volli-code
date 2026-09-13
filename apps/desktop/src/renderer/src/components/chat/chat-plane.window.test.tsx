@@ -19,6 +19,12 @@ import { MotionGlobalConfig } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { UIMessage } from "ai";
+import {
+  DEFAULT_COMPACTION_POLICY,
+  EMPTY_MODEL_ACCESS_DEFAULTS,
+  type ModelAccessSnapshot,
+  type ModelSelection,
+} from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionTransport } from "@volli/session-presentation";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -28,7 +34,9 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useUiStore } from "@renderer/stores/ui";
 import { ChatPlane } from "./chat-plane";
 import {
   forgetTranscriptViews,
@@ -42,24 +50,34 @@ vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 const SESSION = "s1";
 const PROJECT = "p1";
 const TURNS = 400;
+const DEFAULT_SELECTION: ModelSelection = {
+  providerId: "acme",
+  modelId: "sonnet",
+  reasoningLevel: "high",
+};
 
-const bridgeNode = (path: string[]): unknown =>
+type BridgeOverrides = Readonly<Record<string, (...args: unknown[]) => unknown>>;
+
+const bridgeNode = (path: string[], overrides: BridgeOverrides = {}): unknown =>
   new Proxy(() => {}, {
     get(_target, key) {
       if (typeof key !== "string" || key === "then") return undefined;
-      return bridgeNode([...path, key]);
+      return bridgeNode([...path, key], overrides);
     },
     apply(_target, _this, args) {
       const name = path.at(-1) ?? "";
+      const override = overrides[path.join(".")];
+      if (override !== undefined) return override(...args);
       if (name.startsWith("on")) return () => {};
       if (name === "pathForFile") return String(args[0]);
+      if (path.at(-2) === "appState" && name === "set") return Promise.resolve({ ok: true });
       return Promise.resolve({ ok: false, error: "not stubbed" });
     },
   });
 
 /** A bridge that refuses every invoke and subscribes to nothing, by shape. */
-function refusingBridge(): unknown {
-  return bridgeNode([]);
+function refusingBridge(overrides: BridgeOverrides = {}): unknown {
+  return bridgeNode([], overrides);
 }
 
 /** `count` user turns, each saying which one it is so a row can be named. */
@@ -97,6 +115,8 @@ beforeEach(() => {
   useBrowserTabsStore.setState({ byId: {}, hydratedProjects: new Set([PROJECT]) });
   useBackgroundShellsStore.setState({ byId: {}, hydrated: true });
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
+  useChatDraftsStore.setState({ drafts: {} });
+  useUiStore.getState().setSettingsOpen(false);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -112,6 +132,23 @@ afterEach(async () => {
   MotionGlobalConfig.skipAnimations = false;
   vi.unstubAllGlobals();
 });
+
+function provisionalChatStore(promote: () => Promise<boolean> = async () => true) {
+  const store = createChatSessionsStore(
+    () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
+  );
+  const promoteChatSession = vi.fn(promote);
+  const enqueue = vi.fn();
+  store.setState({ promoteChatSession, enqueue } as never);
+  useChatDraftsStore.getState().openProvisional(SESSION, {
+    projectId: PROJECT,
+    ticketId: null,
+    operationId: "draft-operation",
+    title: null,
+  });
+  store.getState().openChatTab(PROJECT, SESSION);
+  return { enqueue, promoteChatSession, store };
+}
 
 function chatStore(messages: readonly UIMessage[]) {
   const store = createChatSessionsStore(
@@ -144,20 +181,70 @@ function chatStore(messages: readonly UIMessage[]) {
   return store;
 }
 
-async function mountPlane(store: ReturnType<typeof chatStore>) {
+async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
+  const plane = (
+    <TooltipProvider delayDuration={0}>
+      <ChatPlane
+        sessionId={SESSION}
+        projectId={PROJECT}
+        ticketId={null}
+        onOpenFile={() => {}}
+        store={store}
+      />
+    </TooltipProvider>
+  );
   await act(async () => {
     root?.render(
-      <TooltipProvider delayDuration={0}>
-        <ChatPlane
-          sessionId={SESSION}
-          projectId={PROJECT}
-          ticketId={null}
-          onOpenFile={() => {}}
-          store={store}
-        />
-      </TooltipProvider>,
+      modelAccess === undefined ? (
+        plane
+      ) : (
+        <ModelAccessProvider client={modelAccess}>{plane}</ModelAccessProvider>
+      ),
     );
   });
+}
+
+function modelClient(selection: ModelSelection): ModelAccessClient {
+  const snapshot: ModelAccessSnapshot = {
+    observedAt: 1,
+    providers: [
+      {
+        id: selection.providerId,
+        label: "Acme",
+        state: "available",
+        accountLabel: null,
+        billingSource: "unknown",
+        recovery: null,
+        signIn: [],
+        hasStoredCredential: true,
+      },
+    ],
+    models: [
+      {
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        label: "Sonnet",
+        state: "available",
+        reasoningLevels: [selection.reasoningLevel],
+        acceptsImageInput: true,
+      },
+    ],
+  };
+  return {
+    inspect: async () => snapshot,
+    defaults: async () => ({ ...EMPTY_MODEL_ACCESS_DEFAULTS, global: selection }),
+    setDefault: async () => ({ ...EMPTY_MODEL_ACCESS_DEFAULTS, global: selection }),
+    hiddenModels: async () => [],
+    setHiddenModels: async (hidden) => hidden,
+    compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
+    setCompactionPolicy: async (policy) => policy,
+    pickerView: async () => "all",
+    setPickerView: async (view) => view,
+    beginSignIn: async () => {
+      throw new Error("not under test");
+    },
+    signOut: async () => undefined,
+  };
 }
 
 async function unmountPlane() {
@@ -190,6 +277,255 @@ function click(target: Element): void {
     target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
+
+describe("a provisional chat plane", () => {
+  it("stays renderer-local until Send, then promotes before queueing the first message", async () => {
+    const { enqueue, promoteChatSession, store } = provisionalChatStore();
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    expect(store.getState().sessions).toEqual({});
+    expect(promoteChatSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      type(box, "first durable words");
+    });
+    expect(promoteChatSession).not.toHaveBeenCalled();
+
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    expect(submit.disabled).toBe(false);
+    await act(async () => {
+      submit.click();
+    });
+
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(enqueue).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ text: "first durable words" }),
+    );
+  });
+
+  it("keeps an import already in flight with the first held message", async () => {
+    const ownerless = {
+      linkId: null,
+      blobHash: "a".repeat(64),
+      label: "late.png",
+      originalName: "late.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    } as const;
+    let finishAttach!: () => void;
+    const attaching = new Promise((resolve) => {
+      finishAttach = () => resolve({ ok: true, blob: ownerless, relPath: "src/late.png" });
+    });
+    const attach = vi.fn(() => attaching);
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "attachments.pathForFile": () => "/tmp/late.png",
+        "attachments.attach": attach,
+      }),
+    );
+    const { enqueue, promoteChatSession, store } = provisionalChatStore();
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
+    const picker = attachButton?.nextElementSibling;
+    const box = composer();
+    if (!(picker instanceof HTMLInputElement) || box === null) {
+      throw new Error("expected attachment picker and composer");
+    }
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["image"], "late.png", { type: "image/png" })],
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(attach).toHaveBeenCalledOnce();
+    await act(async () => type(box, "inspect this"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await act(async () => submit.click());
+
+    expect(promoteChatSession).not.toHaveBeenCalled();
+    await act(async () => finishAttach());
+
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(enqueue).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        text: "inspect this @src/late.png ",
+        attachments: [ownerless],
+      }),
+    );
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([]);
+  });
+
+  it("holds Send until the live default has loaded, then freezes it for promotion", async () => {
+    const selection: ModelSelection = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    };
+    const client = modelClient(selection);
+    let finishDefaults!: () => void;
+    client.defaults = () =>
+      new Promise((resolve) => {
+        finishDefaults = () => resolve({ ...EMPTY_MODEL_ACCESS_DEFAULTS, global: selection });
+      });
+    let finishPromotion!: () => void;
+    const { promoteChatSession, store } = provisionalChatStore(
+      () => new Promise<boolean>((resolve) => (finishPromotion = () => resolve(true))),
+    );
+    await mountPlane(store, client);
+
+    const box = composer();
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (box === null || submit === null || submit === undefined)
+      throw new Error("expected composer");
+    await act(async () => type(box, "wait for policy"));
+    expect(submit.disabled).toBe(true);
+    expect(promoteChatSession).not.toHaveBeenCalled();
+
+    await act(async () => finishDefaults());
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+    await act(async () => submit.click());
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toEqual(selection);
+    await act(async () => finishPromotion());
+  });
+
+  it("opens Model Access instead of promoting when no default resolves", async () => {
+    const selection: ModelSelection = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    };
+    const client = modelClient(selection);
+    client.defaults = async () => EMPTY_MODEL_ACCESS_DEFAULTS;
+    const { promoteChatSession, store } = provisionalChatStore();
+    await mountPlane(store, client);
+    const box = composer();
+    if (box === null) throw new Error("expected composer");
+    await act(async () => type(box, "needs a model"));
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+
+    await act(async () => submit.click());
+
+    await vi.waitFor(() => expect(useUiStore.getState().settingsCategory).toBe("model-access"));
+    expect(promoteChatSession).not.toHaveBeenCalled();
+    expect(container?.querySelector('[aria-label="Queued message: needs a model"]')).not.toBeNull();
+  });
+
+  it("freezes the live default model onto first Send so promotion retries cannot drift", async () => {
+    const selection: ModelSelection = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    };
+    let finishPromotion!: () => void;
+    const { promoteChatSession, store } = provisionalChatStore(
+      () => new Promise<boolean>((resolve) => (finishPromotion = () => resolve(true))),
+    );
+    await mountPlane(store, modelClient(selection));
+    await vi.waitFor(() => {
+      expect(container?.textContent).toContain("Sonnet");
+    });
+
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => {
+      type(box, "freeze this model");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.provisional?.model).toEqual(selection);
+    await act(async () => finishPromotion());
+  });
+
+  it("drops a deferred attachment gesture when the created Draft tab closes", async () => {
+    let finishPromotion!: (promoted: boolean) => void;
+    const promotion = new Promise<boolean>((resolve) => (finishPromotion = resolve));
+    const attach = vi.fn(async () => ({ ok: false, error: "fixture refusal" }));
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "attachments.pathForFile": () => "/tmp/closed.txt",
+        "attachments.attach": attach,
+      }),
+    );
+    const { store } = provisionalChatStore(() => promotion);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => {
+      type(box, "close during transfer");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1),
+    );
+    await act(async () => useChatDraftsStore.getState().markProvisionalSessionCreated(SESSION));
+    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
+    const picker = attachButton?.nextElementSibling;
+    if (!(picker instanceof HTMLInputElement)) throw new Error("expected attachment picker");
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["closed"], "closed.txt", { type: "text/plain" })],
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => store.getState().closeChatTab(PROJECT, SESSION));
+    await act(async () => finishPromotion(true));
+
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]?.state).toBe("unsent"),
+    );
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect held intent withdrawn while promotion is in flight", async () => {
+    let finishPromotion!: (promoted: boolean) => void;
+    const promotion = new Promise<boolean>((resolve) => (finishPromotion = resolve));
+    const attach = vi.fn(async () => ({ ok: false, error: "fixture refusal" }));
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "attachments.pathForFile": () => "/tmp/next.txt",
+        "attachments.attach": attach,
+      }),
+    );
+    const { enqueue, promoteChatSession, store } = provisionalChatStore(() => promotion);
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+
+    const box = composer();
+    if (box === null) throw new Error("expected a composer");
+    await act(async () => {
+      type(box, "cancel before mint settles");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
+    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
+    const picker = attachButton?.nextElementSibling;
+    if (!(picker instanceof HTMLInputElement)) throw new Error("expected attachment picker");
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["next"], "next.txt", { type: "text/plain" })],
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(attach).not.toHaveBeenCalled();
+    const heldId = useChatDraftsStore.getState().drafts[SESSION]?.held[0]?.id;
+    if (heldId === undefined) throw new Error("expected held promotion intent");
+    await act(async () => useChatDraftsStore.getState().dropHeld(SESSION, heldId));
+
+    await act(async () => finishPromotion(true));
+
+    expect(enqueue).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce());
+  });
+});
 
 describe("a chat plane holding a long transcript", () => {
   it("mounts the tail and not the history", async () => {

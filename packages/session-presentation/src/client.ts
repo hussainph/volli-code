@@ -348,6 +348,8 @@ export interface ChatSessionTransport {
     projectId: string;
     ticketId: string | null;
     title: string | null;
+    /** A provisional Draft's UUID, adopted as the durable Session id on promotion. */
+    requestedSessionId?: string;
     /** Skill slugs to inject at attach time. Absent means none. */
     skills?: readonly string[];
     /**
