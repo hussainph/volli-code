@@ -61,11 +61,8 @@ export type MessageResponseProps = Omit<
   "plugins" | "rehypePlugins"
 >;
 
-const settledStreamdownPlugins = { cjk, code, mermaid };
-const liveStreamdownPlugins = { cjk, mermaid };
-
 /**
- * Shiki is a settle-time pipeline, not live-stream work.
+ * Shiki is a settle-time pipeline, not live-stream work (VC-357).
  *
  * Streamdown 2.6 already memoizes completed markdown blocks, so growing the last
  * block does not re-parse or re-highlight the closed blocks above it. The code
@@ -73,14 +70,33 @@ const liveStreamdownPlugins = { cjk, mermaid };
  * though, and each string is a cache miss by definition. A long open fence is
  * therefore quadratic work on the same frames where the reader is scrolling.
  *
+ * WHAT THIS COSTS, STATED PLAINLY. The plugin map is chosen once per render for
+ * a whole message body, because that is the only seam Streamdown offers — there
+ * is no per-block plugin. So this does NOT disable Shiki only for the fence
+ * still being written. For as long as the Turn is open, EVERY fence in the live
+ * assistant Turn draws unhighlighted, including fences that closed minutes ago
+ * and any that precede a tool call in the same Turn. They gain their colour when
+ * the Turn settles, in one pass. The product owner was shown this trade and
+ * accepted it: on the `real` fixture, live Shiki cost 374 dropped frames and 92
+ * long tasks totalling 8.1s per 20 samples on an idle machine, against 12
+ * dropped frames and 1 long task after. Settled transcripts — every Turn a
+ * reader scrolls back through — are unaffected, and so is reasoning.
+ *
  * With no code plugin, Streamdown keeps the same code frame, actions and plain
  * token fallback; only Shiki is absent. CJK, Mermaid, images and the sanitizer
- * stay in the live pipeline. The caller derives `isAnimating` from the stream's
- * one-way `turnActive` boundary, not from the wider Session lifecycle. It changes
- * the stable plugin object exactly once at settle, when every fence is highlighted
- * once at its final size. Both objects are module constants because Streamdown's
- * outer memo compares the plugin-map identity.
+ * stay in the live pipeline.
+ *
+ * The caller derives `isAnimating` from the stream's own `turnActive` boundary
+ * (`turn.started` / `turn.completed` / `turn.interrupted`), not from the wider
+ * Session lifecycle, which can flip to `error` and back while the same Turn is
+ * still being written — that would highlight incomplete content and then strip
+ * the colour off again. Across one Turn the plugin object therefore changes
+ * exactly once, at settle, when every fence is highlighted once at its final
+ * size. Both maps are module constants because Streamdown's outer memo compares
+ * the plugin-map identity.
  */
+const settledStreamdownPlugins = { cjk, code, mermaid };
+const liveStreamdownPlugins = { cjk, mermaid };
 
 /**
  * `animated` is not passed, and its absence is the load-bearing part.
