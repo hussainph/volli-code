@@ -780,6 +780,40 @@ describe("BrowserTabHost navigation controls", () => {
 });
 
 describe("BrowserTabHost native surface", () => {
+  it("owns exact-bound deduplication across its page and DevTools placements", () => {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    const page = views[0];
+    if (page === undefined) throw new Error("expected page view");
+    page.setBounds.mockClear();
+
+    // Main already used this plane for the staged default, so an equal renderer
+    // report should not touch the native surface again.
+    host.setBounds(tab.tabId, BROWSER_DEFAULT_BOUNDS);
+    expect(page.setBounds).not.toHaveBeenCalled();
+
+    const bounds = { x: 12, y: 48, width: 800, height: 600 };
+    host.setBounds(tab.tabId, bounds);
+    host.setBounds(tab.tabId, bounds);
+    expect(page.setBounds).toHaveBeenCalledOnce();
+    expect(page.setBounds).toHaveBeenLastCalledWith(bounds);
+
+    // Opening DevTools is a main-owned placement inside the same outer plane.
+    // Repeating that plane stays quiet; closing DevTools still restores it.
+    host.show(tab.tabId);
+    host.toggleDevTools(tab.tabId);
+    page.setBounds.mockClear();
+    host.setBounds(tab.tabId, bounds);
+    expect(page.setBounds).not.toHaveBeenCalled();
+    host.toggleDevTools(tab.tabId);
+    expect(page.setBounds).toHaveBeenCalled();
+    expect(page.setBounds).toHaveBeenLastCalledWith(bounds);
+  });
+
   it("captures page and docked DevTools pixels in plane-relative positions", async () => {
     const tab = host.open({
       url: "https://example.com",
