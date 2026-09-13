@@ -1268,8 +1268,12 @@ describe("ticket sessions", () => {
   // pins is that a spawned terminal actually receives it, and that a value the
   // user exported in their own shell survives untouched.
   it("injects the concurrency budget, and never over the user's own value", async () => {
-    const priorMakeflags = process.env["MAKEFLAGS"];
+    const keys = ["MAKEFLAGS", "VITEST_MAX_WORKERS", "CARGO_BUILD_JOBS", "GOFLAGS"] as const;
+    const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     process.env["MAKEFLAGS"] = "-j16";
+    delete process.env["VITEST_MAX_WORKERS"];
+    delete process.env["CARGO_BUILD_JOBS"];
+    delete process.env["GOFLAGS"];
     try {
       await createTicketSession("tk1");
       const env = lastSpawnEnv();
@@ -1282,8 +1286,11 @@ describe("ticket sessions", () => {
       // flag-carrying variable it did not write.
       expect(env["MAKEFLAGS"]).toBe("-j16");
     } finally {
-      if (priorMakeflags === undefined) delete process.env["MAKEFLAGS"];
-      else process.env["MAKEFLAGS"] = priorMakeflags;
+      for (const key of keys) {
+        const value = prior[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
