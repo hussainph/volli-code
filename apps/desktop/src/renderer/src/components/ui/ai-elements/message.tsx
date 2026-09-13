@@ -77,10 +77,13 @@ export type MessageResponseProps = Omit<
  * assistant Turn draws unhighlighted, including fences that closed minutes ago
  * and any that precede a tool call in the same Turn. They gain their colour when
  * the Turn settles, in one pass. The product owner was shown this trade and
- * accepted it: on the `real` fixture, live Shiki cost 374 dropped frames and 92
- * long tasks totalling 8.1s per 20 samples on an idle machine, against 12
- * dropped frames and 1 long task after. Settled transcripts — every Turn a
- * reader scrolls back through — are unaffected, and so is reasoning.
+ * accepted it. On the `real` fixture, 20 samples per arm, live Shiki cost 351
+ * dropped frames and 94 long tasks totalling 7.9s on an idle machine and 367 /
+ * 96 / 8.1s under two busy cores; after, both arms report zero long tasks and
+ * zero dropped frames but for one. Settled transcripts — every Turn a reader
+ * scrolls back through — are unaffected, and so is reasoning. The numbers and
+ * what the move to settle costs are in
+ * `docs/research/perf/chat-streaming-scroll-vc357.md`.
  *
  * With no code plugin, Streamdown keeps the same code frame, actions and plain
  * token fallback; only Shiki is absent. CJK, Mermaid, images and the sanitizer

@@ -7,9 +7,98 @@ hypothesis saves the next ticket the trip.
 
 Everything here is measured against the `VC-353` harness on the `real` fixture
 (1,198 Sessions / 259,855 Session Events / 392 Tickets), 20 repetitions per
-arm, on an Apple M1 MacBook Pro (8 logical cores, 16 GiB, macOS 26.5.1). The
-before/after artifacts and the exact commands are in
-[`docs/performance-baselines/vc-357-real/`](../../performance-baselines/vc-357-real/).
+arm, on an Apple M1 MacBook Pro (8 logical cores, 16 GiB, macOS 26.5.1).
+
+The numbers below are the report; the raw `benchmark.json` is deliberately not
+committed. A single run of this interaction emits roughly 40,000 lines of frame
+timings, and a diff nobody can read is not evidence. Reproduce it instead — the
+same two commands that produced every number here, run back to back on one
+machine in one thermal state, with only `message.tsx`'s plugin split reverted
+between them:
+
+```sh
+pnpm bench:desktop -- --preset real --stream-only --arms idle,loaded \
+  --repetitions 20 --output /tmp/vc357-after
+# revert the live/settled plugin split in message.tsx, then:
+pnpm bench:desktop -- --preset real --stream-only --arms idle,loaded \
+  --repetitions 20 --fixture <the fixture the first run generated> \
+  --output /tmp/vc357-before
+```
+
+Do not pass `--skip-build` when the product code has changed between the two
+runs. That flag reuses the previously built bundle, and a before/after pair
+where one arm silently measured the other arm's code is worse than no pair.
+
+## Two ways this harness lied, and how it was caught
+
+The ticket said to make sure the measurement is genuinely driving both at once
+before trusting it. It was not, twice, and both faults had the same shape: the
+probe kept streaming, kept scrolling, kept reporting **zero dropped frames** —
+and the code fence it was supposed to be measuring was not on screen at all.
+Both were caught by `run.mjs`'s per-sample live-fence contract
+(`liveCodeBlocks >= 1`, `settledCodeBlocks >= 1`,
+`settledHighlightedCodeBlocks >= 1`), which refuses to publish a run rather than
+averaging a vacuum. That check earned its place here.
+
+1. **A sample reset that unmounted the row it was resetting.** Scrolling the
+   transcript to its exact bottom before replacing the previous sample's row
+   looked like it would retire the window anchor more firmly. It stopped the
+   live row mounting at all: `liveCodeBlocks: 0` on every sample, renderer RSS
+   110 MB against 288 MB when the fence is really there. Reverted, with the
+   reason written next to the line so it does not come back.
+
+2. **A development React build, chosen by a side effect three files away.** The
+   fixture generator loads the production database modules through a Vite dev
+   server, and `createServer` sets `NODE_ENV=development` for the whole process.
+   `run.mjs` then spawned the chat bench with that inherited, and the bench's own
+   Vite build resolved React's `development` export condition — a 3.4 MB bundle
+   instead of 3.1 MB, laying out differently enough that the growing fence fell
+   outside the scroller the reader was moving inside, where Streamdown's
+   `content-visibility` correctly declines to do any work on it. The bench now
+   pins `NODE_ENV` itself.
+
+The general lesson is worth keeping: in a probe for *smoothness*, a suspiciously
+perfect result is a reason to check that the work is still happening, not a
+reason to celebrate. Every number below comes from samples that each proved the
+fence was mounted, live, and highlighted at settle.
+
+## The numbers
+
+Both arms, `real` fixture, 20 repetitions each, captured back to back in one
+thermal state. The only difference between the two runs is one line in
+`message.tsx`: whether the live pipeline gets the Shiki plugin.
+
+| | idle before | idle after | 2-busy-core before | 2-busy-core after |
+|---|---:|---:|---:|---:|
+| **dropped frames p95** | 111 | **0** | 112 | **0** |
+| dropped frames, all 20 samples | 351 | **0** | 367 | **2** |
+| **long tasks, all 20 samples** | 94 | **0** | 96 | **0** |
+| long-task time, all 20 samples | 7,899 ms | **0 ms** | 8,112 ms | **0 ms** |
+| frames over 50 ms | 74 / 4,780 | **0** | 81 / 4,780 | **0** |
+| frame p50 | 16.7 ms | 16.7 ms | 16.7 ms | 16.7 ms |
+| frame p95 | 17.6 ms | 17.6 ms | 17.6 ms | 17.6 ms |
+| frame p99 | 82.5 ms | **17.7 ms** | 82.8 ms | **17.7 ms** |
+| frame max | 133.4 ms | **17.7 ms** | 166.8 ms | **33.3 ms** |
+| interaction latency p95 | 5,851 ms | 4,001 ms | 5,869 ms | 4,001 ms |
+| renderer RSS p95 | 372 MB | 273 MB | 326 MB | 262 MB |
+
+Averages would have hidden all of this: the frame p50 and p95 are identical in
+every column. The bug lives entirely in the tail, which is exactly where a
+reader feels it.
+
+**Is the ~16.7 ms budget met?** In the idle arm, yes for this interaction: every
+frame of all 20 samples landed at or under 17.7 ms, and nothing was dropped. In
+the loaded arm it is met for 19 samples of 20; one sample produced a single
+33.3 ms frame, counted as 2 dropped frames across the whole arm. `VC-319` calls
+the budget a calibration target rather than a met one, and for this interaction
+on this machine it is now genuinely met — which is a claim about streaming and
+scrolling a bounded transcript, not about the app as a whole.
+
+**What it cost.** The Shiki pass did not disappear; it moved to settle. Settle
+latency p95 went from 154.8 ms to 201.1 ms (idle), and where the before run had
+no settle-time long task at all, the after run has one, up to 164 ms. That is the
+trade in one line: a single long task after the Turn ends, instead of 94 of them
+while the reader is scrolling.
 
 ## The one that was true: Shiki re-tokenises the growing fence (hypothesis 1)
 
@@ -23,16 +112,17 @@ fence — on exactly the frames where the reader is scrolling.
 
 The harness measures this directly. It records the highlighted-token count
 inside the live fence while the stream runs (`liveHighlightedTokens`) and again
-after the Turn settles (`settledHighlightedTokens`):
+after the Turn settles (`settledHighlightedTokens`), in both arms:
 
 | | live tokens | settled tokens |
 |---|---:|---:|
 | before | 3,482 | 3,482 |
 | after | 0 | 3,482 |
 
-That is the whole mechanism, and the whole fix: the tokens move from the
-streaming frames to one settle-time pass. `message.tsx` carries the comment
-explaining what it costs.
+That is the whole mechanism and the whole fix in two columns: the tokens move
+out of the streaming frames into one settle-time pass, and the settled count
+is unchanged, so nothing a reader scrolls back to has lost its colour.
+`message.tsx` carries the comment explaining what the live half costs.
 
 **Why the earlier 107-character fence saw nothing.** The harness's original
 stream source was prose with a token fence in it. At that size Shiki's work per
