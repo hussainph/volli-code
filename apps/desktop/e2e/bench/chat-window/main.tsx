@@ -218,6 +218,242 @@ function appendTurn(sessionId: string): void {
   });
 }
 
+// The measured reply deliberately spends multiple token snapshots inside an
+// open code fence before closing it. That exercises the production live
+// markdown branch (including incremental code parsing), rather than measuring
+// only settled prose while the realistic fenced blocks sit unchanged above it.
+const STREAM_TOKENS = [
+  "Streaming ",
+  "benchmark ",
+  "answer. ",
+  "The ",
+  "live ",
+  "reply ",
+  "opens ",
+  "code:\n\n",
+  "```ts\n",
+  "export ",
+  "function ",
+  "frameCost",
+  "(delta: ",
+  "number) ",
+  "{\n",
+  "  const ",
+  "budget ",
+  "= 16.67;\n",
+  "  return ",
+  "Math.max",
+  "(0, ",
+  "delta ",
+  "- budget);\n",
+  "}\n",
+  "```\n",
+  "The ",
+  "reader ",
+  "keeps ",
+  "scrolling ",
+  "after ",
+  "the ",
+  "fence ",
+  "settles. ",
+] as const;
+const STREAM_FENCE_OPEN_TOKEN = STREAM_TOKENS.indexOf("```ts\n") + 1;
+const STREAM_FENCE_CLOSE_TOKEN = STREAM_TOKENS.indexOf("```\n") + 1;
+const STREAM_SUFFIX =
+  "The renderer continues folding prose and tool context without losing the reader position ".split(
+    /(?<=\s)/,
+  );
+
+function streamText(tokenCount: number): string {
+  if (tokenCount <= STREAM_TOKENS.length) return STREAM_TOKENS.slice(0, tokenCount).join("");
+  return [
+    ...STREAM_TOKENS,
+    ...Array.from(
+      { length: tokenCount - STREAM_TOKENS.length },
+      (_value, index) => STREAM_SUFFIX[index % STREAM_SUFFIX.length],
+    ),
+  ].join("");
+}
+
+/** Replace one in-flight assistant overlay, preserving the message id. */
+function streamSnapshot(sessionId: string, base: readonly UIMessage[], tokenCount: number): number {
+  const text = streamText(tokenCount);
+  const message: UIMessage = {
+    id: `${sessionId}-stream-probe`,
+    role: "assistant",
+    parts: [{ type: "text", text }],
+  };
+  store.setState((state) => {
+    const sessions = (state as unknown as { sessions: Record<string, unknown> }).sessions;
+    const slice = sessions[sessionId] as {
+      transcript: typeof EMPTY_TRANSCRIPT;
+    };
+    const next = [...base, message];
+    return {
+      sessions: {
+        ...sessions,
+        [sessionId]: {
+          ...slice,
+          lifecycle: "working",
+          transcript: {
+            ...slice.transcript,
+            turnActive: true,
+            durableMessages: base,
+            messages: next,
+          },
+        },
+      },
+    } as never;
+  });
+  return text.length;
+}
+
+/** Commit the final overlay and leave the synthetic Session idle again. */
+function settleStream(sessionId: string): void {
+  store.setState((state) => {
+    const sessions = (state as unknown as { sessions: Record<string, unknown> }).sessions;
+    const slice = sessions[sessionId] as {
+      transcript: typeof EMPTY_TRANSCRIPT;
+    };
+    return {
+      sessions: {
+        ...sessions,
+        [sessionId]: {
+          ...slice,
+          lifecycle: "ready",
+          transcript: {
+            ...slice.transcript,
+            turnActive: false,
+            durableMessages: slice.transcript.messages,
+          },
+        },
+      },
+    } as never;
+  });
+}
+
+function busyWait(ms: number): void {
+  const until = performance.now() + ms;
+  while (performance.now() < until) {
+    // The opt-in regression-sensitivity arm burns this renderer task on
+    // purpose. Default measurements always pass zero.
+  }
+}
+
+/**
+ * Grow one transcript snapshot at a wall-clock token rate while moving its
+ * scroller every animation frame. Both actions share one frame loop by
+ * construction. Long tasks
+ * come from Chromium's PerformanceObserver; dropped frames are derived from a
+ * refresh interval sampled before the loop, never hardcoded to 60 Hz.
+ */
+async function streamAndScroll(
+  sessionId: string,
+  index: number,
+  steps: number,
+  slowdownMs: number,
+  tokenRate: number,
+): Promise<unknown> {
+  const scroller = planeScroller(index);
+  if (scroller === null) return { ok: false, why: "no scroller" };
+  const slice = (store.getState() as unknown as { sessions: Record<string, never> }).sessions[
+    sessionId
+  ];
+  const base = (
+    slice as unknown as { transcript: { messages: readonly UIMessage[] } }
+  ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
+  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 800);
+  await settle();
+
+  const refreshFrames: number[] = [];
+  for (let sample = 0; sample < 20; sample += 1) {
+    refreshFrames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
+  }
+  const refreshDeltas = refreshFrames
+    .slice(1)
+    .map((value, at) => value - refreshFrames[at]!)
+    .filter((value) => value > 0 && value < 50)
+    .toSorted((a, b) => a - b);
+  const refreshIntervalMs =
+    refreshDeltas.length === 0 ? null : refreshDeltas[Math.floor(refreshDeltas.length * 0.25)]!;
+
+  const longTasks: number[] = [];
+  const observer =
+    typeof PerformanceObserver === "undefined"
+      ? null
+      : new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) longTasks.push(entry.duration);
+        });
+  try {
+    observer?.observe({ type: "longtask", buffered: false });
+  } catch {
+    // Older Chromium builds can omit long-task observation; the empty list in
+    // the result says exactly that nothing was observed.
+  }
+
+  const frames: number[] = [];
+  let scrollDistancePx = 0;
+  let priorTop = scroller.scrollTop;
+  let direction = -1;
+  let streamedCharacters = 0;
+  let priorTokenCount = 0;
+  const started = performance.now();
+  for (let step = 0; step < steps; step += 1) {
+    busyWait(slowdownMs);
+    const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
+    if (tokenCount !== priorTokenCount) {
+      streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
+      priorTokenCount = tokenCount;
+    }
+    const nextTop = Math.max(
+      0,
+      Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + direction * 18),
+    );
+    scroller.scrollTop = nextTop;
+    frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
+    const actualTop = scroller.scrollTop;
+    scrollDistancePx += Math.abs(actualTop - priorTop);
+    priorTop = actualTop;
+    if (actualTop <= 0 || actualTop >= scroller.scrollHeight - scroller.clientHeight)
+      direction *= -1;
+  }
+  const streamedWhileWorking =
+    (
+      store.getState() as unknown as {
+        sessions: Record<string, { lifecycle: string }>;
+      }
+    ).sessions[sessionId]?.lifecycle === "working";
+  settleStream(sessionId);
+  await settle();
+  observer?.disconnect();
+  const latencyMs = performance.now() - started;
+  const frameTimesMs = frames.slice(1).map((value, at) => value - frames[at]!);
+  const droppedFrames =
+    refreshIntervalMs === null
+      ? null
+      : frameTimesMs.reduce(
+          (sum, duration) => sum + Math.max(0, Math.round(duration / refreshIntervalMs) - 1),
+          0,
+        );
+  return {
+    ok: true,
+    steps,
+    slowdownMs,
+    tokenRate,
+    streamedTokens: priorTokenCount,
+    streamedWhileWorking,
+    codeFenceOpened: priorTokenCount >= STREAM_FENCE_OPEN_TOKEN,
+    codeFenceClosed: priorTokenCount >= STREAM_FENCE_CLOSE_TOKEN,
+    latencyMs,
+    refreshIntervalMs,
+    frameTimesMs,
+    droppedFrames,
+    longTasksMs: longTasks,
+    scrollDistancePx,
+    streamedCharacters,
+  };
+}
+
 /* ----------------------------------------------------------------- surface */
 
 let setMounted: ((ids: readonly string[]) => void) | null = null;
@@ -349,6 +585,12 @@ interface ChatBench {
   geometry(index: number): unknown;
   reachFirst(index: number, steps: number): Promise<unknown>;
   tailProbe(index: number): Promise<unknown>;
+  streamAndScroll(
+    index: number,
+    steps: number,
+    slowdownMs: number,
+    tokenRate: number,
+  ): Promise<unknown>;
   collect(): void;
 }
 
@@ -378,6 +620,11 @@ const bench: ChatBench = {
     const sessionId = sessionIds[index];
     if (sessionId === undefined) return { ok: false, why: "no session" };
     return tailProbe(sessionId, index);
+  },
+  async streamAndScroll(index, steps, slowdownMs, tokenRate) {
+    const sessionId = sessionIds[index];
+    if (sessionId === undefined) return { ok: false, why: "no session" };
+    return streamAndScroll(sessionId, index, steps, slowdownMs, tokenRate);
   },
   collect() {
     // Present because the bench runner launches Electron with --expose-gc: a
