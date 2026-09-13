@@ -16,7 +16,7 @@ import {
   validateUniquePrefix,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob } from "./blob-attach";
+import { attachBlob, sessionLinkBudgetRefusal } from "./blob-attach";
 import {
   createBlobLink,
   deleteBlobLink,
@@ -1025,6 +1025,20 @@ export function registerDataIpcHandlers(
     "volli:blob-link-drafts": (input: BlobLinkDraftsInput): BlobLinksResult => {
       try {
         const now = Date.now();
+        // A chat's image budget is per Session, so an import made while the
+        // chat was still a Draft could not be held to it — there was no
+        // Session to measure (VC-358). This is the boundary where those bytes
+        // become a Session's, and so the last place that rule can be applied
+        // at all; refusing here keeps a promoted Draft to the same ceiling a
+        // durable chat has enforced at every import.
+        if (input.sessionId !== undefined) {
+          const refusal = sessionLinkBudgetRefusal(
+            db,
+            input.sessionId,
+            input.blobs.map((draft) => draft.blobHash),
+          );
+          if (refusal !== null) return { ok: false, error: refusal };
+        }
         // One transaction: a composer's attachments arrive together, and a
         // Ticket that kept three of five would be worse than one that kept none
         // and said so. The same atomicity is what a promoted Draft needs

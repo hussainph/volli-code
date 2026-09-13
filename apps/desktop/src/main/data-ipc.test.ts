@@ -3542,6 +3542,48 @@ describe("attachments (VC-50)", () => {
     });
   });
 
+  it("refuses a promoted Draft whose staged images exceed what one chat can carry (VC-358)", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    // Nothing here was refusable at import: a Draft has no Session, so the
+    // cumulative check had nothing to measure against. Promotion is where
+    // these bytes would become a conversation's, and so where the ceiling
+    // finally applies.
+    const blobs: { blobHash: string }[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      const staged = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+        fileName: `shot-${i}.png`,
+        bytes: image,
+        owner: { unowned: true },
+      });
+      if (!staged.ok || !staged.blob) throw new Error("expected a staged blob");
+      blobs.push({ blobHash: staged.blob.blobHash });
+    }
+    const overflow = new Uint8Array(1024);
+    overflow[0] = 99;
+    const last = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "one-more.png",
+      bytes: overflow,
+      owner: { unowned: true },
+    });
+    if (!last.ok || !last.blob) throw new Error("expected a staged blob");
+    blobs.push({ blobHash: last.blob.blobHash });
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs,
+    });
+    expect(linked).toMatchObject({ ok: false });
+    if (linked.ok) throw new Error("expected refusal");
+    expect(linked.error).toMatch(/Remove one and send again/);
+    // All or nothing, as with an unknown hash: a chat holding four of five
+    // images nobody chose to drop would be worse than an honest refusal.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [],
+    });
+  });
+
   it("refuses a draft link that names no owner or both owners", () => {
     expect(invoke<BlobLinksResult>("volli:blob-link-drafts", { blobs: [] })).toEqual({
       ok: false,

@@ -121,6 +121,41 @@ function assertFitsSessionBudget(
 }
 
 /**
+ * Why a Draft's staged Blobs cannot all become this Session's, or `null` when
+ * they fit.
+ *
+ * Promotion is the one moment a provisional chat's images become a Session's
+ * (VC-358), and an import that happened while there was no Session to own it
+ * never passed {@link assertFitsSessionBudget} — the owner had no `sessionId`
+ * to measure. This is that same rule, asked later and for the whole batch at
+ * once, because by promotion nobody is holding a file and refusing them one by
+ * one would leave the strip half-adopted.
+ *
+ * Blobs the Session already links are skipped rather than counted twice, so a
+ * retried promotion asks the same question it asked the first time.
+ */
+export function sessionLinkBudgetRefusal(
+  db: Database.Database,
+  sessionId: string,
+  blobHashes: readonly string[],
+): string | null {
+  const used = sessionInlineImageBytes(db, sessionId);
+  const linked = new Set(listSessionLinks(db, sessionId).map((link) => link.blobHash));
+  let incoming = 0;
+  for (const hash of blobHashes) {
+    if (linked.has(hash)) continue;
+    const blob = getBlob(db, hash);
+    if (blob && isInlinableImageMime(blob.mime)) incoming += blob.sizeBytes;
+  }
+  if (fitsSessionImageBudget(used, incoming)) return null;
+  return (
+    `These images come to ${megabytes(used + incoming)} MB, past the ` +
+    `${megabytes(MAX_SESSION_INLINE_IMAGE_BYTES)} MB a single chat can carry. ` +
+    `Remove one and send again.`
+  );
+}
+
+/**
  * Performs one attach.
  *
  * Throws with a sentence a person can act on, because every refusal here is
