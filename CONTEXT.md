@@ -791,7 +791,9 @@ ticket is a pure status change. Arming is a property of the column, not of the
 Automation, so one Automation may be armed in one column and merely offered in
 another. It is local to the machine that set it and never travels with the
 project. Arming a column is not retroactive: it governs tickets that arrive
-afterward, never those already sitting there.
+afterward, never those already sitting there. The column-header bolt is always
+visible: outline when unarmed, filled when armed. A filled, muted bolt with
+“automatic triggers off” keeps the arming distinct from permission to fire.
 _Avoid_: default automation (collides with project defaults and the default base branch)
 
 **Offered list**:
@@ -867,7 +869,9 @@ what _else_ starts it, exactly as the Trigger does. Like arming, it is local to
 the machine that set it and never travels with the project, which is why it is
 not a field on the record. Distinct from deleting, which removes the record;
 there is no third state between them, because for a Skill git is already the
-archive.
+archive. The UI labels this switch **Automatic triggers** and its off state
+**Manual only**, so a deliberate Run does not look like a disabled control
+being ignored.
 _Avoid_: paused, archived, active, on (alone)
 
 **Skipped occurrence**:

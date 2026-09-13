@@ -91,6 +91,7 @@ const REFERENCE_COMMANDS = [
   "prompt baseline",
   "doctor",
   "help",
+  "automation run",
 ] as const;
 
 /** The commands whose first `rest` token is consumed as `<id>`. */
