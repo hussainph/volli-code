@@ -1145,11 +1145,71 @@ describe("Session projection checkpoints", () => {
     }
   });
 
-  it("rejects a checkpoint whose identity cannot describe its projection", () => {
+  it("hydrates active collections from checkpoint state", () => {
+    const attachment = {
+      id: "attachment-checkpoint",
+      sessionId: session.id,
+      adapterId: "codex",
+      venue: localVenue,
+      continuity: "fresh" as const,
+      native: null,
+      authority: null,
+    };
+    const attention: SessionAttention = {
+      id: "attention-checkpoint",
+      kind: "input_required",
+      attachmentId: attachment.id,
+      detail: null,
+      diagnostic: null,
+    };
+    const interaction: SessionInteraction = {
+      id: "interaction-checkpoint",
+      attachmentId: attachment.id,
+      kind: "question",
+      title: "Continue?",
+      detail: null,
+      options: [{ id: "yes", label: "Yes", description: null }],
+      multiple: false,
+      native: { id: "native-interaction-checkpoint", detail: null },
+    };
+    const checkpoint = createSessionProjectionCheckpoint(session, [
+      event(1, { kind: "attachment.opened", attachment }),
+      event(2, { kind: "attention.raised", attention }),
+      event(3, { kind: "interaction.opened", interaction }),
+    ]);
+
+    const resumed = advanceSessionProjection(checkpoint, [
+      event(4, {
+        kind: "attachment.closed",
+        attachmentId: attachment.id,
+        outcome: "completed",
+      }),
+      event(5, {
+        kind: "attachment.closed",
+        attachmentId: "missing",
+        outcome: "completed",
+      }),
+    ]);
+
+    expect(resumed.projection.attachments.map(({ id }) => id)).toEqual([attachment.id]);
+    expect(resumed.projection.attention.active.map(({ id }) => id)).toEqual([attention.id]);
+    expect(resumed.projection.interactions.active.map(({ id }) => id)).toEqual([interaction.id]);
+  });
+
+  it("rejects malformed checkpoint metadata", () => {
     const checkpoint = createSessionProjectionCheckpoint(session, []);
-    expect(() =>
-      advanceSessionProjection({ ...checkpoint, sessionId: "another-session" }, []),
-    ).toThrow("Invalid Session projection checkpoint");
+    const invalid = [
+      { ...checkpoint, version: 2 as typeof checkpoint.version },
+      { ...checkpoint, sessionId: "another-session" },
+      { ...checkpoint, throughSequence: 0.5 },
+      { ...checkpoint, throughSequence: -1 },
+    ];
+
+    for (const candidate of invalid) {
+      expect(() => advanceSessionProjection(candidate, [])).toThrow(
+        "Invalid Session projection checkpoint",
+      );
+    }
   });
 });
 
