@@ -2067,7 +2067,16 @@ CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
   digest           TEXT NOT NULL CHECK (length(digest) = 64),
   updated_at       INTEGER NOT NULL
 );
+`;
 
+/**
+ * Migration 048: canonical-prefix repair invalidates projection checkpoints.
+ *
+ * These triggers briefly lived in the unreleased migration 047. Keeping them
+ * in their own follow-up migration also converges profiles that opened after
+ * the checkpoint table landed but before its repair invalidation did.
+ */
+const MIGRATION_048_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
 -- App writes append immutable facts, so inserts are handled as checkpoint
 -- tails. If repair tooling changes a canonical prefix out of band, invalidate
 -- its derived row instead of allowing the cache to hide that change.
@@ -2344,6 +2353,11 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 47,
     name: "session_projection_checkpoints — rebuildable per-Session read models",
     sql: MIGRATION_047_SESSION_PROJECTION_CHECKPOINTS,
+  },
+  {
+    version: 48,
+    name: "session projection checkpoints — invalidate on canonical-prefix repair",
+    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
   },
 ];
 
@@ -2825,8 +2839,15 @@ export interface MigrateOptions {
   toVersion?: number;
 }
 
-/** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
-export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
+/**
+ * Applies every migration whose `version` is greater than the db's current
+ * `user_version`, in order. Returns whether any migration ran.
+ */
+export function migrate(
+  db: Database.Database,
+  dbPath: string,
+  options: MigrateOptions = {},
+): boolean {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
   const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
   const pending = MIGRATIONS.filter(
@@ -2834,7 +2855,7 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   ).toSorted((a, b) => a.version - b.version);
   if (pending.length === 0) {
     logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
-    return;
+    return false;
   }
 
   // Only an already-populated database needs a safety copy — a fresh
@@ -2880,4 +2901,5 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
     const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
     logMigrationBackupRetention(retentionReport);
   }
+  return true;
 }

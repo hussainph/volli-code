@@ -1,4 +1,4 @@
-import { assertSessionEvent } from "@volli/shared";
+import { assertSessionEvent, SESSION_PROJECTION_CHECKPOINT_VERSION } from "@volli/shared";
 import type {
   CommandReceipt,
   ListLatestTicketSignalsQuery,
@@ -322,15 +322,30 @@ class InMemorySessionLedger implements SessionLedger {
     const checkpoint = this.#projectionCheckpoints.get(sessionId);
     if (!checkpoint) return null;
     const latestSequence = this.#latestEventSequence(sessionId);
-    return checkpoint.throughSequence <= latestSequence ? clone(checkpoint) : null;
+    if (
+      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+      checkpoint.sessionId !== sessionId ||
+      checkpoint.projection?.session?.id !== sessionId ||
+      !Number.isInteger(checkpoint.throughSequence) ||
+      checkpoint.throughSequence < 0 ||
+      checkpoint.throughSequence > latestSequence ||
+      !Array.isArray(checkpoint.pendingExecutorStarts)
+    ) {
+      return null;
+    }
+    return clone(checkpoint);
   }
 
   #saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
     if (
-      checkpoint.sessionId !== checkpoint.projection.session.id ||
+      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+      checkpoint.sessionId !== checkpoint.projection?.session?.id ||
+      !Number.isInteger(checkpoint.throughSequence) ||
+      checkpoint.throughSequence < 0 ||
+      !Array.isArray(checkpoint.pendingExecutorStarts) ||
       !this.#sessions.has(checkpoint.sessionId)
     ) {
-      throw new Error("Session projection checkpoint identity is invalid");
+      throw new Error("Session projection checkpoint is invalid");
     }
     const latestSequence = this.#latestEventSequence(checkpoint.sessionId);
     if (checkpoint.throughSequence > latestSequence) {

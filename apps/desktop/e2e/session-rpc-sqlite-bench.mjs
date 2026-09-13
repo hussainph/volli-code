@@ -151,13 +151,19 @@ const vite = await createServer({
 let productionDb;
 let runtime;
 try {
-  const [{ openVolliDb }, { createSqliteSessionLedger }, engineModule, transcriptModule] =
-    await Promise.all([
-      vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts"),
-      vite.ssrLoadModule("/apps/desktop/src/main/session-control/sqlite-ledger.ts"),
-      vite.ssrLoadModule("/packages/session-engine/src/index.ts"),
-      vite.ssrLoadModule("/apps/desktop/src/main/session-runtime/transcript-artifacts.ts"),
-    ]);
+  const [
+    { openVolliDb },
+    { createSqliteSessionLedger },
+    engineModule,
+    transcriptModule,
+    sharedModule,
+  ] = await Promise.all([
+    vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts"),
+    vite.ssrLoadModule("/apps/desktop/src/main/session-control/sqlite-ledger.ts"),
+    vite.ssrLoadModule("/packages/session-engine/src/index.ts"),
+    vite.ssrLoadModule("/apps/desktop/src/main/session-runtime/transcript-artifacts.ts"),
+    vite.ssrLoadModule("/packages/shared/src/index.ts"),
+  ]);
   productionDb = openVolliDb(migratedPath);
   const ledger = createSqliteSessionLedger(productionDb);
   let id = 0;
@@ -181,6 +187,20 @@ try {
   const listingColdStartedAt = performance.now();
   const listedCold = await listAllSessions();
   const listingColdMs = performance.now() - listingColdStartedAt;
+  // Projection reads are deliberately side-effect free. Seed the rebuildable
+  // cache explicitly, as a runtime durable boundary would in production.
+  await ledger.transaction((transaction) => {
+    for (const projectId of projectIds) {
+      for (const session of transaction.listSessions({ projectId, scope: "all" })) {
+        transaction.saveProjectionCheckpoint(
+          sharedModule.createSessionProjectionCheckpoint(
+            session,
+            transaction.listEvents({ sessionId: session.id }),
+          ),
+        );
+      }
+    }
+  });
   const listingCheckpointMs = await repeated(5, listAllSessions);
   const checkpointStorage = productionDb
     .prepare(

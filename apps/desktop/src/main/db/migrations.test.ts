@@ -3312,7 +3312,7 @@ function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   return db;
 }
 
-describe("migrate — 047, Session projection checkpoints (VC-355)", () => {
+describe("migrate — 047–048, Session projection checkpoints (VC-355)", () => {
   it("adds an empty, JSON-checked cache table to an existing profile", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
@@ -3348,6 +3348,36 @@ describe("migrate — 047, Session projection checkpoints (VC-355)", () => {
       "session_projection_checkpoint_provenance_updated",
       "session_projection_checkpoint_session_updated",
     ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("adds repair invalidation to a profile that already claimed the pre-trigger v47", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 47 });
+
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toEqual([]);
+
+    migrate(db, dbPath);
+
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toHaveLength(4);
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

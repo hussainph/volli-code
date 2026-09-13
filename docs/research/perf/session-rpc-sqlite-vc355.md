@@ -88,18 +88,19 @@ puts its one-way clone at only a few milliseconds. Snapshot time is transcript
 artifact I/O, event decoding, and response construction; changing the Session
 transport would not fix it. `session.projection` is the metadata/state path and
 now resumes from a checkpoint. The legacy snapshot still deliberately loads all
-frames for callers that request transcript history; pagination or a
-metadata-first/frame-late snapshot is the next change if this path remains a
-visible symptom.
+frames for callers that request transcript history, including on a checkpoint
+hit, so the measured 269 ms p50 is a steady-state snapshot cost rather than only
+a cold-start cost. Pagination or a metadata-first/frame-late snapshot is the
+next change if this path remains a visible symptom.
 
 ## Routine interaction call counts
 
 These were captured from a built app using a disposable copy of the real
-profile. The long-chat sample had 1,178 events. The backend optimization did not
-change renderer call sites, so the pre-change count from the unchanged call
-graph and the instrumented post-change count are identical.
+profile. The long-chat sample had 1,178 events. Only the post-change arm was
+measured dynamically. The comparison value is derived from the unchanged
+renderer call graph, which the backend-only optimization did not modify.
 
-| interaction | before | after | procedures after |
+| interaction | before (derived) | after (measured) | procedures after |
 |---|---:|---:|---|
 | app boot with a restored chat | 6 | 6 | picker view, snapshot, subscribe, hidden models, defaults, inspect |
 | open a ticket | 0 | 0 | — |
@@ -188,7 +189,9 @@ Recommendation, costed by the measurements:
 ## Projection checkpoints
 
 Migration 047 adds `session_projection_checkpoints` with schema version,
-through-sequence, checkpoint JSON, SHA-256 digest, and update time. The reducer
+through-sequence, checkpoint JSON, SHA-256 digest, and update time. Migration
+048 adds repair-invalidation triggers separately so profiles that opened during
+the pre-release v47 lineage also converge. The reducer
 checkpoint contains the complete public projection plus hidden pending
 executor-start state and usage accumulators. It is written after a full fold,
 a tail advance, attachment close/failure, and runtime shutdown.
@@ -210,7 +213,10 @@ checkpoint changes back with their facts.
 The 1,218 checkpoint rows used 11,293,377 bytes of JSON (largest 94,918 bytes),
 about 10.8 MiB. `SessionEngine.getSession` and `listSessions`, not only the
 runtime LRU, resume from these rows, which removes the former listing refold.
-A checkpoint hit fetches and folds only events after `throughSequence`.
+A checkpoint hit fetches and folds only events after `throughSequence`. Those
+read APIs do not populate or advance the cache as a side effect; runtime durable
+boundaries and the explicit checkpoint API own writes. The benchmark seeds all
+rows explicitly between the before/after listing measurements.
 
 ## Architectural verdict
 

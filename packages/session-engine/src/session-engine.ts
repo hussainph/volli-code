@@ -599,9 +599,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async listSessions(query) {
       return ports.ledger.transaction((transaction) =>
-        transaction
-          .listSessions(query)
-          .map((session) => projectStoredSession(transaction, session)),
+        transaction.listSessions(query).map((session) => projectStoredSession(transaction, session)),
       );
     },
 
@@ -664,32 +662,17 @@ function projectStoredSession(
         sessionId: session.id,
         afterSequence: checkpoint.throughSequence,
       });
-      const advanced = advanceSessionProjection(checkpoint, tail);
-      if (tail.length > 0) saveDerivedCheckpoint(transaction, advanced);
-      return advanced.projection;
+      return advanceSessionProjection(checkpoint, tail).projection;
     }
   } catch {
     // A projection checkpoint is a rebuildable cache. Any unsupported,
     // malformed, or stale value falls through to the immutable event log.
   }
 
-  const rebuilt = createSessionProjectionCheckpoint(
+  return createSessionProjectionCheckpoint(
     session,
     transaction.listEvents({ sessionId: session.id }),
-  );
-  saveDerivedCheckpoint(transaction, rebuilt);
-  return rebuilt.projection;
-}
-
-function saveDerivedCheckpoint(
-  transaction: SessionLedgerTransaction,
-  checkpoint: SessionProjectionCheckpoint,
-): void {
-  try {
-    transaction.saveProjectionCheckpoint(checkpoint);
-  } catch {
-    // Read availability never depends on the derived cache accepting a write.
-  }
+  ).projection;
 }
 
 /**

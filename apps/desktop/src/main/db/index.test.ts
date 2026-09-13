@@ -31,7 +31,7 @@ describe("openVolliDb read tuning (VC-355)", () => {
     }
   });
 
-  it("leaves planner statistics behind (PRAGMA optimize after migrations)", () => {
+  it("leaves bounded planner statistics behind after migrations", () => {
     dir = mkdtempSync(join(tmpdir(), "volli-db-tuning-"));
     const db = openVolliDb(join(dir, "volli.db"));
     try {
@@ -43,6 +43,31 @@ describe("openVolliDb read tuning (VC-355)", () => {
       expect(row?.count).toBe(1);
     } finally {
       db.close();
+    }
+  });
+
+  it("does not rerun ANALYZE on a routine open", () => {
+    dir = mkdtempSync(join(tmpdir(), "volli-db-tuning-"));
+    const path = join(dir, "volli.db");
+    const first = openVolliDb(path);
+    first.exec(`
+      CREATE TABLE analyze_probe (id INTEGER PRIMARY KEY, value TEXT);
+      CREATE INDEX analyze_probe_value ON analyze_probe(value);
+      INSERT INTO analyze_probe (value) VALUES ('present');
+      ANALYZE analyze_probe;
+      DELETE FROM sqlite_stat1 WHERE tbl = 'analyze_probe';
+    `);
+    first.close();
+
+    const reopened = openVolliDb(path);
+    try {
+      expect(
+        reopened
+          .prepare("SELECT COUNT(*) AS count FROM sqlite_stat1 WHERE tbl = 'analyze_probe'")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      reopened.close();
     }
   });
 });

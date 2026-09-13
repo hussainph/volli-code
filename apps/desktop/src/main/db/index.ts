@@ -9,8 +9,8 @@ import { migrate } from "./migrations";
  * (VC-355): a 64 MB page cache, 256 MB of memory-mapped I/O, and in-memory
  * temp storage, so reads over a large history avoid the OS round-trip and
  * sorts/hashes stay off disk. The WAL itself is bounded by an aggressive
- * `wal_autocheckpoint` (see below) and, after migrations, a bounded ANALYZE
- * refreshes the planner statistics.
+ * `wal_autocheckpoint` (see below) and, when migrations run, a bounded ANALYZE
+ * refreshes the planner statistics without making routine opens write.
  *
  * Runs any pending migrations.
  * The parent directory must already exist; `src/main/index.ts` creates it
@@ -36,13 +36,15 @@ export function openVolliDb(dbPath: string): Database.Database {
   // disk footprint while the automatic checkpoint still amortizes to a page
   // or two per commit.
   db.pragma("wal_autocheckpoint = 400");
-  migrate(db, dbPath);
+  const migrated = migrate(db, dbPath);
   // Post-migration, so it sees the final schema. A bounded ANALYZE
   // (`analysis_limit` keeps each table's scan proportional — SQLite's own
-  // recommendation for routine maintenance): a handful of small tables on a
-  // fresh database, and on an existing one it refreshes the planner stats for
-  // however many events arrived since last launch without a full-table scan.
-  db.pragma("analysis_limit = 1000");
-  db.exec("ANALYZE");
+  // recommendation for routine maintenance) keeps a migration from leaving
+  // the planner blind. Do not repeat it on a routine open: ANALYZE takes a
+  // write lock and changes sqlite_stat1 even when application data did not.
+  if (migrated) {
+    db.pragma("analysis_limit = 1000");
+    db.exec("ANALYZE");
+  }
   return db;
 }

@@ -5,7 +5,7 @@ import {
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
-import { roleImpliedByTicket } from "@volli/shared";
+import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
   Session,
@@ -918,7 +918,7 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
-  it("resumes getSession and listSessions projections from checkpoint tails", async () => {
+  it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];
     const ledger: SessionLedger = {
@@ -941,29 +941,37 @@ describe("SessionEngine creation and explicit commands", () => {
     const created = await plane.createSession(createRequest("command-checkpoint-list"));
 
     cursors.length = 0;
-    const first = await plane.getSession({ sessionId: created.session.id });
+    const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
     expect(cursors).toEqual([undefined]);
-    expect(first).not.toBeNull();
-    const checkpointSequence = (
-      await plane.getProjectionCheckpoint({ sessionId: created.session.id })
-    )?.throughSequence;
-    expect(checkpointSequence).toBeTypeOf("number");
+    expect(first).toHaveLength(1);
+    await expect(
+      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toBeNull();
 
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+    await plane.saveProjectionCheckpoint(checkpoint);
     await plane.submit({
       commandId: "command-checkpoint-tail",
       sessionId: created.session.id,
       intent: { kind: "session.signal", signal: "done", reason: "Tail" },
       provenance: userProvenance,
     });
+
     cursors.length = 0;
     await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
       signal: { signal: "done", reason: "Tail" },
     });
-    expect(cursors).toEqual([checkpointSequence]);
+    expect(cursors).toEqual([checkpoint.throughSequence]);
 
     cursors.length = 0;
-    await plane.listSessions({ projectId: "project-1", scope: "all" });
-    expect(cursors).toEqual([checkpointSequence! + 3]);
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(1);
+    expect(cursors).toEqual([checkpoint.throughSequence]);
+    expect(
+      (await plane.getProjectionCheckpoint({ sessionId: created.session.id }))?.throughSequence,
+    ).toBe(checkpoint.throughSequence);
   });
 
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
