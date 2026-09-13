@@ -12,6 +12,7 @@ import type {
   SessionRole,
 } from "./agent-runtime";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import type { McpToolDefinition } from "./mcp";
 import type { ModelTier } from "./model-access-policy";
 import { EMPTY_SESSION_USAGE_SUMMARY, summarizeSessionUsage } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
@@ -547,7 +548,12 @@ export type SessionAttention =
 export type SessionInput =
   | { kind: "runtime-brief"; text: string }
   | { kind: "prompt-resources"; resources: readonly PromptResource[] }
-  | { kind: "tool-surface"; tools: readonly SessionToolId[] };
+  | {
+      kind: "tool-surface";
+      tools: readonly SessionToolId[];
+      /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
+      mcpTools?: readonly McpToolDefinition[];
+    };
 
 /**
  * Who ended a Session's work (VC-86): a supervising Session (the control-tier

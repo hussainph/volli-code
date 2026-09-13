@@ -26,6 +26,8 @@ import type {
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
+import { validateMcpToolDefinitions } from "./mcp";
+import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
 import type { UsageLimits } from "./usage-limits";
 // Type-only: `verb-registry.ts` reads this module's own vocabulary, so a value
 // import here would close a cycle. Nothing below needs one.
@@ -296,6 +298,8 @@ export interface RuntimeToolBundle {
    * unconditionally would refuse every Session that predates it.
    */
   todoWrite?: boolean;
+  /** Sanitized dynamic MCP definitions, frozen in provider order. */
+  mcp?: readonly McpToolDefinition[];
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -1131,6 +1135,12 @@ export interface SessionRuntimeSpec {
    */
   shell?: RuntimeShellPort;
   /**
+   * Call the exact server/tool identity behind this Session's frozen MCP
+   * definitions. Main owns clients and transports; this typed port owns no
+   * configuration and lets the model change none of it.
+   */
+  mcp?: RuntimeMcpPort;
+  /**
    * Run one product verb the Session's frozen Agent Tool Surface names, in the
    * host's own process (VC-162).
    *
@@ -1160,6 +1170,28 @@ export interface SessionRuntimeSpec {
   callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
+}
+
+export type RuntimeMcpContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string }
+  | { type: "unsupported"; text: string };
+
+export interface RuntimeMcpCallResult {
+  content: readonly RuntimeMcpContent[];
+  structuredContent?: McpJsonValue;
+  isError: boolean;
+}
+
+export interface RuntimeMcpCall {
+  serverId: string;
+  toolName: string;
+  arguments: Readonly<Record<string, unknown>>;
+  toolCallId: string;
+}
+
+export interface RuntimeMcpPort {
+  call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult>;
 }
 
 /** One product verb call, as the runtime hands it to the host. */
@@ -1197,7 +1229,7 @@ export interface RuntimeVerbResult {
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "callVerb"
+  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "mcp" | "callVerb"
 >;
 
 /**
@@ -1237,6 +1269,11 @@ export type SessionToolBinding =
   | { tool: "shell_start"; port: RuntimeShellPort }
   | { tool: "shell_output"; port: RuntimeShellPort }
   | { tool: "shell_kill"; port: RuntimeShellPort }
+  | {
+      tool: McpToolId;
+      definition: McpToolDefinition;
+      port: RuntimeMcpPort;
+    }
   | { tool: VerbToolKey; verb: VerbToolKey; port: NonNullable<SessionRuntimeSpec["callVerb"]> };
 
 /**
@@ -1307,6 +1344,13 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       `This Session's bundle names ${verbs.join(", ")}, but no verb port is wired to answer it.`,
     );
   }
+  const mcpTools = validateMcpToolDefinitions(spec.tools.mcp ?? []);
+  const mcp = spec.mcp;
+  if (mcpTools.length > 0 && mcp === undefined) {
+    throw new Error(
+      "This Session's bundle names MCP tools, but no MCP port is wired to answer them.",
+    );
+  }
   return [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
@@ -1314,6 +1358,11 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       tool: verb,
       verb,
       port: callVerb as NonNullable<typeof callVerb>,
+    })),
+    ...mcpTools.map((definition): SessionToolBinding => ({
+      tool: definition.providerName,
+      definition,
+      port: mcp as RuntimeMcpPort,
     })),
   ];
 }
