@@ -3,17 +3,17 @@
  *
  * Three ideas, and the shape follows from them:
  *
- *  1. **Model and effort are peers in the footer, not one inside the other.**
- *     Provider stays a heading inside the model popover, because it is not a
- *     decision you make on its own — you pick a model and the provider follows.
- *     Effort is not that: it is the per-task half of the same sentence where
- *     model is the set-and-forget half, so it sits beside the pill as its own
- *     chip (`composer-effort-ui.tsx`) rather than nested in the popover's
- *     selected row, where it was invisible until opened and outgrew the popover
- *     past four levels. An executor that pins its own model renders no pill at
- *     all rather than a disabled one, on the same rule as the mode segment
- *     below: a control naming models the harness will drop is worse than no
- *     control.
+ *  1. **Model and effort are peers until width makes two controls costlier than
+ *     the distinction.** Provider stays a heading inside the model popover,
+ *     because it is not a decision you make on its own — you pick a model and
+ *     the provider follows. Effort is the per-task half of the same sentence;
+ *     at ordinary widths it sits beside the model as its own chip
+ *     (`composer-effort-ui.tsx`). Below 24rem the model face names both values
+ *     and its popover adds the same effort slider, leaving one configuration
+ *     control rather than wrapping two. An executor that pins its own model
+ *     renders no pill at all rather than a disabled one, on the same rule as
+ *     the mode segment below: a control naming models the harness will drop is
+ *     worse than no control.
  *  2. **Delivery is session state, not a control.** Idle, ⏎ sends. While a turn
  *     is live the submit glyph becomes Queue, ⏎ queues, ⌘⏎ steers without
  *     interrupting, and ⌫ on an empty box takes the newest queued message back.
@@ -84,6 +84,7 @@ import {
 
 import {
   composerIntent,
+  effortLabel,
   reclampEffort,
   takeQueued,
   unqueueLast,
@@ -111,7 +112,6 @@ import {
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
-import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import {
   ComposerCaretContext,
   useComposerCaretBinding,
@@ -124,7 +124,7 @@ import {
   COMPOSER_GLYPH_WEIGHT,
   COMPOSER_PRIMARY_SIZE,
 } from "@renderer/components/chat/composer-chrome";
-import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
+import { EffortPill, EffortSlider } from "@renderer/components/chat/composer-effort-ui";
 import { ContextUsagePill } from "@renderer/components/chat/context-usage-ui";
 import { ComposerPicker } from "@renderer/components/chat/composer-picker-ui";
 import { ModelMark, ModelName } from "@renderer/components/models/model-identity";
@@ -440,6 +440,7 @@ export const SessionComposer = React.memo(function SessionComposer({
       textareaRef={textareaRef}
     >
       <PromptInput
+        data-composer-container=""
         className={cn(
           // `group/composer` names the box for anything inside that reads
           // its state; the picker card and the queued rows are groups' worth
@@ -600,15 +601,6 @@ export const SessionComposer = React.memo(function SessionComposer({
             {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
             imagesUnsupported={imagesUnsupported === true}
           />
-          <PromptEditorDialog
-            value={value}
-            onValueChange={onValueChange}
-            title="Edit message"
-            triggerLabel="Expand message editor"
-            textareaLabel="Expanded message"
-            placeholder="Ask, plan, or implement…"
-            disabled={!ready}
-          />
           <PromptInputTools
             className={cn("min-w-0 flex-1 flex-wrap", working && "composer-live-config")}
           >
@@ -622,6 +614,16 @@ export const SessionComposer = React.memo(function SessionComposer({
               onChange={onSelectionChange}
               open={modelPickerOpen}
               onOpenChange={onModelPickerOpenChange}
+              compactEffort={
+                effortStops.length > 1
+                  ? {
+                      levels: effortStops,
+                      value: selection.reasoningLevel,
+                      onChange: (reasoningLevel) =>
+                        onSelectionChange({ ...selection, reasoningLevel }),
+                    }
+                  : undefined
+              }
             />
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
@@ -636,6 +638,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 value={selection.reasoningLevel}
                 disabled={modelChoiceDisabled}
                 onChange={(reasoningLevel) => onSelectionChange({ ...selection, reasoningLevel })}
+                className="composer-separate-effort"
               />
             ) : null}
           </PromptInputTools>
@@ -1506,11 +1509,14 @@ function ModelPillFace({
   selection,
   selectionTier,
   selectionProviderLabel,
+  compactEffortValue,
 }: {
   models: readonly ComposerModel[];
   selection: ComposerModelSelection;
   selectionTier: string | null;
   selectionProviderLabel?: string;
+  /** Present only where this face can become the narrow combined control. */
+  compactEffortValue?: string;
 }) {
   return (
     <>
@@ -1546,7 +1552,7 @@ function ModelPillFace({
           this control answers most of the time. Below it the footer wraps
           instead (see `PromptInputTools` above), so the floor is what CHOOSES
           that break rather than a width that overflows. */}
-      <span className="min-w-14 truncate">
+      <span className="composer-model-name min-w-14 truncate">
         {/* The tier leads the model where a start named one (VC-259): "Fast ·
             Claude Haiku 4.5". It is a qualifier in the muted ink, in the same
             "term · name" grammar the provider already uses for an ambiguous
@@ -1560,9 +1566,61 @@ function ModelPillFace({
         ) : null}
         {modelPillLabel(models, selection, selectionProviderLabel)}
       </span>
+      {compactEffortValue === undefined ? null : (
+        // Container CSS reveals this value only after the separate effort pill
+        // has left the row. `aria-hidden` because the button's full accessible
+        // name is composed independently of what this truncated face can draw.
+        <span aria-hidden className="composer-merged-effort-label hidden shrink-0">
+          · {effortLabel(compactEffortValue)}
+        </span>
+      )}
       <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
     </>
   );
+}
+
+interface CompactEffortControl {
+  levels: readonly string[];
+  value: string;
+  onChange(level: string): void;
+}
+
+/** Keep the JS branch in lockstep with globals.css's 23.999rem container query. */
+const COMPACT_COMPOSER_WIDTH_PX = 384;
+
+/**
+ * Radix portals the model popover to `body`, outside the composer's CSS
+ * container. The trigger face and the separate effort pill can respond with
+ * container CSS, but the portalled slider needs the same answer in React.
+ * Observe the nearest marked prompt container so resizing a split updates an
+ * already-open picker on chat, New ticket, and one-off Automation runs.
+ */
+function useCompactComposer(
+  anchor: React.RefObject<HTMLButtonElement | null>,
+  enabled: boolean,
+): boolean {
+  const [compact, setCompact] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    if (!enabled) {
+      setCompact(false);
+      return;
+    }
+    const container = anchor.current?.closest<HTMLElement>("[data-composer-container]");
+    if (container === undefined || container === null) return;
+    // Container queries read the content box. These marked containers have no
+    // padding, so clientWidth is the same box; getBoundingClientRect includes
+    // the 1px prompt border and creates a two-pixel state where CSS and React
+    // disagree about whether the merged slider exists.
+    const measure = () => setCompact(container.clientWidth < COMPACT_COMPOSER_WIDTH_PX);
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [anchor, enabled]);
+
+  return compact;
 }
 
 export function ModelPill({
@@ -1575,6 +1633,7 @@ export function ModelPill({
   onChange,
   open: openProp,
   onOpenChange,
+  compactEffort,
 }: {
   models: readonly ComposerModel[];
   tiers?: readonly ComposerTierRow[];
@@ -1587,8 +1646,13 @@ export function ModelPill({
   /** Controlled open, for the caller that opens this list by typing (`/model`). */
   open?: boolean;
   onOpenChange?(open: boolean): void;
+  /** At a sub-24rem Session composer, fold this slider into the model control. */
+  compactEffort?: CompactEffortControl;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const compact = useCompactComposer(triggerRef, compactEffort !== undefined);
+  const compactEffortRailRef = React.useRef<HTMLDivElement>(null);
   // The toggle exists only where there is a table to show; without one the
   // list is every model and the remembered word is never even read.
   const [view, setView] = useModelPickerView(tiers !== undefined);
@@ -1622,6 +1686,10 @@ export function ModelPill({
     tier: selectionTier,
     providerLabel: selectionProviderLabel,
   });
+  const controlLabel =
+    compact && compactEffort !== undefined
+      ? `Model and effort: ${identity} · ${effortLabel(compactEffort.value)}`
+      : `Model: ${identity}`;
   // Nothing can be CHOSEN here right now: a turn is working, or the catalog
   // offers nothing to switch to.
   const frozen = disabled || models.length === 0;
@@ -1644,12 +1712,13 @@ export function ModelPill({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              ref={triggerRef}
               type="button"
               size={COMPOSER_CONTROL_SIZE}
               variant="ghost"
               data-testid="model-pill"
               aria-disabled
-              aria-label={`Model: ${identity}`}
+              aria-label={controlLabel}
               className={cn(
                 MODEL_PILL_GIVE,
                 COMPOSER_CONFIG_CHIP,
@@ -1661,6 +1730,7 @@ export function ModelPill({
                 selection={selection}
                 selectionTier={selectionTier}
                 selectionProviderLabel={selectionProviderLabel}
+                compactEffortValue={compactEffort?.value}
               />
             </Button>
           </TooltipTrigger>
@@ -1679,6 +1749,7 @@ export function ModelPill({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          ref={triggerRef}
           type="button"
           size={COMPOSER_CONTROL_SIZE}
           variant="ghost"
@@ -1691,8 +1762,12 @@ export function ModelPill({
           // Neither is the reveal on its own — a `title` is unreachable from a
           // keyboard, and a name is not readable — which is why the list this
           // pill opens leads with the same string, in ink, one press away.
-          aria-label={`Model: ${identity}`}
-          title={identity}
+          aria-label={controlLabel}
+          title={
+            compact && compactEffort !== undefined
+              ? `${identity} · ${effortLabel(compactEffort.value)} effort`
+              : identity
+          }
           className={cn(MODEL_PILL_GIVE, COMPOSER_CONFIG_CHIP, "text-muted-foreground")}
         >
           <ModelPillFace
@@ -1700,6 +1775,7 @@ export function ModelPill({
             selection={selection}
             selectionTier={selectionTier}
             selectionProviderLabel={selectionProviderLabel}
+            compactEffortValue={compactEffort?.value}
           />
         </Button>
       </PopoverTrigger>
@@ -1753,6 +1829,20 @@ export function ModelPill({
           />
           <span className="min-w-0 break-words">{identity}</span>
         </div>
+        {compact && compactEffort !== undefined ? (
+          <div
+            data-testid="combined-model-effort"
+            className="flex justify-center border-b px-4 py-3"
+          >
+            <EffortSlider
+              railRef={compactEffortRailRef}
+              levels={compactEffort.levels}
+              value={compactEffort.value}
+              onChange={compactEffort.onChange}
+              onDismiss={() => setOpen(false)}
+            />
+          </div>
+        ) : null}
         <PromptInputCommand>
           {/* Inside the command root, so arrow keys reach the list from the
               toggle too; the search field keeps focus in the All view through

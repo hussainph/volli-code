@@ -43,7 +43,6 @@ import {
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
-import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -342,16 +341,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         aria-keyshortcuts="Meta+Enter Control+Enter"
         className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
       />
-      <div className="prompt-toolbar flex items-center justify-between gap-2 px-2 py-2">
-        <PromptEditorDialog
-          value={draft}
-          onValueChange={setDraft}
-          title="Edit comment"
-          triggerLabel="Expand comment editor"
-          textareaLabel="Expanded comment"
-          placeholder="Add a comment…"
-          disabled={submitting}
-        />
+      <div className="prompt-toolbar flex items-center justify-end gap-2 px-2 py-2">
         <Button
           size="sm"
           className="prompt-primary"

@@ -549,6 +549,15 @@ function RunOnceForm({
       : (models.find(
           (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
         )?.reasoningLevels ?? []);
+  const changePinEffort = (reasoningLevel: string): void => {
+    if (pin === null) return;
+    const picked = composerModelSelection({ ...pin, reasoningLevel });
+    if (picked !== null) setPin(picked);
+  };
+  const compactEffort =
+    pin !== null && pinStops.length > 1
+      ? { levels: pinStops, value: pin.reasoningLevel, onChange: changePinEffort }
+      : undefined;
   // The shared rule, so this button and main's refusal are one policy.
   const incomplete = unboundRunProblem(instructions) !== null || (choice === "pin" && pin === null);
 
@@ -572,7 +581,7 @@ function RunOnceForm({
         </DialogHeader>
         {/* DialogContent is a grid. This zero minimum lets the shared picker
             truncate inside the dialog instead of widening the grid track. */}
-        <div className="flex min-w-0 flex-col gap-2">
+        <div data-composer-container="" className="@container/composer flex min-w-0 flex-col gap-2">
           <ComposerPickerStack
             value={instructions}
             onValueChange={setInstructions}
@@ -588,7 +597,7 @@ function RunOnceForm({
           >
             <InstructionsTextarea value={instructions} onValueChange={setInstructions} />
           </ComposerPickerStack>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Segmented<OverrideChoice>
               ariaLabel="Runtime"
               value={choice}
@@ -604,6 +613,7 @@ function RunOnceForm({
                   models={models}
                   selection={pin ?? NO_PIN}
                   disabled={false}
+                  compactEffort={compactEffort}
                   onChange={(next) => {
                     const picked = composerModelSelection(next);
                     if (picked !== null) setPin(picked);
@@ -613,10 +623,8 @@ function RunOnceForm({
                   <EffortPill
                     levels={pinStops}
                     value={pin.reasoningLevel}
-                    onChange={(level) => {
-                      const picked = composerModelSelection({ ...pin, reasoningLevel: level });
-                      if (picked !== null) setPin(picked);
-                    }}
+                    onChange={changePinEffort}
+                    className="composer-separate-effort"
                   />
                 ) : null}
               </>

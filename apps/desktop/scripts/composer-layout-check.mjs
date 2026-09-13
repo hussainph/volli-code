@@ -46,8 +46,8 @@ try {
               }
             }
             const form = root.querySelector("form");
+            const compact = expected.width === "265 · narrowest pane";
             if (expected.state === "Turn live, two queued") {
-              const compact = expected.width === "265 · narrowest pane";
               const liveConfig = form.querySelector(".composer-live-config");
               const steerLabels = [...form.querySelectorAll(".composer-steer-label")];
               if ((getComputedStyle(liveConfig).display === "none") !== compact)
@@ -59,6 +59,21 @@ try {
               )
                 problems.push("Steer label compactness");
             }
+            if (expected.state !== "Frozen pill (no models)") {
+              const separateEffort = form.querySelector(".composer-separate-effort");
+              const mergedEffort = form.querySelector(".composer-merged-effort-label");
+              if ((getComputedStyle(separateEffort).display === "none") !== compact)
+                problems.push("separate effort responsiveness");
+              if ((getComputedStyle(mergedEffort).display !== "none") !== compact)
+                problems.push("merged effort responsiveness");
+            }
+            const ticketFooter = root.querySelector('[data-testid="new-ticket-footer"]');
+            const ticketEffort = ticketFooter.querySelector(".composer-separate-effort");
+            const ticketMergedEffort = ticketFooter.querySelector(".composer-merged-effort-label");
+            if ((getComputedStyle(ticketEffort).display === "none") !== compact)
+              problems.push("ticket effort responsiveness");
+            if ((getComputedStyle(ticketMergedEffort).display !== "none") !== compact)
+              problems.push("ticket merged effort responsiveness");
             const settings = [...form.querySelectorAll(".prompt-config")];
             const add = form.querySelector(".prompt-add");
             const primary = form.querySelector(".prompt-primary");
@@ -103,18 +118,40 @@ try {
     assert.equal(await input.inputValue(), "@");
     assert.equal(await input.evaluate((node) => document.activeElement === node), true);
 
-    // The compact surface and its expanded editor are two views of one draft.
-    // The dialog takes focus, edits in place, and Escape returns to the surface
-    // without throwing the prose away.
-    await input.fill("A longer draft");
-    await page.getByRole("button", { name: "Expand message editor", exact: true }).click();
-    const expanded = page.getByRole("textbox", { name: "Expanded message", exact: true });
-    assert.equal(await expanded.inputValue(), "A longer draft");
-    assert.equal(await expanded.evaluate((node) => document.activeElement === node), true);
-    await expanded.fill("The expanded editor keeps this draft");
-    await expanded.press("Escape");
-    await page.getByTestId("prompt-editor-dialog").waitFor({ state: "detached" });
-    assert.equal(await input.inputValue(), "The expanded editor keeps this draft");
+    // At the narrowest width, model and effort share one trigger and one
+    // popover. The standalone effort chip and expanded-editor icon are gone.
+    const sessionComposer = page.locator("form.prompt-surface");
+    const combined = sessionComposer.getByRole("button", { name: /^Model and effort:/ });
+    assert.equal(await combined.isVisible(), true);
+    assert.equal(
+      await sessionComposer.getByRole("button", { name: /^Reasoning effort:/ }).isVisible(),
+      false,
+    );
+    assert.equal(
+      await sessionComposer.getByRole("button", { name: /Expand message editor/ }).count(),
+      0,
+    );
+    await combined.click();
+    const combinedEffort = page.getByRole("slider", { name: "Reasoning effort", exact: true });
+    assert.equal(await combinedEffort.isVisible(), true);
+    await combinedEffort.press("Home");
+    assert.equal(await combinedEffort.getAttribute("aria-valuetext"), "Off");
+    await combinedEffort.press("Escape");
+    await page.getByTestId("combined-model-effort").waitFor({ state: "detached" });
+
+    const ticketFooter = page.getByTestId("new-ticket-footer");
+    const ticketCombined = ticketFooter.getByRole("button", { name: /^Model and effort:/ });
+    assert.equal(await ticketCombined.isVisible(), true);
+    assert.equal(
+      await ticketFooter.getByRole("button", { name: /^Reasoning effort:/ }).isVisible(),
+      false,
+    );
+    await ticketCombined.click();
+    assert.equal(
+      await page.getByRole("slider", { name: "Reasoning effort", exact: true }).isVisible(),
+      true,
+    );
+    await page.getByRole("slider", { name: "Reasoning effort", exact: true }).press("Escape");
 
     await page.emulateMedia({ forcedColors: "active" });
     const border = await page.locator("form.prompt-surface").evaluate((node) => {
@@ -127,7 +164,7 @@ try {
     await page.close();
   }
   console.log(
-    `PASS: ${checks} theme/width/state layouts; picker, newline, send, Add, and expanded editing in both appearances.`,
+    `PASS: ${checks} theme/width/state layouts; picker, newline, send, Add, and compact model/effort in both appearances.`,
   );
 } finally {
   await browser.close();

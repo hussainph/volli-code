@@ -103,9 +103,10 @@ const doors = {
 };
 
 /**
- * One available model with one reasoning level, so the per-invocation override
- * menu has something to offer. Without a catalog the override rows are
- * correctly absent, which would make the surface untestable rather than tested.
+ * One available model with two reasoning levels, so the per-invocation
+ * override has both model and effort choices to expose. Without a catalog the
+ * override rows are correctly absent, which would make the surface untestable
+ * rather than tested.
  */
 const MODEL_ACCESS = {
   inspect: vi.fn(async () => ({
@@ -116,7 +117,7 @@ const MODEL_ACCESS = {
         modelId: "claude-opus",
         label: "claude-opus",
         state: "available",
-        reasoningLevels: ["high"],
+        reasoningLevels: ["low", "high"],
       },
     ],
   })),
@@ -569,11 +570,19 @@ describe("Run once", () => {
     await mount({ automations: [automation()] });
     await openMenu();
     await openSubmenu("Run on model");
+    await openSubmenu("claude-opus");
     await act(async () => {
-      menuItem("claude-opus").click();
+      menuItem("high").click();
     });
 
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
+    expect(document.querySelector("[data-composer-container]")?.className).toContain(
+      "@container/composer",
+    );
+    expect(document.querySelector('[data-testid="model-pill"]')?.getAttribute("aria-label")).toBe(
+      "Model and effort: claude-opus · Anthropic · High",
+    );
+    expect(document.querySelector(".composer-separate-effort")).not.toBeNull();
     await typeInstructions("/sweep this once");
     await act(async () => {
       runButton().click();
@@ -598,8 +607,9 @@ describe("the per-invocation override", () => {
     await mount({ automations: [automation()], armings: [ARMING] });
     await openMenu();
     await openSubmenu("Run on model");
+    await openSubmenu("claude-opus");
     await act(async () => {
-      menuItem("claude-opus").click();
+      menuItem("high").click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({

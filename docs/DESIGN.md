@@ -126,7 +126,7 @@ treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink | facts about the turn |
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem | facts about the turn |
 | Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
 | Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
 | Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
@@ -144,20 +144,16 @@ list opens exactly as if typed. A surface that takes no files has no attach row;
 has no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
 one-press attach. The ticket Files rail keeps a paperclip — it is about files, not prompts.
 
-**Long prose has one escape hatch.** Session messages, Automation instructions, command prompts,
-and comments expose the same expand mark in their tray. It opens a large controlled writing sheet,
-so edits stay in the original draft and the compact surface keeps ownership of Send, Save, or
-Comment. New ticket follows the same rule at its dialog level: its existing Expand control widens
-the Monaco-backed description editor rather than nesting a second editor.
-
 **Chords live on hover.** Send says `⏎ · ⇧⏎`, Queue says `⏎ · ⌘⏎ steer`, in tooltips on the
 control the chord replaces; never as a hint line under the box.
 
 **Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
-context pill drops its percent and keeps the ring. During a live turn, model and effort are frozen,
-so that disabled pair leaves the narrow tray entirely; the queued Steer action keeps its icon and
-accessible name but drops its printed word. Add and Expand stay outside the omitted group, and the
-context / Stop / Queue cluster never moves.
+separate effort pill folds into the model control, whose face and popover then expose both values.
+The rule is shared by Session chat, New-ticket kickoff, and one-off Automation runtime controls.
+The context pill also drops its percent while keeping the ring. During a live turn, model and effort
+are frozen, so that disabled combined control leaves the narrow tray entirely; the queued Steer
+action keeps its icon and accessible name but drops its printed word. Add stays outside the omitted
+group, and the context / Stop / Queue cluster never moves.
 
 ## Elevation — three tiers
 

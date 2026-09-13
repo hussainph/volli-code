@@ -26,6 +26,7 @@ interface InspectableProps {
   "aria-label"?: string;
   children?: React.ReactNode;
   className?: string;
+  compactEffort?: { levels: readonly string[]; value: string; onChange(level: string): void };
   disabled?: boolean;
   label?: string;
   levels?: readonly string[];
@@ -451,6 +452,18 @@ describe("the effort control's place in the footer", () => {
     expect(effortPill()?.props.levels).toEqual(["low", "medium", "xhigh"]);
   });
 
+  it("offers one responsive model-and-effort control without duplicating the slider stops", () => {
+    const html = renderFooter();
+    const model = findElements(composerTree(footerProps()), ModelPill)[0];
+
+    expect(model?.props.compactEffort).toMatchObject({
+      levels: ["low", "medium", "xhigh"],
+      value: "medium",
+    });
+    expect(html).toContain("composer-separate-effort");
+    expect(html).toContain("composer-merged-effort-label");
+  });
+
   it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
     // The row rested at 70% and came up under focus. On the app's own
     // canvases that made a resting composer and a disabled one the same
@@ -487,10 +500,10 @@ describe("the effort control's place in the footer", () => {
     expect(html).toContain("min-h-20");
   });
 
-  it("offers the shared long-prompt editor without changing the draft owner", () => {
+  it("keeps prompt entry on the writing sheet without an expanded-editor icon", () => {
     const html = renderFooter();
 
-    expect(html).toContain('aria-label="Expand message editor"');
+    expect(html).not.toContain("Expand message editor");
     expect(html).toContain('aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"');
     expect(html).toContain('aria-keyshortcuts="Enter"');
   });

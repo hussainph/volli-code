@@ -386,6 +386,7 @@ export function ComposerForm({
     // content, which lets the host shrink, which is the resize Monaco's
     // `automaticLayout` observer was waiting for.
     <div
+      data-composer-container=""
       onKeyDownCapture={handleKeyDownCapture}
       // The whole composer is the drop target, not just the description box: a
       // file meant for this ticket is aimed at the dialog, and the title input,
@@ -393,7 +394,7 @@ export function ComposerForm({
       // because Monaco treats a dropped file as text to insert and would
       // otherwise write the path into the body instead of attaching it.
       {...fileAttachHandlers((picked) => void attachFiles(picked))}
-      className="flex min-w-0 flex-col"
+      className="@container/composer flex min-w-0 flex-col"
     >
       <div className="px-6 pt-4 pb-2">
         <ComposerBreadcrumb

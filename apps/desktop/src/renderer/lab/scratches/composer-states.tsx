@@ -281,9 +281,15 @@ export default function ComposerStatesScratch() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-label uppercase text-muted-foreground">New-ticket footer</h2>
-        <div style={{ width }} className={cn(PROMPT_SURFACE, "overflow-hidden")}>
+        <div
+          data-testid="new-ticket-footer"
+          data-composer-container=""
+          style={{ width }}
+          className={cn("@container/composer overflow-hidden", PROMPT_SURFACE)}
+        >
           <div className="prompt-toolbar px-4 py-2">
             <ComposerFooter
+              projectId="composer-lab"
               onAttachFiles={() => undefined}
               run={{
                 models: MODELS,
@@ -291,10 +297,10 @@ export default function ComposerStatesScratch() {
                 selection: SELECTION,
                 setSelection: () => undefined,
               }}
-              createMore={false}
-              onCreateMoreChange={() => undefined}
-              onCreate={() => undefined}
-              onKickoff={() => undefined}
+              launch={{ kind: "kickoff" }}
+              onLaunchChange={() => undefined}
+              onSubmit={() => undefined}
+              automationOffer={{ groups: [], ready: true, enabledIds: [] }}
               disabled={false}
             />
           </div>

@@ -164,6 +164,29 @@ it("shows model controls only for chat kickoff", () => {
   expect(render({ launch: { kind: "create" } })).not.toContain('aria-label="Model:');
 });
 
+it("wires kickoff model and effort into the shared responsive control", () => {
+  const html = render({
+    run: {
+      models: [
+        {
+          id: "anthropic/sonnet",
+          providerId: "anthropic",
+          providerLabel: "Anthropic",
+          modelId: "sonnet",
+          label: "Sonnet",
+          reasoningLevels: ["low", "high"],
+        },
+      ],
+      tiers: [],
+      selection: { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" },
+      setSelection: () => undefined,
+    },
+  });
+
+  expect(html).toContain("composer-merged-effort-label");
+  expect(html).toContain("composer-separate-effort");
+});
+
 it("keeps the launch selector available without a catalogue", async () => {
   await act(async () =>
     root.render(

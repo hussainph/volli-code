@@ -55,7 +55,6 @@ import {
 } from "@renderer/components/chat/composer-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
-import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import { ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -917,17 +916,9 @@ export function InstructionsTextarea({
         }}
       />
       {/* The same tinted control tray as chat and ticket creation. Commands
-          and files stay behind `+`; long prose gets the shared expand action. */}
+          and files stay behind the single `+` door. */}
       <div className="prompt-toolbar flex items-center gap-1 px-2 py-2">
         <ComposerAddMenu />
-        <PromptEditorDialog
-          value={value}
-          onValueChange={onValueChange}
-          title="Edit instructions"
-          triggerLabel="Expand instructions editor"
-          textareaLabel="Expanded instructions"
-          placeholder={INSTRUCTIONS_PLACEHOLDER}
-        />
       </div>
     </div>
   );

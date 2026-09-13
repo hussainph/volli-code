@@ -93,6 +93,8 @@ export interface EffortPillProps {
   onChange(level: string): void;
   /** Model policy is immutable during an active turn, and effort is part of it. */
   disabled?: boolean;
+  /** Lets a responsive composer retire this peer when effort joins the model control. */
+  className?: string;
 }
 
 /**
@@ -104,7 +106,13 @@ export interface EffortPillProps {
  * popover up — it is a smaller decision than picking a model, and it is the one
  * you take a second look at.
  */
-export function EffortPill({ levels, value, onChange, disabled = false }: EffortPillProps) {
+export function EffortPill({
+  levels,
+  value,
+  onChange,
+  disabled = false,
+  className,
+}: EffortPillProps) {
   const [open, setOpen] = React.useState(false);
   const railRef = React.useRef<HTMLDivElement>(null);
 
@@ -121,6 +129,7 @@ export function EffortPill({ levels, value, onChange, disabled = false }: Effort
             COMPOSER_CONFIG_CHIP,
             "min-w-0 text-muted-foreground",
             open && "bg-accent text-foreground",
+            className,
           )}
         >
           {/* `bold`, not the outline default and not `fill`. Gauge is arcs and
@@ -209,7 +218,7 @@ function stretchLimit(reduced: boolean): number {
  * interior stops only — the pill's two ends are the first and last stops, and
  * a hairline drawn on top of a rounded cap is a smudge, not a tick.
  */
-function EffortSlider({
+export function EffortSlider({
   levels,
   value,
   onChange,

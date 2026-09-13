@@ -11,7 +11,7 @@ describe("the shared automation prompt surface", () => {
     expect(html).toContain("prompt-surface");
     expect(html).toContain("prompt-toolbar");
     expect(html).toContain('aria-label="Instructions"');
-    expect(html).toContain('aria-label="Expand instructions editor"');
+    expect(html).not.toContain("Expand instructions editor");
     expect(html).toContain("Review the changes");
     expect(html).toContain("resize-none");
     expect(html).toContain("field-sizing-content");
