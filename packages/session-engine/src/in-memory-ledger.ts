@@ -320,20 +320,7 @@ class InMemorySessionLedger implements SessionLedger {
 
   #getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null {
     const checkpoint = this.#projectionCheckpoints.get(sessionId);
-    if (!checkpoint) return null;
-    const latestSequence = this.#latestEventSequence(sessionId);
-    if (
-      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
-      checkpoint.sessionId !== sessionId ||
-      checkpoint.projection?.session?.id !== sessionId ||
-      !Number.isInteger(checkpoint.throughSequence) ||
-      checkpoint.throughSequence < 0 ||
-      checkpoint.throughSequence > latestSequence ||
-      !Array.isArray(checkpoint.pendingExecutorStarts)
-    ) {
-      return null;
-    }
-    return clone(checkpoint);
+    return checkpoint ? clone(checkpoint) : null;
   }
 
   #saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {

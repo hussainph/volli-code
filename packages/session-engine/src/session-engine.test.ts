@@ -17,6 +17,7 @@ import type {
   SessionLedger,
   SessionLedgerTransaction,
   SessionObservation,
+  SessionProjectionCheckpoint,
   SessionUsage,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -972,6 +973,51 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(
       (await plane.getProjectionCheckpoint({ sessionId: created.session.id }))?.throughSequence,
     ).toBe(checkpoint.throughSequence);
+  });
+
+  it("validates in-memory projection checkpoints at their write boundary", async () => {
+    const { plane } = composition();
+    await expect(plane.latestEventSequence({ sessionId: "missing-session" })).resolves.toBe(0);
+    const created = await plane.createSession(createRequest("command-checkpoint-validation"));
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    const checkpoint = createSessionProjectionCheckpoint(created.session, events);
+    const missingProjection = { ...checkpoint, projection: undefined };
+    const missingSession = {
+      ...checkpoint,
+      sessionId: "missing-session",
+      projection: {
+        ...checkpoint.projection,
+        session: { ...checkpoint.projection.session, id: "missing-session" },
+      },
+    };
+    const invalid = [
+      { ...checkpoint, version: 2 },
+      { ...checkpoint, sessionId: "another-session" },
+      missingProjection,
+      { ...checkpoint, throughSequence: 0.5 },
+      { ...checkpoint, throughSequence: -1 },
+      { ...checkpoint, pendingExecutorStarts: null },
+      missingSession,
+    ] as unknown as SessionProjectionCheckpoint[];
+
+    for (const candidate of invalid) {
+      await expect(plane.saveProjectionCheckpoint(candidate)).rejects.toThrow(
+        "Session projection checkpoint is invalid",
+      );
+    }
+    await expect(
+      plane.saveProjectionCheckpoint({
+        ...checkpoint,
+        throughSequence: checkpoint.throughSequence + 1,
+      }),
+    ).rejects.toThrow("Session projection checkpoint is ahead of durable history");
+
+    await plane.saveProjectionCheckpoint(checkpoint);
+    const older = createSessionProjectionCheckpoint(created.session, []);
+    await plane.saveProjectionCheckpoint(older);
+    await expect(
+      plane.getProjectionCheckpoint({ sessionId: created.session.id }),
+    ).resolves.toMatchObject({ throughSequence: checkpoint.throughSequence });
   });
 
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
