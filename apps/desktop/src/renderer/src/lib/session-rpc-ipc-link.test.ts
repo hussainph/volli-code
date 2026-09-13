@@ -147,6 +147,50 @@ describe("query and mutation", () => {
     expect(JSON.stringify(samples)).not.toContain("session-1");
   });
 
+  it("keeps observer failures and unserializable metric values off the RPC path", async () => {
+    const bridge = fakeBridge();
+    const input = { sessionId: "session-1" } as { sessionId: string; self?: unknown };
+    input.self = input;
+    const client = createSessionRpcClient(bridge, {
+      record: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    const answer = client.session.projection.query(input);
+    await flush();
+    const response = { ok: true as const, data: { projection: {}, throughSequence: 4 } };
+    Object.defineProperty(response, "toJSON", { value: () => undefined });
+    bridge.reply(response);
+
+    await expect(answer).resolves.toEqual(response.data);
+  });
+
+  it("records transport failures even when the observer clock fails", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    const client = createSessionRpcClient(bridge, {
+      now: () => {
+        throw new Error("clock failed");
+      },
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.snapshot.query({ sessionId: "session-1" });
+    await flush();
+    bridge.rejectRequest(new Error("bridge failed"));
+
+    await expect(answer).rejects.toMatchObject({ message: "bridge failed" });
+    expect(samples).toEqual([
+      expect.objectContaining({
+        kind: "round-trip",
+        procedure: "session.snapshot",
+        responseBytes: 0,
+        outcome: "transport-error",
+      }),
+    ]);
+  });
+
   it("routes a mutation the same way", async () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
@@ -170,7 +214,11 @@ describe("query and mutation", () => {
   // to guess which one it is showing.
   it("keeps the router's error code readable off the rejection", async () => {
     const bridge = fakeBridge();
-    const client = createSessionRpcClient(bridge);
+    const samples: SessionRpcPerformanceSample[] = [];
+    const client = createSessionRpcClient(bridge, {
+      now: () => 1,
+      record: (sample) => samples.push(sample),
+    });
 
     const answer = client.modelAccess.defaults.query();
     await flush();
@@ -180,6 +228,13 @@ describe("query and mutation", () => {
       message: "Unknown model",
       data: { code: "NOT_FOUND", httpStatus: 404, path: "modelAccess.defaults" },
     });
+    expect(samples).toEqual([
+      expect.objectContaining({
+        kind: "round-trip",
+        procedure: "modelAccess.defaults",
+        outcome: "rpc-error",
+      }),
+    ]);
   });
 
   // A boot whose database failed registers no handler at all, so the invoke
@@ -603,6 +658,22 @@ describe("subscription", () => {
 });
 
 describe("sessionRpcClient", () => {
+  it("ignores a malformed init-script benchmark observer", async () => {
+    const bridge = fakeBridge();
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      __VOLLI_SESSION_RPC_PERFORMANCE__: { record: null },
+    });
+    vi.resetModules();
+    const { sessionRpcClient: isolatedSessionRpcClient } = await import("./session-rpc-ipc-link");
+
+    const answer = isolatedSessionRpcClient().session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+
+    await expect(answer).resolves.toEqual({ projection: {}, throughSequence: 4 });
+  });
+
   // A StrictMode double render must not stack a second event listener onto the
   // bridge: every frame would then arrive twice.
   it("builds the app's client once and attaches an init-script benchmark observer", async () => {
