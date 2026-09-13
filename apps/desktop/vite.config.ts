@@ -36,8 +36,19 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // transitive OpenTelemetry package to electron-builder.yml's node_modules
 // whitelist and keeping that list in sync as their dependency graph moves.
 // `verify-packed-requires.mjs` is what catches getting this wrong.
+//
+// The MCP client (VC-8) rides along on exactly the same reasoning. It is
+// main-only, pure JavaScript, and — checked across every file of its `dist/`,
+// including the stdio transport — reads nothing relative to its own package
+// layout: no `__dirname`, no `require.resolve`, no module-load file read. That
+// is the property that forces jsdom into `neverBundle`, and its absence is what
+// makes inlining safe here. Bundling it also spares this repo from tracking its
+// runtime tree (cross-spawn, zod, jose, eventsource, @modelcontextprotocol/core
+// …) in the electron-builder whitelist as that graph moves.
 const bundleWorkspacePackages = (id: string): boolean =>
-  id.startsWith("@volli/") || id.startsWith("@opentelemetry/");
+  id.startsWith("@volli/") ||
+  id.startsWith("@opentelemetry/") ||
+  id.startsWith("@modelcontextprotocol/");
 
 function sourceFilesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
