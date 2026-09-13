@@ -18,7 +18,7 @@ node apps/desktop/e2e/sidebar-store-bench.mjs \
   --output /tmp/vc354-sidebar.json
 ```
 
-The lab scratch mounts the shipped `ActiveSessions` in a non-StrictMode React root. Its deterministic fixture has 1,198 Sessions (392 terminal, 806 chat), 392 tickets, 50 worktree paths, 16 Active rows, 1,182 Previous rows, and 3,714 descendants under the sidebar host. Each trigger runs 24 samples in an idle arm and again with one synthetic busy core. `<Profiler>` callbacks cover the full component and both bands; the artifact also contains commit/paint wall time and `PerformanceObserver("longtask")` entries.
+The lab scratch mounts the shipped `ActiveSessions` in a non-StrictMode React root. Its deterministic fixture has 1,198 Sessions (392 terminal, 806 chat), 392 tickets, 50 worktree paths, 16 Active rows, 1,182 Previous rows, and 3,714 descendants under the sidebar host. Each trigger runs 24 samples in an idle arm and again with one synthetic busy core. Two inner `<Profiler>` callbacks cover the Active and Previous bands. The outer callback wraps the sidebar host (`SidebarProvider`, `Sidebar`, `SidebarContent`, and `ActiveSessions`); after mount work is discarded, its commits are the subtree commits triggered by `ActiveSessions`, while its durations include any render work in that host rather than isolating the component's self-time. The artifact also contains commit/paint wall time and `PerformanceObserver("longtask")` entries.
 
 This is the VC-354 component/store probe, not a replacement for VC-353's full migrated-database interaction harness. VC-353 had not published its harness contract or committed baseline when these runs were captured. Both artifacts are dirty-worktree captures at the same Git SHA; the final after artifact additionally records SHA-256 `86684b82d952df8e2700ffe105876f5da4ffdeda34e9a7f6fcc373a74862b6c7` over the measured component, listing helper, and lab scratch. The original baseline predates that provenance field, so its `before` label and raw contents remain the provenance available for that arm.
 
@@ -70,12 +70,12 @@ The exact, repeatable result is the render-count change: all four irrelevant cro
 
 After the change, the ranked renderer work contains only relevant updates: own open-tab changes (two commits per write because the ticket-history effect settles), project chat activity, and own terminal state. Cross-project entries disappear rather than merely becoming cheaper.
 
-Across the complete trigger matrix, the Profiler boundaries rank as follows. The outer boundary includes both inner bands, so rows are not additive.
+Across the complete trigger matrix, the Profiler boundaries rank as follows. The outer sidebar-host boundary includes both inner bands and the surrounding sidebar scaffolding, so rows are not additive and its durations are not component self-time.
 
 | Profiler boundary | Idle commits / total | Busy commits / total |
 |---|---:|---:|
-| `ActiveSessions` before | 264 / 1,865.8 ms | 264 / 1,902.1 ms |
-| `ActiveSessions` after | 168 / 1,771.3 ms | 168 / 1,715.7 ms |
+| Sidebar host before | 264 / 1,865.8 ms | 264 / 1,902.1 ms |
+| Sidebar host after | 168 / 1,771.3 ms | 168 / 1,715.7 ms |
 | Previous band before → after | 264 / 593.7 → 168 / 530.4 ms | 264 / 613.5 → 168 / 490.7 ms |
 | Active band before → after | 264 / 225.1 → 168 / 233.0 ms | 264 / 230.4 → 168 / 213.3 ms |
 
