@@ -53,6 +53,7 @@ import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { selectCreationAction } from "./lib/composer-actions.mjs";
 import { launch as launchSmokeApp, waitUntil } from "./lib/smoke-kit.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -1247,12 +1248,12 @@ async function main() {
       },
     );
 
-    // === 18. Global create: plain "c" opens the New-ticket composer; ⌘+Enter creates
-    // (The Linear-style composer replaced the primitive dialog in the composer PR:
-    // its title placeholder has no ellipsis, and plain Enter moves focus to the
-    // body instead of submitting — ⌘/Ctrl+Enter is the create shortcut. The full
-    // composer contract lives in composer-basics-smoke.mjs; this check only keeps
-    // the board-level "c" → create → card lands wiring honest.)
+    // === 18. Global create: plain "c" opens the New-ticket composer; choose
+    // Create only, then ⌘+Enter commits that selected action. The composer now
+    // defaults to Start chat, which intentionally leaves the board for the new
+    // Ticket workspace. This board-level check selects the non-navigating action
+    // so it can keep the "c" → create → card lands wiring honest; the full action
+    // menu and kickoff contracts live in composer-basics-smoke.mjs.
     await attempt(
       18,
       'Plain "c" hotkey opens the New-ticket composer; typing a title + ⌘Enter creates VC-14 and closes it',
@@ -1267,7 +1268,12 @@ async function main() {
         await sleep(400);
         const dialogOpenCount = await page.getByRole("dialog").count();
         const title = "Global create dialog smoke card";
-        await page.getByPlaceholder("Ticket title").fill(title);
+        const titleField = page.getByPlaceholder("Ticket title");
+        await titleField.fill(title);
+        await selectCreationAction(page, "Create only");
+        // The action menu is portalled and intentionally excluded from the
+        // composer's commit shortcut. Return focus to the form before pressing it.
+        await titleField.focus();
         await page.keyboard.press("Meta+Enter");
         await sleep(400);
         const dialogClosedCount = await page.getByRole("dialog").count();
