@@ -24,4 +24,7 @@ Sampling: 20 repetitions; arms: idle.
 - The loaded arm is named `N-busy-core`: N Node worker threads run the fixed integer-mixing loop in `busy-worker.mjs` continuously from before Electron launch through the last sample; actual arm duration and worker checksums are recorded in JSON.
 - RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.
 
-Raw samples and complete host/fixture metadata are in the adjacent JSON report.
+The run also wrote a `benchmark.json` here with every raw sample and the full
+host/fixture metadata. It is not committed: it is tens of thousands of lines of
+frame timings, which no review reads and no diff carries usefully. Re-run the
+command in `docs/performance-benchmark.md` to regenerate it.

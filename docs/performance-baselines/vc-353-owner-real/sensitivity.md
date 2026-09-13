@@ -19,7 +19,14 @@ All 40 raw samples reported `streamedWhileWorking: true`, `codeFenceOpened: true
 
 Machine: MacBookPro17,1, Apple M1, 8 logical cores, 16 GiB, macOS 26.5.1 (25F80), arm64, Node v24.18.0.
 
-Raw reports:
+Reports:
 
-- [`sensitivity/control.json`](sensitivity/control.json) and [`sensitivity/control.md`](sensitivity/control.md)
-- [`sensitivity/deliberate-slowdown.json`](sensitivity/deliberate-slowdown.json) and [`sensitivity/deliberate-slowdown.md`](sensitivity/deliberate-slowdown.md)
+- [`sensitivity/control.md`](sensitivity/control.md)
+- [`sensitivity/deliberate-slowdown.md`](sensitivity/deliberate-slowdown.md)
+
+The harness writes a `benchmark.json` beside each of these holding every raw
+frame timing. Those are not committed — one is tens of thousands of lines of
+numbers that no review can read and no diff can carry usefully. Regenerate them
+with the two commands in
+[`performance-benchmark.md`](../../performance-benchmark.md#regression-sensitivity-proof);
+the tables above are the durable record.
