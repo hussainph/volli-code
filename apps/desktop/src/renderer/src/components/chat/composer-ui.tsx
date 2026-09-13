@@ -111,6 +111,7 @@ import {
   type ComposerPickerState,
 } from "@renderer/chat/composer-picker";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
+import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import {
   ComposerCaretContext,
   useComposerCaretBinding,
@@ -496,7 +497,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                       }}
                     >
                       <ArrowBendUpLeftIcon className="size-3" />
-                      Steer
+                      <span className="composer-steer-label">Steer</span>
                     </Button>
                   ) : null}
                   <Button
@@ -599,7 +600,18 @@ export const SessionComposer = React.memo(function SessionComposer({
             {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
             imagesUnsupported={imagesUnsupported === true}
           />
-          <PromptInputTools className="min-w-0 flex-1 flex-wrap">
+          <PromptEditorDialog
+            value={value}
+            onValueChange={onValueChange}
+            title="Edit message"
+            triggerLabel="Expand message editor"
+            textareaLabel="Expanded message"
+            placeholder="Ask, plan, or implement…"
+            disabled={!ready}
+          />
+          <PromptInputTools
+            className={cn("min-w-0 flex-1 flex-wrap", working && "composer-live-config")}
+          >
             <ModelPill
               models={models}
               tiers={tiers}
@@ -680,6 +692,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
                 aria-label={working ? "Queue" : "Send"}
+                aria-keyshortcuts="Enter"
               >
                 {/* `bold`, both: at 16px a regular arrow is a hairline on a
                     filled disc, and coverage is scale-invariant, so the weight
@@ -845,6 +858,7 @@ function ComposerTextarea({
       // could be answered twice. The card owns its answer; this owns messages,
       // and a draft typed here is never taken for one.
       aria-label="Message"
+      aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"
       placeholder="Ask, plan, or implement…"
       // A writing sheet, not a search field: 16px insets with room for a
       // short paragraph. Content still grows to the existing scroll ceiling.

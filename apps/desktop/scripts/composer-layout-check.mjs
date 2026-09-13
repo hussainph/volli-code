@@ -30,41 +30,57 @@ try {
       await page.getByRole("button", { name: width, exact: true }).click();
       for (const state of states) {
         await page.getByRole("button", { name: state, exact: true }).click();
-        const issues = await page.getByTestId("composer-states").evaluate((root) => {
-          const problems = [];
-          for (const surface of root.querySelectorAll(".prompt-surface")) {
-            if (surface.scrollWidth > surface.clientWidth + 1) problems.push("surface overflow");
-            const bounds = surface.getBoundingClientRect();
-            for (const button of surface.querySelectorAll("button")) {
-              const box = button.getBoundingClientRect();
-              if (box.width === 0) continue;
-              if (box.left < bounds.left - 1 || box.right > bounds.right + 1)
-                problems.push(
-                  `clipped control: ${button.getAttribute("aria-label") ?? button.textContent}`,
-                );
+        const issues = await page.getByTestId("composer-states").evaluate(
+          (root, expected) => {
+            const problems = [];
+            for (const surface of root.querySelectorAll(".prompt-surface")) {
+              if (surface.scrollWidth > surface.clientWidth + 1) problems.push("surface overflow");
+              const bounds = surface.getBoundingClientRect();
+              for (const button of surface.querySelectorAll("button")) {
+                const box = button.getBoundingClientRect();
+                if (box.width === 0) continue;
+                if (box.left < bounds.left - 1 || box.right > bounds.right + 1)
+                  problems.push(
+                    `clipped control: ${button.getAttribute("aria-label") ?? button.textContent}`,
+                  );
+              }
             }
-          }
-          const form = root.querySelector("form");
-          const settings = [...form.querySelectorAll(".prompt-config")];
-          const add = form.querySelector(".prompt-add");
-          const primary = form.querySelector(".prompt-primary");
-          const primaryBounds = primary.getBoundingClientRect();
-          if (primaryBounds.width !== 32 || primaryBounds.height !== 32)
-            problems.push("send key size");
-          const controls = [...settings, add, primary].filter(Boolean);
-          for (let i = 0; i < controls.length; i++) {
-            for (const other of controls.slice(i + 1)) {
-              const a = controls[i].getBoundingClientRect();
-              const b = other.getBoundingClientRect();
+            const form = root.querySelector("form");
+            if (expected.state === "Turn live, two queued") {
+              const compact = expected.width === "265 · narrowest pane";
+              const liveConfig = form.querySelector(".composer-live-config");
+              const steerLabels = [...form.querySelectorAll(".composer-steer-label")];
+              if ((getComputedStyle(liveConfig).display === "none") !== compact)
+                problems.push("live config compactness");
               if (
-                Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
-                Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1
+                steerLabels.some(
+                  (label) => (getComputedStyle(label).display === "none") !== compact,
+                )
               )
-                problems.push("overlapping controls");
+                problems.push("Steer label compactness");
             }
-          }
-          return problems;
-        });
+            const settings = [...form.querySelectorAll(".prompt-config")];
+            const add = form.querySelector(".prompt-add");
+            const primary = form.querySelector(".prompt-primary");
+            const primaryBounds = primary.getBoundingClientRect();
+            if (primaryBounds.width !== 32 || primaryBounds.height !== 32)
+              problems.push("send key size");
+            const controls = [...settings, add, primary].filter(Boolean);
+            for (let i = 0; i < controls.length; i++) {
+              for (const other of controls.slice(i + 1)) {
+                const a = controls[i].getBoundingClientRect();
+                const b = other.getBoundingClientRect();
+                if (
+                  Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
+                  Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1
+                )
+                  problems.push("overlapping controls");
+              }
+            }
+            return problems;
+          },
+          { state, width },
+        );
         assert.deepEqual(issues, [], `${colorScheme} / ${width} / ${state}`);
         checks++;
       }
@@ -82,9 +98,24 @@ try {
     await input.press("Enter");
     assert.equal(await input.inputValue(), "");
     await page.getByRole("button", { name: "Add to message", exact: true }).first().click();
+    assert.equal(await page.getByRole("menuitem", { name: /Commands & skills/ }).isVisible(), true);
     await page.getByRole("menuitem", { name: /Mention a file/ }).click();
     assert.equal(await input.inputValue(), "@");
     assert.equal(await input.evaluate((node) => document.activeElement === node), true);
+
+    // The compact surface and its expanded editor are two views of one draft.
+    // The dialog takes focus, edits in place, and Escape returns to the surface
+    // without throwing the prose away.
+    await input.fill("A longer draft");
+    await page.getByRole("button", { name: "Expand message editor", exact: true }).click();
+    const expanded = page.getByRole("textbox", { name: "Expanded message", exact: true });
+    assert.equal(await expanded.inputValue(), "A longer draft");
+    assert.equal(await expanded.evaluate((node) => document.activeElement === node), true);
+    await expanded.fill("The expanded editor keeps this draft");
+    await expanded.press("Escape");
+    await page.getByTestId("prompt-editor-dialog").waitFor({ state: "detached" });
+    assert.equal(await input.inputValue(), "The expanded editor keeps this draft");
+
     await page.emulateMedia({ forcedColors: "active" });
     const border = await page.locator("form.prompt-surface").evaluate((node) => {
       const style = getComputedStyle(node);
@@ -96,7 +127,7 @@ try {
     await page.close();
   }
   console.log(
-    `PASS: ${checks} theme/width/state layouts; picker, newline, send, and Add in both appearances.`,
+    `PASS: ${checks} theme/width/state layouts; picker, newline, send, Add, and expanded editing in both appearances.`,
   );
 } finally {
   await browser.close();

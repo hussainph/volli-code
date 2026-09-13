@@ -55,6 +55,7 @@ import {
 } from "@renderer/components/chat/composer-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
+import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import { ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -868,10 +869,9 @@ export function AutomationEditorPanel({
  * the two surfaces a person writes prompts into looked like two different
  * kinds of thing. Now it is `PROMPT_SURFACE` around the same textarea
  * insets, with the same control band under the text; the band holds the `+`
- * (Commands and Mention a file — no attach row, because Instructions take no
- * files) and nothing else, because nothing else is decided here. The runtime
- * lives in the aside on the editor and under the box on Run once, where it
- * already was.
+ * (Commands & skills and Mention a file — no attach row, because Instructions
+ * take no files) plus the shared long-form editor. The runtime lives in the
+ * aside on the editor and under the box on Run once, where it already was.
  *
  * `className` reaches the textarea, because the two call sites disagree on
  * how tall a resting box should be (a page's instructions, a dialog's) and
@@ -916,9 +916,18 @@ export function InstructionsTextarea({
           if (caret.handleKeyDown(event)) return;
         }}
       />
-      {/* The same tinted control tray as chat and ticket creation. */}
+      {/* The same tinted control tray as chat and ticket creation. Commands
+          and files stay behind `+`; long prose gets the shared expand action. */}
       <div className="prompt-toolbar flex items-center gap-1 px-2 py-2">
         <ComposerAddMenu />
+        <PromptEditorDialog
+          value={value}
+          onValueChange={onValueChange}
+          title="Edit instructions"
+          triggerLabel="Expand instructions editor"
+          textareaLabel="Expanded instructions"
+          placeholder={INSTRUCTIONS_PLACEHOLDER}
+        />
       </div>
     </div>
   );

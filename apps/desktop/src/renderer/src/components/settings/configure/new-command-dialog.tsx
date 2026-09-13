@@ -16,6 +16,7 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { errorMessage, isWritablePromptTemplateName } from "@volli/shared";
 
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
+import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import { cn } from "@renderer/lib/utils";
 import { CONTROL_W } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
@@ -162,7 +163,7 @@ export function NewCommandDialog({
             <label htmlFor="cmd-body" className="text-ui">
               Prompt
             </label>
-            <div className={cn(PROMPT_SURFACE, "overflow-hidden")}>
+            <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
               <Textarea
                 id="cmd-body"
                 value={body}
@@ -171,6 +172,16 @@ export function NewCommandDialog({
                 placeholder="Read the ticket, open a PR against main, and paste the ticket body as the description."
                 onChange={(event) => setBody(event.target.value)}
               />
+              <div className="prompt-toolbar flex justify-end px-2 py-2">
+                <PromptEditorDialog
+                  value={body}
+                  onValueChange={setBody}
+                  title="Edit command prompt"
+                  triggerLabel="Expand command prompt editor"
+                  textareaLabel="Expanded command prompt"
+                  placeholder="Read the ticket, open a PR against main, and paste the ticket body as the description."
+                />
+              </div>
             </div>
           </div>
 

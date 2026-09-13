@@ -121,8 +121,8 @@ owns the shell; `globals.css` owns its material. Every color comes from generate
 There is no backdrop blur, animated glow, or focus-triggered shell change.
 
 This treatment reaches Session chat, New ticket, Automation instructions (including Run once),
-command-prompt creation, and ticket comments. Command creation has no inline actions and takes
-only the writing sheet, not an empty tray. Questions retain their quieter stacked-card treatment.
+command-prompt creation, and ticket comments. Questions retain their quieter stacked-card
+treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
@@ -137,20 +137,27 @@ The send key is a deliberate exception to the action-pill silhouette: it shares 
 radius, while settings remain pills. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
 The chrome stays at one ink, so a resting composer never masquerades as disabled.
 
-**`+` is the one door.** A menu, not a paperclip: Attach files… · Commands `/` · Mention a
-file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary. The two
-picker rows write the trigger at the caret through the picker stack's own binding, so the list
-opens exactly as if typed. A surface that takes no files has no attach row; one with no picker has
-no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
+**`+` is the one door.** A menu, not a paperclip: Attach files… · Commands & skills `/` ·
+Mention a file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary.
+The two picker rows write the trigger at the caret through the picker stack's own binding, so the
+list opens exactly as if typed. A surface that takes no files has no attach row; one with no picker
+has no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
 one-press attach. The ticket Files rail keeps a paperclip — it is about files, not prompts.
+
+**Long prose has one escape hatch.** Session messages, Automation instructions, command prompts,
+and comments expose the same expand mark in their tray. It opens a large controlled writing sheet,
+so edits stay in the original draft and the compact surface keeps ownership of Send, Save, or
+Comment. New ticket follows the same rule at its dialog level: its existing Expand control widens
+the Monaco-backed description editor rather than nesting a second editor.
 
 **Chords live on hover.** Send says `⏎ · ⇧⏎`, Queue says `⏎ · ⌘⏎ steer`, in tooltips on the
 control the chord replaces; never as a hint line under the box.
 
 **Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
-context pill drops its percent and keeps the ring, then the model name truncates to its 56px
-floor, then the effort chip takes the next line. Add sits outside that wrapping group so it
-cannot become an orphan row during a live turn. The primary cluster never moves.
+context pill drops its percent and keeps the ring. During a live turn, model and effort are frozen,
+so that disabled pair leaves the narrow tray entirely; the queued Steer action keeps its icon and
+accessible name but drops its printed word. Add and Expand stay outside the omitted group, and the
+context / Stop / Queue cluster never moves.
 
 ## Elevation — three tiers
 

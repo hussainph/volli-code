@@ -43,6 +43,7 @@ import {
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
+import { PromptEditorDialog } from "@renderer/components/chat/prompt-editor-dialog";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
@@ -272,6 +273,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
           <textarea
             autoFocus
             value={draft}
+            aria-keyshortcuts="Meta+Enter Control+Enter Escape"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -337,13 +339,24 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         }}
         placeholder="Add a comment…"
         aria-label="Add a comment"
+        aria-keyshortcuts="Meta+Enter Control+Enter"
         className="min-h-20 max-h-48 w-full resize-none bg-transparent px-4 py-4 text-sm text-foreground outline-none placeholder:text-muted-foreground field-sizing-content"
       />
-      <div className="prompt-toolbar flex justify-end px-2 py-2">
+      <div className="prompt-toolbar flex items-center justify-between gap-2 px-2 py-2">
+        <PromptEditorDialog
+          value={draft}
+          onValueChange={setDraft}
+          title="Edit comment"
+          triggerLabel="Expand comment editor"
+          textareaLabel="Expanded comment"
+          placeholder="Add a comment…"
+          disabled={submitting}
+        />
         <Button
           size="sm"
           className="prompt-primary"
           disabled={draft.trim() === "" || submitting}
+          aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
           <PaperPlaneTiltIcon />

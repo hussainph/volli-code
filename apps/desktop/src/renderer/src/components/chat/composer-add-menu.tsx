@@ -122,7 +122,7 @@ export function ComposerAddMenu({
             <>
               <DropdownMenuItem onSelect={() => insert("/")}>
                 <TerminalWindowIcon />
-                Commands
+                Commands &amp; skills
                 <DropdownMenuShortcut>/</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => insert("@")}>

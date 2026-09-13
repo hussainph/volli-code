@@ -67,6 +67,22 @@
   }
 }
 
+/* A live turn freezes model and effort. On the app's narrowest chat pane,
+ * repeating those disabled facts costs the whole second footer line, so the
+ * live surface gives them up before it gives up Add, context, Stop, or Queue.
+ * The queued row keeps its direct Steer action but lets the icon and
+ * accessible name carry it where the printed word would squeeze the draft.
+ *
+ * `!important` is the same specificity guard the motion gates use: Tailwind's
+ * generated `flex` utility otherwise restores the config group's display after
+ * this authored container rule has removed it. */
+@container composer (max-width: 23.999rem) {
+  .composer-live-config,
+  .composer-steer-label {
+    display: none !important;
+  }
+}
+
 /* Outside the component layer so the forced-colors edge also overrides the
  * shell's border-transparent utility when decorative fills disappear. */
 @media (forced-colors: active) {

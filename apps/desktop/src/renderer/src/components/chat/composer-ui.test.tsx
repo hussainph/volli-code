@@ -295,6 +295,14 @@ describe("the queued message row", () => {
     expect(html).toContain('aria-label="Queued message actions:');
   });
 
+  it("keeps Steer direct but lets its printed label give way in a narrow live turn", () => {
+    const html = renderComposer();
+
+    expect(html).toContain('aria-label="Steer queued message: also cover the empty-name branch"');
+    expect(html).toContain('class="composer-steer-label"');
+    expect(html).toContain("composer-live-config");
+  });
+
   it("names turn interruption and wears no focus dressing on the shell", () => {
     const html = renderComposer();
 
@@ -477,6 +485,14 @@ describe("the effort control's place in the footer", () => {
     expect(html).toContain("prompt-config");
     expect(html).toContain("prompt-primary rounded-control");
     expect(html).toContain("min-h-20");
+  });
+
+  it("offers the shared long-prompt editor without changing the draft owner", () => {
+    const html = renderFooter();
+
+    expect(html).toContain('aria-label="Expand message editor"');
+    expect(html).toContain('aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"');
+    expect(html).toContain('aria-keyshortcuts="Enter"');
   });
 
   it("names the chord on the primary's hover, and both of them while a turn is live", () => {
