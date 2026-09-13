@@ -13,9 +13,10 @@
  *   2. With a column armed, the split button's default half names that
  *      Automation, because the Ticket sits in that column — without expanding
  *      the old empty-state page door into a new populated-state control.
- *   3. The caret menu is that column's Offered list plus "Run once…" — a
- *      switched-off Automation among them, offered with its own note rather
- *      than withheld (running by hand is universal, VC-112).
+ *   3. The caret menu groups every column's Offered list with the Ticket's
+ *      current column first, plus "Run once…" — a switched-off Automation
+ *      among them is offered with its own note rather than withheld (running
+ *      by hand is universal, VC-112).
  *   4. Pressing the default half reaches the Run door.
  *   5. "Run once…" takes Instructions and offers this invocation its own
  *      Runtime, and starting it reaches the Run door while writing NO record:
@@ -27,8 +28,9 @@
  *      run yet the rail draws no list, and the door it reads agrees.
  *   8. Right-clicking the control opens the nested context menu — the other
  *      deliberate surface VC-112 names for the per-invocation override.
- *   9. The board card's own `Automations ▸` submenu offers this column's list
- *      without opening the Ticket, and holds the same nested override.
+ *   9. The board card's own `Automations ▸` submenu offers every column's
+ *      grouped list without opening the Ticket, and holds the same nested
+ *      override.
  *
  * TWO LIMITS, both stated rather than papered over:
  *
@@ -250,7 +252,9 @@ try {
     "the default half of the split button is this column's Armed automation",
     async () => {
       await openTicket();
-      const armed = page.getByLabel("Run Review sweep on this ticket");
+      // The visible choices below repeat the same run label deliberately; the
+      // first match is the split button's default half above those choices.
+      const armed = page.getByLabel("Run Review sweep on this ticket").first();
       await armed.waitFor({ timeout: 15000 });
       // VC-257 moves the existing empty-state door; it does not add a new door
       // to states where the rail already has an Automation to offer.
@@ -262,7 +266,7 @@ try {
     },
   );
 
-  await attempt(4, "its menu is this column's Offered list plus Run once…", async () => {
+  await attempt(4, "its menu groups every column's Offered list plus Run once…", async () => {
     await page.getByLabel("Other automations").click();
     const menu = page.getByRole("menu").first();
     await menu.waitFor({ timeout: 10000 });
@@ -272,9 +276,10 @@ try {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
-        // Offered is the record's Trigger: an Automation that names another
-        // column is not offered here.
-        !items.includes("Done sweep") &&
+        // Cross-column hand-runs remain available without moving this Ticket;
+        // headings explain where each Automation is normally offered.
+        items.includes("Done sweep") &&
+        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
         items.includes("Run once") &&
         // Nobody switched anything on here, and a switched-off Automation is
         // still offered — with the note that says what off means.
@@ -286,7 +291,7 @@ try {
   await attempt(5, "pressing the default half reaches the Run door", async () => {
     // No default model on this profile, so the Run's own refusal opens Model
     // Access — which is the evidence the press reached the door.
-    await page.getByLabel("Run Review sweep on this ticket").click();
+    await page.getByLabel("Run Review sweep on this ticket").first().click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
     await backToBoard();
     return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
@@ -352,7 +357,7 @@ try {
     // The second deliberate surface VC-112 names beside the rail itself. The
     // override row rides here when the profile has a catalog; this profile has
     // none, so the row is printed rather than required.
-    await page.getByLabel("Run Review sweep on this ticket").click({ button: "right" });
+    await page.getByLabel("Run Review sweep on this ticket").first().click({ button: "right" });
     const menu = page.getByRole("menu").first();
     await menu.waitFor({ timeout: 10000 });
     const items = await menu.innerText();
@@ -362,7 +367,8 @@ try {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
-        !items.includes("Done sweep") &&
+        items.includes("Done sweep") &&
+        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
         items.includes("Run once"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),
     };
@@ -382,7 +388,8 @@ try {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
-        !items.includes("Done sweep") &&
+        items.includes("Done sweep") &&
+        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
         // A card has nowhere to type an Unbound Run, so it offers none.
         !items.includes("Run once"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),
