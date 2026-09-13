@@ -3333,6 +3333,21 @@ describe("migrate — 047, Session projection checkpoints (VC-355)", () => {
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get(),
     ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'
+            ORDER BY name`,
+        )
+        .pluck()
+        .all(),
+    ).toEqual([
+      "session_projection_checkpoint_event_deleted",
+      "session_projection_checkpoint_event_updated",
+      "session_projection_checkpoint_provenance_updated",
+      "session_projection_checkpoint_session_updated",
+    ]);
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

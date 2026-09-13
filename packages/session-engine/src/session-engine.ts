@@ -1,4 +1,6 @@
 import {
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
   observationPayload,
   projectSession,
   reportSessionUsage,
@@ -587,9 +589,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session
-          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
-          : null;
+        return session ? projectStoredSession(transaction, session) : null;
       });
     },
 
@@ -601,9 +601,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) =>
         transaction
           .listSessions(query)
-          .map((session) =>
-            projectSession(session, transaction.listEvents({ sessionId: session.id })),
-          ),
+          .map((session) => projectStoredSession(transaction, session)),
       );
     },
 
@@ -653,6 +651,45 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       );
     },
   };
+}
+
+function projectStoredSession(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+): SessionProjection {
+  try {
+    const checkpoint = transaction.getProjectionCheckpoint(session.id);
+    if (checkpoint) {
+      const tail = transaction.listEvents({
+        sessionId: session.id,
+        afterSequence: checkpoint.throughSequence,
+      });
+      const advanced = advanceSessionProjection(checkpoint, tail);
+      if (tail.length > 0) saveDerivedCheckpoint(transaction, advanced);
+      return advanced.projection;
+    }
+  } catch {
+    // A projection checkpoint is a rebuildable cache. Any unsupported,
+    // malformed, or stale value falls through to the immutable event log.
+  }
+
+  const rebuilt = createSessionProjectionCheckpoint(
+    session,
+    transaction.listEvents({ sessionId: session.id }),
+  );
+  saveDerivedCheckpoint(transaction, rebuilt);
+  return rebuilt.projection;
+}
+
+function saveDerivedCheckpoint(
+  transaction: SessionLedgerTransaction,
+  checkpoint: SessionProjectionCheckpoint,
+): void {
+  try {
+    transaction.saveProjectionCheckpoint(checkpoint);
+  } catch {
+    // Read availability never depends on the derived cache accepting a write.
+  }
 }
 
 /**

@@ -2067,6 +2067,38 @@ CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
   digest           TEXT NOT NULL CHECK (length(digest) = 64),
   updated_at       INTEGER NOT NULL
 );
+
+-- App writes append immutable facts, so inserts are handled as checkpoint
+-- tails. If repair tooling changes a canonical prefix out of band, invalidate
+-- its derived row instead of allowing the cache to hide that change.
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_updated
+AFTER UPDATE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.session_id OR session_id = NEW.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_deleted
+AFTER DELETE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints WHERE session_id = OLD.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_provenance_updated
+AFTER UPDATE ON session_provenances
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id IN (
+     SELECT session_id FROM session_events WHERE provenance_id = NEW.id OR provenance_id = OLD.id
+   );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_session_updated
+AFTER UPDATE ON sessions
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.id OR session_id = NEW.id;
+END;
 `;
 
 export const MIGRATIONS: readonly Migration[] = [

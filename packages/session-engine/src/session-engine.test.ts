@@ -918,6 +918,54 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  it("resumes getSession and listSessions projections from checkpoint tails", async () => {
+    const stored = createInMemorySessionLedger();
+    const cursors: Array<number | undefined> = [];
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "listEvents") return Reflect.get(target, property, receiver);
+                return (query: Parameters<SessionLedgerTransaction["listEvents"]>[0]) => {
+                  cursors.push(query.afterSequence);
+                  return transaction.listEvents(query);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-checkpoint-list"));
+
+    cursors.length = 0;
+    const first = await plane.getSession({ sessionId: created.session.id });
+    expect(cursors).toEqual([undefined]);
+    expect(first).not.toBeNull();
+    const checkpointSequence = (
+      await plane.getProjectionCheckpoint({ sessionId: created.session.id })
+    )?.throughSequence;
+    expect(checkpointSequence).toBeTypeOf("number");
+
+    await plane.submit({
+      commandId: "command-checkpoint-tail",
+      sessionId: created.session.id,
+      intent: { kind: "session.signal", signal: "done", reason: "Tail" },
+      provenance: userProvenance,
+    });
+    cursors.length = 0;
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      signal: { signal: "done", reason: "Tail" },
+    });
+    expect(cursors).toEqual([checkpointSequence]);
+
+    cursors.length = 0;
+    await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(cursors).toEqual([checkpointSequence! + 3]);
+  });
+
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {
     const ledger = createInMemorySessionLedger();
     const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
