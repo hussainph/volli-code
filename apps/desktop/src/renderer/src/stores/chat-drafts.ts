@@ -152,9 +152,26 @@ export interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
   /** Opens a renderer-local Draft under the UUID its eventual Session will use. */
   openProvisional(sessionId: string, provisional: Omit<ProvisionalChatDraft, "phase">): void;
-  /** Changes the title promotion will record, without creating a Session. */
+  /**
+   * Changes the title promotion will record, without creating a Session.
+   *
+   * Refused once the create has landed (`session-created`): the title is part
+   * of the durable create intent, and the engine treats a replay carrying a
+   * different intent as a conflict. From that moment a rename is a SESSION
+   * rename, and the surfaces route it to that path rather than here — so no
+   * gesture is dropped, it simply changes which door it takes.
+   */
   setProvisionalTitle(sessionId: string, title: string): void;
-  /** Changes the model policy that promotion will record, without creating a Session. */
+  /**
+   * Changes the model policy that promotion will record, without creating a
+   * Session.
+   *
+   * Send freezes the choice — a create that lands before a later failure must
+   * replay the same model even if Settings changed in between — so this
+   * refuses once a first message is held under a resolved model, and the
+   * composer's picker is stood down for that same window rather than
+   * accepting a change it would have to discard.
+   */
   setProvisionalModel(sessionId: string, model: ModelSelection): void;
   /** Records that create landed, so a failed Blob transfer can resume honestly. */
   markProvisionalSessionCreated(sessionId: string): void;
@@ -513,13 +530,10 @@ export function createChatDraftsStore(storage?: StateStorage) {
           setProvisionalTitle: (sessionId, title) =>
             set((state) => {
               const draft = state.drafts[sessionId];
-              if (
-                draft?.provisional?.phase !== "draft" ||
-                draft.held.length > 0 ||
-                promotions.has(sessionId)
-              ) {
-                return {};
-              }
+              // Only the create intent is frozen, and it freezes when the
+              // create LANDS — not when Send is pressed. Until then this is
+              // still the Draft's own title and may be edited freely.
+              if (draft?.provisional?.phase !== "draft") return {};
               return {
                 drafts: {
                   ...state.drafts,
@@ -536,8 +550,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
               const draft = state.drafts[sessionId];
               if (
                 draft?.provisional?.phase !== "draft" ||
-                (draft.held.length > 0 && draft.provisional.model !== undefined) ||
-                promotions.has(sessionId)
+                (draft.held.length > 0 && draft.provisional.model !== undefined)
               ) {
                 return {};
               }

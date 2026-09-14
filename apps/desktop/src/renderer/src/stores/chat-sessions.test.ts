@@ -760,10 +760,22 @@ describe("promoteChatSession", () => {
     // different one has not promoted this Draft, and adopting it would strand
     // every tab, pane and shortcut still naming the Draft.
     state.createAnswer = () => ({ sessionId: "someone-elses-session" });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+    try {
+      await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
 
-    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("someone-elses-session");
+      // The person is told what to do and nothing else. Two raw UUIDs on the
+      // page are diagnosis, which is our job, not theirs (CLAUDE.md) — so they
+      // go to the log a support report can read instead.
+      expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toBe(
+        "Could not start Session. Try sending again.",
+      );
+      expect(logged.mock.calls.at(-1)?.[0]).toContain("someone-elses-session");
+      expect(logged.mock.calls.at(-1)?.[0]).toContain(DRAFT_ID);
+    } finally {
+      logged.mockRestore();
+    }
     expect(attaches).toEqual([]);
     expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
   });

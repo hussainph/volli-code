@@ -1723,8 +1723,10 @@ export function TicketDetail({
 function renameSessionTab(tabId: string, title: string): void {
   const chatSessionId = parseChatTabId(tabId);
   if (chatSessionId !== null) {
-    const draft = useChatDraftsStore.getState().drafts[chatSessionId];
-    if (draft?.provisional !== undefined) {
+    // Before the create lands the title is the Draft's; after it, the same
+    // gesture is a Session rename. Routing by phase means a rename typed in the
+    // promotion window lands somewhere rather than being dropped.
+    if (useChatDraftsStore.getState().drafts[chatSessionId]?.provisional?.phase === "draft") {
       useChatDraftsStore.getState().setProvisionalTitle(chatSessionId, title);
     } else {
       void renameChatSession(chatSessionId, title);

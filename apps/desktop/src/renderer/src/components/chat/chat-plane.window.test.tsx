@@ -387,6 +387,69 @@ describe("a provisional chat plane", () => {
     expect(useChatDraftsStore.getState().drafts[SESSION]?.attachments).toEqual([]);
   });
 
+  it("stands the composer down while the first message's import is still arriving", async () => {
+    // The second ⏎ used to be dropped on the floor: a file committed to the
+    // first message cannot be overtaken, so `send` returned and said nothing.
+    // CLAUDE.md is explicit that a gesture is never swallowed — so the box
+    // refuses visibly instead, and takes the words again once the file lands.
+    const ownerless = {
+      linkId: null,
+      blobHash: "b".repeat(64),
+      label: "slow.png",
+      originalName: "slow.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    } as const;
+    let finishAttach!: () => void;
+    const attaching = new Promise((resolve) => {
+      finishAttach = () => resolve({ ok: true, blob: ownerless, relPath: "src/slow.png" });
+    });
+    vi.stubGlobal(
+      "api",
+      refusingBridge({
+        "attachments.pathForFile": () => "/tmp/slow.png",
+        "attachments.attach": vi.fn(() => attaching),
+      }),
+    );
+    // Promotion is held open, so this test observes ONLY the import gate:
+    // nothing here can be explained by the chat having become durable.
+    const { enqueue, store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
+    const picker = attachButton?.nextElementSibling;
+    const box = composer();
+    if (!(picker instanceof HTMLInputElement) || box === null) {
+      throw new Error("expected attachment picker and composer");
+    }
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [new File(["image"], "slow.png", { type: "image/png" })],
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await act(async () => type(box, "first"));
+
+    const submit = container?.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+    if (submit === null || submit === undefined) throw new Error("expected Send");
+    expect(submit.disabled).toBe(false);
+    await act(async () => submit.click());
+
+    // The import is captured, so the box is visibly not taking a second one.
+    await vi.waitFor(() => expect(submit.disabled).toBe(true));
+    await act(async () => type(box, "second"));
+    expect(submit.disabled).toBe(true);
+    expect(enqueue).not.toHaveBeenCalled();
+
+    await act(async () => finishAttach());
+
+    // The cohort settled, so the box takes words again — with the words still
+    // in it, which is what tells this apart from an empty composer.
+    await vi.waitFor(() => expect(submit.disabled).toBe(false));
+    expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
+      text: "first @src/slow.png ",
+      attachments: [ownerless],
+    });
+  });
+
   it("holds Send until the live default has loaded, then freezes it for promotion", async () => {
     const selection: ModelSelection = {
       providerId: "acme",

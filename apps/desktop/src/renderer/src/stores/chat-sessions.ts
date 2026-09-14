@@ -334,9 +334,19 @@ export function createChatSessionsStore(
         input.requestedSessionId !== undefined &&
         created.sessionId !== input.requestedSessionId
       ) {
-        toastError(
-          `Could not start Session: promotion returned ${created.sessionId}, not ${input.requestedSessionId}`,
+        // A host that minted its own id instead of taking the one this chat has
+        // carried since it was opened. Everything holding that id — the tab,
+        // the split pane, the staged files — now names something that is not
+        // this Session, so the promotion cannot be completed honestly.
+        //
+        // The two ids are diagnosis, not recovery: they go to the log, where a
+        // support report can find them, and the person gets the one sentence
+        // that tells them what to do (CLAUDE.md — keep the measurements off the
+        // page).
+        console.error(
+          `[chat] promotion refused: requested Session ${input.requestedSessionId}, host minted ${created.sessionId}`,
         );
+        toastError("Could not start Session. Try sending again.");
         return null;
       }
       if (makeClient) makeResident(created.sessionId);

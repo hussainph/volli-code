@@ -233,9 +233,12 @@ describe("fitsSessionImageBudget", () => {
   });
 });
 
-describe("inlineImageBytesIn", () => {
-  const png = (sizeBytes: number) => ({ mime: "image/png", sizeBytes });
+/** One staged PNG of a given size — the strip entry the budget counts. */
+function png(sizeBytes: number) {
+  return { mime: "image/png", sizeBytes };
+}
 
+describe("inlineImageBytesIn", () => {
   it("counts only what can be inlined into a conversation", () => {
     // A PDF is read from disk when a turn asks for it; an image is replayed
     // into every subsequent turn. Only the second spends the budget, so a

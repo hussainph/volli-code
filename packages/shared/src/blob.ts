@@ -224,10 +224,7 @@ function budgetMegabytes(bytes: number): string {
  * renderer asks it first — before a provisional chat mints anything durable —
  * and a person must not be told two different things by the two askers.
  */
-export function sessionImageBudgetRefusal(
-  usedBytes: number,
-  incomingBytes: number,
-): string | null {
+export function sessionImageBudgetRefusal(usedBytes: number, incomingBytes: number): string | null {
   if (fitsSessionImageBudget(usedBytes, incomingBytes)) return null;
   return (
     `These images come to ${budgetMegabytes(usedBytes + incomingBytes)} MB, past the ` +
@@ -399,9 +396,7 @@ export function draftAttachmentHashes(value: unknown): string[] {
 export type ProvisionalChatDraftPhase = "draft" | "session-created";
 
 /** Whether a persisted value names a phase both readers of the envelope know. */
-export function isProvisionalChatDraftPhase(
-  value: unknown,
-): value is ProvisionalChatDraftPhase {
+export function isProvisionalChatDraftPhase(value: unknown): value is ProvisionalChatDraftPhase {
   return value === "draft" || value === "session-created";
 }
 

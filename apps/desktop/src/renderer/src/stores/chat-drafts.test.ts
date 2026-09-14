@@ -268,27 +268,35 @@ describe("provisional chat", () => {
     ]);
   });
 
-  it("freezes create metadata from the held Send boundary through promotion", async () => {
+  it("freezes the model at Send and the title at create, each for its own reason", async () => {
     const store = createChatDraftsStore(createMemoryStorage());
     const originalModel = {
       providerId: "acme",
       modelId: "sonnet",
       reasoningLevel: "high" as const,
     };
+    const changedModel = {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    } as const;
     store.getState().openProvisional("draft-1", PROVISIONAL);
     store.getState().setProvisionalTitle("draft-1", "Before send");
     store.getState().setProvisionalModel("draft-1", originalModel);
     store.getState().holdMessage("draft-1", { id: "first-send", text: "go" });
+
+    // The MODEL freezes at Send. Send is where the live default was resolved
+    // into an explicit choice, so letting Settings move it afterwards would
+    // make a retry replay a different create than the one that may already
+    // have landed.
+    store.getState().setProvisionalModel("draft-1", changedModel);
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(originalModel);
+
+    // The TITLE does not. Nothing durable carries it until the create goes
+    // out, so refusing it here would only drop a rename with nowhere to go.
     store.getState().setProvisionalTitle("draft-1", "After send before create");
-    store.getState().setProvisionalModel("draft-1", {
-      providerId: "other",
-      modelId: "changed",
-      reasoningLevel: "low",
-    });
-    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
-      title: "Before send",
-      model: originalModel,
-    });
+    expect(store.getState().drafts["draft-1"]?.provisional?.title).toBe("After send before create");
+
     let finishPromotion!: () => void;
     const promoting = store
       .getState()
@@ -296,30 +304,18 @@ describe("provisional chat", () => {
         "draft-1",
         () => new Promise<boolean>((resolve) => (finishPromotion = () => resolve(false))),
       );
-
-    store.getState().setProvisionalTitle("draft-1", "During create");
-    store.getState().setProvisionalModel("draft-1", {
-      providerId: "other",
-      modelId: "changed",
-      reasoningLevel: "low",
-    });
-    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
-      title: "Before send",
-      model: originalModel,
-    });
-
     finishPromotion();
     await promoting;
+
+    // Once the create has LANDED the title is in a durable intent, and the
+    // engine treats a replay carrying a different intent as a conflict. From
+    // here a rename is a Session rename, which the surfaces route elsewhere.
     store.getState().markProvisionalSessionCreated("draft-1");
     store.getState().setProvisionalTitle("draft-1", "After create");
-    store.getState().setProvisionalModel("draft-1", {
-      providerId: "other",
-      modelId: "changed",
-      reasoningLevel: "low",
-    });
+    store.getState().setProvisionalModel("draft-1", changedModel);
     expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
       phase: "session-created",
-      title: "Before send",
+      title: "After send before create",
       model: originalModel,
     });
   });

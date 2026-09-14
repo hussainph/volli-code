@@ -371,10 +371,23 @@ export function ChatPlane({
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const steeringQueued = React.useRef(new Set<string>());
+  // Whether a file import committed to the FIRST message is still arriving.
+  // `importingFirstMessage` below holds the same fact for the synchronous
+  // reads inside callbacks; this one re-renders, so the composer can stand
+  // down for that window rather than accepting a ⏎ it would have to drop.
+  const [holdingFirstImport, setHoldingFirstImport] = React.useState(false);
   // Two one-line callbacks that were inline literals, and inline is what they
   // could not be: they are props of a memoized composer, so a fresh closure per
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
+  /** Sets both copies of the captured-import cohort at once. */
+  const captureFirstImport = React.useCallback(
+    (captured: { id: string; settled: Promise<void> } | null) => {
+      importingFirstMessage.current = captured;
+      setHoldingFirstImport(captured !== null);
+    },
+    [],
+  );
 
   const {
     messages,
@@ -424,9 +437,14 @@ export function ChatPlane({
   // in that window spends it before the warning it was owed — which is the one
   // thing knowing the model early was for.
   const composable =
-    provisional !== undefined
+    (provisional !== undefined
       ? catalogState !== "loading"
-      : modelSelection !== null && catalogState !== "loading";
+      : modelSelection !== null && catalogState !== "loading") &&
+    // A file import committed to the first message is still arriving. The box
+    // stands down for that moment rather than taking a ⏎ it could only drop:
+    // a second message cannot overtake the files the first one is holding open
+    // (CLAUDE.md — never swallow a gesture; refuse it visibly instead).
+    !holdingFirstImport;
   // What this picker may offer (VC-53), decided in one place because the
   // New-ticket composer asks the same question — see `offerableModels`.
   const composerModels = React.useMemo(
@@ -447,9 +465,12 @@ export function ChatPlane({
     (next: ComposerModelSelection) => {
       const nextSelection = composerModelSelection(next);
       if (nextSelection === null) return;
+      // Which door depends on whether a Session exists yet, never on whether
+      // the gesture is allowed: the picker is already stood down while the
+      // first message is in flight (`modelChoiceDisabled`), so a selection
+      // that arrives here always has somewhere to land.
       const launch = useChatDraftsStore.getState().drafts[sessionId]?.provisional;
-      if (launch !== undefined) {
-        if (launch.phase === "session-created") return;
+      if (launch?.phase === "draft") {
         useChatDraftsStore.getState().setProvisionalModel(sessionId, nextSelection);
       } else {
         void selectModel(nextSelection);
@@ -808,7 +829,7 @@ export function ChatPlane({
         if (importing?.id === message.id) {
           await importing.settled;
           if (importingFirstMessage.current?.id === message.id) {
-            importingFirstMessage.current = null;
+            captureFirstImport(null);
             clearAttachments();
             await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
           }
@@ -830,6 +851,7 @@ export function ChatPlane({
     },
     [
       attachDraftFilesNow,
+      captureFirstImport,
       clearAttachments,
       dropHeld,
       holdMessage,
@@ -844,8 +866,9 @@ export function ChatPlane({
       const drafts = useChatDraftsStore.getState();
       const launch = drafts.drafts[sessionId]?.provisional;
       // A second Enter cannot overtake a file import already committed to the
-      // first Enter. Once that captured cohort settles, ordinary rapid sends
-      // resume and share promotion's single flight as before.
+      // first Enter. The composer is already not-ready in that window (see
+      // `composable`), so this is the race guard behind the visible refusal,
+      // never the only thing standing between a person and a lost message.
       if (importingFirstMessage.current !== null) return;
       // Defaults stay live while this is merely a Draft. Send is the boundary
       // that freezes the resolved choice: a create that lands before a later
@@ -869,7 +892,7 @@ export function ChatPlane({
         provisionalDispatches.current += 1;
         if (drafts.hasAttachmentImports(sessionId)) {
           importBarrier = drafts.waitForAttachmentImports(sessionId);
-          importingFirstMessage.current = { id: message.id, settled: importBarrier };
+          captureFirstImport({ id: message.id, settled: importBarrier });
         }
       }
       // The strip's durable copy empties BEFORE the hold, so the one flush
@@ -883,7 +906,7 @@ export function ChatPlane({
           if (importBarrier !== null) {
             await importBarrier;
             if (importingFirstMessage.current?.id === original.id) {
-              importingFirstMessage.current = null;
+              captureFirstImport(null);
             }
             // Late imported Blobs were routed into the held copy above. Remove
             // the hook's local preview of them before the durable Session adopts
@@ -904,7 +927,15 @@ export function ChatPlane({
       // agent received refers to them.
       clearAttachments();
     },
-    [clearAttachments, deliver, dispatch, provisionalModel, sessionId, setDraftAttachments],
+    [
+      captureFirstImport,
+      clearAttachments,
+      deliver,
+      dispatch,
+      provisionalModel,
+      sessionId,
+      setDraftAttachments,
+    ],
   );
 
   // What the Session is holding for you, from the two records that say it — see

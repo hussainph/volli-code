@@ -666,8 +666,12 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // Each Session kind has its own optimistic surface to move before the
     // durable write. Board and File tabs never raise this callback.
     if (descriptor.kind === "chat") {
-      const draft = useChatDraftsStore.getState().drafts[descriptor.sessionId];
-      if (draft?.provisional !== undefined) {
+      // Before the create lands the title is the Draft's; after it, the same
+      // gesture is a Session rename. Routing by phase means a rename typed in
+      // the promotion window lands somewhere rather than being dropped.
+      if (
+        useChatDraftsStore.getState().drafts[descriptor.sessionId]?.provisional?.phase === "draft"
+      ) {
         useChatDraftsStore.getState().setProvisionalTitle(descriptor.sessionId, title);
       } else {
         void renameChatSession(descriptor.sessionId, title);
