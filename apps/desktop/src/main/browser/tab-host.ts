@@ -225,6 +225,15 @@ export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
 export const BROWSER_INTERACTION_QUIET_MS = 5_000;
 export const BROWSER_DEFAULT_BOUNDS: Rectangle = { x: 0, y: 0, width: 1_280, height: 720 };
 
+function sameRectangle(left: Rectangle, right: Rectangle): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+}
+
 /**
  * Stand-in pixels are JPEG, not PNG, and this is a latency decision rather than
  * a size one. An overlay cannot appear until the capture returns, so the
@@ -1346,9 +1355,17 @@ export class BrowserTabHost {
     return { ...entry.state };
   }
 
-  /** Applies the renderer-measured host plane to the page and its docked DevTools. */
+  /**
+   * Applies the renderer-measured host plane to the page and its docked DevTools.
+   *
+   * Exact-bound deduplication belongs here rather than in the renderer: main is
+   * the only owner that sees its own initial placement and page/DevTools split.
+   * A renderer cache can otherwise go stale when main lays out the native view
+   * itself and silently swallow the later placement that restores the DOM plane.
+   */
   setBounds(tabId: string, bounds: Rectangle): void {
     const entry = this.requireTab(tabId);
+    if (sameRectangle(entry.bounds, bounds)) return;
     entry.bounds = { ...bounds };
     this.layout(entry);
   }

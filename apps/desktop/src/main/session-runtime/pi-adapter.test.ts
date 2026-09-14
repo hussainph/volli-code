@@ -19,12 +19,14 @@ import {
   BUILTIN_RULE_PACK_ID,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
+  mcpProviderToolName,
   resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type McpToolDefinition,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
   type PromptResource,
@@ -1119,6 +1121,97 @@ describe("Pi native adapter attach", () => {
     ]);
   });
 
+  it("binds exact frozen MCP definitions to an attachment-scoped port and disposes it on release", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo/exact",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo/exact"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const dispose = vi.fn(async () => undefined);
+    const call = vi.fn(async () => ({ content: [], isError: false }));
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: ({ mcpTools, workspacePath }) => {
+        expect(mcpTools).toEqual([tool]);
+        expect(workspacePath).toBe(attachmentSpec().directory);
+        return { call, dispose };
+      },
+    });
+
+    expect(runtime.spec.tools.mcp).toEqual([tool]);
+    await runtime.spec.mcp?.call(
+      { serverId: "fixture-1", toolName: "echo/exact", arguments: {}, toolCallId: "call-1" },
+      new AbortController().signal,
+    );
+    expect(call).toHaveBeenCalledOnce();
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes the MCP attachment host when runtime setup fails", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const dispose = vi.fn(async () => undefined);
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+      resolveMcpPort: () => ({
+        call: async () => ({ content: [], isError: false }),
+        dispose,
+      }),
+    });
+    runtime.startFailure = new Error("runtime setup failed");
+
+    await expect(adapter.attach(attachmentSpec(), new RecordingSink())).rejects.toThrow(
+      "runtime setup failed",
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an MCP surface with missing definitions or no main-process port", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const missingDefinitions = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(missingDefinitions).rejects.toThrow(/MCP definitions.*surface/i);
+
+    const noPort = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(noPort).rejects.toThrow(/wired no MCP host/i);
+  });
+
   it("names todo_write in the bundle exactly when the frozen surface holds it (VC-6)", async () => {
     // Membership is the bundle's to state because the tool has no port. It is
     // read back off the durable record like the verb half, never re-derived:
@@ -1393,6 +1486,70 @@ describe("Pi native adapter attach", () => {
     const binding = await adapter.attach(attachmentSpec(), new RecordingSink());
 
     expect(binding.native).toEqual({ id: null, detail: null });
+  });
+
+  /**
+   * VC-367. Boot recovery reconciles a Session whose turn was live at the
+   * crash, and reconciling rehydrates the binding — which resolves the whole
+   * tool surface, this port included. A host that is not up yet makes the
+   * resolver throw, and the throw comes out of `attach` rather than out of any
+   * browser tool: the Session never recovers, and the failure is recorded as
+   * `adapter_unrecoverable` with the resolver's own words. That is precisely
+   * what the shipped boot order produced for every such Session, on every
+   * crash, because the host was built several hundred lines AFTER the sweep.
+   */
+  const recoveringSpec = attachmentSpec({
+    continuity: "native_resume",
+    native: {
+      id: "pi-session-previous",
+      detail: {
+        runtime: "pi",
+        sessionId: "pi-session-previous",
+        sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
+      },
+    },
+  });
+
+  it("fails a recovery attach when the Browser host is not up yet", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => {
+        throw new Error("The Browser host is not ready; retry the attachment.");
+      },
+    });
+
+    const error: unknown = await adapter
+      .attach(recoveringSpec, new RecordingSink())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("The Browser host is not ready");
+    // Nothing was started, so there is no binding to reconcile: the Session's
+    // turn stays interrupted and boot recovery force-closes the attachment.
+    expect(runtime.specs).toHaveLength(0);
+  });
+
+  it("recovers the same Session once the Browser host exists", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => ({
+        tabs: async () => ({ tabs: [] }),
+        navigate: unusedPortMethod,
+        snapshot: unusedPortMethod,
+        act: unusedPortMethod,
+        screenshot: unusedPortMethod,
+        console: unusedPortMethod,
+        turnEnded: () => undefined,
+      }),
+    });
+
+    const binding = await adapter.attach(recoveringSpec, new RecordingSink());
+
+    // The whole difference is the ordering: same Session, same recovery
+    // reference, same adapter — a host that exists is all it ever needed. The
+    // prior process's sidecar reached the runtime, so there is a live binding
+    // for boot recovery to reconcile the interrupted turn through.
+    expect(runtime.specs).toHaveLength(1);
+    expect(runtime.spec.recovery).toMatchObject({ sessionId: "pi-session-previous" });
+    expect(binding.reconcile).toBeTypeOf("function");
   });
 });
 

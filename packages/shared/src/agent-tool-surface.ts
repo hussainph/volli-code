@@ -55,6 +55,8 @@
 import { CAPABILITY_TOOL_IDS, CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
 import type { CodingToolId, NonCodingToolId, SessionToolId } from "./authority";
 import type { SessionRole } from "./agent-runtime";
+import { errorMessage } from "./errors";
+import { isMcpToolId, validateMcpToolDefinitions, type McpToolDefinition } from "./mcp";
 import { VERB_TOOL_KEYS, isVerbToolKey } from "./verb-registry";
 import type { VerbToolKey } from "./verb-registry";
 
@@ -211,7 +213,11 @@ export function isSessionToolId(value: unknown): value is SessionToolId {
   // through a restatement of either: `CAPABILITY_TOOL_IDS` is the whole
   // capability vocabulary and `isVerbToolKey` the whole registry one, so a tool
   // added to either is admitted here without this line being touched.
-  return (CAPABILITY_TOOL_IDS as readonly string[]).includes(value) || isVerbToolKey(value);
+  return (
+    (CAPABILITY_TOOL_IDS as readonly string[]).includes(value) ||
+    isVerbToolKey(value) ||
+    isMcpToolId(value)
+  );
 }
 
 /** What a venue can actually answer, as membership rather than as ports. */
@@ -240,6 +246,8 @@ export interface AgentToolSurfaceInput {
    * closed rather than one that learns to.
    */
   grants?: readonly string[];
+  /** Selected, sanitized project MCP definitions, in settings order. */
+  mcpTools?: readonly McpToolDefinition[];
   /**
    * The surface this Session may not exceed: its parent's own frozen record,
    * for a Subagent Session (VC-9).
@@ -311,6 +319,12 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
     granted.add(grant);
   }
   const verbs = new Set<VerbToolKey>([...roleVerbBundle(input.role), ...granted]);
+  let mcpTools: readonly McpToolDefinition[];
+  try {
+    mcpTools = validateMcpToolDefinitions(input.mcpTools ?? []);
+  } catch (error) {
+    throw new AgentToolSurfaceError(errorMessage(error));
+  }
   const withheld = ROLE_CAPABILITY_POLICY[input.role].withheld;
   const within = input.within;
   const offered = (tool: SessionToolId): boolean =>
@@ -325,6 +339,9 @@ export function resolveAgentToolSurface(input: AgentToolSurfaceInput): readonly 
       (tool) => input.capabilities.interaction.includes(tool) && offered(tool),
     ),
     ...VERB_TOOL_KEYS.filter((key) => verbs.has(key)),
+    // Dynamic MCP definitions are settings-backed and always trail the static
+    // product vocabulary, preserving every previously frozen position.
+    ...mcpTools.map((tool) => tool.providerName).filter(offered),
   ];
 }
 

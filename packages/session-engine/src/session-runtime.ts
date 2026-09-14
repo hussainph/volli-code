@@ -1,4 +1,8 @@
-import { nativeObservationEventId, projectSession } from "@volli/shared";
+import {
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
+  nativeObservationEventId,
+} from "@volli/shared";
 import type {
   CommandReceipt,
   CompactionWorkReason,
@@ -19,6 +23,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionProjectionCheckpoint,
   SessionRole,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -104,6 +109,16 @@ export interface SessionRuntimePorts {
   ids: SessionRuntimeIds;
   /** Host diagnostics seam for a failing client stream; failures are isolated. */
   onSubscriberFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be read,
+   * folded, or written; failures are isolated.
+   *
+   * Every such failure is recovered by refolding the immutable log, so none of
+   * them can fail a read. That is precisely why they need reporting: a cache
+   * that misses permanently behaves exactly like one that is merely cold, and
+   * the only symptom would be that opening a long chat never got faster.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void | Promise<void>;
 }
 
 export type SessionClientCommand =
@@ -608,17 +623,19 @@ class BufferedObservationSink implements ObservationSink {
 }
 
 /**
- * One Session's history, folded once.
+ * One Session's folded history and the resumable state behind it.
  *
- * `projection` is always exactly `projectSession(session, events, foldedAt)` —
- * the fold stays a pure total function over the whole log, and this only keeps
- * its result and the events it consumed so the next read folds the same log
- * plus whatever arrived after `throughSequence`.
+ * A cold cache hit retains only the tail after its durable checkpoint. The
+ * legacy full-snapshot route re-reads prefix events when it needs frames; a
+ * projection read never materializes them merely to recover current state.
  */
 interface ProjectedHistory {
   projection: SessionProjection;
+  /** Tail consumed in this runtime; the whole log only when `completeEvents` is true. */
   events: readonly SessionEvent[];
   throughSequence: number;
+  checkpoint: SessionProjectionCheckpoint;
+  completeEvents: boolean;
 }
 
 const EVENT_PAGE_SIZE = 500;
@@ -1780,6 +1797,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       outcome: "completed",
     });
     await this.#publish([closed]);
+    await this.#saveProjectionCheckpoint(request.sessionId);
     this.#bindings.delete(request.command.attachmentId);
     this.#overlays.delete(request.sessionId);
     this.#compactionProgress.delete(request.sessionId);
@@ -1828,9 +1846,16 @@ class DefaultSessionRuntime implements SessionRuntime {
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
+    // A persisted projection intentionally retains no prefix event rows. The
+    // legacy full snapshot still promises every frame, so only that procedure
+    // pays the full-log read; projection-first opens and routine state reads do
+    // not. A future paginated snapshot can remove this compatibility cost.
+    const events = history.completeEvents
+      ? history.events
+      : await this.#listEventsPaged({ sessionId: input.sessionId });
     const frames: SessionStreamFrame[] = [];
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const event of history.events) {
+    for (const event of events) {
       const frame = await this.#frame(event);
       frames.push(frame);
       if (frame.transcript) transcript.push(frame.transcript);
@@ -1972,6 +1997,20 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    // The cache is derived and best-effort: a failed shutdown write only makes
+    // the next launch refold. Capture before clearing so even an attachment
+    // that has not emitted its close yet leaves a reusable prefix. The results
+    // are inspected rather than discarded: shutdown is the write most likely to
+    // fail as a group (a closing database), and that is worth reporting once
+    // per failure instead of silently losing every session's prefix.
+    const shutdownWrites = await Promise.allSettled(
+      [...this.#histories.values()].map((history) =>
+        this.ports.engine.saveProjectionCheckpoint(history.checkpoint),
+      ),
+    );
+    for (const write of shutdownWrites) {
+      if (write.status === "rejected") await this.#reportCheckpointFailure(write.reason);
+    }
     for (const subscribers of this.#subscribers.values()) {
       for (const subscriber of subscribers) subscriber.active = false;
     }
@@ -2231,6 +2270,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
     await this.#publish([event]);
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
+      await this.#saveProjectionCheckpoint(spec.sessionId);
       // The executor closed itself, so the stop is the same one `#release`
       // performs and belongs at the same point: after the closing fact is
       // durable, before anything behind it in the pipeline can be recorded
@@ -2877,19 +2917,10 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   async #latestSequence(sessionId: string): Promise<number> {
-    let afterSequence = 0;
-    for (;;) {
-      const page = await this.ports.engine.listEvents({
-        sessionId,
-        afterSequence,
-        limit: EVENT_PAGE_SIZE,
-      });
-      const latest = page.at(-1);
-      /* v8 ignore next -- #result is only called after its command event commits. */
-      if (!latest) throw new Error(`Session ${sessionId} has no committed command event`);
-      afterSequence = latest.sequence;
-      if (page.length < EVENT_PAGE_SIZE) return afterSequence;
-    }
+    const sequence = await this.ports.engine.latestEventSequence({ sessionId });
+    /* v8 ignore next -- #result is only called after its command event commits. */
+    if (sequence === 0) throw new Error(`Session ${sessionId} has no committed command event`);
+    return sequence;
   }
 
   async #listEventsPaged(input: {
@@ -2918,15 +2949,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   /**
    * A Session's folded history, kept between reads.
    *
-   * Every read asked the ledger for the whole log and folded it again, which is
-   * linear in Session length per read and quadratic across a streaming turn.
-   * This keeps the fold's *result* and the events behind it, and asks the
-   * ledger only for what arrived after `throughSequence`.
-   *
-   * The entry is served unchanged only when the ledger returned no event past
-   * the cursor. Otherwise the log it holds is extended and re-folded from the
-   * top, so `projection` is never a partial fold and `projectSession` is never
-   * asked to resume from one.
+   * Every read once asked the ledger for the whole log and folded it again,
+   * which is linear in Session length per read and quadratic across a streaming
+   * turn. A live entry and a persisted checkpoint now both retain the reducer's
+   * complete resumable state and ask only for events after `throughSequence`.
+   * The legacy full snapshot remains the one route that explicitly asks for
+   * every frame.
    *
    * That makes the invalidation rule the ledger's own contract, and the fold
    * has exactly two durable inputs, each covered by one clause of it:
@@ -2961,8 +2989,33 @@ class DefaultSessionRuntime implements SessionRuntime {
       // thrown away for the fold below.
       const known = await this.ports.engine.getBaseSession({ sessionId });
       if (!known) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
+      let persisted: SessionProjectionCheckpoint | null = null;
+      try {
+        persisted = await this.ports.engine.getProjectionCheckpoint({ sessionId });
+      } catch (error) {
+        // A host that cannot decode its cache still has the immutable log.
+        await this.#reportCheckpointFailure(error);
+      }
+      if (persisted) {
+        try {
+          const tail = await this.#listEventsPaged({
+            sessionId,
+            afterSequence: persisted.throughSequence,
+          });
+          const history = foldHistory(known, tail, persisted);
+          // Advance a stale checkpoint after the read that proved its tail.
+          if (tail.length > 0) await this.#persistProjectionCheckpoint(history.checkpoint);
+          return this.#keepHistory(sessionId, history);
+        } catch (error) {
+          // A checkpoint is a cache, never authority. Unsupported or corrupt
+          // JSON falls through to the same whole-log fold as a missing row.
+          await this.#reportCheckpointFailure(error);
+        }
+      }
       const events = await this.#listEventsPaged({ sessionId });
-      return this.#keepHistory(sessionId, foldHistory(known, events));
+      const history = foldHistory(known, events);
+      await this.#persistProjectionCheckpoint(history.checkpoint);
+      return this.#keepHistory(sessionId, history);
     }
     const appended = await this.#listEventsPaged({
       sessionId,
@@ -2971,8 +3024,43 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (appended.length === 0) return this.#keepHistory(sessionId, cached);
     return this.#keepHistory(
       sessionId,
-      foldHistory(cached.projection.session, [...cached.events, ...appended]),
+      foldHistory(cached.projection.session, appended, cached.checkpoint, cached),
     );
+  }
+
+  async #saveProjectionCheckpoint(sessionId: string): Promise<void> {
+    try {
+      const history = await this.#history(sessionId);
+      await this.#persistProjectionCheckpoint(history.checkpoint);
+    } catch (error) {
+      // Closing an attachment must not fail because its derived cache missed.
+      await this.#reportCheckpointFailure(error);
+    }
+  }
+
+  async #persistProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void> {
+    try {
+      await this.ports.engine.saveProjectionCheckpoint(checkpoint);
+    } catch (error) {
+      // Missing a cache write is recoverable by definition. The immutable log
+      // remains canonical and the next read takes the full-fold fallback.
+      await this.#reportCheckpointFailure(error);
+    }
+  }
+
+  /**
+   * Reports a recovered checkpoint failure to the host.
+   *
+   * The seam's own failure is swallowed here for the same reason the callers
+   * swallow theirs: a diagnostic must never convert a recovered cache miss
+   * into a failed read.
+   */
+  async #reportCheckpointFailure(error: unknown): Promise<void> {
+    try {
+      await this.ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
+    }
   }
 
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
@@ -3023,11 +3111,21 @@ export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionR
   return new DefaultSessionRuntime(ports);
 }
 
-function foldHistory(session: Session, events: readonly SessionEvent[]): ProjectedHistory {
+function foldHistory(
+  session: Session,
+  events: readonly SessionEvent[],
+  checkpoint: SessionProjectionCheckpoint | null = null,
+  prior?: ProjectedHistory,
+): ProjectedHistory {
+  const folded = checkpoint
+    ? advanceSessionProjection(checkpoint, events, session)
+    : createSessionProjectionCheckpoint(session, events);
   return {
-    projection: projectSession(session, events),
-    events,
-    throughSequence: events.at(-1)?.sequence ?? 0,
+    projection: folded.projection,
+    events: prior ? [...prior.events, ...events] : events,
+    throughSequence: folded.throughSequence,
+    checkpoint: folded,
+    completeEvents: prior?.completeEvents ?? checkpoint === null,
   };
 }
 
