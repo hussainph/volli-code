@@ -29,6 +29,7 @@ import {
 import type {
   ModelAccessSnapshot,
   ModelSelection,
+  McpToolDefinition,
   ModelTier,
   PromptResource,
   ReasoningLevel,
@@ -159,14 +160,23 @@ export interface SessionToolSurfacePorts {
     role: SessionRole,
     grants: readonly string[],
     within?: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
   ): readonly SessionToolId[];
+  /** Selected sanitized definitions for a newly born root Session. */
+  resolveMcp?(projectId: string): readonly McpToolDefinition[];
+  /** Exact definitions a parent froze, used verbatim by a new child. */
+  recordedMcp?(sessionId: string): Promise<readonly McpToolDefinition[]>;
   /**
    * The surface one existing Session was frozen with, or `null` when it has
    * none recorded (a legacy Session that has not attached since VC-164). Read
    * for a parent, to bound its child.
    */
   recorded(sessionId: string): Promise<readonly SessionToolId[] | null>;
-  record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
+  record(
+    sessionId: string,
+    tools: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
+  ): Promise<void>;
 }
 
 /**
@@ -541,10 +551,15 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
+    const mcpTools =
+      input.parentSessionId === undefined
+        ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
+        : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
-      ...(within === null ? [] : [within]),
+      within === null ? undefined : within,
+      mcpTools,
     );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),
@@ -584,7 +599,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(created.sessionId, toolSurface);
+    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
     return { sessionId: created.sessionId, model };
   }
 

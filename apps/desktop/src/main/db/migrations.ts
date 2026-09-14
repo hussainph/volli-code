@@ -2050,6 +2050,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
   WHERE merged_into_id IS NULL;
 `;
 
+/** App-owned, per-project MCP configuration and its last successful discovery. */
+const MIGRATION_047_MCP_SERVERS = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  transport    TEXT NOT NULL CHECK (json_valid(transport)),
+  catalog      TEXT NOT NULL CHECK (json_valid(catalog)),
+  stale        INTEGER NOT NULL CHECK (stale IN (0, 1)),
+  error        TEXT,
+  refreshed_at INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, created_at, id);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2288,6 +2306,11 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "labels — one live identity per NOCASE name, with retained merge aliases",
     sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
     apply: applyMigration046LabelCaseIdentity,
+  },
+  {
+    version: 47,
+    name: "mcp_servers — per-project configuration and last working tool catalog",
+    sql: MIGRATION_047_MCP_SERVERS,
   },
 ];
 

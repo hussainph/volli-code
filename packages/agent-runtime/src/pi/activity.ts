@@ -15,7 +15,7 @@ import type {
   RuntimeActivityObservation,
   RuntimeActivityValue,
 } from "@volli/shared";
-import { isActivityBrowseAction, readActivityBrowse } from "@volli/shared";
+import { isActivityBrowseAction, isMcpToolId, readActivityBrowse } from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
@@ -93,8 +93,8 @@ const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
   browser_console: "console",
 };
 
-/** Image bytes never enter an activity payload; the picture travels as the host's id. */
-const IMAGE_OMITTED = "[image]";
+/** Binary content never enters an activity payload. */
+const BINARY_OMITTED = { image: "[image]", audio: "[audio]" } as const;
 
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
@@ -132,7 +132,9 @@ export function mapPiActivity(
           : null;
     const input = normalizeInput(sourceInput);
     const output = normalizeActivityValue(
-      toolName in BROWSER_TOOL_ACTION ? withoutImageBytes(sourceOutput) : sourceOutput,
+      toolName in BROWSER_TOOL_ACTION || isMcpToolId(toolName)
+        ? withoutBinaryBytes(sourceOutput)
+        : sourceOutput,
     );
     const startedAt =
       type === "tool_execution_start"
@@ -326,26 +328,23 @@ export function displayUrl(url: string | null): string | null {
 }
 
 /**
- * A BROWSER tool result with its image blocks' bytes removed, before the value
- * bound ever sees them. A screenshot is ~100 KB of base64 against a 32 KB
- * string bound: kept, it would be cut mid-string and shown to nobody; the host
- * holds the real picture and the facet names it.
- *
- * Only browser tools, deliberately. This slice built the picture path for
- * `browser_screenshot` alone, and stripping every tool's image blocks would
- * silently change what an unrelated tool's activity payload carries with
- * nothing standing in for the bytes — a loss where here it is a substitution.
+ * Remove binary blocks before the durable value bound sees them. Browser
+ * screenshots travel by the host's picture id; MCP images remain available to
+ * the model in Pi's live result but history keeps only a typed placeholder.
+ * MCP audio is already converted to text by the tool wrapper, and is stripped
+ * here too so this durable boundary stays safe if Pi exposes a raw block.
  */
-function withoutImageBytes(rawOutput: unknown): unknown {
+function withoutBinaryBytes(rawOutput: unknown): unknown {
   const result = recordOf(rawOutput);
   const content = readField(result, "content");
   if (result === null || !Array.isArray(content)) return rawOutput;
   const stripped: unknown[] = [];
   for (const block of content) {
     const item = recordOf(block);
+    const type = readField(item, "type");
     stripped.push(
-      item !== null && readField(item, "type") === "image" && "data" in item
-        ? { ...item, data: IMAGE_OMITTED }
+      item !== null && (type === "image" || type === "audio") && "data" in item
+        ? { ...item, data: BINARY_OMITTED[type] }
         : block,
     );
   }

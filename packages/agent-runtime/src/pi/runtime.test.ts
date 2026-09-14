@@ -43,14 +43,17 @@ import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-respo
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
+  mcpProviderToolName,
   sessionToolIds,
   skillPromptResource,
   SKILL_POLICY_DEFAULT,
   UtilityCompletionError,
   type AuthoritySnapshot,
+  type McpToolDefinition,
   type ObservabilityEvent,
   type CompactionObservation,
   type RuntimeAskUserRequest,
+  type RuntimeMcpCall,
   type ProviderAttemptEvent,
   type RuntimeObservation,
   type RuntimeSessionIdentity,
@@ -3138,6 +3141,182 @@ describe("startSession", () => {
     for (const observation of settled) {
       expect(sidecar).toContain(observation.message.entryId);
     }
+  });
+
+  /**
+   * The MCP half of the same loop (VC-8), end to end and through nothing
+   * simulated but the provider.
+   *
+   * Three claims only this test can make. The model meets the provider-safe
+   * name while the host port is handed the EXACT server id and MCP tool name
+   * the definition was frozen with — the two never being the same string is the
+   * whole reason identity is carried rather than parsed back out of the visible
+   * one. The Snapshot names that dynamic tool like any other and the gate lets
+   * the call through: `authorityVerdict` has no rule for a tool with no path
+   * and no command, so a valid MCP call is not refused merely for being
+   * dynamic. And the call settles as ordinary durable history — one activity id
+   * across start and end, image bytes substituted rather than carried, and the
+   * final fact replayed by the same `reconcile` path a restart uses.
+   */
+  it("calls a frozen MCP definition through the real loop and settles it as durable history", async () => {
+    const mcpTool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "issues/create",
+      providerName: mcpProviderToolName("fixture-1", "GitHub Fixture", "issues/create"),
+      description: "Create a fixture issue",
+      inputSchema: {
+        type: "object",
+        properties: { title: { type: "string" } },
+        required: ["title"],
+        additionalProperties: false,
+      },
+    };
+    const received: RuntimeMcpCall[] = [];
+    const pixels = "Q".repeat(1_000);
+    const { spec, observations, sessionDataDir } = fixture({
+      tools: { tools: ["read"], mcp: [mcpTool] },
+      mcp: {
+        call: async (request) => {
+          received.push(request);
+          return {
+            content: [
+              { type: "text", text: "issue #7 created" },
+              { type: "image", data: pixels, mimeType: "image/png" },
+              { type: "unsupported", text: "[resource link: issue — https://fixture/7]" },
+            ],
+            structuredContent: { url: "https://fixture/7", number: 7 },
+            isError: false,
+          };
+        },
+      },
+    });
+
+    // Recorded, not judged — but recorded in full, dynamic names included.
+    expect(spec.authority.tools).toEqual(["read", mcpTool.providerName]);
+
+    let offeredNames: readonly string[] = [];
+    let afterTool: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            offeredNames = (context.tools ?? []).map((tool) => tool.name);
+            emit.toolCall(mcpTool.providerName, { title: "Exact" });
+            emit.finish();
+          },
+          (emit, context) => {
+            afterTool = context;
+            emit.text("Filed issue #7.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("File the fixture issue.");
+
+    // What the model was offered, and what the server was actually asked.
+    expect(offeredNames).toEqual(["read", mcpTool.providerName]);
+    expect(received).toEqual([
+      {
+        serverId: "fixture-1",
+        toolName: "issues/create",
+        arguments: { title: "Exact" },
+        toolCallId: expect.any(String),
+      },
+    ]);
+    // Nothing was denied, and no fallback budget was spent on a dynamic name.
+    expect(kinds(observations)).not.toContain("authority");
+
+    // Every block reached the model: text as text, the image as an image, the
+    // unsupported block as its bounded text stand-in, and structured content as
+    // stable JSON — each behind the Volli-owned trust notice.
+    const toolResult = (afterTool?.messages ?? []).find(
+      (message): message is Extract<Message, { role: "toolResult" }> =>
+        message.role === "toolResult",
+    );
+    expect(toolResult?.content).toEqual([
+      { type: "text", text: expect.stringContaining("untrusted data") },
+      { type: "text", text: "issue #7 created" },
+      { type: "image", data: pixels, mimeType: "image/png" },
+      { type: "text", text: "[resource link: issue — https://fixture/7]" },
+      {
+        type: "text",
+        text: 'Structured content (untrusted data): {"number":7,"url":"https://fixture/7"}',
+      },
+    ]);
+
+    const activities = observations.filter((observation) => observation.kind === "activity");
+    expect(activities.map((activity) => activity.state)).toEqual(["started", "completed"]);
+    // One call id across both facts, and it is Pi's own tool-call id.
+    expect(new Set(activities.map((activity) => activity.activityId)).size).toBe(1);
+    expect(activities[0]?.activityId).toBe(received[0]?.toolCallId);
+    expect(activities[1]).toMatchObject({
+      input: { title: "Exact" },
+      descriptor: { nativeToolName: mcpTool.providerName, endedAt: expect.any(Number) },
+    });
+    // The durable payload keeps the result readable and the bytes out of it.
+    const durable = JSON.stringify(activities[1]?.output);
+    expect(durable).toContain("issue #7 created");
+    expect(durable).toContain("[image]");
+    expect(durable).not.toContain(pixels);
+
+    // The final fact comes back through the path a restart reads, unchanged.
+    const replay = await handle.reconcile(null);
+    expect(replay.observations.filter((observation) => observation.kind === "activity")).toEqual([
+      activities[1],
+    ]);
+    await handle.close();
+  });
+
+  it("reports an MCP isError result as a failed activity the model can read", async () => {
+    const mcpTool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "issues/create",
+      providerName: mcpProviderToolName("fixture-1", "GitHub Fixture", "issues/create"),
+      description: "Create a fixture issue",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    };
+    const { spec, observations, sessionDataDir } = fixture({
+      tools: { tools: [], mcp: [mcpTool] },
+      mcp: {
+        call: async () => ({
+          content: [{ type: "text", text: "the fixture refused this issue" }],
+          isError: true,
+        }),
+      },
+    });
+
+    let afterFailure: Context | undefined;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall(mcpTool.providerName, {});
+            emit.finish();
+          },
+          (emit, context) => {
+            afterFailure = context;
+            emit.text("The server refused it.");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    await handle.submitUserMessage("File the fixture issue.");
+
+    const activities = observations.filter((observation) => observation.kind === "activity");
+    expect(activities.map((activity) => activity.state)).toEqual(["started", "failed"]);
+    // A failure the model reads and the ledger records, not a thrown host detail.
+    expect(JSON.stringify(afterFailure?.messages)).toContain("the fixture refused this issue");
+    expect(activities[1]).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("the fixture refused this issue"),
+    });
+    await handle.close();
   });
 
   it("meters every model call in a turn, including the one that only called a tool", async () => {
