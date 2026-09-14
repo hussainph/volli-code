@@ -852,6 +852,86 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  it("reports router, validation, and handler time without retaining payloads", async () => {
+    const fixture = runtimeFixture();
+    const samples: unknown[] = [];
+    let now = 20;
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => (now += 3),
+        record: (sample) => samples.push(sample),
+      },
+    });
+
+    await caller.session.projection({ sessionId: "session-private" });
+
+    expect(samples).toEqual([
+      {
+        procedure: "session.projection",
+        durationMs: 3,
+        outcome: "success",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-private");
+  });
+
+  it("isolates procedure behavior from optional observer clock and record failures", async () => {
+    const fixture = runtimeFixture();
+    const defaultClockSamples: unknown[] = [];
+    const defaultClockCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: { record: (sample) => defaultClockSamples.push(sample) },
+    });
+    await expect(
+      defaultClockCaller.session.projection({ sessionId: "session-default-clock" }),
+    ).resolves.toBeDefined();
+    expect(defaultClockSamples).toHaveLength(1);
+
+    const throwingCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => {
+          throw new Error("clock failed");
+        },
+        record: () => {
+          throw new Error("record failed");
+        },
+      },
+    });
+    await expect(
+      throwingCaller.session.projection({ sessionId: "session-throwing-observer" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("skips a procedure sample when either performance clock read fails", async () => {
+    for (const failedRead of [1, 2]) {
+      const fixture = runtimeFixture();
+      const samples: unknown[] = [];
+      let reads = 0;
+      const caller = createSessionRouter().createCaller({
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        performanceObserver: {
+          now: () => {
+            reads += 1;
+            if (reads === failedRead) throw new Error("clock failed");
+            return reads;
+          },
+          record: (sample) => samples.push(sample),
+        },
+      });
+
+      await expect(
+        caller.session.projection({ sessionId: "session-clock-failure" }),
+      ).resolves.toBeDefined();
+      expect(samples).toEqual([]);
+    }
+  });
+
   it("exposes Model Access without adapter, profile, or credential inputs", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];

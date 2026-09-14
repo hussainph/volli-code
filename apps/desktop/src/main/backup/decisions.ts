@@ -145,6 +145,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason: "Durable acceptance receipts; without them a replay could duplicate accepted work.",
   },
   {
+    table: "session_projection_checkpoints",
+    decision: "rebuild",
+    reason:
+      "A derived cache over canonical Session events; restore leaves it empty and reads rebuild it safely.",
+  },
+  {
     table: "session_attachments",
     decision: "include",
     reason:

@@ -3312,6 +3312,127 @@ function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   return db;
 }
 
+describe("migrate — 048–049, Session projection checkpoints (VC-355)", () => {
+  it("adds an empty, JSON-checked cache table to an existing profile", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 47 });
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "session_projection_checkpoints")).toEqual([
+      "session_id",
+      "schema_version",
+      "through_sequence",
+      "checkpoint",
+      "digest",
+      "updated_at",
+    ]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'
+            ORDER BY name`,
+        )
+        .pluck()
+        .all(),
+    ).toEqual([
+      "session_projection_checkpoint_event_deleted",
+      "session_projection_checkpoint_event_updated",
+      "session_projection_checkpoint_provenance_updated",
+      "session_projection_checkpoint_session_updated",
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("adds repair invalidation to a profile that already claimed the pre-trigger v48", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 48 });
+
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toEqual([]);
+
+    migrate(db, dbPath);
+
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toHaveLength(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("executes every repair trigger and removes the affected checkpoint", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+    db.prepare(
+      `INSERT INTO session_provenances (id, provenance)
+       VALUES (1, '{"source":{"kind":"user","id":"u","detail":null},"venue":null}')`,
+    ).run();
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s1', 'p1', 't1', 'One', 1)",
+    ).run();
+    db.prepare(
+      `INSERT INTO session_events
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES ('e1', 's1', 1, 1, 1, 1, NULL, NULL, '{"kind":"session.archived"}')`,
+    ).run();
+
+    const insertCheckpoint = db.prepare(
+      `INSERT INTO session_projection_checkpoints
+         (session_id, schema_version, through_sequence, checkpoint, digest, updated_at)
+       VALUES ('s1', 1, 1, '{}', ?, 1)`,
+    );
+    const checkpointCount = (): number =>
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get() as {
+          count: number;
+        }
+      ).count;
+    const expectInvalidated = (): void => expect(checkpointCount()).toBe(0);
+
+    insertCheckpoint.run("a".repeat(64));
+    db.prepare("UPDATE sessions SET title = 'Two' WHERE id = 's1'").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("b".repeat(64));
+    db.prepare("UPDATE session_provenances SET provenance = provenance WHERE id = 1").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("c".repeat(64));
+    db.prepare("UPDATE session_events SET recorded_at = 2 WHERE id = 'e1'").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("d".repeat(64));
+    db.prepare("DELETE FROM session_events WHERE id = 'e1'").run();
+    expectInvalidated();
+    db.close();
+  });
+});
+
 describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", () => {
   it("folds the stray spelling into a retained alias and preserves every association", () => {
     const dbPath = tempDbPath();
