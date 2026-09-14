@@ -178,6 +178,20 @@ export function settledLifecycle(
   return working ? "working" : "ready";
 }
 
+/** How one attach should report a refusal. */
+export interface AttachOptions {
+  /**
+   * The refusal already has a durable home, so the slice must stay quiet.
+   *
+   * True for a TICKET Session's attach: a worktree that cannot be materialized
+   * is recorded as Ticket Attention, which is the surface a person acts on. A
+   * ticketless Session has no such surface, so its refusal is the slice's to
+   * carry. A THROWN attach is neither — nothing was recorded anywhere — and is
+   * always settled onto the slice.
+   */
+  refusalIsReportedElsewhere?: boolean;
+}
+
 /* ---------------------------------------------------------------- the store */
 
 /**
@@ -460,6 +474,25 @@ export class ChatSessionClient {
    * Null re-arms the attempt; see {@link ChatSessionClient.#attachForQueue}.
    */
   #queueAttachSignature: string | null = null;
+  /**
+   * The projection this client's own attach succeeded against, while that
+   * attach's executor has not been reported yet — or null.
+   *
+   * An attach RPC answering "ready" says the ledger accepted it, NOT that the
+   * projection has caught up: the executor reaches this client on the stream, a
+   * moment later. In between, a Session that is starting perfectly well looks
+   * exactly like one whose executor is gone — and a Chat Draft's first message
+   * is already in the queue by then (VC-358), which is the state
+   * {@link queueNeedsExecutor} exists to act on. Asking again there is what
+   * made the ledger refuse the second attach with "already has a live
+   * executor".
+   *
+   * Held only until the NEXT projection arrives, whatever it says. If it
+   * carries an executor the wait was right; if it does not, the attach truly
+   * did not take and the queue may ask again. Either way this ends, so it can
+   * never become the silent queue it is protecting.
+   */
+  #awaitingExecutorFor: SessionPresentationProjection | null = null;
 
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
@@ -536,14 +569,36 @@ export class ChatSessionClient {
    * because a snapshot that failed left this client blind to the very projection
    * that says whether an executor is live.
    */
-  async retryAttach(): Promise<boolean> {
+  async retryAttach(options?: AttachOptions): Promise<boolean> {
     const slice = this.#slice();
     if (slice === undefined || slice.lifecycle === "starting" || slice.projection === null) {
       return false;
     }
     this.#writes().attaching(this.sessionId);
     void this.connect();
-    return this.#attachOnce();
+    return this.#attachOnce(options);
+  }
+
+  /**
+   * The FIRST attach of a Session this surface just brought into residence —
+   * a create, or a Chat Draft promoted by its first message (VC-358).
+   *
+   * One attacher, deliberately. The store used to perform this attach itself
+   * while the client performed every other one, and the two could not see each
+   * other: with a message already queued (which is exactly what promotion
+   * does), the queue's own reattach fired while the store's attach was still
+   * landing and the ledger refused the second with "already has a live
+   * executor". The client owns the attach door now, so its own latch covers
+   * every path into it.
+   *
+   * Unlike {@link retryAttach} this does not require a projection: there has
+   * not been one yet. It opens the stream and attaches in the same gesture,
+   * which is what makes the Session live.
+   */
+  startAttach(options?: AttachOptions): Promise<boolean> {
+    this.#writes().attaching(this.sessionId);
+    void this.connect();
+    return this.#attachOnce(options);
   }
 
   /**
@@ -555,23 +610,37 @@ export class ChatSessionClient {
    * replace the projection this attach is about to move with the one it had
    * before.
    */
-  async #attachOnce(): Promise<boolean> {
+  async #attachOnce(options?: AttachOptions): Promise<boolean> {
     try {
       const attached = await this.#attachSession({
         operationId: this.#newCommandId(),
         sessionId: this.sessionId,
       });
       const refusal = rejectedReceipt(attached);
+      // One wording for the receiptless case, whichever door asked. The store
+      // used to own the first attach and said this; the client said
+      // "attachment needs recovery" for every other. Now that there is one
+      // attacher there is one sentence, and it is the one written as a
+      // sentence — a person meeting it twice can tell it is the same state.
       const failure =
         attached.state === "ready" && refusal === null
           ? null
-          : (refusal ?? "attachment needs recovery");
-      this.#writes().settle(
-        this.sessionId,
-        failure === null ? null : `Could not start Session: ${failure}`,
-      );
+          : (refusal ?? "Runtime recovery is required.");
+      // A refusal with a durable home is told once, there. Saying it on the
+      // slice as well would put the same sentence in two places and give the
+      // person two things to dismiss for one problem.
+      const slicePart =
+        failure === null || options?.refusalIsReportedElsewhere === true
+          ? null
+          : `Could not start Session: ${failure}`;
+      // Before the settle, which is the store write the drain re-enters on.
+      this.#awaitingExecutorFor = failure === null ? (this.#slice()?.projection ?? null) : null;
+      this.#writes().settle(this.sessionId, slicePart);
       return failure === null;
     } catch (failure) {
+      // A throw never reached the host, so there is no receipt and no durable
+      // Attention anywhere: the slice is the only surface that can carry it,
+      // whatever the Session's Role.
       this.#writes().settle(this.sessionId, `Could not start Session: ${errorMessage(failure)}`);
       return false;
     }
@@ -1021,6 +1090,11 @@ export class ChatSessionClient {
         // Re-arm the reattach the moment the Session stops needing one, so a
         // second death is answered as readily as the first.
         if (!queueNeedsExecutor(slice)) this.#queueAttachSignature = null;
+        // A projection has arrived since this client's own attach succeeded, so
+        // whatever it says is now the answer and the wait is over.
+        if (this.#awaitingExecutorFor !== null && slice.projection !== this.#awaitingExecutorFor) {
+          this.#awaitingExecutorFor = null;
+        }
         const next = nextRelease(slice.queue, {
           working: slice.lifecycle === "working",
           // A failure is explicit recovery, not a reason to keep feeding a
@@ -1107,6 +1181,9 @@ export class ChatSessionClient {
    * latch that ignored them would be the same silence in a different place.
    */
   #queueAttachRequest(slice: ChatSessionSlice): string | null {
+    // This client attached a moment ago and is still waiting to be told what
+    // that produced. Asking again now would be asking twice for one thing.
+    if (this.#awaitingExecutorFor !== null) return null;
     if (!queueNeedsExecutor(slice)) return null;
     const signature = slice.queue.map((entry) => entry.id).join(",");
     return this.#queueAttachSignature === signature ? null : signature;

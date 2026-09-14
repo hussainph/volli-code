@@ -847,6 +847,25 @@ describe("promoteChatSession", () => {
     );
   });
 
+  it("attaches exactly once even though the first message is queued straight away", async () => {
+    // The regression this ticket invited. Promotion fills the queue the instant
+    // the attach starts, and a non-empty queue with no live executor is what
+    // VC-367's reattach watches for. While the store attached on its own the
+    // two could not see each other, both attached, and the ledger refused the
+    // second: "already has a live executor". One attacher, one latch.
+    const { attaches, store } = fixture();
+    openDraft();
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+
+    // Settle everything the attach and the stream can still write, then count.
+    await vi.waitFor(() => expect(attaches.length).toBeGreaterThanOrEqual(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(attaches).toHaveLength(1);
+    expect(attaches[0]).toMatchObject({ sessionId: DRAFT_ID });
+  });
+
   it("keeps a ticket Draft's first message queued when its worktree is unavailable at send", async () => {
     // Deferring the worktree ensure to first send moves this discovery to a
     // worse moment, which the design accepted on ONE condition: the words wait

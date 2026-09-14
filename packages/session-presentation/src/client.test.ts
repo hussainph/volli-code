@@ -952,7 +952,7 @@ describe("product-owned attach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(false);
     expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toBe("Could not start Session: attachment needs recovery");
+    expect(slice()!.sessionError).toBe("Could not start Session: Runtime recovery is required.");
   });
 });
 

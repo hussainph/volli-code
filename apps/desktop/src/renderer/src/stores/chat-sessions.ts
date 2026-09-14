@@ -32,7 +32,6 @@ import {
   getOrCreateChatClient,
   markAttaching,
   markDelivered,
-  rejectedReceipt,
   retitleSlice,
   seedSlice,
   settleSlice,
@@ -255,45 +254,30 @@ export function createChatSessionsStore(
         },
       });
 
-    /** Seed one resident slice/client after create, without disturbing a replayed promotion. */
-    const makeResident = (sessionId: string): void => {
+    /**
+     * Seed one resident slice and start its Session: stream open, executor
+     * attaching. Idempotent enough for a replayed promotion, which may find
+     * the slice already here.
+     *
+     * The client performs the attach, and is the ONLY thing that does. The
+     * store used to attach here itself while the client attached everywhere
+     * else, and the two could not see each other: promotion queues the first
+     * message immediately, so the queue's own reattach (VC-367) fired while
+     * this attach was still landing and the ledger refused the second with
+     * "already has a live executor". One attacher, one latch.
+     *
+     * Never awaited — the slow half (worktree ensure, Agent Runtime boot) stays
+     * off the create/promotion critical path, which is VC-16's optimistic open.
+     */
+    const makeResident = (sessionId: string, ticketId: string | null): void => {
       if (get().sessions[sessionId] === undefined) {
         set((state) => ({ sessions: { ...state.sessions, [sessionId]: seedSlice("starting") } }));
-        const client = attach(sessionId);
-        void client.connect();
-        return;
       }
-      get().attaching(sessionId);
-    };
-
-    /** Worktree ensure + Agent Runtime boot, always off the create/promotion critical path. */
-    const startAttach = (
-      edge: ChatSessionTransport,
-      sessionId: string,
-      ticketId: string | null,
-      operationId: string = edge.newCommandId(),
-    ): void => {
-      void (async () => {
-        try {
-          const attached = await edge.attachSession({ operationId, sessionId });
-          const refusal = rejectedReceipt(attached);
-          // A ticketed refusal is reported by durable Ticket Attention on the
-          // projection, so a slice-level error here would say the same thing
-          // twice. A ticketless Session has no Attention surface, so its
-          // refusal is settled onto the slice.
-          get().settle(
-            sessionId,
-            attached.state === "ready" || ticketId !== null
-              ? null
-              : `Could not start Session: ${refusal ?? "Runtime recovery is required."}`,
-          );
-        } catch (failure) {
-          // An attach that never reached main has no receipt and no Attention
-          // — the slice is the only surface that can carry it, whatever the
-          // Session's Role.
-          get().settle(sessionId, `Could not start Session: ${errorMessage(failure)}`);
-        }
-      })();
+      // A ticketed refusal is reported by durable Ticket Attention on the
+      // projection, so a slice-level error would say the same thing twice. A
+      // ticketless Session has no Attention surface, so its refusal is the
+      // slice's to carry.
+      void attach(sessionId).startAttach({ refusalIsReportedElsewhere: ticketId !== null });
     };
 
     /** The durable mint shared by immediate starts and Draft promotion. */
@@ -349,7 +333,7 @@ export function createChatSessionsStore(
         toastError("Could not start Session. Try sending again.");
         return null;
       }
-      if (makeClient) makeResident(created.sessionId);
+      if (makeClient) makeResident(created.sessionId, input.ticketId);
       return created.sessionId;
     };
 
@@ -362,12 +346,9 @@ export function createChatSessionsStore(
 
       async createChatSession(input) {
         const edge = transport();
-        const sessionId = await mint(edge, input, true);
-        if (sessionId === null) return null;
         // The Session is durable and addressable NOW — the id resolves and the
-        // caller lands the tab while this slow half runs in the background.
-        startAttach(edge, sessionId, input.ticketId);
-        return sessionId;
+        // caller lands the tab while `makeResident`'s attach runs behind it.
+        return mint(edge, input, true);
       },
 
       promoteChatSession(sessionId) {
@@ -486,11 +467,10 @@ export function createChatSessionsStore(
             get().closeChatSession(sessionId);
             return true;
           }
-          makeResident(sessionId);
           // Create replay keeps the stable Draft operation/id. Runtime attach
           // is a new attempt: replaying a prior rejected attach receipt after
           // relaunch would make recovery permanently refuse the same work.
-          startAttach(edge, sessionId, provisional.ticketId);
+          makeResident(sessionId, provisional.ticketId);
           return true;
         });
       },
