@@ -58,6 +58,32 @@ the live eight-Session workload delivered the full cascade (10/40 close, 9/36
 open) and one 166.7 ms open frame. In both reproductions, every delivered width
 step resized all four terminal hosts.
 
+### Re-measured after the review changes
+
+Both arms below were driven by the bench's own `--busy` generator, so the loaded
+arm is reproducible rather than described. Taken on the same machine while five
+sibling worktrees were running their own test suites — real contention on top of
+the two synthetic workers, which is the condition the ticket is actually about.
+
+| arm | action | resize callbacks | resize entries | FPS | p95 frame | max frame | frames >33 ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `--busy 0` | close | 1 | 4 | 59.9 | 17.6 ms | 17.7 ms | 0 |
+| `--busy 0` | open | 1 | 4 | 60.0 | 17.5 ms | 17.6 ms | 0 |
+| `--busy 2` | close | 1 | 4 | 58.2 | 17.5 ms | 32.4 ms | 0 |
+| `--busy 2` | open | 1 | 4 | 60.0 | 17.6 ms | 17.6 ms | 0 |
+
+Both runs exited zero, which now means more than "it finished": no renderer
+console error, every terminal host object still connected and never present in a
+removal mutation, and every endpoint settled with no active marker or retained
+transform. Reduced-motion endpoints settled in 4–21 ms against a 50 ms swap bar
+— they are swaps, not shortened animations. A preference change mid-journey
+settled in 154–158 ms, i.e. it lands on the endpoint rather than continuing.
+
+The one number worth naming is the loaded close's 32.4 ms worst frame. It is
+under the 33.3 ms budget and it is the only reading in either arm above one
+frame, on a machine simultaneously running two synthetic busy cores and five
+other test suites.
+
 The implementation removes the spacer's `width` transition. The content keeps
 one endpoint's layout while a WAAPI standalone `translate` runs on the
 compositor, then commits the final spacer/card geometry once where the two
@@ -192,10 +218,10 @@ describes the code, and the comment now says so.
    existence question the ticket already treated as settled. What was NOT done is
    the rest of what the ticket asked for: only one load level (two busy workers)
    was measured, so there is no curve, and no audit of synchronous work on main
-   was performed here. VC-355's finding that a full event-log walk blocks main
+   was performed here. The sweep is now one flag — `--busy N` — and whoever wants
+   the curve should take it rather than inherit this single point. VC-355's finding that a full event-log walk blocks main
    for ~630 ms is the same mechanism from the other end and that ticket owns the
-   fix; the load-level sweep now costs one flag (`--busy N`) and is the obvious
-   next measurement. VC-355 separately measured zero Session RPC calls for
+   fix. VC-355 separately measured zero Session RPC calls for
    sidebar open, so the transition itself does not synchronously request Session
    projections. The changed path held 60 FPS in the two-worker arm, which does
    not disprove jank from a separate long synchronous main-process task.
