@@ -220,15 +220,25 @@ export interface SessionStartInput {
    * The Session id a client already minted (VC-358), honored when present so a
    * provisional chat can be promoted under the id it carried all along. There
    * is no swap to manage because there is no second id: the ledger takes this
-   * one as the Session's. Forwarded ONLY inside the `session.create` intent —
-   * never the model record or an attach — and the command id stays derived
+   * one as the Session's.
+   *
+   * Rides the `session.create` CLIENT COMMAND only — never the model record,
+   * never an attach — and is deliberately absent from the durable intent the
+   * engine writes: the id IS the Session's id, so recording that it was
+   * proposed would be a second copy of one fact. The command id stays derived
    * from {@link operationId}, so a replayed promotion restates the same id
    * under the same key, which is what lets the engine's dedup collapse it (its
    * replay guard refuses a replay naming a different id than the create was
-   * accepted under). Absent — every existing caller, whose doors name no such
-   * field — keeps the ledger's own id derivation, untouched. Format is the RPC
-   * door's contract (`z.string().uuid()` there); this facade forwards, it does
-   * not re-validate.
+   * accepted under).
+   *
+   * Absent — every existing caller, whose doors name no such field — keeps the
+   * ledger's own id derivation, untouched.
+   *
+   * THIS FACADE DOES NOT VALIDATE. Format is the RPC door's contract
+   * (`z.uuidv4()` there, per `docs/BOUNDARIES.md` rule 1), and uniqueness is
+   * the ledger's (`assertGloballyUnusedId`). A caller reaching this facade by
+   * another door — the agent socket, an Automation — therefore carries the
+   * same obligation the RPC door discharges for the renderer.
    */
   requestedSessionId?: string;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */

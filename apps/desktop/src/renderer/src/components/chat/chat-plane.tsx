@@ -40,9 +40,11 @@ import type {
 import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   errorMessage,
+  modelPurposeForRole,
   modelTierRow,
   offeredComposerVerbs,
   resolveDefaultModel,
+  roleImpliedByTicket,
   readSkillResources,
   type ComposerVerbMoment,
   type ComposerVerbName,
@@ -399,12 +401,21 @@ export function ChatPlane({
   // explicit Draft choice, then the project's override, then the Role default.
   // It stays a reading rather than being copied into the Draft, so changing a
   // default before the first send still changes what the new Session will use.
+  //
+  // The ladder's rungs are the shared ones, and so is the Role→tier step:
+  // `roleImpliedByTicket` then `modelPurposeForRole`, never an inlined
+  // ternary. Both sides of the wire must answer the same question the same
+  // way, and the mapping exists precisely so the NEXT Role is a decision in
+  // one place rather than a silent `global` in this one.
   const provisionalModel =
     provisional === undefined
       ? null
       : (provisional.model ??
         projectModel ??
-        resolveDefaultModel(defaults, provisional.ticketId === null ? "global" : "ticket"));
+        resolveDefaultModel(
+          defaults,
+          modelPurposeForRole(roleImpliedByTicket(provisional.ticketId)),
+        ));
   const modelSelection = projection?.modelSelection ?? provisionalModel;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   // A durable model is not enough to type: the row that says this Session is
