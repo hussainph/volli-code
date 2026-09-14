@@ -129,7 +129,16 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "main",
           environment: "node",
-          include: ["src/main/**/*.test.ts"],
+          // The performance matrix's own unit tests ride in this project
+          // rather than the renderer one: they are plain Node, they assert the
+          // fixture generator's determinism, and they need neither jsdom nor
+          // the @renderer alias.
+          include: ["src/main/**/*.test.ts", "e2e/bench/performance/*.test.mjs"],
+          // Drains the data-change coalescer after every test. Module state
+          // that outlives the test that filled it is delivered into the next
+          // one's window mock otherwise; see the file for why it disposes
+          // rather than flushes.
+          setupFiles: ["src/main/test-setup.ts"],
           // Stated again here, and it is not redundant: `renderer` above
           // INHERITS this cap through `extends: true` while this project
           // inherits nothing, and vitest refuses a run whose projects disagree
@@ -358,6 +367,16 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
         "src/components/sidebar/edge-region.ts",
+        // How the shell's pin/unpin journey decides what to do next (VC-359).
+        // Enrolled on `edge-region.ts`'s argument and then some: the rule holds
+        // two facts apart on purpose — which layout the content surface is laid
+        // out against, and where the compositor is drawing it — and the failure
+        // mode is not a wrong pixel but a STUCK one. Its first version could
+        // strand the spacer reserving a panel width with no panel in it, with
+        // every Browser plane frozen behind a stand-in and no input left that
+        // could re-run the machine. Nothing in a screenshot of a settled shell
+        // shows that the settling was reachable at all.
+        "src/components/sidebar/content-motion.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/project-appearance-model.ts",
         // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
@@ -507,6 +526,12 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        // How a burst of invalidations becomes one (VC-359). Enrolled because
+        // the merge is a SAFETY rule, not an optimisation: it may only ever
+        // widen, and the one kind a venue cache depends on has to survive a
+        // mixed batch. A branch that quietly narrowed a scope would leave a
+        // surface showing yesterday's data with nothing on screen saying so.
+        "**/src/main/data-change-coalescer.ts",
         "**/src/main/blob-attach.ts",
         "**/src/main/blob-collect.ts",
         "**/src/main/blob-protocol.ts",

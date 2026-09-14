@@ -98,6 +98,7 @@ const doors = {
   list: vi.fn(),
   armings: vi.fn(),
   enablement: vi.fn(),
+  columnOrders: vi.fn(),
   runsForTicket: vi.fn(),
 };
 
@@ -241,6 +242,7 @@ function runButton(): HTMLButtonElement {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
+  doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
@@ -269,6 +271,23 @@ afterEach(async () => {
 });
 
 describe("the split button", () => {
+  it("shows and runs another column's saved work without opening any menu", async () => {
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["needs_review"] } })],
+    });
+    expect(text()).toContain("Needs Review");
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+    await act(async () => control("Run Review sweep on this ticket").click());
+    expect(runAutomationOnTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "automation", automationId: "a1" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    );
+    expect(TICKET.status).toBe("doing");
+  });
+
   it("presses the Armed automation of this Ticket's current column", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
 
@@ -312,7 +331,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).toContain("Switched off");
+    expect(text()).toContain("Manual only");
     await act(async () => {
       menuItem("Review sweep").click();
     });
@@ -324,7 +343,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).not.toContain("Switched off");
+    expect(text()).not.toContain("Manual only");
   });
 
   it("presses Run once where the column arms nothing", async () => {
