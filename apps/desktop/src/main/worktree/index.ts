@@ -72,6 +72,9 @@ export {
   readWorktreeChangeSet,
   readWorktreeChangeSetPaths,
   readWorktreeBaseFile,
+  // The git-free half of those verbs: ticket → on-disk identity, for a caller
+  // that needs the PATH rather than a status report (VC-369).
+  resolveWorktreeTarget,
 } from "./read";
 export type {
   WorktreeReadDeps,

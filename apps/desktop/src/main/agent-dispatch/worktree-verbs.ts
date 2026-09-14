@@ -168,13 +168,19 @@ export async function worktreeStatusVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, worktreeExists } = context;
+  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
   // Context resolution (which ticket the agent means) stays this door's
   // concern; the git compose + the no-worktree / stamped-but-deleted
   // discrimination live behind the ticketId-in read verb (CONCEPT #42).
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
-  const read = readWorktreeStatus({ db: options.db, git, worktreeExists }, resolved.ticket.id);
+  // `gitAsync` for the same reason the IPC door uses it: this socket handler
+  // also runs on the Electron main process, so a synchronous status read froze
+  // the app's windows for as long as `volli worktree status` took (VC-369).
+  const read = await readWorktreeStatus(
+    { db: options.db, git, gitAsync, worktreeExists },
+    resolved.ticket.id,
+  );
   switch (read.kind) {
     case "missing-ticket":
       return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");
@@ -206,14 +212,18 @@ export async function worktreeDiffVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, envSession, git, worktreeExists } = context;
+  const { options, projects, envSession, git, gitAsync, worktreeExists } = context;
   const resolved = resolveWorktreeTicket(options.db, projects, envSession, request);
   if (!resolved.ok) return resolved.response;
   // Merge-base ("what the PR would contain") is the default; --working-tree
   // switches to the uncommitted view. Same two-mode diff.ts the rail uses.
   const mode: WorktreeDiffMode =
     request.args["workingTree"] === true ? "working-tree" : "merge-base";
-  const read = readWorktreeDiff({ db: options.db, git, worktreeExists }, resolved.ticket.id, mode);
+  const read = await readWorktreeDiff(
+    { db: options.db, git, gitAsync, worktreeExists },
+    resolved.ticket.id,
+    mode,
+  );
   switch (read.kind) {
     case "missing-ticket":
       return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");

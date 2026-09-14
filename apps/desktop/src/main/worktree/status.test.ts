@@ -55,11 +55,11 @@ function statusGit(
 }
 
 describe("getWorktreeStatus", () => {
-  it("reports a fully clean, in-sync worktree", () => {
+  it("reports a fully clean, in-sync worktree", async () => {
     const gitDir = tempDir("gitdir");
-    const { git } = statusGit(gitDir);
+    const { gitAsync: git } = statusGit(gitDir);
     expect(
-      getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" }),
+      await getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" }),
     ).toEqual({
       uncommitted: false,
       sequencerActive: false,
@@ -69,36 +69,52 @@ describe("getWorktreeStatus", () => {
     });
   });
 
-  it("flags uncommitted when git status is non-empty", () => {
+  it("flags uncommitted when git status is non-empty", async () => {
     const gitDir = tempDir("gitdir");
-    const { git } = statusGit(gitDir, { status: () => " M src/a.ts\n" });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const { gitAsync: git } = statusGit(gitDir, { status: () => " M src/a.ts\n" });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.uncommitted).toBe(true);
   });
 
-  it("treats a failing status read as uncommitted=true (never silently clean)", () => {
+  it("treats a failing status read as uncommitted=true (never silently clean)", async () => {
     const gitDir = tempDir("gitdir");
-    const { git } = statusGit(gitDir, {
+    const { gitAsync: git } = statusGit(gitDir, {
       status: () => {
         throw new Error("git status exploded");
       },
     });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.uncommitted).toBe(true);
   });
 
-  it("flags sequencerActive when a marker file exists in the private gitdir", () => {
+  it("flags sequencerActive when a marker file exists in the private gitdir", async () => {
     const gitDir = tempDir("gitdir");
     writeFileSync(join(gitDir, "MERGE_HEAD"), "abc\n");
-    const { git } = statusGit(gitDir);
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const { gitAsync: git } = statusGit(gitDir);
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.sequencerActive).toBe(true);
   });
 
-  it("parses ahead/behind from rev-list --left-right --count (left=behind, right=ahead)", () => {
+  it("parses ahead/behind from rev-list --left-right --count (left=behind, right=ahead)", async () => {
     const gitDir = tempDir("gitdir");
-    const { git, calls } = statusGit(gitDir, { revList: () => "2\t5\n" });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const { gitAsync: git, calls } = statusGit(gitDir, { revList: () => "2\t5\n" });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.behindBase).toBe(2);
     expect(report.aheadOfBase).toBe(5);
     // Uses the three-dot symmetric range `<base>...<branch>`.
@@ -108,36 +124,51 @@ describe("getWorktreeStatus", () => {
     expect(revList?.args).toContain("main...b");
   });
 
-  it("measures ahead/behind against origin/<base> when the remote-tracking ref exists", () => {
+  it("measures ahead/behind against origin/<base> when the remote-tracking ref exists", async () => {
     const gitDir = tempDir("gitdir");
-    const { git, calls } = statusGit(gitDir, { hasRemoteRef: true, revList: () => "1\t3\n" });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const { gitAsync: git, calls } = statusGit(gitDir, {
+      hasRemoteRef: true,
+      revList: () => "1\t3\n",
+    });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.behindBase).toBe(1);
     expect(report.aheadOfBase).toBe(3);
     const revList = calls.find((c) => c.args[0] === "rev-list");
     expect(revList?.args).toContain("origin/main...b");
   });
 
-  it("returns null ahead/behind when the base is unknown, never spawning rev-list", () => {
+  it("returns null ahead/behind when the base is unknown, never spawning rev-list", async () => {
     const gitDir = tempDir("gitdir");
-    const { git, calls } = statusGit(gitDir);
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: null });
+    const { gitAsync: git, calls } = statusGit(gitDir);
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: null,
+    });
     expect(report.aheadOfBase).toBeNull();
     expect(report.behindBase).toBeNull();
     // The ahead/behind probe never spawns; the (independent) unpushed probe may.
     expect(calls.some((c) => c.args[0] === "rev-list" && c.args[1] === "--left-right")).toBe(false);
   });
 
-  it("counts unpushed commits against origin/<branch>, and nulls when the probe fails", () => {
+  it("counts unpushed commits against origin/<branch>, and nulls when the probe fails", async () => {
     const gitDir = tempDir("gitdir");
-    const { git, calls } = statusGit(gitDir, { unpushed: () => "3\n" });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const { gitAsync: git, calls } = statusGit(gitDir, { unpushed: () => "3\n" });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.unpushed).toBe(3);
     const probe = calls.find((c) => c.args[0] === "rev-list" && c.args[1] === "--count");
     expect(probe?.args).toContain("refs/remotes/origin/b..b");
 
     const failing = statusGit(gitDir); // default: unpushed probe throws (never pushed)
-    const failed = getWorktreeStatus(failing.git, {
+    const failed = await getWorktreeStatus(failing.gitAsync, {
       worktreePath: "/wt",
       branch: "b",
       baseBranch: "main",
@@ -145,10 +176,10 @@ describe("getWorktreeStatus", () => {
     expect(failed.unpushed).toBeNull();
   });
 
-  it("skips the unpushed probe entirely when the branch is unknown", () => {
+  it("skips the unpushed probe entirely when the branch is unknown", async () => {
     const gitDir = tempDir("gitdir");
-    const { git, calls } = statusGit(gitDir);
-    const report = getWorktreeStatus(git, {
+    const { gitAsync: git, calls } = statusGit(gitDir);
+    const report = await getWorktreeStatus(git, {
       worktreePath: "/wt",
       branch: null,
       baseBranch: "main",
@@ -157,15 +188,19 @@ describe("getWorktreeStatus", () => {
     expect(calls.some((c) => c.args[0] === "rev-list" && c.args[1] === "--count")).toBe(false);
   });
 
-  it("returns null ahead/behind when rev-list fails, but keeps the rest of the report", () => {
+  it("returns null ahead/behind when rev-list fails, but keeps the rest of the report", async () => {
     const gitDir = tempDir("gitdir");
-    const { git } = statusGit(gitDir, {
+    const { gitAsync: git } = statusGit(gitDir, {
       status: () => " M a.ts\n",
       revList: () => {
         throw new Error("bad revision");
       },
     });
-    const report = getWorktreeStatus(git, { worktreePath: "/wt", branch: "b", baseBranch: "main" });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
     expect(report.aheadOfBase).toBeNull();
     expect(report.behindBase).toBeNull();
     expect(report.uncommitted).toBe(true);
