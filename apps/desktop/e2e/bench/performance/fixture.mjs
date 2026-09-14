@@ -230,12 +230,25 @@ function message(index, role) {
 }
 
 async function loadProductionModules() {
+  // Creating a Vite dev server sets `process.env.NODE_ENV = "development"` on
+  // THIS process, and it stays set after the server closes. The benchmark
+  // runner generates a fixture and then spawns the renderer bench, which
+  // inherits the environment and quietly builds itself in development mode:
+  // dev JSX, dev React, profiling instrumentation inside the frames it times.
+  // That cost several hours and two invalid baselines, so the loan is repaid
+  // here where it is taken rather than papered over downstream.
+  const priorNodeEnv = process.env.NODE_ENV;
+  const restoreNodeEnv = () => {
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+  };
   const vite = await createServer({
     root: APP_DIR,
     server: { middlewareMode: true, hmr: false },
     appType: "custom",
     logLevel: "error",
   });
+  restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
     const [db, sessionControl, artifacts, shared] = await Promise.all([

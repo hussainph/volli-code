@@ -1053,7 +1053,11 @@ async function runChatBench({
     ],
     {
       cwd: APP_DIR,
-      env: { ELECTRON_DISABLE_SECURITY_WARNINGS: "1" },
+      // NODE_ENV is stated, not inherited: this process may have created a
+      // Vite dev server to read the fixture through production modules, and
+      // that sets `development` for everything spawned afterwards. The bench
+      // pins it too; a measured build is worth saying twice.
+      env: { ELECTRON_DISABLE_SECURITY_WARNINGS: "1", NODE_ENV: "production" },
       signal,
     },
   );

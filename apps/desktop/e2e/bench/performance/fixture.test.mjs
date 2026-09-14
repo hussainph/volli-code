@@ -46,6 +46,13 @@ describe("performance fixture allocation", () => {
 describe("performance fixture file", () => {
   it("migrates a file database and is readable through production codecs and artifacts", async () => {
     const root = await mkdtemp(join(tmpdir(), "volli-performance-fixture-test-"));
+    // Reading the fixture through production modules means starting a Vite dev
+    // server, which sets NODE_ENV=development on this process and leaves it
+    // set. The benchmark runner then spawns the renderer bench, which inherits
+    // it and silently builds itself in development mode — dev React, dev JSX,
+    // profiling work inside the frames it times. Two owner baselines were lost
+    // to that before it was found, so the restoration is pinned here.
+    const nodeEnvBefore = process.env.NODE_ENV;
     try {
       const generated = await generateFixture({
         preset: "small",
@@ -53,11 +60,13 @@ describe("performance fixture file", () => {
         outputDirectory: root,
         force: true,
       });
+      expect(process.env.NODE_ENV).toBe(nodeEnvBefore);
       const firstDatabaseDigest = createHash("sha256")
         .update(await readFile(generated.dbPath))
         .digest("hex");
       const firstManifest = await readFile(generated.manifestPath, "utf8");
       const verified = await verifyFixture(root, { preset: "small" });
+      expect(process.env.NODE_ENV).toBe(nodeEnvBefore);
       expect(verified.ok).toBe(true);
       expect(verified.schemaVersion).toBe(CURRENT_DB_SCHEMA_VERSION);
       expect(verified.counts).toEqual({
