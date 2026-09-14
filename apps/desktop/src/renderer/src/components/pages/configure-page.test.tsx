@@ -31,6 +31,55 @@ function renderConfigure(activeKey: string): string {
   );
 }
 
+/** The section titles one category draws, off the marker the rail audit reads. */
+function sectionTitles(activeKey: string): string[] {
+  return (
+    [...renderConfigure(activeKey).matchAll(/data-slot="pref-section-title"[^>]*>([^<]*)</g)]
+      .map((match) => (match[1] ?? "").trim())
+      // The audit's own window: shorter is noise, longer is data rather than
+      // vocabulary someone would half-remember and search for.
+      .filter((title) => title.length >= 4 && title.length <= 40)
+  );
+}
+
+function keywordsFor(key: string): readonly string[] {
+  for (const group of configureGroups(project)) {
+    for (const category of group.categories) {
+      if (category.key === key) return [category.label, ...(category.keywords ?? [])];
+    }
+  }
+  throw new Error(`no configure category ${key}`);
+}
+
+/**
+ * The rail's search index against the panes it indexes.
+ *
+ * A section a person can SEE and cannot FIND is a section that may as well not
+ * be there, and the e2e audit that catches it (`settings-search-smoke.mjs`,
+ * "every visible label finds this page") is a sharded smoke that costs minutes
+ * — and only noticed the MCP pane's "Add server" after it had already shipped
+ * to CI. This is the same rule stated where it costs milliseconds.
+ */
+describe("the Configure rail's search index", () => {
+  it.each(["skills", "commands", "mcp", "plugins", "authority", "sessions", "worktrees"])(
+    "finds the %s pane from every section title it draws",
+    (key) => {
+      // The rail matches a lowercased substring, so the stored terms are
+      // compared the same way the shell compares them.
+      const terms = keywordsFor(key).map((term) => term.toLowerCase());
+      const titles = sectionTitles(key);
+
+      expect(titles.length).toBeGreaterThan(0);
+      for (const title of titles) {
+        expect(
+          terms.some((term) => term.includes(title.toLowerCase())),
+          `"${title}" is drawn in Configure → ${key} but nothing in the rail finds it`,
+        ).toBe(true);
+      }
+    },
+  );
+});
+
 describe("Configure rail", () => {
   it("groups agent configuration apart from project settings", () => {
     const html = renderConfigure("skills");
