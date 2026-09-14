@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { BlobLinkView } from "@volli/shared";
 
-import { createChatDraftsStore, MAX_DRAFTS, type ChatDraft } from "./chat-drafts";
+import {
+  createChatDraftsStore,
+  isEmptyProvisionalChatDraft,
+  isVisibleProvisionalChatDraft,
+  MAX_DRAFTS,
+  type ChatDraft,
+} from "./chat-drafts";
 
 /** Simple in-memory `StateStorage` so each test gets its own isolated backing. */
 function createMemoryStorage() {
@@ -43,6 +49,355 @@ function readPersisted(storage: ReturnType<typeof createMemoryStorage>) {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+const PROVISIONAL = {
+  projectId: "p1",
+  ticketId: "t1",
+  operationId: "op-1",
+  title: null,
+} as const;
+
+describe("provisional chat", () => {
+  it("keeps an empty Draft live without calling persistence", () => {
+    const storage = createMemoryStorage();
+    const write = vi.spyOn(storage, "setItem");
+    const store = createChatDraftsStore(storage);
+
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    expect(store.getState().drafts["draft-1"]?.provisional).toEqual({
+      ...PROVISIONAL,
+      phase: "draft",
+    });
+    expect(readPersisted(storage)).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps title/model-only Drafts out of persistence and sidebar visibility", () => {
+    const storage = createMemoryStorage();
+    const write = vi.spyOn(storage, "setItem");
+    const store = createChatDraftsStore(storage);
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    store.getState().setProvisionalTitle("draft-1", "Planning");
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "anthropic",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    });
+
+    expect(isVisibleProvisionalChatDraft(store.getState().drafts["draft-1"]!)).toBe(false);
+    expect(isEmptyProvisionalChatDraft(store.getState().drafts["draft-1"])).toBe(true);
+    // And an id with no Draft at all is neither: a durable Session's tab must
+    // not be mistaken for something the workspace may not record.
+    expect(isEmptyProvisionalChatDraft(undefined)).toBe(false);
+    expect(isEmptyProvisionalChatDraft(store.getState().drafts["never-opened"])).toBe(false);
+    expect(readPersisted(storage)).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("passes a clear through the quiet storage edge rather than swallowing it", async () => {
+    // The quiet edge exists to skip writes that say nothing new. A CLEAR says
+    // something, and zustand exposes one, so it must reach the backing store
+    // — otherwise a cleared key would silently rehydrate on the next launch.
+    const storage = createMemoryStorage();
+    const remove = vi.spyOn(storage, "removeItem");
+    const store = createChatDraftsStore(storage);
+    store.getState().setDraft("s1", "words");
+    expect(readPersisted(storage)).not.toBeNull();
+
+    await store.persist.clearStorage();
+
+    expect(remove).toHaveBeenCalledWith("volli:chat-drafts");
+    expect(readPersisted(storage)).toBeNull();
+  });
+
+  it("keeps the Draft a person is already typing into when its surface re-opens it", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraft("draft-1", "half typed");
+
+    // Re-opening the same id is how a surface re-asserts a Draft it already
+    // has. It must not mint a second launch record over the words.
+    store.getState().openProvisional("draft-1", { ...PROVISIONAL, operationId: "op-2" });
+
+    expect(store.getState().drafts["draft-1"]?.provisional?.operationId).toBe("op-1");
+    expect(store.getState().drafts["draft-1"]?.text).toBe("half typed");
+  });
+
+  it("leaves a durable Draft alone when promotion completes twice", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("durable-1", "already a Session");
+
+    // A second `completePromotion` (a retried handoff) has no provisional left
+    // to strip, and must not rewrite the entry it finds.
+    const before = store.getState().drafts["durable-1"];
+    store.getState().completePromotion("durable-1");
+
+    expect(store.getState().drafts["durable-1"]).toBe(before);
+  });
+
+  it("treats promoting a Draft that is already a Session as done", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("durable-1", "already a Session");
+    const run = vi.fn();
+
+    // Nothing provisional is left to promote, so there is no work to run and
+    // no failure to report: the caller's words are already somewhere durable.
+    await expect(store.getState().promote("durable-1", run)).resolves.toBe(true);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("persists launch identity once the Draft has content and restores it on relaunch", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts["draft-1"]).toEqual({
+      text: "half typed",
+      attachments: [],
+      held: [],
+      touchedAt: expect.any(Number) as number,
+      provisional: { ...PROVISIONAL, phase: "draft" },
+    });
+  });
+
+  it("survives a quit on either side of the mint, with the message retryable", async () => {
+    // The two crash windows the design named. Before the mint there is no
+    // Session at all, so the words come back as an ordinary unsent Draft.
+    const storage = createMemoryStorage();
+    const beforeMint = createChatDraftsStore(storage);
+    beforeMint.getState().openProvisional("draft-1", PROVISIONAL);
+    beforeMint.getState().setDraft("draft-1", "");
+    beforeMint.getState().holdMessage("draft-1", { id: "m1", text: "in flight" });
+    beforeMint.getState().markHeld("draft-1", "m1", "sending");
+
+    let reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "draft",
+      operationId: PROVISIONAL.operationId,
+    });
+    // `sending` describes a flight that no longer exists. A held message is
+    // rehydrated as `unsent` so there is something to press, not a spinner
+    // waiting on a promise that died with the process.
+    expect(reloaded.getState().drafts["draft-1"]?.held).toEqual([
+      { id: "m1", text: "in flight", state: "unsent" },
+    ]);
+
+    // After the mint a Session DOES exist, and the marker that says so is what
+    // stops a relaunch minting a second one. The operation id rides across
+    // too, so the replay is the same command.
+    const afterMint = createChatDraftsStore(storage);
+    await afterMint.persist.rehydrate();
+    afterMint.getState().markProvisionalSessionCreated("draft-1");
+
+    reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "session-created",
+      operationId: PROVISIONAL.operationId,
+    });
+    expect(reloaded.getState().drafts["draft-1"]?.held).toEqual([
+      { id: "m1", text: "in flight", state: "unsent" },
+    ]);
+  });
+
+  it("tracks post-create recovery, then promotes in place without changing the Draft key", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraft("draft-1", "hello");
+
+    store.getState().markProvisionalSessionCreated("draft-1");
+    expect(store.getState().drafts["draft-1"]?.provisional?.phase).toBe("session-created");
+
+    store.getState().completePromotion("draft-1");
+    expect(store.getState().drafts["draft-1"]).toEqual(
+      expect.objectContaining({ text: "hello" }) as unknown as ChatDraft,
+    );
+    expect(store.getState().drafts["draft-1"]?.provisional).toBeUndefined();
+  });
+
+  it("serializes concurrent promotion and retires a failed flight for retry", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    let release!: (promoted: boolean) => void;
+    const run = vi.fn(() => new Promise<boolean>((resolve) => (release = resolve)));
+
+    const first = store.getState().promote("draft-1", run);
+    const second = store.getState().promote("draft-1", run);
+
+    expect(second).toBe(first);
+    expect(run).toHaveBeenCalledOnce();
+    release(false);
+    await expect(first).resolves.toBe(false);
+    await expect(store.getState().promote("draft-1", async () => true)).resolves.toBe(true);
+  });
+
+  it("waits for every concurrent attachment import and makes completion idempotent", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const finishFirst = store.getState().beginAttachmentImport("draft-1");
+    const finishSecond = store.getState().beginAttachmentImport("draft-1");
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(true);
+    let settled = false;
+    const waiting = store
+      .getState()
+      .waitForAttachmentImports("draft-1")
+      .then(() => (settled = true));
+
+    const finishLater = store.getState().beginAttachmentImport("draft-1");
+    finishFirst();
+    finishFirst();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    finishSecond();
+    await waiting;
+    expect(settled).toBe(true);
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(true);
+    const waitingForLater = store.getState().waitForAttachmentImports("draft-1");
+    finishLater();
+    await expect(waitingForLater).resolves.toBeUndefined();
+    expect(store.getState().hasAttachmentImports("draft-1")).toBe(false);
+  });
+
+  it("does not let a late import callback resurrect a Draft closed while it was pending", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    const finishImport = store.getState().beginAttachmentImport("draft-1");
+
+    store.getState().discardProvisional("draft-1");
+    store.getState().setDraft("draft-1", "@late-file ");
+    store.getState().setDraftAttachments("draft-1", [blobView({ linkId: null })]);
+    finishImport();
+
+    expect(store.getState().drafts["draft-1"]).toBeUndefined();
+  });
+
+  it("adopts durable Blob links across the staged strip and held messages", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const ownerless = blobView({ linkId: null });
+    const linked = blobView({ linkId: "session-link" });
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraftAttachments("draft-1", [ownerless]);
+    store.getState().holdMessage("draft-1", {
+      id: "m1",
+      text: "look",
+      attachments: [ownerless],
+    });
+
+    store.getState().adoptLinkedAttachments("draft-1", [linked]);
+
+    expect(store.getState().drafts["draft-1"]?.attachments).toEqual([linked]);
+    expect(store.getState().drafts["draft-1"]?.held[0]?.attachments).toEqual([linked]);
+  });
+
+  it("can freeze the first resolved model after an earlier no-model refusal", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().holdMessage("draft-1", { id: "refused", text: "retry me" });
+
+    store.getState().setProvisionalModel("draft-1", model);
+    store.getState().setProvisionalModel("draft-1", {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    });
+
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
+  });
+
+  it("amends only the named held message while a captured import finishes", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().holdMessage("draft-1", { id: "m1", text: "first" });
+    store.getState().holdMessage("draft-1", { id: "m2", text: "second" });
+
+    store
+      .getState()
+      .amendHeldMessage("draft-1", "m1", (message) => ({ ...message, text: "first @late " }));
+    store
+      .getState()
+      .amendHeldMessage("draft-1", "missing", (message) => ({ ...message, text: "wrong" }));
+
+    expect(store.getState().drafts["draft-1"]?.held.map(({ text }) => text)).toEqual([
+      "first @late ",
+      "second",
+    ]);
+  });
+
+  it("freezes the model at Send and the title at create, each for its own reason", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const originalModel = {
+      providerId: "acme",
+      modelId: "sonnet",
+      reasoningLevel: "high" as const,
+    };
+    const changedModel = {
+      providerId: "other",
+      modelId: "changed",
+      reasoningLevel: "low",
+    } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setProvisionalTitle("draft-1", "Before send");
+    store.getState().setProvisionalModel("draft-1", originalModel);
+    store.getState().holdMessage("draft-1", { id: "first-send", text: "go" });
+
+    // The MODEL freezes at Send. Send is where the live default was resolved
+    // into an explicit choice, so letting Settings move it afterwards would
+    // make a retry replay a different create than the one that may already
+    // have landed.
+    store.getState().setProvisionalModel("draft-1", changedModel);
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(originalModel);
+
+    // The TITLE does not. Nothing durable carries it until the create goes
+    // out, so refusing it here would only drop a rename with nowhere to go.
+    store.getState().setProvisionalTitle("draft-1", "After send before create");
+    expect(store.getState().drafts["draft-1"]?.provisional?.title).toBe("After send before create");
+
+    let finishPromotion!: () => void;
+    const promoting = store
+      .getState()
+      .promote(
+        "draft-1",
+        () => new Promise<boolean>((resolve) => (finishPromotion = () => resolve(false))),
+      );
+    finishPromotion();
+    await promoting;
+
+    // Once the create has LANDED the title is in a durable intent, and the
+    // engine treats a replay carrying a different intent as a conflict. From
+    // here a rename is a Session rename, which the surfaces route elsewhere.
+    store.getState().markProvisionalSessionCreated("draft-1");
+    store.getState().setProvisionalTitle("draft-1", "After create");
+    store.getState().setProvisionalModel("draft-1", changedModel);
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "session-created",
+      title: "After send before create",
+      model: originalModel,
+    });
+  });
+
+  it("updates a provisional model and discards only identities that are still Drafts", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setProvisionalModel("draft-1", model);
+    expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
+
+    store.getState().completePromotion("draft-1");
+    store.getState().discardProvisional("draft-1");
+    expect(store.getState().drafts).toHaveProperty("draft-1");
+
+    store.getState().openProvisional("draft-2", PROVISIONAL);
+    store.getState().discardProvisional("draft-2");
+    expect(store.getState().drafts).not.toHaveProperty("draft-2");
+  });
 });
 
 describe("setDraft", () => {
@@ -465,6 +820,71 @@ describe("persistence", () => {
     for (let i = 5; i < MAX_DRAFTS + 5; i++) expect(keys).toContain(`s${i}`);
   });
 
+  it("never evicts a provisional Draft to make room for a text draft", () => {
+    vi.useFakeTimers();
+    const storage = createMemoryStorage();
+    const store = createChatDraftsStore(storage);
+
+    // The oldest thing in the store, and therefore the first the cap would
+    // reach for. It is also the ONLY handle on this identity: evicting it
+    // loses the words and the operation id a retry needs.
+    vi.setSystemTime(0);
+    store.getState().openProvisional("unpromoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-unpromoted",
+      title: null,
+    });
+    store.getState().setDraft("unpromoted", "typed but never sent");
+    // Worse: this one's Session row already exists, so evicting it would
+    // strand a durable Session AND a held first message with no retry surface.
+    vi.setSystemTime(1);
+    store.getState().openProvisional("half-promoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-half",
+      title: null,
+    });
+    store.getState().setDraft("half-promoted", "sent, mid-promotion");
+    store.getState().markProvisionalSessionCreated("half-promoted");
+
+    for (let i = 0; i < MAX_DRAFTS + 5; i++) {
+      vi.setSystemTime(100 + i);
+      store.getState().setDraft(`s${i}`, `text ${i}`);
+    }
+
+    const keys = Object.keys(readPersisted(storage)!.state.drafts);
+    expect(keys).toContain("unpromoted");
+    expect(keys).toContain("half-promoted");
+    // The cap still binds the drafts it is for — a durable Session's unsent
+    // words are recoverable because the Session itself is still listed.
+    expect(keys.filter((key) => key.startsWith("s"))).toHaveLength(MAX_DRAFTS);
+    for (let i = 0; i < 5; i++) expect(keys).not.toContain(`s${i}`);
+  });
+
+  it("still evicts a promoted Draft, which is an ordinary Session draft again", () => {
+    vi.useFakeTimers();
+    const storage = createMemoryStorage();
+    const store = createChatDraftsStore(storage);
+
+    vi.setSystemTime(0);
+    store.getState().openProvisional("promoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op",
+      title: null,
+    });
+    store.getState().setDraft("promoted", "words");
+    store.getState().completePromotion("promoted");
+
+    for (let i = 0; i < MAX_DRAFTS; i++) {
+      vi.setSystemTime(100 + i);
+      store.getState().setDraft(`s${i}`, `text ${i}`);
+    }
+
+    expect(Object.keys(readPersisted(storage)!.state.drafts)).not.toContain("promoted");
+  });
+
   it("rehydrates drafts from a seeded storage into a fresh store", async () => {
     const storage = createMemoryStorage();
     createChatDraftsStore(storage).getState().setDraft("s1", "hello");
@@ -480,6 +900,62 @@ describe("persistence", () => {
         touchedAt: expect.any(Number) as number,
       },
     });
+  });
+
+  it("restores a Draft's skills and model, dropping skill entries that are not names", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    first.getState().setProvisionalModel("draft-1", {
+      providerId: "anthropic",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    });
+    // Reach past the store to seed the shapes a hand-edited or older blob can
+    // hold: hydration must keep the names and drop the rest rather than fail
+    // the Draft they rode in on.
+    const raw = JSON.parse(storage.getItem("volli:chat-drafts")!) as {
+      state: { drafts: Record<string, { provisional: Record<string, unknown> }> };
+    };
+    raw.state.drafts["draft-1"]!.provisional.skills = ["logos", "", 7, null];
+    storage.setItem("volli:chat-drafts", JSON.stringify(raw));
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toEqual({
+      ...PROVISIONAL,
+      phase: "draft",
+      skills: ["logos"],
+      model: { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" },
+    });
+  });
+
+  it.each([
+    ["a title that is neither absent nor a string", { title: 7 }],
+    ["a phase this build does not know", { phase: "promoting" }],
+    ["a ticket id that is present but empty", { ticketId: "" }],
+    ["no operation id to make the create one command", { operationId: "" }],
+    ["no project to own it", { projectId: "" }],
+  ])("drops a launch record with %s, keeping the words beside it", async (_name, invalid) => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    const raw = JSON.parse(storage.getItem("volli:chat-drafts")!) as {
+      state: { drafts: Record<string, { provisional: Record<string, unknown> }> };
+    };
+    Object.assign(raw.state.drafts["draft-1"]!.provisional, invalid);
+    storage.setItem("volli:chat-drafts", JSON.stringify(raw));
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    // The Draft survives as an ordinary draft: a launch record this build
+    // cannot read is not a reason to throw away what someone typed.
+    expect(reloaded.getState().drafts["draft-1"]?.text).toBe("half typed");
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toBeUndefined();
   });
 
   // A held message re-sent after a relaunch must deliver what its `/skill`

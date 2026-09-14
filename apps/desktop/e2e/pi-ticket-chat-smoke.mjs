@@ -30,15 +30,12 @@
  * called by both `ticket-sessions.ts` and `project-sessions.ts`). Nothing
  * bootstraps this on a fresh profile, so check 1 records one over the same
  * `modelAccess.setDefault` tRPC mutation Settings' "Default model" section
- * uses (`smoke-kit.mjs`'s `seedDefaultModel`) before the ticket chat is ever
- * created — and it records {@link MODEL_PIN}, not the catalog's first
- * available. The composer's Model pill (`composer-ui.tsx`) is offered to every
- * Session now regardless of Role — Ticket or Project — since
- * `chat-plane.tsx` dropped its old ticket/project "pinned" carve-out, and the
- * model it names is the one Pi actually runs: `attach` carries the Session's
- * durable selection in and `model.select` reaches Pi's own picker. Check 6
- * below proves the pill names the model this Session recorded rather than the
- * placeholder a Session with nothing selected would show.
+ * uses (`smoke-kit.mjs`'s `seedDefaultModel`) before the ticket Draft is ever
+ * opened — and it records {@link MODEL_PIN}, not the catalog's first available.
+ * The provisional composer's Model pill (`composer-ui.tsx`) reads that live
+ * policy without creating a Session; first Send records it and Pi runs it.
+ * Check 5 proves the pill names that policy rather than the placeholder a
+ * Session with nothing selected would show.
  *
  * Run:
  *   pnpm run build
@@ -149,7 +146,7 @@ const EVIDENCE_DIR = join(EVIDENCE_ROOT, EVIDENCE_RUN);
 const PI_SESSION_DIR = join(userDataDir, "pi-sessions");
 
 function messageBox(page) {
-  // This is still the accessible Message textarea: check 6 verifies that
+  // This is still the accessible Message textarea: check 5 verifies that
   // semantic contract through its role and name before the turn starts. It is
   // a CSS lookup here because the q2 scenario reads composer geometry WHILE a
   // queued row's actions dropdown is open, and that dropdown is a modal Radix
@@ -972,33 +969,125 @@ async function main() {
     let sessionId = null;
     await attempt(
       4,
-      "the tab strip's own Chat control creates a chat tab (attaches Pi)",
+      "the tab strip's Chat control opens only a provisional Draft — no Session, worktree, or empty app_state row",
       async () => {
         chatTabLabel = await openNewChatTab(page, TICKET_TAB_STRIP);
-        sessionId = await waitUntil(
-          "the ticket chat Session to enter the durable listing",
-          async () => {
-            const listed = await page.evaluate(
-              (id) => window.api.sessions.listForTicket({ ticketId: id }),
-              ticketId,
-            );
-            if (!listed.ok) throw new Error(listed.error);
-            const chat = listed.sessions.find((row) => row.kind === "chat");
-            return chat?.kind === "chat" ? chat.record.sessionId : false;
-          },
-        );
+        // Cross both app_state's debounce and the old eager attach window: this
+        // is an assertion that nothing appears, not a race against creation.
+        await sleep(600);
+        const evidence = await page.evaluate(async (id) => {
+          const [listed, boot] = await Promise.all([
+            window.api.sessions.listForTicket({ ticketId: id }),
+            window.api.data.bootstrap(),
+          ]);
+          if (!listed.ok) throw new Error(listed.error);
+          if (!boot.ok) throw new Error(boot.error);
+          return {
+            sessions: listed.sessions.length,
+            chatDraftState: boot.data.appState["volli:chat-drafts"] ?? null,
+            workspace: boot.data.appState["volli:workspace"] ?? null,
+          };
+        }, ticketId);
+        const worktree = await findWorktreeDir(worktreesRoot, displayId);
+        const workspaceHasChat = evidence.workspace?.includes('"chat:') ?? false;
         return {
-          ok: chatTabLabel !== null && sessionId !== null,
-          detail: `tab=${chatTabLabel} session=${sessionId}`,
+          ok:
+            chatTabLabel !== null &&
+            evidence.sessions === 0 &&
+            evidence.chatDraftState === null &&
+            !workspaceHasChat &&
+            worktree === null,
+          detail:
+            `tab=${chatTabLabel} sessions=${evidence.sessions} ` +
+            `draftState=${evidence.chatDraftState === null ? "absent" : "present"} ` +
+            `workspaceChat=${workspaceHasChat} worktree=${worktree ?? "absent"}`,
         };
       },
     );
-    if (sessionId === null) throw new Error("chat Session seed failed — cannot continue");
+    if (!results.find((result) => result.n === 4)?.ok) {
+      throw new Error("provisional Draft check failed — cannot continue to the billed turn");
+    }
 
-    // Carried over from the retired session-chat-smoke.mjs: a chat on
-    // a worktree ticket must attach against the materialized worktree, not
-    // a directory that was never provisioned.
-    await attempt(5, "creating the chat materialized the ticket's worktree", async () => {
+    await attempt(
+      5,
+      "the provisional composer is ready and shows the live default model policy",
+      async () => {
+        const textarea = messageBox(page);
+        const accessibleTextarea = accessibleMessageBox(page);
+        await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
+        await waitUntil(
+          "the composer to become ready",
+          async () => !(await textarea.isDisabled()) && (await accessibleTextarea.count()) === 1,
+          { timeout: 30000 },
+        ).catch(async (error) => {
+          await abortMainBeforeEvidence(page, "composer-inert");
+          throw error;
+        });
+        // A Draft reads the same create-time policy main will use without
+        // copying it into persisted state: explicit choice, project override,
+        // then this Ticket-role default.
+        const pill = page.getByRole("button", { name: defaultModel.label });
+        const shown = await waitUntil(
+          "the model pill to name the default model",
+          async () => (await pill.count()) > 0,
+        )
+          .then(() => true)
+          .catch(() => false);
+        // The picker deliberately exposes an aria-label beginning `Model:`;
+        // the label locator above matches this resolved identity. A /^Model:/
+        // lookup would find the same button, not an unresolved placeholder.
+        return {
+          ok: shown,
+          detail: `label=${defaultModel.label} shown=${shown}`,
+        };
+      },
+    );
+    if (!results.find((result) => result.n === 5)?.ok) {
+      throw new Error("composer readiness check failed — cannot continue to the billed turn");
+    }
+
+    let submittedAt = null;
+    await attempt(
+      6,
+      "the first Send promotes the Draft under its stable id and starts the real turn",
+      async () => {
+        // Every locator in the billing-sensitive interval now has a hard local
+        // ceiling. `waitUntil` cannot bound a callback whose locator itself is
+        // still waiting on Playwright's much longer default.
+        page.setDefaultTimeout(VULNERABLE_LOCATOR_TIMEOUT_MS);
+        try {
+          submittedAt = await submitPrompt(page, PROMPT_TEXT);
+          sessionId = await waitUntil(
+            "the promoted ticket chat to enter the durable listing",
+            async () => {
+              const listed = await page.evaluate(
+                (id) => window.api.sessions.listForTicket({ ticketId: id }),
+                ticketId,
+              );
+              if (!listed.ok) throw new Error(listed.error);
+              const chat = listed.sessions.find((row) => row.kind === "chat");
+              return chat?.kind === "chat" ? chat.record.sessionId : false;
+            },
+          );
+          await installLiveActivityProbe(page, sessionId);
+          await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
+            timeout: 15000,
+          });
+          return { ok: true, detail: `session=${sessionId}` };
+        } catch (error) {
+          await abortMainBeforeEvidence(page, "turn-never-started");
+          throw error;
+        }
+      },
+    );
+    if (!results.find((result) => result.n === 6)?.ok || sessionId === null) {
+      throw new Error("turn start check failed — app stopped before evidence");
+    }
+
+    // Carried over from the retired session-chat-smoke.mjs, but deliberately
+    // AFTER Send now: a provisional Draft earns no checkout. Promotion must
+    // attach against the materialized worktree once it has durable intent.
+    await attempt(7, "promotion materialized and stamped the ticket's worktree", async () => {
       const worktreeDir = await waitUntil(
         "the ticket's worktree to appear on disk",
         async () => (await findWorktreeDir(worktreesRoot, displayId)) ?? false,
@@ -1007,12 +1096,6 @@ async function main() {
         await abortMainBeforeEvidence(page, "worktree-absent");
         throw error;
       });
-      // The stamp is POLLED, not read once. `git worktree add` creates the
-      // directory several steps before `ensure` persists the identity, and
-      // since VC-16 that pipeline is async — so main serves this very
-      // `bootstrap()` mid-pipeline and a single read races the stamp. The old
-      // read-immediately worked only because a synchronous `ensure` blocked
-      // every IPC until it finished, which is the freeze that was fixed.
       const readStamp = async () =>
         page.evaluate(async (pid) => {
           const boot = await window.api.data.bootstrap();
@@ -1034,73 +1117,8 @@ async function main() {
         detail: `dir=${worktreeDir} stamped=${row?.worktreePath ?? "none"}`,
       };
     });
-    if (!results.find((result) => result.n === 5)?.ok) {
-      throw new Error("worktree check failed — cannot continue to the billed turn");
-    }
-
-    await attempt(
-      6,
-      "the composer is ready, its Model pill naming the recorded model (not the unselected placeholder)",
-      async () => {
-        const textarea = messageBox(page);
-        const accessibleTextarea = accessibleMessageBox(page);
-        await waitUntil("the composer to mount", async () => (await textarea.count()) > 0);
-        await waitUntil(
-          "the composer to become ready",
-          async () => !(await textarea.isDisabled()) && (await accessibleTextarea.count()) === 1,
-          { timeout: 30000 },
-        ).catch(async (error) => {
-          await abortMainBeforeEvidence(page, "composer-inert");
-          throw error;
-        });
-        // Every structured Session offers the Model Access pill now, Ticket
-        // or Project alike (`chat-plane.tsx` dropped its old "pinned"
-        // carve-out), so the picker existing is not the regression to watch
-        // for. What has to hold is that it names the model THIS Session
-        // recorded (check 1's seed) rather than the bare "Model" placeholder
-        // a Session with nothing selected shows.
-        const pill = page.getByRole("button", { name: defaultModel.label });
-        const shown = await waitUntil(
-          "the model pill to name the recorded model",
-          async () => (await pill.count()) > 0,
-        )
-          .then(() => true)
-          .catch(() => false);
-        const placeholderShown = (await page.getByRole("button", { name: /^Model: / }).count()) > 0;
-        return {
-          ok: shown && !placeholderShown,
-          detail: `label=${defaultModel.label} shown=${shown} placeholderShown=${placeholderShown}`,
-        };
-      },
-    );
-    if (!results.find((result) => result.n === 6)?.ok) {
-      throw new Error("composer readiness check failed — cannot continue to the billed turn");
-    }
-    await installLiveActivityProbe(page, sessionId);
-
-    let submittedAt = null;
-    await attempt(
-      7,
-      "submitting the one real prompt starts a turn (streaming/working state appears)",
-      async () => {
-        // Every locator in the billing-sensitive interval now has a hard local
-        // ceiling. `waitUntil` cannot bound a callback whose locator itself is
-        // still waiting on Playwright's much longer default.
-        page.setDefaultTimeout(VULNERABLE_LOCATOR_TIMEOUT_MS);
-        try {
-          submittedAt = await submitPrompt(page, PROMPT_TEXT);
-          await waitUntil("the turn to start", async () => (await stopButton(page).count()) > 0, {
-            timeout: 15000,
-          });
-          return { ok: true };
-        } catch (error) {
-          await abortMainBeforeEvidence(page, "turn-never-started");
-          throw error;
-        }
-      },
-    );
     if (!results.find((result) => result.n === 7)?.ok) {
-      throw new Error("turn start check failed — app stopped before evidence");
+      throw new Error("post-promotion worktree check failed — app stopped before evidence");
     }
 
     let sleepBarrierStartedAt = null;

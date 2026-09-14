@@ -36,10 +36,15 @@
  * indefinitely — it just isn't named as the *reason* a draft goes away.
  */
 import {
+  CHAT_DRAFTS_APP_STATE_KEY,
   isBlobLinkView,
   isPromptResource,
+  isProvisionalChatDraftPhase,
+  parseSessionModel,
   type BlobLinkView,
+  type ModelSelection,
   type PromptResource,
+  type ProvisionalChatDraftPhase,
 } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
@@ -49,7 +54,7 @@ import { appStateStorage } from "@renderer/lib/app-state-storage";
 /** A draft never survives past this many most-recently-touched sessions. */
 export const MAX_DRAFTS = 50;
 /** The single app_state row that owns every Session draft and held message. */
-export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
+export { CHAT_DRAFTS_APP_STATE_KEY };
 
 /**
  * Where a message that left the box currently stands.
@@ -100,8 +105,35 @@ export interface HeldMessageInput {
   attachments?: readonly BlobLinkView[];
 }
 
+export interface ProvisionalChatDraft {
+  /** The project whose surface owns this not-yet-Session. */
+  projectId: string;
+  /** The Ticket it works, or null for a project's own chat. */
+  ticketId: string | null;
+  /** Stable across every promotion retry; its create command is derived from this id. */
+  operationId: string;
+  /** Optional create-time policy chosen by the opening surface. */
+  skills?: readonly string[];
+  title: string | null;
+  model?: ModelSelection;
+  /**
+   * How far this Draft has got towards being a Session. Its vocabulary lives
+   * in `@volli/shared` because main reads the same persisted envelope at boot
+   * and must recognise exactly the same set — see
+   * {@link ProvisionalChatDraftPhase}.
+   */
+  phase: ProvisionalChatDraftPhase;
+}
+
 export interface ChatDraft {
   text: string;
+  /**
+   * Present only while this identity names a Draft rather than a Session.
+   * Empty provisional entries live in memory but are filtered from persistence;
+   * once content exists this launch record is what makes relaunch promotion
+   * retryable without changing either the tab id or the durable Session id.
+   */
+  provisional?: ProvisionalChatDraft;
   /**
    * The files staged on the message being written (VC-137) — the strip above
    * the box, persisted beside the words for the same reason they are: a
@@ -116,8 +148,57 @@ export interface ChatDraft {
   touchedAt: number;
 }
 
-interface ChatDraftsState {
+export interface ChatDraftsState {
   drafts: Readonly<Record<string, ChatDraft>>;
+  /** Opens a renderer-local Draft under the UUID its eventual Session will use. */
+  openProvisional(sessionId: string, provisional: Omit<ProvisionalChatDraft, "phase">): void;
+  /**
+   * Changes the title promotion will record, without creating a Session.
+   *
+   * Refused once the create has landed (`session-created`): the title is part
+   * of the durable create intent, and the engine treats a replay carrying a
+   * different intent as a conflict. From that moment a rename is a SESSION
+   * rename, and the surfaces route it to that path rather than here — so no
+   * gesture is dropped, it simply changes which door it takes.
+   */
+  setProvisionalTitle(sessionId: string, title: string): void;
+  /**
+   * Changes the model policy that promotion will record, without creating a
+   * Session.
+   *
+   * Send freezes the choice — a create that lands before a later failure must
+   * replay the same model even if Settings changed in between — so this
+   * refuses once a first message is held under a resolved model, and the
+   * composer's picker is stood down for that same window rather than
+   * accepting a change it would have to discard.
+   */
+  setProvisionalModel(sessionId: string, model: ModelSelection): void;
+  /** Records that create landed, so a failed Blob transfer can resume honestly. */
+  markProvisionalSessionCreated(sessionId: string): void;
+  /** Replaces ownerless attachment views with the Session links promotion created. */
+  adoptLinkedAttachments(sessionId: string, attachments: readonly BlobLinkView[]): void;
+  /** The Blob transfer landed; this identity is now an ordinary durable Session draft. */
+  completePromotion(sessionId: string): void;
+  /** Abandons an unpromoted Draft. A durable Session draft is never removed here. */
+  discardProvisional(sessionId: string): void;
+  /** Registers one file-import flight and returns its idempotent completion callback. */
+  beginAttachmentImport(sessionId: string): () => void;
+  /** Whether a file import has started but not committed its strip change yet. */
+  hasAttachmentImports(sessionId: string): boolean;
+  /**
+   * Settles once the file imports feeding this Draft at call time have
+   * committed their strip changes. Imports begun later belong to the next
+   * composer message and cannot extend this barrier.
+   */
+  waitForAttachmentImports(sessionId: string): Promise<void>;
+  /**
+   * Serializes promotion per Draft. Concurrent sends share the exact Promise;
+   * a failure retires it so a later send can retry from persisted metadata.
+   */
+  promote(
+    sessionId: string,
+    run: (provisional: ProvisionalChatDraft) => Promise<boolean>,
+  ): Promise<boolean>;
   /** Sets (or overwrites) a session's draft text, stamping `touchedAt` to now. */
   setDraft(sessionId: string, text: string): void;
   /**
@@ -139,6 +220,16 @@ interface ChatDraftsState {
    * stays there until delivery is somebody else's durable problem.
    */
   holdMessage(sessionId: string, message: HeldMessageInput): void;
+  /**
+   * Rewrites one held message while a pre-Send file import finishes. The
+   * import began as part of that message, so its eventual Blob/ref must follow
+   * the held copy rather than reappear in the newly emptied composer.
+   */
+  amendHeldMessage(
+    sessionId: string,
+    id: string,
+    amend: (message: HeldMessage) => HeldMessage,
+  ): void;
   /**
    * Starts an explicit steer from the displayed strip in one durable write.
    *
@@ -165,11 +256,72 @@ interface ChatDraftsState {
 
 type PersistedChatDraftsState = Pick<ChatDraftsState, "drafts">;
 
+/** Whether Zustand's serialized partial state contains any Draft worth storing. */
+function serializedDraftsAreEmpty(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return (
+      isPlainRecord(parsed) &&
+      isPlainRecord(parsed.state) &&
+      isPlainRecord(parsed.state.drafts) &&
+      Object.keys(parsed.state.drafts).length === 0
+    );
+  } catch {
+    /* v8 ignore next -- `persist` hands this the string it just serialized, so a parse failure needs a serializer this store does not install; a value it cannot read is still honestly not an empty-drafts blob. */
+    return false;
+  }
+}
+
+/**
+ * Zustand calls its storage on every store write even when `partialize` removes
+ * the only thing that changed. An empty provisional Draft therefore needs this
+ * quiet edge: opening, focusing, renaming, choosing a model, or closing it must
+ * remain renderer-only rather than UPSERTing an unchanged/empty app_state blob.
+ *
+ * Production storage is synchronous and cache-backed. The Promise allowance is
+ * retained for StateStorage-compatible tests/adapters; those conservatively
+ * write because their current value cannot be compared synchronously.
+ */
+function quietDraftStorage(storage: StateStorage): StateStorage {
+  return {
+    getItem: (name) => storage.getItem(name),
+    setItem: (name, value) => {
+      const current = storage.getItem(name);
+      if (typeof current === "string" && current === value) return;
+      if (current === null && serializedDraftsAreEmpty(value)) return;
+      return storage.setItem(name, value);
+    },
+    // Passed straight through. The quiet edge above is about WRITES that say
+    // nothing new; a clear says something, and zustand exposes one
+    // (`persist.clearStorage`), so this is reachable and must not be swallowed.
+    removeItem: (name) => storage.removeItem(name),
+  };
+}
+
 /** True for a draft with nothing left in it — no text, no files, nothing held. */
-function isEmptyDraft(draft: ChatDraft): boolean {
+export function isEmptyChatDraft(draft: ChatDraft): boolean {
   return (
     draft.text.trim().length === 0 && draft.attachments.length === 0 && draft.held.length === 0
   );
+}
+
+/** A sidebar/layout-visible Draft has content but is still not a Session. */
+export function isVisibleProvisionalChatDraft(draft: ChatDraft): boolean {
+  return draft.provisional !== undefined && !isEmptyChatDraft(draft);
+}
+
+/**
+ * The counterpart: a Draft nobody has typed into yet.
+ *
+ * This is the state that must stay entirely renderer-local — out of the
+ * persisted envelope, out of the workspace's tab order and pane assignments,
+ * out of the sidebar. Every surface asks the same question, so they ask it
+ * through one function rather than each re-deriving "provisional AND empty".
+ * `undefined` for an identity with no Draft at all: a durable Session's tab is
+ * neither visible-provisional nor empty-provisional.
+ */
+export function isEmptyProvisionalChatDraft(draft: ChatDraft | undefined): boolean {
+  return draft?.provisional !== undefined && isEmptyChatDraft(draft);
 }
 
 /** True for a value that is a plain object (not null, not an array). */
@@ -238,11 +390,42 @@ function readDraftAttachments(value: unknown): readonly BlobLinkView[] {
 }
 
 /** True for a hydrated draft entry with the fields this store actually reads. */
+function readProvisionalChatDraft(value: unknown): ProvisionalChatDraft | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const { projectId, ticketId, operationId, title, phase } = value;
+  if (
+    typeof projectId !== "string" ||
+    projectId.length === 0 ||
+    (ticketId !== null && typeof ticketId !== "string") ||
+    (typeof ticketId === "string" && ticketId.length === 0) ||
+    typeof operationId !== "string" ||
+    operationId.length === 0 ||
+    (title !== null && typeof title !== "string") ||
+    !isProvisionalChatDraftPhase(phase)
+  ) {
+    return undefined;
+  }
+  const skills = Array.isArray(value.skills)
+    ? value.skills.filter((skill): skill is string => typeof skill === "string" && skill.length > 0)
+    : [];
+  const model = parseSessionModel(value.model);
+  return {
+    projectId,
+    ticketId,
+    operationId,
+    title,
+    phase,
+    ...(skills.length > 0 ? { skills } : {}),
+    ...(model === null ? {} : { model }),
+  };
+}
+
 function isChatDraft(value: unknown): value is {
   text: string;
   touchedAt: number;
   attachments?: unknown;
   held?: unknown;
+  provisional?: unknown;
 } {
   if (!isPlainRecord(value)) return false;
   return (
@@ -262,11 +445,13 @@ function readPersistedDrafts(value: unknown): Record<string, ChatDraft> {
   const drafts: Record<string, ChatDraft> = {};
   for (const [sessionId, entry] of Object.entries(value)) {
     if (!isChatDraft(entry)) continue;
+    const provisional = readProvisionalChatDraft(entry.provisional);
     drafts[sessionId] = {
       text: entry.text,
       attachments: readDraftAttachments(entry.attachments),
       held: readHeldMessages(entry.held),
       touchedAt: entry.touchedAt,
+      ...(provisional === undefined ? {} : { provisional }),
     };
   }
   return drafts;
@@ -278,11 +463,30 @@ function readPersistedDrafts(value: unknown): Record<string, ChatDraft> {
  * time only — live state keeps a draft that's mid-edit-to-blank until it's
  * actually written out, so retyping over a just-cleared box doesn't fight the
  * store.
+ *
+ * A PROVISIONAL Draft is exempt from the cap (VC-358). The cap exists because
+ * a durable Session's unsent words are recoverable in the sense that matters:
+ * the Session is still there, still listed, still openable, and the box is
+ * merely empty. A provisional Draft is the only handle on its identity — and
+ * once it is `session-created`, the only handle on a durable Session row and
+ * the held first message that has not reached a queue. Dropping one to make
+ * room for a text draft would strand both. They are bounded by open tabs
+ * rather than by this number, which is why exempting them cannot grow the
+ * envelope without bound.
  */
 function sanitizeDrafts(drafts: Readonly<Record<string, ChatDraft>>): Record<string, ChatDraft> {
-  const kept = Object.entries(drafts).filter(([, draft]) => !isEmptyDraft(draft));
+  const kept = Object.entries(drafts).filter(([, draft]) => !isEmptyChatDraft(draft));
   kept.sort(([, a], [, b]) => b.touchedAt - a.touchedAt);
-  return Object.fromEntries(kept.slice(0, MAX_DRAFTS));
+  const capped: [string, ChatDraft][] = [];
+  let durable = 0;
+  for (const entry of kept) {
+    if (entry[1].provisional !== undefined) capped.push(entry);
+    else if (durable < MAX_DRAFTS) {
+      durable += 1;
+      capped.push(entry);
+    }
+  }
+  return Object.fromEntries(capped);
 }
 
 /** The draft a session already has, or the empty one every action starts from. */
@@ -300,9 +504,15 @@ function draftFor(drafts: Readonly<Record<string, ChatDraft>>, sessionId: string
  * hydrate-on-create behavior.
  */
 export function createChatDraftsStore(storage?: StateStorage) {
+  /** In-flight work is process-local; only its stable operation id belongs in persistence. */
+  const promotions = new Map<string, Promise<boolean>>();
+  const attachmentImports = new Map<string, Set<Promise<void>>>();
+  // A close can unmount the composer while its async file import still owns
+  // callbacks. Keep those callbacks from recreating the Draft they belonged to.
+  const abandonedImports = new Set<string>();
   return create<ChatDraftsState>()(
     persist(
-      (set) => {
+      (set, get) => {
         /** Rewrites one existing draft's held list, or does nothing at all. */
         const reviseHeld = (
           sessionId: string,
@@ -319,14 +529,168 @@ export function createChatDraftsStore(storage?: StateStorage) {
 
         return {
           drafts: {},
-          setDraft: (sessionId, text) =>
+          openProvisional: (sessionId, provisional) =>
+            set((state) => {
+              abandonedImports.delete(sessionId);
+              if (state.drafts[sessionId]?.provisional !== undefined) return {};
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draftFor(state.drafts, sessionId),
+                    provisional: { ...provisional, phase: "draft" },
+                  },
+                },
+              };
+            }),
+          setProvisionalTitle: (sessionId, title) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              // Only the create intent is frozen, and it freezes when the
+              // create LANDS — not when Send is pressed. Until then this is
+              // still the Draft's own title and may be edited freely.
+              if (draft?.provisional?.phase !== "draft") return {};
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    provisional: { ...draft.provisional, title },
+                    touchedAt: Date.now(),
+                  },
+                },
+              };
+            }),
+          setProvisionalModel: (sessionId, model) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (
+                draft?.provisional?.phase !== "draft" ||
+                (draft.held.length > 0 && draft.provisional.model !== undefined)
+              ) {
+                return {};
+              }
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    provisional: { ...draft.provisional, model },
+                    touchedAt: Date.now(),
+                  },
+                },
+              };
+            }),
+          markProvisionalSessionCreated: (sessionId) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (
+                draft?.provisional === undefined ||
+                draft.provisional.phase === "session-created"
+              ) {
+                return {};
+              }
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    provisional: { ...draft.provisional, phase: "session-created" },
+                  },
+                },
+              };
+            }),
+          adoptLinkedAttachments: (sessionId, attachments) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (draft === undefined || attachments.length === 0) return {};
+              const byHash = new Map(
+                attachments.map((attachment) => [attachment.blobHash, attachment]),
+              );
+              // A strip is always a list; a held message's files are not, and
+              // only that difference is optional. Keeping the optionality at the
+              // one call site that has it leaves no empty-list fallback here for
+              // a reader to wonder about.
+              const adopt = (current: readonly BlobLinkView[]) =>
+                current.map((attachment) => byHash.get(attachment.blobHash) ?? attachment);
+              return {
+                drafts: {
+                  ...state.drafts,
+                  [sessionId]: {
+                    ...draft,
+                    attachments: adopt(draft.attachments),
+                    held: draft.held.map((message) => {
+                      const current = message.attachments;
+                      return current === undefined
+                        ? message
+                        : Object.assign({}, message, { attachments: adopt(current) });
+                    }),
+                  },
+                },
+              };
+            }),
+          completePromotion: (sessionId) =>
+            set((state) => {
+              const draft = state.drafts[sessionId];
+              if (draft?.provisional === undefined) return {};
+              const { provisional: _provisional, ...durableDraft } = draft;
+              return { drafts: { ...state.drafts, [sessionId]: durableDraft } };
+            }),
+          discardProvisional: (sessionId) =>
+            set((state) => {
+              if (state.drafts[sessionId]?.provisional === undefined) return {};
+              if (attachmentImports.has(sessionId)) abandonedImports.add(sessionId);
+              const drafts = { ...state.drafts };
+              delete drafts[sessionId];
+              return { drafts };
+            }),
+          beginAttachmentImport(sessionId) {
+            const flights = attachmentImports.get(sessionId) ?? new Set<Promise<void>>();
+            let resolveFlight!: () => void;
+            const flight = new Promise<void>((resolve) => {
+              resolveFlight = resolve;
+            });
+            flights.add(flight);
+            attachmentImports.set(sessionId, flights);
+            let finished = false;
+            return () => {
+              if (finished) return;
+              finished = true;
+              const current = attachmentImports.get(sessionId);
+              current?.delete(flight);
+              if (current?.size === 0) attachmentImports.delete(sessionId);
+              resolveFlight();
+              if (!attachmentImports.has(sessionId)) abandonedImports.delete(sessionId);
+            };
+          },
+          hasAttachmentImports: (sessionId) => (attachmentImports.get(sessionId)?.size ?? 0) > 0,
+          waitForAttachmentImports(sessionId) {
+            const flights = attachmentImports.get(sessionId);
+            return flights === undefined ? Promise.resolve() : Promise.all(flights).then(() => {});
+          },
+          promote(sessionId, run) {
+            const current = promotions.get(sessionId);
+            if (current !== undefined) return current;
+            const provisional = get().drafts[sessionId]?.provisional;
+            if (provisional === undefined) return Promise.resolve(true);
+            const flight = run(provisional).finally(() => {
+              /* v8 ignore next -- a second promotion returns the flight above rather than starting one, so the only entry this can find is its own; the check is what keeps that true if that ever changes. */
+              if (promotions.get(sessionId) === flight) promotions.delete(sessionId);
+            });
+            promotions.set(sessionId, flight);
+            return flight;
+          },
+          setDraft: (sessionId, text) => {
+            if (abandonedImports.has(sessionId)) return;
             set((state) => ({
               drafts: {
                 ...state.drafts,
                 [sessionId]: { ...draftFor(state.drafts, sessionId), text, touchedAt: Date.now() },
               },
-            })),
-          setDraftAttachments: (sessionId, attachments) =>
+            }));
+          },
+          setDraftAttachments: (sessionId, attachments) => {
+            if (abandonedImports.has(sessionId)) return;
             set((state) => ({
               drafts: {
                 ...state.drafts,
@@ -336,7 +700,8 @@ export function createChatDraftsStore(storage?: StateStorage) {
                   touchedAt: Date.now(),
                 },
               },
-            })),
+            }));
+          },
           holdMessage: (sessionId, message) =>
             set((state) => {
               const draft = draftFor(state.drafts, sessionId);
@@ -366,6 +731,14 @@ export function createChatDraftsStore(storage?: StateStorage) {
                   },
                 },
               };
+            }),
+          amendHeldMessage: (sessionId, id, amend) =>
+            reviseHeld(sessionId, (held) => {
+              const index = held.findIndex((message) => message.id === id);
+              if (index < 0) return held;
+              const next = [...held];
+              next[index] = amend(held[index]!);
+              return next;
             }),
           beginQueuedSteer: (sessionId, visible, targetId) =>
             set((state) => {
@@ -417,7 +790,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
       {
         name: CHAT_DRAFTS_APP_STATE_KEY,
         version: 1,
-        storage: createJSONStorage(() => storage ?? appStateStorage),
+        storage: createJSONStorage(() => quietDraftStorage(storage ?? appStateStorage)),
         skipHydration: storage === undefined,
         partialize: (state): PersistedChatDraftsState => ({
           drafts: sanitizeDrafts(state.drafts),

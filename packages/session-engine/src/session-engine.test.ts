@@ -138,6 +138,52 @@ describe("SessionEngine creation and explicit commands", () => {
     ).toMatchObject({ role: "subagent", parentSessionId: "parent-session" });
   });
 
+  it("honors a client-requested Session id, and keeps the ledger derivation absent one (VC-358)", async () => {
+    const { plane } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+
+    // Without a request, the ledger's own `ids.next("session")` derivation is
+    // untouched — the default this ticket must not move.
+    expect((await plane.createSession(createRequest("command-default-id"))).session.id).toBe(
+      "session-1",
+    );
+
+    const promoted = await plane.createSession({
+      ...createRequest("command-requested-id"),
+      requestedSessionId: requested,
+    });
+    expect(promoted.session.id).toBe(requested);
+    // The id travels on the immutable identity fact, not only the live row.
+    const created = (await plane.listEvents({ sessionId: requested })).find(
+      ({ payload }) => payload.kind === "session.created",
+    );
+    expect(created?.payload.kind === "session.created" && created.payload.session.id).toBe(
+      requested,
+    );
+  });
+
+  it("replays a requested-id create idempotently, and refuses a different requested id (VC-358)", async () => {
+    const { plane } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+    const first = await plane.createSession({
+      ...createRequest("command-promote"),
+      requestedSessionId: requested,
+    });
+
+    const replay = await plane.createSession({
+      ...createRequest("command-promote"),
+      requestedSessionId: requested,
+    });
+    expect(replay).toEqual(first);
+
+    await expect(
+      plane.createSession({
+        ...createRequest("command-promote"),
+        requestedSessionId: "11111111-2222-4333-8444-555555555555",
+      }),
+    ).rejects.toBeInstanceOf(SessionEngineConflictError);
+  });
+
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
     const { plane } = composition();
     const { session } = await plane.createSession(createRequest());
