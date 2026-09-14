@@ -16,7 +16,7 @@ import {
   validateUniquePrefix,
   WORKTREE_MISSING_ON_DISK,
 } from "@volli/shared";
-import { attachBlob } from "./blob-attach";
+import { attachBlob, sessionLinkBudgetRefusal } from "./blob-attach";
 import {
   createBlobLink,
   deleteBlobLink,
@@ -1065,9 +1065,26 @@ export function registerDataIpcHandlers(
     "volli:blob-link-drafts": (input: BlobLinkDraftsInput): BlobLinksResult => {
       try {
         const now = Date.now();
+        // A chat's image budget is per Session, so an import made while the
+        // chat was still a Draft could not be held to it — there was no
+        // Session to measure (VC-358). This is the boundary where those bytes
+        // become a Session's, and so the last place that rule can be applied
+        // at all; refusing here keeps a promoted Draft to the same ceiling a
+        // durable chat has enforced at every import.
+        if (input.sessionId !== undefined) {
+          const refusal = sessionLinkBudgetRefusal(
+            db,
+            input.sessionId,
+            input.blobs.map((draft) => draft.blobHash),
+          );
+          if (refusal !== null) return { ok: false, error: refusal };
+        }
         // One transaction: a composer's attachments arrive together, and a
         // Ticket that kept three of five would be worse than one that kept none
-        // and said so.
+        // and said so. The same atomicity is what a promoted Draft needs
+        // (VC-358): the Session it names already exists by the time this runs,
+        // and its staged blobs must adopt it all-or-nothing — a retry that
+        // half-adopted would leave the chat unsure what it is holding.
         db.transaction(() => {
           for (const draft of input.blobs) {
             createBlobLink(
@@ -1075,14 +1092,28 @@ export function registerDataIpcHandlers(
               {
                 blobHash: draft.blobHash,
                 ...(draft.label === undefined ? {} : { label: draft.label }),
-                ticketId: input.ticketId,
+                // Exactly one owner, admitted by the descriptor; a session
+                // link simply leaves `eventActor` unused — `createBlobLink`
+                // attributes ticket links only.
+                ...(input.ticketId !== undefined
+                  ? { ticketId: input.ticketId }
+                  : { sessionId: input.sessionId }),
                 eventActor: { kind: "user" },
               },
               now,
             );
           }
         })();
-        return { ok: true, blobs: listLinkViews(db, { ticketId: input.ticketId }) };
+        // The caller reads back the owner it named: the Ticket composer its
+        // strip, the promoted chat its Session's — the links it just made and
+        // any that were already there.
+        return {
+          ok: true,
+          blobs:
+            input.ticketId !== undefined
+              ? listLinkViews(db, { ticketId: input.ticketId })
+              : listLinkViews(db, { sessionId: input.sessionId }),
+        };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

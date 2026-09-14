@@ -153,11 +153,22 @@ export interface SessionAttention {
   reason: string | null;
 }
 
+/**
+ * One row of the Active band.
+ *
+ * MOSTLY a Session, but not always. Since VC-358 the band also carries
+ * provisional chat Drafts — renderer-owned, not yet durable, and never built
+ * by this module: `active-sessions.tsx` projects them into this shape and
+ * concatenates them ahead of the listing. A Draft is a row a person can see,
+ * name and click, so it has to be one of these; the fields below say what each
+ * one means when nothing is running yet.
+ */
 export interface ActiveSessionRow {
   id: string;
   /**
    * The ticket this row belongs to, or `null` for a ticketless Session — a
-   * Board Session, or one whose ticket has left the board.
+   * Board Session, or one whose ticket has left the board. A Draft carries the
+   * Ticket it was opened against, which is also the scope it will promote under.
    */
   ticket: Ticket | null;
   title: string;
@@ -167,9 +178,16 @@ export interface ActiveSessionRow {
    * only when there is no ticket whose status could stand there instead
    * (`session-band-row.tsx`). Still built for every row either way: which one
    * of those two it is, is the view's call and not the listing's.
+   *
+   * A Draft says `Draft`, because nothing is running and saying the name of an
+   * executor that has not been chosen yet would be the one dishonest answer.
    */
   source: string;
-  /** Never `null`: every row here speaks for a Session, and a Session is always in some state. */
+  /**
+   * Never `null`: every row is in some state. For a Session that is what its
+   * executor reports. A Draft is always `idle` — it has no executor to be busy,
+   * and `idle` is the truthful reading of a chat nobody has spoken to.
+   */
   activity: SessionActivityState;
   /**
    * Whether the row's activity is the harness's own report or the PTY

@@ -22,6 +22,8 @@ import {
   acceptsImageInputIn,
   applySkillModes,
   BLOB_URL_SCHEME,
+  CHAT_DRAFTS_APP_STATE_KEY,
+  chatDraftAttachmentHashes,
   diffManagedContent,
   displayTicketId,
   errorMessage,
@@ -2225,17 +2227,19 @@ app.whenReady().then(async () => {
   // it runs at boot rather than on the user's turn, and a failure is logged
   // rather than raised: garbage left behind is a disk cost, never a broken app.
   //
-  // EXCEPT what a still-stored new-Ticket draft names (VC-137): the draft
-  // persists its attachment strip like it persists the words, so those Blobs
-  // are a persisted attachment waiting for their Ticket, not garbage. Reading
-  // the raw app_state row here — the renderer owns that envelope's shape, and
-  // `draftAttachmentHashes` reads it defensively enough that a malformed row
-  // can at worst leak bytes until the draft is fixed or cleared.
+  // EXCEPT what a still-stored new-Ticket or provisional-chat Draft names
+  // (VC-137/VC-358): each persists its attachment strip like it persists the
+  // words, so those Blobs are waiting for an owner, not garbage. Reading the
+  // raw app_state rows here — the renderer owns those envelope shapes, and the
+  // shared readers are defensive enough that malformed state can at worst leak
+  // bytes until the Draft is fixed or cleared.
   if (dbHandle.ok) {
     try {
-      const retained = new Set(
-        draftAttachmentHashes(getAllAppState(dbHandle.db)[NEW_TICKET_DRAFT_APP_STATE_KEY]),
-      );
+      const appState = getAllAppState(dbHandle.db);
+      const retained = new Set([
+        ...draftAttachmentHashes(appState[NEW_TICKET_DRAFT_APP_STATE_KEY]),
+        ...chatDraftAttachmentHashes(appState[CHAT_DRAFTS_APP_STATE_KEY]),
+      ]);
       const { collected } = collectUnlinkedBlobs(
         dbHandle.db,
         blobsRoot(app.getPath("userData")),
