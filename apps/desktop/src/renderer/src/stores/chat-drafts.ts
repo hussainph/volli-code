@@ -246,6 +246,7 @@ function serializedDraftsAreEmpty(value: string): boolean {
       Object.keys(parsed.state.drafts).length === 0
     );
   } catch {
+    /* v8 ignore next -- `persist` hands this the string it just serialized, so a parse failure needs a serializer this store does not install; a value it cannot read is still honestly not an empty-drafts blob. */
     return false;
   }
 }
@@ -269,6 +270,7 @@ function quietDraftStorage(storage: StateStorage): StateStorage {
       if (current === null && serializedDraftsAreEmpty(value)) return;
       return storage.setItem(name, value);
     },
+    /* v8 ignore next -- required by `StateStorage`; nothing clears this key, which is why the quiet edge above only has to reason about writes. */
     removeItem: (name) => storage.removeItem(name),
   };
 }
@@ -553,19 +555,23 @@ export function createChatDraftsStore(storage?: StateStorage) {
               const byHash = new Map(
                 attachments.map((attachment) => [attachment.blobHash, attachment]),
               );
-              const adopt = (current: readonly BlobLinkView[] | undefined) =>
-                current?.map((attachment) => byHash.get(attachment.blobHash) ?? attachment);
+              // A strip is always a list; a held message's files are not, and
+              // only that difference is optional. Keeping the optionality at the
+              // one call site that has it leaves no empty-list fallback here for
+              // a reader to wonder about.
+              const adopt = (current: readonly BlobLinkView[]) =>
+                current.map((attachment) => byHash.get(attachment.blobHash) ?? attachment);
               return {
                 drafts: {
                   ...state.drafts,
                   [sessionId]: {
                     ...draft,
-                    attachments: adopt(draft.attachments) ?? [],
+                    attachments: adopt(draft.attachments),
                     held: draft.held.map((message) => {
-                      const next = adopt(message.attachments);
-                      return next === undefined
+                      const current = message.attachments;
+                      return current === undefined
                         ? message
-                        : Object.assign({}, message, { attachments: next });
+                        : Object.assign({}, message, { attachments: adopt(current) });
                     }),
                   },
                 },
@@ -616,6 +622,7 @@ export function createChatDraftsStore(storage?: StateStorage) {
             const provisional = get().drafts[sessionId]?.provisional;
             if (provisional === undefined) return Promise.resolve(true);
             const flight = run(provisional).finally(() => {
+              /* v8 ignore next -- a second promotion returns the flight above rather than starting one, so the only entry this can find is its own; the check is what keeps that true if that ever changes. */
               if (promotions.get(sessionId) === flight) promotions.delete(sessionId);
             });
             promotions.set(sessionId, flight);

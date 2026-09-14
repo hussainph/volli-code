@@ -91,6 +91,42 @@ describe("provisional chat", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("keeps the Draft a person is already typing into when its surface re-opens it", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+    store.getState().setDraft("draft-1", "half typed");
+
+    // Re-opening the same id is how a surface re-asserts a Draft it already
+    // has. It must not mint a second launch record over the words.
+    store.getState().openProvisional("draft-1", { ...PROVISIONAL, operationId: "op-2" });
+
+    expect(store.getState().drafts["draft-1"]?.provisional?.operationId).toBe("op-1");
+    expect(store.getState().drafts["draft-1"]?.text).toBe("half typed");
+  });
+
+  it("leaves a durable Draft alone when promotion completes twice", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("durable-1", "already a Session");
+
+    // A second `completePromotion` (a retried handoff) has no provisional left
+    // to strip, and must not rewrite the entry it finds.
+    const before = store.getState().drafts["durable-1"];
+    store.getState().completePromotion("durable-1");
+
+    expect(store.getState().drafts["durable-1"]).toBe(before);
+  });
+
+  it("treats promoting a Draft that is already a Session as done", async () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    store.getState().setDraft("durable-1", "already a Session");
+    const run = vi.fn();
+
+    // Nothing provisional is left to promote, so there is no work to run and
+    // no failure to report: the caller's words are already somewhere durable.
+    await expect(store.getState().promote("durable-1", run)).resolves.toBe(true);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("persists launch identity once the Draft has content and restores it on relaunch", async () => {
     const storage = createMemoryStorage();
     const first = createChatDraftsStore(storage);
@@ -740,6 +776,62 @@ describe("persistence", () => {
         touchedAt: expect.any(Number) as number,
       },
     });
+  });
+
+  it("restores a Draft's skills and model, dropping skill entries that are not names", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    first.getState().setProvisionalModel("draft-1", {
+      providerId: "anthropic",
+      modelId: "sonnet",
+      reasoningLevel: "high",
+    });
+    // Reach past the store to seed the shapes a hand-edited or older blob can
+    // hold: hydration must keep the names and drop the rest rather than fail
+    // the Draft they rode in on.
+    const raw = JSON.parse(storage.getItem("volli:chat-drafts")!) as {
+      state: { drafts: Record<string, { provisional: Record<string, unknown> }> };
+    };
+    raw.state.drafts["draft-1"]!.provisional.skills = ["logos", "", 7, null];
+    storage.setItem("volli:chat-drafts", JSON.stringify(raw));
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toEqual({
+      ...PROVISIONAL,
+      phase: "draft",
+      skills: ["logos"],
+      model: { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" },
+    });
+  });
+
+  it.each([
+    ["a title that is neither absent nor a string", { title: 7 }],
+    ["a phase this build does not know", { phase: "promoting" }],
+    ["a ticket id that is present but empty", { ticketId: "" }],
+    ["no operation id to make the create one command", { operationId: "" }],
+    ["no project to own it", { projectId: "" }],
+  ])("drops a launch record with %s, keeping the words beside it", async (_name, invalid) => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    const raw = JSON.parse(storage.getItem("volli:chat-drafts")!) as {
+      state: { drafts: Record<string, { provisional: Record<string, unknown> }> };
+    };
+    Object.assign(raw.state.drafts["draft-1"]!.provisional, invalid);
+    storage.setItem("volli:chat-drafts", JSON.stringify(raw));
+
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+
+    // The Draft survives as an ordinary draft: a launch record this build
+    // cannot read is not a reason to throw away what someone typed.
+    expect(reloaded.getState().drafts["draft-1"]?.text).toBe("half typed");
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toBeUndefined();
   });
 
   // A held message re-sent after a relaunch must deliver what its `/skill`

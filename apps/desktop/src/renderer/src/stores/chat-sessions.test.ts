@@ -747,6 +747,204 @@ describe("promoteChatSession", () => {
     ]);
   });
 
+  it("refuses a Session the edge minted under an id the Draft did not ask for", async () => {
+    const { attaches, state, store } = fixture();
+    openDraft();
+    // The Draft's id IS the durable id (VC-358). An edge that answers with a
+    // different one has not promoted this Draft, and adopting it would strand
+    // every tab, pane and shortcut still naming the Draft.
+    state.createAnswer = () => ({ sessionId: "someone-elses-session" });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("someone-elses-session");
+    expect(attaches).toEqual([]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeUndefined();
+  });
+
+  it("keeps the Draft and its words when the create itself fails", async () => {
+    const { attaches, state, store } = fixture();
+    openDraft();
+    state.createAnswer = () => Promise.reject(new Error("edge is down"));
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("edge is down");
+    expect(attaches).toEqual([]);
+    // Nothing durable happened, so the Draft is still the whole truth.
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe("draft");
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.text).toBe("first message");
+  });
+
+  it("promotes a ticketless Draft without asking any ticket to refresh its rail", async () => {
+    const { attaches, projectStarts, store } = fixture();
+    const listForTicket = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+    vi.stubGlobal("window", {
+      api: { attachments: { linkDrafts: vi.fn() }, sessions: { listForTicket } },
+    });
+    useChatDraftsStore.getState().openProvisional(DRAFT_ID, {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "promotion-op",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft(DRAFT_ID, "first message");
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(projectStarts).toEqual([{ operationId: "promotion-op", projectId: "p1", title: null }]);
+    expect(listForTicket).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(attaches).toEqual([{ operationId: "cmd-1", sessionId: DRAFT_ID }]),
+    );
+  });
+
+  it("hands back only the message that was in flight when the tab closed mid-transfer", async () => {
+    const { store } = fixture();
+    openDraft(true);
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(DRAFT_ID, { id: "in-flight", text: "first message" });
+    drafts.holdMessage(DRAFT_ID, { id: "waiting", text: "second message" });
+    drafts.markHeld(DRAFT_ID, "waiting", "queued");
+    store.getState().openChatTab("t1", DRAFT_ID);
+    let releaseLink!: () => void;
+    const linkWait = new Promise<void>((resolve) => (releaseLink = resolve));
+    vi.mocked(window.api.attachments.linkDrafts).mockImplementation(async ({ blobs }) => {
+      await linkWait;
+      return {
+        ok: true as const,
+        blobs: blobs.map((blob, index) => ({
+          linkId: `linked-${index}`,
+          blobHash: blob.blobHash,
+          label: blob.label ?? "attachment",
+          originalName: blob.label ?? "attachment",
+          mime: "image/png",
+          sizeBytes: 2048,
+        })),
+      };
+    });
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+        "session-created",
+      ),
+    );
+    store.getState().closeChatTab("t1", DRAFT_ID);
+    releaseLink();
+    await expect(promotion).resolves.toBe(true);
+
+    // `sending` is the one state with no retry surface behind it. A queued row
+    // already has one, and rewriting it would be a lie about where it stood.
+    const held = useChatDraftsStore.getState().drafts[DRAFT_ID]?.held ?? [];
+    expect(held.map(({ id, state }) => [id, state])).toEqual([
+      ["in-flight", "unsent"],
+      ["waiting", "queued"],
+    ]);
+  });
+
+  it("carries the Draft's chosen skills into the create it was born with", async () => {
+    const { store, ticketStarts } = fixture();
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts: vi.fn() },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    useChatDraftsStore.getState().openProvisional(DRAFT_ID, {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "promotion-op",
+      title: null,
+      skills: ["logos"],
+    });
+    useChatDraftsStore.getState().setDraft(DRAFT_ID, "first message");
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(ticketStarts).toEqual([
+      {
+        operationId: "promotion-op",
+        projectId: "p1",
+        ticketId: "t1",
+        title: null,
+        requestedSessionId: DRAFT_ID,
+        skills: ["logos"],
+      },
+    ]);
+  });
+
+  it("refuses the send when a staged file does not come back from the transfer", async () => {
+    const { attaches, store } = fixture();
+    openDraft(true);
+    vi.stubGlobal("window", {
+      api: {
+        attachments: {
+          // Answers `ok`, but without the Blob it was asked to adopt: the
+          // Session would attach holding a file the composer still shows.
+          linkDrafts: vi.fn(async () => ({ ok: true as const, blobs: [] })),
+        },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("shot.png");
+    expect(attaches).toEqual([]);
+  });
+
+  it("refuses the send when the transfer itself throws", async () => {
+    const { attaches, store } = fixture();
+    openDraft(true);
+    vi.stubGlobal("window", {
+      api: {
+        attachments: {
+          linkDrafts: vi.fn(async () => {
+            throw new Error("database is locked");
+          }),
+        },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("database is locked");
+    expect(attaches).toEqual([]);
+  });
+
+  it("sends an unlabelled staged file as a hash alone", async () => {
+    const { store } = fixture();
+    openDraft();
+    const linkDrafts = vi.fn(async () => ({ ok: true as const, blobs: [] }));
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    useChatDraftsStore.getState().setDraftAttachments(DRAFT_ID, [
+      {
+        linkId: null,
+        blobHash: "ef".repeat(32),
+        label: "",
+        originalName: "paste.png",
+        mime: "image/png",
+        sizeBytes: 64,
+      },
+    ]);
+
+    await store.getState().promoteChatSession(DRAFT_ID);
+
+    // An absent label is not an empty one: main labels the link from the
+    // Blob's own name rather than storing "".
+    expect(linkDrafts).toHaveBeenCalledWith({
+      sessionId: DRAFT_ID,
+      blobs: [{ blobHash: "ef".repeat(32) }],
+    });
+  });
+
   it("restores persisted provisional Drafts as tabs without making resident Session slices", () => {
     const { store } = fixture();
     openDraft();
@@ -756,6 +954,79 @@ describe("promoteChatSession", () => {
     expect(store.getState().openTabs).toEqual({ t1: [DRAFT_ID] });
     expect(store.getState().provisionalActive).toEqual({ t1: DRAFT_ID });
     expect(store.getState().sessions).toEqual({});
+  });
+
+  it("restores a ticketless Draft under its project, and focuses the most recently touched", () => {
+    const { store } = fixture();
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts: vi.fn() },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    const drafts = useChatDraftsStore.getState();
+    drafts.openProvisional("older-draft", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-older",
+      title: null,
+    });
+    drafts.setDraft("older-draft", "typed first");
+    drafts.openProvisional("newer-draft", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-newer",
+      title: null,
+    });
+    drafts.setDraft("newer-draft", "typed second");
+    // A Session that has already promoted is not provisional, and restoring
+    // tabs must step over it rather than open it as a Draft.
+    drafts.setDraft("durable-1", "a Session's draft");
+
+    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+
+    expect(store.getState().openTabs).toEqual({ p1: ["older-draft", "newer-draft"] });
+    expect(store.getState().provisionalActive).toEqual({ p1: "newer-draft" });
+    expect(store.getState().sessions).toEqual({});
+  });
+
+  it("focuses the most recently touched Draft whatever order they are stored in", () => {
+    const { store } = fixture();
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts: vi.fn() },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      const drafts = useChatDraftsStore.getState();
+      vi.setSystemTime(2000);
+      drafts.openProvisional("touched-later", {
+        projectId: "p1",
+        ticketId: null,
+        operationId: "op-later",
+        title: null,
+      });
+      drafts.setDraft("touched-later", "typed most recently");
+      vi.setSystemTime(1000);
+      drafts.openProvisional("touched-earlier", {
+        projectId: "p1",
+        ticketId: null,
+        operationId: "op-earlier",
+        title: null,
+      });
+      drafts.setDraft("touched-earlier", "typed a while ago");
+
+      store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Both are restored, but the one someone touched last is the one in front
+    // — insertion order in the persisted blob is not recency.
+    expect(store.getState().openTabs).toEqual({ p1: ["touched-later", "touched-earlier"] });
+    expect(store.getState().provisionalActive).toEqual({ p1: "touched-later" });
   });
 
   it("drops a restored Draft whose project no longer exists", () => {
@@ -1328,6 +1599,21 @@ describe("open chat tabs", () => {
 });
 
 describe("reconcileTicketChatTabs", () => {
+  it("moves the focused Draft of every departed ticket onto the project", () => {
+    const { store } = fixture();
+    store.setState({
+      openTabs: { t1: ["draft-1"], t2: ["draft-2"] },
+      provisionalActive: { t1: "draft-1", t2: "draft-2" },
+    });
+
+    // Two tickets leaving at once: the second must edit the focus map the
+    // first already began, not start a fresh copy over it.
+    store.getState().reconcileTicketChatTabs("p1", ["t1", "t2"], []);
+
+    expect(store.getState().openTabs).toEqual({ p1: ["draft-1", "draft-2"] });
+    expect(store.getState().provisionalActive).toEqual({ p1: "draft-2" });
+  });
+
   it("moves departed ticket tabs onto the project and records their exact ticket origins", () => {
     const { store } = fixture();
     // No resident slices: ownership reconciliation cannot depend on an
@@ -1529,6 +1815,73 @@ describe("clearRehomedTicketProvenance", () => {
     store.getState().clearRehomedTicketProvenance("t1");
 
     expect(store.getState().rehomedTicketBySession).toBe(before);
+  });
+
+  it("drops an owner whose only tab was the abandoned Draft", () => {
+    const { store } = fixture();
+    const draftId = "only-tab";
+    useChatDraftsStore.getState().openProvisional(draftId, {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "only-tab-operation",
+      title: null,
+    });
+    store.setState({
+      openTabs: { p1: [draftId], t2: ["durable-2"] },
+      rehomedTicketBySession: { [draftId]: "t1" },
+    });
+
+    store.getState().clearRehomedTicketProvenance("t1");
+
+    // An owner with nothing left is not an owner with an empty strip.
+    expect(store.getState().openTabs).toEqual({ t2: ["durable-2"] });
+  });
+
+  it("keeps a Draft the deleted ticket already promoted, which is a Session now", () => {
+    const { store } = fixture();
+    const draftId = "already-created";
+    useChatDraftsStore.getState().openProvisional(draftId, {
+      projectId: "p1",
+      ticketId: "t1",
+      operationId: "created-operation",
+      title: null,
+    });
+    useChatDraftsStore.getState().setDraft(draftId, "already sent");
+    useChatDraftsStore.getState().markProvisionalSessionCreated(draftId);
+    store.setState({ openTabs: { p1: [draftId] }, rehomedTicketBySession: { [draftId]: "t1" } });
+
+    store.getState().clearRehomedTicketProvenance("t1");
+
+    // Only an UNCREATED Draft is abandoned with its ticket. This one has a
+    // durable row behind it, and no delete channel exists to take it back.
+    expect(useChatDraftsStore.getState().drafts[draftId]?.provisional?.phase).toBe(
+      "session-created",
+    );
+    expect(store.getState().openTabs).toEqual({ p1: [draftId] });
+  });
+});
+
+describe("setProvisionalActive", () => {
+  it("holds its own state when the named Draft is already the focused one", () => {
+    const { store } = fixture();
+    store.getState().setProvisionalActive("t1", "draft-1");
+    const before = store.getState().provisionalActive;
+
+    store.getState().setProvisionalActive("t1", "draft-1");
+
+    // Re-asserting focus is what every re-render of the tab strip does; it
+    // must not be a store write, or the sidebar rebuilds for nothing.
+    expect(store.getState().provisionalActive).toBe(before);
+  });
+
+  it("forgets an owner's focus rather than remembering a null", () => {
+    const { store } = fixture();
+    store.getState().setProvisionalActive("t1", "draft-1");
+    store.getState().setProvisionalActive("t2", "draft-2");
+
+    store.getState().setProvisionalActive("t1", null);
+
+    expect(store.getState().provisionalActive).toEqual({ t2: "draft-2" });
   });
 });
 

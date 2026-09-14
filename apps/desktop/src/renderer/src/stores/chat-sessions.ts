@@ -416,13 +416,17 @@ export function createChatSessionsStore(
           // Project teardown can remove the tab and Draft after create while a
           // Blob transfer is awaited. The durable row may survive elsewhere,
           // but no removed project earns a hidden resident runtime.
-          if (useChatDraftsStore.getState().drafts[sessionId]?.provisional === undefined) {
+          const drafts = useChatDraftsStore.getState();
+          const draft = drafts.drafts[sessionId];
+          if (draft?.provisional === undefined) {
             get().closeChatSession(sessionId);
             return true;
           }
           if (closedCreatedDrafts.delete(sessionId)) {
-            const drafts = useChatDraftsStore.getState();
-            for (const message of drafts.drafts[sessionId]?.held ?? []) {
+            // One read, held across both decisions: nothing awaits between them,
+            // so a second `getState()` could only ever return the same Draft —
+            // and asking twice invites a reader to believe otherwise.
+            for (const message of draft.held) {
               if (message.state === "sending") drafts.markHeld(sessionId, message.id, "unsent");
             }
             drafts.completePromotion(sessionId);
