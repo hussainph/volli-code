@@ -1506,6 +1506,109 @@ describe("Session tRPC router", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("carries a client-requested Session id on create, UUID-checked at the edge (VC-358)", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // A provisional chat promotes under the id it minted; absent, nothing
+    // changes for callers that never state one.
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      requestedSessionId: requested,
+    });
+    await caller.sessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ requestedSessionId: requested }),
+      {
+        operationId: "operation-2",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      },
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+        requestedSessionId: "not a uuid",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("refuses a well-formed UUID that is not v4, and the nil and max ids", async () => {
+    // `docs/BOUNDARIES.md` rule 1: a durable id may never be built from
+    // anything machine-local. A v1 UUID carries the minting machine's MAC
+    // address in its last 48 bits, so accepting one would put a hardware
+    // identifier into a permanent Session id — and a durable id derivation is
+    // frozen the moment it ships, so this door cannot be narrowed later.
+    const fixture = runtimeFixture();
+    const admitted: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        admitted.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const refused = [
+      // v1: time-based, node field is a MAC.
+      "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      // v3 and v5: name-based, so two clients naming the same thing collide.
+      "3d813cbb-47fb-32ba-91df-831e1593ac29",
+      "886313e1-3b8a-5372-9b90-0c9aee199e5d",
+      "00000000-0000-0000-0000-000000000000",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    ];
+
+    for (const [index, requestedSessionId] of refused.entries()) {
+      await expect(
+        caller.sessions.create({
+          operationId: `refused-${index}`,
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: null,
+          requestedSessionId,
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    // Refused at the edge means refused before the handler — no create ran.
+    expect(admitted).toEqual([]);
+
+    // And the shape the renderer actually mints still passes.
+    await caller.sessions.create({
+      operationId: "admitted",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+      requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(admitted).toEqual([
+      expect.objectContaining({ requestedSessionId: "550e8400-e29b-41d4-a716-446655440000" }),
+    ]);
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({

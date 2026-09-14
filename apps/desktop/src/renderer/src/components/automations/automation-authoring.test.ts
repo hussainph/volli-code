@@ -45,7 +45,7 @@ describe("automation authoring assistance", () => {
     vi.mocked(bootChatSession).mockImplementation(async (_scope, options: ChatBoot) => {
       expect(enqueue).not.toHaveBeenCalled();
       expect(options.title).toBe("Draft automation");
-      expect(options.land("s1")).toBe(true);
+      expect(options.land("s1", true)).toBe(true);
       return "s1";
     });
 

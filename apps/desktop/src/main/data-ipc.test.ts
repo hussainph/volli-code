@@ -3688,6 +3688,123 @@ describe("attachments (VC-50)", () => {
     });
   });
 
+  it("links a promoted Draft's staged blobs to its new session (VC-358)", async () => {
+    // The durable Session a promotion minted — its id was fixed before the
+    // staged blobs ever had an owner to hang off.
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    expect(draft.blob.linkId).toBeNull();
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash, label: "Staged" }],
+    });
+    if (!linked.ok) throw new Error(linked.error);
+    expect(linked.blobs).toHaveLength(1);
+    expect(linked.blobs[0]).toMatchObject({ label: "Staged", originalName: "staged.png" });
+
+    // The Session's own list reads them back; the Ticket's does not, and the
+    // adoption left no ticket event — a session link is recorded by the
+    // transcript turn that carries the file, never by the ledger here.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "Staged" }],
+    });
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+    if (!events.ok) throw new Error(events.error);
+    expect(events.events.filter((one) => one.payload.kind === "attachment_added")).toHaveLength(0);
+  });
+
+  it("re-links a promoted Draft idempotently — a retry after a lost reply adds nothing", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    const first = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!first.ok) throw new Error(first.error);
+
+    // Promotion replays its one command after a lost reply; the same blobs
+    // against the same Session are the SAME links, in the same order.
+    const retry = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!retry.ok) throw new Error(retry.error);
+    expect(retry.blobs).toEqual(first.blobs);
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "staged.png" }],
+    });
+  });
+
+  it("refuses a promoted Draft whose staged images exceed what one chat can carry (VC-358)", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    // Nothing here was refusable at import: a Draft has no Session, so the
+    // cumulative check had nothing to measure against. Promotion is where
+    // these bytes would become a conversation's, and so where the ceiling
+    // finally applies.
+    const blobs: { blobHash: string }[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      const staged = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+        fileName: `shot-${i}.png`,
+        bytes: image,
+        owner: { unowned: true },
+      });
+      if (!staged.ok || !staged.blob) throw new Error("expected a staged blob");
+      blobs.push({ blobHash: staged.blob.blobHash });
+    }
+    const overflow = new Uint8Array(1024);
+    overflow[0] = 99;
+    const last = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "one-more.png",
+      bytes: overflow,
+      owner: { unowned: true },
+    });
+    if (!last.ok || !last.blob) throw new Error("expected a staged blob");
+    blobs.push({ blobHash: last.blob.blobHash });
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs,
+    });
+    expect(linked).toMatchObject({ ok: false });
+    if (linked.ok) throw new Error("expected refusal");
+    expect(linked.error).toMatch(/Remove one and send again/);
+    // All or nothing, as with an unknown hash: a chat holding four of five
+    // images nobody chose to drop would be worse than an honest refusal.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [],
+    });
+  });
+
+  it("refuses a draft link that names no owner or both owners", () => {
+    expect(invoke<BlobLinksResult>("volli:blob-link-drafts", { blobs: [] })).toEqual({
+      ok: false,
+      error: "Invalid attachment drafts",
+    });
+    expect(
+      invoke<BlobLinksResult>("volli:blob-link-drafts", {
+        ticketId: ticket.id,
+        sessionId: "promoted-1",
+        blobs: [],
+      }),
+    ).toEqual({ ok: false, error: "Invalid attachment drafts" });
+  });
+
   it("refuses a list that names no owner", async () => {
     expect(invoke<BlobLinksResult>("volli:blob-list", {})).toEqual({
       ok: false,

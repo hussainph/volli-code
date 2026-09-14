@@ -25,6 +25,7 @@ import {
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore } from "@renderer/stores/venue";
@@ -305,6 +306,19 @@ export async function boot(
     useWorkspaceStore.persist.rehydrate(),
     useChatDraftsStore.persist.rehydrate(),
   ]);
+  // Typed provisional Drafts are the one chat kind whose identity lives in
+  // app_state rather than the Session listing. Reopen their tabs only after
+  // both the Drafts and workspace layout have landed, so recorded `chat:<id>`
+  // values resolve normally on the app's first render.
+  useChatSessionsStore
+    .getState()
+    .restoreProvisionalChatTabs(
+      useChatDraftsStore.getState().drafts,
+      new Set(
+        Object.values(payload.ticketsByProject).flatMap((tickets) => tickets.map(({ id }) => id)),
+      ),
+      new Set(payload.projects.map(({ id }) => id)),
+    );
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

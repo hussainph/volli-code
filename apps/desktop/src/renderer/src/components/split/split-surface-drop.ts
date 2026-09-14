@@ -49,11 +49,19 @@ export interface SplitSurfaceWrites {
   reorderPane(paneId: string, movedId: string, ids: readonly string[]): void;
   /** Move a tab into a pane; the model focuses and activates for it. */
   moveTabToPane(tabId: string, paneId: string): void;
-  /** Split a pane open around `tabId`, claiming `surfaceTabIds` on a first split. */
+  /**
+   * Split a pane open around `tabId`, claiming `surfaceTabIds` on a first split.
+   *
+   * `null` splits the pane open with NOTHING assigned to it. That is what a
+   * Chat Draft nobody has typed into needs (VC-358): the pane is durable
+   * layout and is recorded, but the Draft riding into it is not yet something
+   * the workspace may name, so it arrives through the renderer-only active
+   * override instead.
+   */
   splitPane(
     paneId: string,
     edge: SplitViewEdge,
-    tabId: string,
+    tabId: string | null,
     surfaceTabIds: readonly string[],
   ): void;
   /** Bring a tab to the front of an UNSPLIT surface — the centre drop's door. */

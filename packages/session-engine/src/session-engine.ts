@@ -52,6 +52,15 @@ export interface CreateSessionRequest {
   /** The delegating Session for a `subagent`, null otherwise — ledger data, never a host table's. */
   parentSessionId: string | null;
   title: string | null;
+  /**
+   * The Session id a client already minted (VC-358), honored when present so a
+   * provisional chat can be promoted under the id it carried all along. Absent
+   * — every existing caller — keeps the ledger's own `ids.next("session")`
+   * derivation, untouched. The requested id is not stored beside the Session:
+   * it simply IS the Session id, so replay can compare a later request against
+   * the durable row and refuse a command that arrives naming another id.
+   */
+  requestedSessionId?: string | null;
   /** Trusted host-supplied audit provenance; renderers never call this module directly. */
   provenance: SessionEventProvenance;
 }
@@ -208,7 +217,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (existing) return replayCreate(transaction, request);
 
         const session: Session = {
-          id: ports.ids.next("session"),
+          id: request.requestedSessionId ?? ports.ids.next("session"),
           projectId: request.projectId,
           ticketId: request.ticketId,
           role: request.role,
@@ -817,6 +826,14 @@ function replayCreate(
   if (!stored || !sameCreateSessionRequest(stored, request)) {
     throw new SessionEngineConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
+    );
+  }
+  // VC-358: the requested id, when the replaying request carries one, must be
+  // the id the command was first accepted under — a promote that replays with
+  // a different client-minted id is a different intent, not the same one.
+  if (request.requestedSessionId && stored.sessionId !== request.requestedSessionId) {
+    throw new SessionEngineConflictError(
+      `Command ${stored.id} was accepted for Session ${stored.sessionId}, not ${request.requestedSessionId}`,
     );
   }
   const receipt = transaction.listReceipts(stored.id).find(isCreateReceipt);

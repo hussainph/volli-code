@@ -131,6 +131,12 @@ export type SessionClientCommand =
       /** The delegating Session, for a `subagent`; null for a root Role. */
       parentSessionId: string | null;
       title: string | null;
+      /**
+       * A client-minted id the durable Session takes as its own (VC-358), so a
+       * provisional chat can be promoted without an id swap. Optional: absent
+       * keeps the ledger's own `ids.next("session")` derivation.
+       */
+      requestedSessionId?: string | null;
     }
   | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
   | {
@@ -807,6 +813,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         role: request.command.role,
         parentSessionId: request.command.parentSessionId,
         title: request.command.title,
+        requestedSessionId: request.command.requestedSessionId ?? null,
         provenance: userProvenance(null),
       });
       await this.#publish([result.commandEvent, result.event, result.receiptEvent]);
