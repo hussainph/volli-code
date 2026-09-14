@@ -1268,6 +1268,16 @@ describe("ticket sessions", () => {
   // pins is that a spawned terminal actually receives it, and that a value the
   // user exported in their own shell survives untouched.
   it("injects the concurrency budget, and never over the user's own value", async () => {
+    // This test asserts on BOTH halves of the no-clobber rule, so it has to own
+    // the ambient environment for the variables it names. Volli fills only the
+    // gaps, and a Session running this suite was itself started with a budget —
+    // so inside an agent Session the "filled" spellings arrive pre-set and the
+    // assertions below read the harness's own number instead of the fixture's.
+    // Clear the three this test expects Volli to write, and set the one it
+    // expects Volli to leave alone.
+    const cleared = ["VITEST_MAX_WORKERS", "CARGO_BUILD_JOBS", "GOFLAGS"] as const;
+    const priorEnv = new Map(cleared.map((name) => [name, process.env[name]]));
+    for (const name of cleared) delete process.env[name];
     const priorMakeflags = process.env["MAKEFLAGS"];
     process.env["MAKEFLAGS"] = "-j16";
     try {
@@ -1284,6 +1294,10 @@ describe("ticket sessions", () => {
     } finally {
       if (priorMakeflags === undefined) delete process.env["MAKEFLAGS"];
       else process.env["MAKEFLAGS"] = priorMakeflags;
+      for (const [name, value] of priorEnv) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 
