@@ -1,5 +1,12 @@
 export const FIXTURE_SCHEMA_VERSION = 1;
-export const CURRENT_DB_SCHEMA_VERSION = 46;
+/**
+ * The app's latest migration version, which a generated fixture must reach.
+ *
+ * Unlike {@link FIXTURE_SCHEMA_VERSION}, this is not a pin: it asserts that a
+ * freshly generated fixture migrated all the way up, so it has to be raised
+ * whenever a migration is added. VC-8 added 047; VC-355 added 048 and 049.
+ */
+export const CURRENT_DB_SCHEMA_VERSION = 49;
 export const DEFAULT_SEED = 353_259_855;
 export const REAL_BUSY_CORE_DEFAULT = 2;
 

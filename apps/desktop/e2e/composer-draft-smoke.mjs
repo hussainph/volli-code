@@ -37,6 +37,7 @@ import {
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import { createOnlyTicket } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-composer-draft-smoke-");
 const { attempt, summarize } = createRunner();
@@ -218,7 +219,7 @@ async function main() {
           await closeAnyDialog(page);
           return { ok: false, detail: "no restored draft to create from (draft feature missing)" };
         }
-        await composer(page).getByRole("button", { name: "Create", exact: true }).click();
+        await createOnlyTicket(page);
         await waitUntil(
           "dialog closes after create",
           async () => (await composer(page).count()) === 0,

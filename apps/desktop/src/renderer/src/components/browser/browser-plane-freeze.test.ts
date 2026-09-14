@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   APP_ROOT_ID,
   hasNativePlaneOverlay,
+  hasVisibleNativePlane,
   planeVisibility,
   shouldPaintPlanePixels,
   PLANE_CAPTURE_DEADLINE_MS,
@@ -130,6 +131,55 @@ describe("shouldPaintPlanePixels", () => {
 
   it("paints nothing for a pane that is not on screen", () => {
     expect(shouldPaintPlanePixels({ visible: false, frameCount: 2 })).toBe(false);
+  });
+});
+
+/*
+ * jsdom runs no layout, so `offsetParent` is always null and `clientWidth`
+ * always 0 — the three reads this predicate makes are exactly the three jsdom
+ * cannot answer. Stub them per element, which keeps each case naming the one
+ * real condition it stands for.
+ */
+function plane(box: { onScreen: boolean; width: number; height: number }): HTMLElement {
+  const node = document.createElement("div");
+  node.setAttribute("data-browser-plane", "tab-1");
+  Object.defineProperty(node, "offsetParent", {
+    value: box.onScreen ? document.body : null,
+  });
+  Object.defineProperty(node, "clientWidth", { value: box.width });
+  Object.defineProperty(node, "clientHeight", { value: box.height });
+  document.body.append(node);
+  return node;
+}
+
+describe("hasVisibleNativePlane", () => {
+  it("is quiet when no Browser Tab is mounted", () => {
+    mountAppRoot();
+    expect(hasVisibleNativePlane(document)).toBe(false);
+  });
+
+  it("reports a plane that is on screen with a box to fill", () => {
+    plane({ onScreen: true, width: 800, height: 600 });
+    expect(hasVisibleNativePlane(document)).toBe(true);
+  });
+
+  it("ignores a pane that is in the tree but not displayed", () => {
+    // A background split, or a Browser Tab behind another tab: the anchor still
+    // exists, and there is no native view over it to detach.
+    plane({ onScreen: false, width: 800, height: 600 });
+    expect(hasVisibleNativePlane(document)).toBe(false);
+  });
+
+  it("ignores a displayed pane collapsed to nothing", () => {
+    plane({ onScreen: true, width: 0, height: 600 });
+    plane({ onScreen: true, width: 800, height: 0 });
+    expect(hasVisibleNativePlane(document)).toBe(false);
+  });
+
+  it("reports the visible one out of several panes", () => {
+    plane({ onScreen: false, width: 800, height: 600 });
+    plane({ onScreen: true, width: 800, height: 600 });
+    expect(hasVisibleNativePlane(document)).toBe(true);
   });
 });
 

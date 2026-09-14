@@ -160,4 +160,22 @@ describe("AccountUsage", () => {
       "",
     );
   });
+
+  it("keeps the block inside its host's clip box — no negative top margin to slice a first line", () => {
+    // VC-352: the popover's accordion content clips at its own top edge while
+    // it animates height, so the tuck the settings host's `py-4` had earned
+    // (`-mt-2`) drew as a sliced first line once the block moved inside it.
+    // jsdom lays nothing out, so the class contract is the only witness:
+    // neither the window block nor the unavailable line may tuck above its box.
+    const markup = renderToStaticMarkup(
+      <>
+        <AccountUsage limits={LIMITS} now={NOW} />
+        <AccountUsage
+          limits={{ checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } }}
+          now={NOW}
+        />
+      </>,
+    );
+    expect(markup).not.toContain("-mt-");
+  });
 });

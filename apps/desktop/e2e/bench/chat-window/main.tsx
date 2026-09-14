@@ -62,6 +62,35 @@ const bridgeNode = (path: string[]): unknown =>
 
 Object.defineProperty(window, "api", { value: bridgeNode([]), writable: true });
 
+// Count the native observer deliveries the real plane requests. The wrapper is
+// installed before React mounts, delegates every method unchanged, and counts
+// callbacks rather than entries because one delivery is one scheduled JS turn.
+const NativeResizeObserver = window.ResizeObserver;
+let resizeObserverCallbacks = 0;
+class CountingResizeObserver implements ResizeObserver {
+  readonly #observer: ResizeObserver;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.#observer = new NativeResizeObserver((entries) => {
+      resizeObserverCallbacks += 1;
+      callback(entries, this);
+    });
+  }
+
+  observe(target: Element, options?: ResizeObserverOptions): void {
+    this.#observer.observe(target, options);
+  }
+
+  unobserve(target: Element): void {
+    this.#observer.unobserve(target);
+  }
+
+  disconnect(): void {
+    this.#observer.disconnect();
+  }
+}
+window.ResizeObserver = CountingResizeObserver;
+
 /* ---------------------------------------------------------------- fixtures */
 
 const FENCE = [
@@ -218,10 +247,23 @@ function appendTurn(sessionId: string): void {
   });
 }
 
-// The measured reply deliberately spends multiple token snapshots inside an
-// open code fence before closing it. That exercises the production live
-// markdown branch (including incremental code parsing), rather than measuring
-// only settled prose while the realistic fenced blocks sit unchanged above it.
+// The measured reply opens with roughly 4 KB of TypeScript, then grows that
+// fence across 96 more token snapshots before it closes. The former
+// 107-character fence completed too quickly to reproduce Shiki's append-only
+// cache misses: its owner-machine baseline reported zero dropped frames before
+// the optimization. This keeps the production live Markdown branch and the
+// reader's scroll in the same paint loop while giving every cache miss the
+// realistic long-fence input VC-357 was opened for.
+const streamCodeLine = (prefix: string, index: number): string => {
+  const suffix = String(index + 1).padStart(3, "0");
+  return `  const ${prefix}${suffix} = Math.max(0, delta${suffix} - budget) + history[${index}]!.duration + samples[${index}]!.cost;\n`;
+};
+const STREAM_CODE_BASE = Array.from({ length: 42 }, (_value, index) =>
+  streamCodeLine("baseline", index),
+).join("");
+const STREAM_CODE_TOKENS = Array.from({ length: 96 }, (_value, index) =>
+  streamCodeLine("frame", index),
+);
 const STREAM_TOKENS = [
   "Streaming ",
   "benchmark ",
@@ -232,21 +274,9 @@ const STREAM_TOKENS = [
   "opens ",
   "code:\n\n",
   "```ts\n",
-  "export ",
-  "function ",
-  "frameCost",
-  "(delta: ",
-  "number) ",
-  "{\n",
-  "  const ",
-  "budget ",
-  "= 16.67;\n",
-  "  return ",
-  "Math.max",
-  "(0, ",
-  "delta ",
-  "- budget);\n",
-  "}\n",
+  `export function measureFrames(delta: number, budget: number, history: Frame[], samples: Sample[]) {\n${STREAM_CODE_BASE}`,
+  ...STREAM_CODE_TOKENS,
+  "  return history.length;\n}\n",
   "```\n",
   "The ",
   "reader ",
@@ -308,6 +338,29 @@ function streamSnapshot(sessionId: string, base: readonly UIMessage[], tokenCoun
   return text.length;
 }
 
+/** Remove the previous sample before mounting the next stable live row. */
+function resetStream(sessionId: string, messages: readonly UIMessage[]): void {
+  store.setState((state) => {
+    const sessions = (state as unknown as { sessions: Record<string, unknown> }).sessions;
+    const slice = sessions[sessionId] as { transcript: typeof EMPTY_TRANSCRIPT };
+    return {
+      sessions: {
+        ...sessions,
+        [sessionId]: {
+          ...slice,
+          lifecycle: "ready",
+          transcript: {
+            ...slice.transcript,
+            turnActive: false,
+            durableMessages: messages,
+            messages,
+          },
+        },
+      },
+    } as never;
+  });
+}
+
 /** Commit the final overlay and leave the synthetic Session idle again. */
 function settleStream(sessionId: string): void {
   store.setState((state) => {
@@ -353,7 +406,24 @@ async function streamAndScroll(
   const base = (
     slice as unknown as { transcript: { messages: readonly UIMessage[] } }
   ).transcript.messages.filter((message) => message.id !== `${sessionId}-stream-probe`);
-  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 800);
+  // Every repetition starts from the same Turn and window state. If the prior
+  // sample's settled row is replaced only after the reader detaches, a large
+  // transcript can anchor its 60-row window above the new Turn and leave the
+  // live fence unmounted. Mount one cheap prose snapshot while bottom-locked,
+  // then let the measured reader move inside that stable row.
+  //
+  // DO NOT ADD `scroller.scrollTop = scroller.scrollHeight` ABOVE THIS. It looks
+  // like it would retire the previous sample's anchor more firmly, and it was
+  // tried (VC-357, reverted). Measured: every sample then reported
+  // `liveCodeBlocks: 0` and `settledCodeBlocks: 0` — the fence never mounted at
+  // all, so the probe measured a transcript with no code in it and reported a
+  // flawless 0 dropped frames. `run.mjs`'s per-sample live-fence contract is
+  // what caught it; without that check it would have read as a clean result.
+  resetStream(sessionId, base);
+  await settle();
+  streamSnapshot(sessionId, base, 1);
+  await settle();
+  scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight - 120);
   await settle();
 
   const refreshFrames: number[] = [];
@@ -383,11 +453,52 @@ async function streamAndScroll(
   }
 
   const frames: number[] = [];
+  const resizeObserverCallbacksBefore = resizeObserverCallbacks;
   let scrollDistancePx = 0;
   let priorTop = scroller.scrollTop;
-  let direction = -1;
-  let streamedCharacters = 0;
-  let priorTokenCount = 0;
+  let readerOffsetPx = 120;
+  let readerDirection = 1;
+  let streamedCharacters = streamText(1).length;
+  let priorTokenCount = 1;
+  let liveCodeBlocks = 0;
+  let liveHighlightedCodeBlocks = 0;
+  let liveHighlightedTokens = 0;
+  const codeState = (): { blocks: number; highlighted: number; highlightedTokens: number } => {
+    const plane = document.querySelectorAll<HTMLElement>("[data-bench-plane]")[index];
+    const block = [
+      ...(plane?.querySelectorAll<HTMLElement>('[data-streamdown="code-block"]') ?? []),
+    ].findLast((candidate) => candidate.textContent?.includes("measureFrames") === true);
+    const highlightedTokens = [
+      ...(block?.querySelectorAll<HTMLElement>("pre code > span > span") ?? []),
+    ].filter((token) => {
+      const color = token.style.getPropertyValue("--sdm-c");
+      return color !== "" && color !== "inherit";
+    }).length;
+    return {
+      blocks: block === undefined ? 0 : 1,
+      highlighted: highlightedTokens > 0 ? 1 : 0,
+      highlightedTokens,
+    };
+  };
+  const moveScroller = (): void => {
+    // Stay inside the live code row while moving. An absolute scroll offset lets
+    // the growing tail run below the viewport, where Streamdown intentionally
+    // defers Shiki with content-visibility and the probe becomes vacuous.
+    const maxReaderOffset = Math.max(80, Math.min(360, scroller.clientHeight * 0.45));
+    readerOffsetPx += readerDirection * 18;
+    if (readerOffsetPx <= 24 || readerOffsetPx >= maxReaderOffset) readerDirection *= -1;
+    readerOffsetPx = Math.max(24, Math.min(maxReaderOffset, readerOffsetPx));
+    scroller.scrollTop = Math.max(
+      0,
+      scroller.scrollHeight - scroller.clientHeight - readerOffsetPx,
+    );
+  };
+  const recordScroll = (): void => {
+    const actualTop = scroller.scrollTop;
+    scrollDistancePx += Math.abs(actualTop - priorTop);
+    priorTop = actualTop;
+  };
+
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
@@ -395,29 +506,65 @@ async function streamAndScroll(
       streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
       priorTokenCount = tokenCount;
     }
-    const nextTop = Math.max(
-      0,
-      Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + direction * 18),
-    );
-    scroller.scrollTop = nextTop;
-    frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
-    const actualTop = scroller.scrollTop;
-    scrollDistancePx += Math.abs(actualTop - priorTop);
-    priorTop = actualTop;
-    if (actualTop <= 0 || actualTop >= scroller.scrollHeight - scroller.clientHeight)
-      direction *= -1;
+    // The second paint is load-bearing. Streamdown hands the code source to its
+    // lazy highlighter after React commits. Starting the next update in the
+    // first rAF callback can supersede that work before it runs, which measures
+    // a renderer that skipped intermediate deltas rather than one that painted
+    // the stream. The reader still moves on BOTH frames.
+    for (let paint = 0; paint < 2; paint += 1) {
+      moveScroller();
+      frames.push(await new Promise<number>((resolve) => requestAnimationFrame(resolve)));
+      recordScroll();
+    }
+    const code = codeState();
+    liveCodeBlocks = Math.max(liveCodeBlocks, code.blocks);
+    liveHighlightedCodeBlocks = Math.max(liveHighlightedCodeBlocks, code.highlighted);
+    liveHighlightedTokens = Math.max(liveHighlightedTokens, code.highlightedTokens);
   }
-  const streamedWhileWorking =
-    (
-      store.getState() as unknown as {
-        sessions: Record<string, { lifecycle: string }>;
-      }
-    ).sessions[sessionId]?.lifecycle === "working";
+  const streamedSlice = (
+    store.getState() as unknown as {
+      sessions: Record<string, { lifecycle: string; transcript: { turnActive: boolean } }>;
+    }
+  ).sessions[sessionId];
+  const streamedWhileWorking = streamedSlice?.lifecycle === "working";
+  const streamedWhileTurnActive = streamedSlice?.transcript.turnActive === true;
+  const latencyMs = performance.now() - started;
+  for (const entry of observer?.takeRecords() ?? []) longTasks.push(entry.duration);
+  observer?.disconnect();
+  const observedResizeCallbacks = resizeObserverCallbacks - resizeObserverCallbacksBefore;
+  const frameTimesMs = frames.slice(1).map((value, at) => value - frames[at]!);
+
+  // Settle is deliberately outside the concurrent frame window. VC-357 moves
+  // one final Shiki pass here, so mixing it into the stream would hide the
+  // sustained-frame improvement and also hide the remaining settle cost.
+  const settleLongTasks: number[] = [];
+  const settleObserver =
+    typeof PerformanceObserver === "undefined"
+      ? null
+      : new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) settleLongTasks.push(entry.duration);
+        });
+  try {
+    settleObserver?.observe({ type: "longtask", buffered: false });
+  } catch {
+    // Same compatibility rule as the stream observer above.
+  }
+  const settleStarted = performance.now();
   settleStream(sessionId);
   await settle();
-  observer?.disconnect();
-  const latencyMs = performance.now() - started;
-  const frameTimesMs = frames.slice(1).map((value, at) => value - frames[at]!);
+  let settledCode = codeState();
+  const highlightDeadline = performance.now() + 2_000;
+  while (
+    settledCode.blocks > 0 &&
+    settledCode.highlighted === 0 &&
+    performance.now() < highlightDeadline
+  ) {
+    await frame();
+    settledCode = codeState();
+  }
+  const settleLatencyMs = performance.now() - settleStarted;
+  for (const entry of settleObserver?.takeRecords() ?? []) settleLongTasks.push(entry.duration);
+  settleObserver?.disconnect();
   const droppedFrames =
     refreshIntervalMs === null
       ? null
@@ -431,6 +578,7 @@ async function streamAndScroll(
     tokenRate,
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
+    streamedWhileTurnActive,
     codeFenceOpened: priorTokenCount >= STREAM_FENCE_OPEN_TOKEN,
     codeFenceClosed: priorTokenCount >= STREAM_FENCE_CLOSE_TOKEN,
     latencyMs,
@@ -438,6 +586,17 @@ async function streamAndScroll(
     frameTimesMs,
     droppedFrames,
     longTasksMs: longTasks,
+    liveCodeBlocks,
+    liveHighlightedCodeBlocks,
+    liveHighlightedTokens,
+    settledCodeBlocks: settledCode.blocks,
+    settledHighlightedCodeBlocks: settledCode.highlighted,
+    settledHighlightedTokens: settledCode.highlightedTokens,
+    settleLatencyMs,
+    settleLongTasksMs: settleLongTasks,
+    resizeObserverCallbacks: observedResizeCallbacks,
+    resizeObserverCallbacksPerSecond:
+      latencyMs === 0 ? 0 : (observedResizeCallbacks * 1_000) / latencyMs,
     scrollDistancePx,
     streamedCharacters,
   };

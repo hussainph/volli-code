@@ -185,13 +185,25 @@ export function aggregateInteraction(id, label, samples) {
   const longTasks = samples.flatMap((sample) =>
     Array.isArray(sample.longTasksMs) ? sample.longTasksMs : [],
   );
+  const settleLongTasks = samples.flatMap((sample) =>
+    Array.isArray(sample.settleLongTasksMs) ? sample.settleLongTasksMs : [],
+  );
   const extra = {};
   for (const key of [
     "firstPaintMs",
     "openMs",
     "closeMs",
+    "settleLatencyMs",
     "scrollDistancePx",
     "streamedCharacters",
+    "liveCodeBlocks",
+    "liveHighlightedCodeBlocks",
+    "liveHighlightedTokens",
+    "settledCodeBlocks",
+    "settledHighlightedCodeBlocks",
+    "settledHighlightedTokens",
+    "resizeObserverCallbacks",
+    "resizeObserverCallbacksPerSecond",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -213,6 +225,11 @@ export function aggregateInteraction(id, label, samples) {
           ),
         ),
         durationMs: summarize(longTasks),
+      },
+      settleLongTasks: {
+        observedCount: settleLongTasks.length,
+        countPerSample: summarize(samples.map((sample) => sample.settleLongTasksMs?.length ?? 0)),
+        durationMs: summarize(settleLongTasks),
       },
       ...extra,
     },
@@ -907,8 +924,29 @@ export function validateChatBenchReport(
     if (sample.streamedWhileWorking !== true) {
       throw new Error(`ChatPlane ${at} did not stream in the working state`);
     }
-    if (requireCodeFence && (sample.codeFenceOpened !== true || sample.codeFenceClosed !== true)) {
-      throw new Error(`ChatPlane ${at} did not open and close the default code fence`);
+    if (sample.streamedWhileTurnActive !== true) {
+      throw new Error(`ChatPlane ${at} did not stream while the turn was active`);
+    }
+    // The fence contract belongs to a full-length run. A documented quick
+    // smoke (`--stream-steps 30`) legitimately ends while the fence is still
+    // open, and failing it would make the fast harness check unusable; a
+    // baseline, which is what these numbers are published from, must reach
+    // every phase. `requireCodeFence` is true exactly when the run used the
+    // default step count and token rate.
+    if (requireCodeFence) {
+      if (sample.codeFenceOpened !== true || sample.codeFenceClosed !== true) {
+        throw new Error(`ChatPlane ${at} did not open and close the default code fence`);
+      }
+      // Streamdown defers offscreen code with `content-visibility`, so a probe
+      // that streamed into no mounted, highlighted block measured nothing and
+      // would otherwise report a clean zero.
+      if (
+        sample.liveCodeBlocks < 1 ||
+        sample.settledCodeBlocks < 1 ||
+        sample.settledHighlightedCodeBlocks < 1
+      ) {
+        throw new Error(`ChatPlane ${at} missed its live-fence contract`);
+      }
     }
     if (!Number.isFinite(sample.latencyMs) || sample.latencyMs < 0) {
       throw new Error(`ChatPlane ${at} has invalid latency`);
@@ -1134,7 +1172,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
         rendererErrors.push(...result.rendererErrors);
       }
     }
-    console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} frames`);
+    console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} stream steps`);
     const chat = await underLoad("stream+scroll bench", (signal) =>
       runChatBench({
         manifest,
@@ -1152,7 +1190,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
       name,
       busyCores: load?.workers ?? 0,
       streamTokenRate: args.streamTokenRate,
-      streamContent: "live-prose-open-code-fence-close-prose",
+      streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
       interactions: INTERACTIONS.flatMap(([id, label]) =>
         byInteraction[id].length === 0 ? [] : [aggregateInteraction(id, label, byInteraction[id])],
       ),
@@ -1290,7 +1328,7 @@ export function markdown(report) {
     "- The app measurements launch the production Vite/Electron build against a fresh APFS-cloned copy of the deterministic, file-backed migrated fixture for every repetition.",
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
-    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production working/live lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → an incrementally growing open TypeScript fence → a closed fence → prose, and moves the transcript scroller every animation frame in the same loop.`,
+    `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
     `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline and otherwise holds the load until the configured exposure is complete; quick stream-only smoke runs stop early and say so in JSON.`,
     "- Ticket switching first makes both workspaces usable, returns to the first, then times selection and focus-readiness of the already-open second workspace.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
@@ -1367,7 +1405,7 @@ async function main() {
       loadDurationSeconds: args.loadDurationSeconds,
       streamSteps: args.streamSteps,
       streamTokenRate: args.streamTokenRate,
-      streamContent: "live-prose-open-code-fence-close-prose",
+      streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
       streamOnly: args.streamOnly,
       arms: args.arms,
     },

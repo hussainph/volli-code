@@ -65,17 +65,37 @@ function run(command, commandArgs, options = {}) {
 
 const electron = (await import(join(APP, "node_modules", "electron", "index.js"))).default;
 
+/*
+ * A measurement harness may not be built in development mode, and saying so out
+ * loud is not paranoia here (VC-357).
+ *
+ * Vite's `createServer` sets `process.env.NODE_ENV = "development"` for the
+ * WHOLE process, and `bench/performance/fixture.mjs` starts one to load the
+ * production database modules as TypeScript. When `run.mjs` generates or
+ * verifies a fixture and then spawns this bench, that value rides into the
+ * child's environment and the build below resolves React's `development`
+ * export condition instead of `production`.
+ *
+ * What that cost, measured: a 3.4 MB bundle instead of 3.1 MB, and a layout
+ * different enough that the growing code fence fell outside the scroller the
+ * reader was moving inside. Streamdown defers offscreen code with
+ * `content-visibility`, so the probe then streamed into a transcript with no
+ * mounted code block at all and reported ZERO dropped frames for it — a clean
+ * bill of health for a measurement that measured nothing. `run.mjs`'s
+ * per-sample live-fence contract is what refused it.
+ *
+ * Pinned unconditionally rather than inside the build branch: the `--skip-build`
+ * path hands this same environment to Electron, and one answer for both is
+ * easier to keep true than two.
+ */
+process.env.NODE_ENV = "production";
+
 // Vite's Node API rather than its CLI: `vite` has no linked bin in this
 // workspace (the app builds through `vp`), and a bench that shells out to a
 // binary that may not be there fails for a reason that has nothing to do with
 // what it measures.
 if (!SKIP_BUILD) {
   console.log(`building the bench page (${BENCH})`);
-  // Vite reads an inherited NODE_ENV in preference to the build mode, and a
-  // caller that touched a Vite dev server first exports `development`. A bench
-  // page is only worth building the way the app ships, so say so here instead
-  // of depending on who spawned this process.
-  process.env.NODE_ENV = "production";
   const { build } = await import("vite");
   await build({ configFile: join(BENCH, "vite.config.ts"), mode: "production", logLevel: "warn" });
 }

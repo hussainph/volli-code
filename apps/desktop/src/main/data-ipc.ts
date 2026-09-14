@@ -26,6 +26,7 @@ import {
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type {
@@ -60,6 +61,12 @@ import type {
   LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
+  McpProjectInput,
+  McpSaveInput,
+  McpServerIdInput,
+  McpServerInput,
+  McpSetEnabledInput,
+  McpSetToolsInput,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
@@ -331,10 +338,16 @@ async function materializeSwitchedOnWorktree(
   // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
   // new identity stamp to show. Failure has a scope flag that really did change
   // under a renderer that is about to revert it optimistically off the back of
-  // the error below — and the re-hydrate is what puts the true value back. It
-  // lands last by construction rather than by luck: this event is sent before
-  // the reply, so the renderer starts its bootstrap round-trip before it sees
-  // the error, and a round-trip cannot outrun a message already queued.
+  // the error below — and the re-hydrate is what puts the true value back.
+  //
+  // It lands last because it is COARSER, not because it is queued first. That
+  // used to be an ordering argument — sent before the reply, so a round-trip
+  // could not outrun a message already on the wire — and the frame-window
+  // coalescer in `broadcast.ts` retired it: the invalidation now leaves up to
+  // 8ms after the reply, so the optimistic revert wins that race. The outcome is
+  // unchanged because the re-hydrate is a full SQLite bootstrap and the revert
+  // is one field: whichever order they arrive in, the bootstrap is the last word
+  // on that field. Nothing here may be rewritten to depend on arriving first.
   broadcastDataChanged({ ticketId, projectId: committed.projectId, kind: "worktree" });
   if (!outcome.ok) {
     // Surfaced as a failed mutation so it reaches a toast rather than living
@@ -430,6 +443,8 @@ export function registerDataIpcHandlers(
      * rather than writing somewhere arbitrary.
      */
     blobsRoot?: string;
+    /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
+    mcpSettings?: McpSettingsService;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -453,6 +468,7 @@ export function registerDataIpcHandlers(
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
+  const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -666,6 +682,17 @@ export function registerDataIpcHandlers(
       if (!project) return { ok: false, error: "Unknown project" };
       return { ok: true, project };
     },
+
+    "volli:mcp-list": (input: McpProjectInput) => ({
+      ok: true as const,
+      servers: mcpSettings.list(input.projectId),
+    }),
+    "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
+    "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
+    "volli:mcp-refresh": (input: McpServerIdInput) => mcpSettings.refresh(input),
+    "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
+    "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
+    "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());

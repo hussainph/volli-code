@@ -1,6 +1,7 @@
 import {
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
   observationPayload,
-  projectSession,
   reportSessionUsage,
   sameCommandReceipt,
   sameSessionCommand,
@@ -35,6 +36,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjection,
+  SessionProjectionCheckpoint,
   SessionUsageReport,
   SessionUsageReportQuery,
   LatestSessionSignal,
@@ -128,6 +130,23 @@ export interface SessionEngine {
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
   /**
+   * Metadata-only event head, without payload/provenance decoding.
+   *
+   * `0` means "this Session has no committed events", and that is a total
+   * answer rather than an ambiguous one: sequences are 1-based, and a Session
+   * that does not exist has no committed events either, so both cases are the
+   * same true statement about history. It is deliberately NOT an error channel
+   * — a caller that additionally needs the Session to exist has already asked
+   * for it, and the one caller for which `0` is impossible
+   * (`SessionRuntime`'s post-commit result) raises its own error rather than
+   * pushing that concern into every reader of this head.
+   */
+  latestEventSequence(query: GetSessionQuery): Promise<number>;
+  /** A derived projection cache row; null means the immutable log must be folded. */
+  getProjectionCheckpoint(query: GetSessionQuery): Promise<SessionProjectionCheckpoint | null>;
+  /** Persists only a rebuildable read model, never a Session fact. */
+  saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void>;
+  /**
    * What a scope consumed, over a window, optionally broken down.
    *
    * One indexed read plus one pass of arithmetic — no Session histories folded
@@ -143,6 +162,17 @@ export interface SessionEnginePorts {
   ledger: SessionLedger;
   clock: SessionLedgerClock;
   ids: SessionLedgerIds;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be used.
+   *
+   * A checkpoint is a rebuildable cache, so a failure here is always recovered
+   * by refolding the immutable log — but a cache that fails on EVERY read is
+   * indistinguishable from one that is merely absent, and the symptom is only
+   * that reads are quietly slow forever. Reporting the miss is what makes that
+   * condition observable. Seam failures are isolated, exactly as the runtime's
+   * {@link SessionRuntimePorts.onSubscriberFailure} is.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void;
 }
 
 export class SessionEngineConflictError extends Error {
@@ -161,6 +191,15 @@ export class SessionEngineNotFoundError extends Error {
 
 /** The storage-agnostic Session Engine; its host supplies one transactional ledger writer. */
 export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
+  // Isolated here rather than at each call site: a diagnostics seam that could
+  // itself throw would turn a recovered cache miss into a failed read.
+  const reportCheckpointFailure = (error: unknown): void => {
+    try {
+      ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
+    }
+  };
   return {
     async createSession(request) {
       return ports.ledger.transaction((transaction) => {
@@ -255,7 +294,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: request.sessionId,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(request.sessionId) + 1,
           occurredAt,
           recordedAt: ports.clock.now(),
           provenance: request.provenance,
@@ -270,7 +309,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
-        const events = transaction.listEvents({ sessionId: session.id });
+        // No whole-log read here (VC-356). Recording one fact used to list every
+        // event of the Session first, which made a turn's durable cost a
+        // function of how long the Session had been alive rather than of what
+        // the turn reported — quadratic across a Session, on the path a person
+        // waits on. The three things that read wanted are each answerable
+        // without it: the projection resumes from its checkpoint, the next
+        // sequence is an index lookup, and the one question neither can answer
+        // asks for the audit read where it is actually needed.
+        //
         // SQLite persists omitted optional envelope ids as NULL. Canonicalize
         // before either receipt or fact handling so every durable event uses
         // the same replay identity.
@@ -286,7 +333,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 `Receipt ${observation.receipt.id} was already recorded differently`,
               );
             }
-            const event = receiptEventFor(events, existingReceipt.id);
+            // The replay path, and the only read here that still walks the
+            // log: no index answers "which event carries this receipt", and a
+            // re-delivered receipt is rare. Kept exact rather than narrowed to
+            // this observation's own id, because a receipt re-delivered under a
+            // new envelope id must still resolve to the event that recorded it.
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              existingReceipt.id,
+            );
             if (!event || event.sessionId !== session.id) {
               throw new SessionEngineConflictError(
                 `Receipt ${existingReceipt.id} has no Session event`,
@@ -307,9 +362,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const projection = projectSession(session, events);
-          assertReceiptObservation(transaction, session, projection, observation);
-          const sequence = nextSequence(events);
+          const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+          assertReceiptObservation(transaction, session, stored.checkpoint.projection, observation);
+          const sequence = transaction.latestEventSequence(session.id) + 1;
           const event = receiptRecordedEvent(
             observation.id,
             session.id,
@@ -321,6 +376,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           );
           transaction.appendReceipt(event.payload.receipt);
           transaction.appendEvent(event);
+          refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
           return event;
         }
 
@@ -355,13 +411,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const projection = projectSession(session, events);
-        assertObservableFact(projection, observation);
-        assertPendingStartReservation(projection, observation);
+        const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+        assertObservableFact(stored.checkpoint.projection, observation);
+        assertPendingStartReservation(stored.checkpoint.projection, observation);
         const event: SessionEvent = {
           id: observation.id,
           sessionId: session.id,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(session.id) + 1,
           occurredAt: observation.occurredAt,
           recordedAt: ports.clock.now(),
           provenance: observation.provenance,
@@ -370,6 +426,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           payload,
         };
         transaction.appendEvent(event);
+        refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
         return event;
       });
     },
@@ -386,8 +443,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const existing = transaction.getCommand(commandRequest.id);
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
-        const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events);
+        // Accepting a Command is the other half of a turn's durable cost, and
+        // it reached for the same whole-log read `observe` did (VC-356). The
+        // replay branch above already returned, so nothing here needs the log
+        // itself — only the folded state and the next sequence.
+        const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -397,7 +457,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const commandEvent = commandRecordedEvent(
           ports.ids.next("event"),
           session.id,
-          nextSequence(events),
+          transaction.latestEventSequence(session.id) + 1,
           command.createdAt,
           request.provenance,
           command,
@@ -547,7 +607,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return { event, receipt: priorReceipt, receiptEvent };
         }
 
-        const sequence = nextSequence(events);
+        const sequence = transaction.latestEventSequence(session.id) + 1;
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: session.id,
@@ -580,9 +640,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session
-          ? projectSession(session, transaction.listEvents({ sessionId: session.id }))
-          : null;
+        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
       });
     },
 
@@ -594,9 +652,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) =>
         transaction
           .listSessions(query)
-          .map((session) =>
-            projectSession(session, transaction.listEvents({ sessionId: session.id })),
-          ),
+          .map((session) => projectStoredSession(transaction, session, reportCheckpointFailure)),
       );
     },
 
@@ -616,6 +672,24 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.listEvents(query));
     },
 
+    async latestEventSequence(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.latestEventSequence(query.sessionId),
+      );
+    },
+
+    async getProjectionCheckpoint(query) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.getProjectionCheckpoint(query.sessionId),
+      );
+    },
+
+    async saveProjectionCheckpoint(checkpoint) {
+      return ports.ledger.transaction((transaction) =>
+        transaction.saveProjectionCheckpoint(checkpoint),
+      );
+    },
+
     async reportUsage(query) {
       return ports.ledger.transaction((transaction) =>
         // The floor is read in the SAME transaction as the rows. Two reads
@@ -628,6 +702,96 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       );
     },
   };
+}
+
+/**
+ * How far the persisted checkpoint may fall behind the log before a write path
+ * refreshes it.
+ *
+ * A checkpoint that is only ever written when an attachment closes does not
+ * bound anything for the Session that is currently running: the tail grows for
+ * the whole attachment, which is exactly the span a long chat spends appending
+ * facts. Refreshing it costs one derived row; NOT refreshing it costs a fold
+ * over that row's worth of events on every durable fact, forever. So the
+ * cadence is a bound on both: at most this many events are ever re-folded, and
+ * at most one cache row is written per this many appends.
+ */
+export const CHECKPOINT_REFRESH_EVENTS = 64;
+
+interface StoredSessionProjection {
+  checkpoint: SessionProjectionCheckpoint;
+  /**
+   * Cursor of the checkpoint as PERSISTED, or null when none was usable.
+   * `checkpoint` has already been advanced past this, so only this value can
+   * say how stale the durable cache is.
+   */
+  persistedThrough: number | null;
+}
+
+function storedSessionProjection(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): StoredSessionProjection {
+  try {
+    const checkpoint = transaction.getProjectionCheckpoint(session.id);
+    if (checkpoint) {
+      // The fold read, not the audit read: a listing over every Session would
+      // otherwise JSON-decode one provenance per event to produce state that
+      // never looks at it (VC-355).
+      const tail = transaction.listProjectionEvents({
+        sessionId: session.id,
+        afterSequence: checkpoint.throughSequence,
+      });
+      return {
+        checkpoint: advanceSessionProjection(checkpoint, tail, session),
+        persistedThrough: checkpoint.throughSequence,
+      };
+    }
+  } catch (error) {
+    // A projection checkpoint is a rebuildable cache. Any unsupported,
+    // malformed, or stale value falls through to the immutable event log —
+    // reported, so a cache that never succeeds is visible as more than slowness.
+    onCheckpointFailure(error);
+  }
+
+  return {
+    checkpoint: createSessionProjectionCheckpoint(
+      session,
+      transaction.listProjectionEvents({ sessionId: session.id }),
+    ),
+    persistedThrough: null,
+  };
+}
+
+function projectStoredSession(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): SessionProjection {
+  return storedSessionProjection(transaction, session, onCheckpointFailure).checkpoint.projection;
+}
+
+/**
+ * Folds one just-appended fact into the derived cache when it has drifted far
+ * enough to be worth a write. Never throws: the checkpoint is rebuildable, so
+ * a failed refresh is slower, not wrong.
+ */
+function refreshProjectionCheckpoint(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  stored: StoredSessionProjection,
+  appended: SessionEvent,
+  onCheckpointFailure: (error: unknown) => void,
+): void {
+  if (appended.sequence - (stored.persistedThrough ?? 0) < CHECKPOINT_REFRESH_EVENTS) return;
+  try {
+    transaction.saveProjectionCheckpoint(
+      advanceSessionProjection(stored.checkpoint, [appended], session),
+    );
+  } catch (error) {
+    onCheckpointFailure(error);
+  }
 }
 
 /**
@@ -996,10 +1160,6 @@ function resolveCommandRoute(
     case "session.stop":
       return { route: null, rejection: null };
   }
-}
-
-function nextSequence(events: readonly SessionEvent[]): number {
-  return (events.at(-1)?.sequence ?? 0) + 1;
 }
 
 function assertObservableFact(

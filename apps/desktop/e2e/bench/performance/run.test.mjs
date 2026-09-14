@@ -24,8 +24,21 @@ function streamSample(overrides = {}) {
     steps: 120,
     tokenRate: 30,
     streamedWhileWorking: true,
+    streamedWhileTurnActive: true,
     codeFenceOpened: true,
     codeFenceClosed: true,
+    // A sample only counts if the growing fence was actually mounted and
+    // highlighted; Streamdown defers offscreen code, so a probe that measured
+    // nothing would otherwise look perfect.
+    liveCodeBlocks: 1,
+    liveHighlightedCodeBlocks: 1,
+    liveHighlightedTokens: 42,
+    settledCodeBlocks: 1,
+    settledHighlightedCodeBlocks: 1,
+    settledHighlightedTokens: 64,
+    resizeObserverCallbacks: 12,
+    settleLatencyMs: 5,
+    settleLongTasksMs: [],
     latencyMs: 10,
     frameTimesMs: [16, 17],
     droppedFrames: 0,

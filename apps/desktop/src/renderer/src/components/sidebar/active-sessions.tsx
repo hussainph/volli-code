@@ -1,5 +1,4 @@
 import * as React from "react";
-import { useShallow } from "zustand/react/shallow";
 import { errorMessage, type LatestSessionSignal, type Project, type Ticket } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -14,7 +13,7 @@ import {
   buildActiveSessionListing,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
-  listingOutputStamps,
+  listingSessionIds,
   sessionRowRoute,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -45,7 +44,7 @@ import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
-import { sessionPanes, useSessionsStore } from "@renderer/stores/sessions";
+import { sessionPanes, type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -53,6 +52,120 @@ const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
 const EMPTY_EXPANDED: readonly string[] = [];
+
+type SessionsStoreState = ReturnType<typeof useSessionsStore.getState>;
+type ChatSessionsStoreState = ReturnType<typeof useChatSessionsStore.getState>;
+
+function sameRecordValues<Value>(
+  left: Readonly<Record<string, Value>>,
+  right: Readonly<Record<string, Value>>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    rightKeys.every((key) => Object.is(right[key], left[key]))
+  );
+}
+
+/**
+ * A selector for the named keys of one flat store record.
+ *
+ * The selector itself runs after every write, so it first gates on the source
+ * record's identity. That keeps an unrelated slice write O(1); only a write to
+ * this record pays the bounded key walk. It then preserves its own result by
+ * shallow identity, so later unrelated writes stay O(1) too rather than asking
+ * a `useShallow` wrapper to compare the same projected keys again.
+ */
+function scopedRecordSelector<State, Value>(
+  readSource: (state: State) => Readonly<Record<string, Value>>,
+  keys: readonly string[],
+): (state: State) => Record<string, Value> {
+  let previousSource: Readonly<Record<string, Value>> | null = null;
+  let selected: Record<string, Value> = {};
+  return (state) => {
+    const source = readSource(state);
+    if (source === previousSource) return selected;
+    previousSource = source;
+    const next: Record<string, Value> = {};
+    for (const key of keys) {
+      const value = source[key];
+      if (value !== undefined) next[key] = value;
+    }
+    if (!sameRecordValues(selected, next)) selected = next;
+    return selected;
+  };
+}
+
+type ListingContainerScope = {
+  containers: Record<string, SessionContainer>;
+  sessionIds: readonly string[];
+};
+
+function sameStringMembership(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left);
+  return right.every((value) => leftSet.has(value));
+}
+
+/**
+ * Project-scoped terminal containers together with the roots and panes in
+ * those containers. The outer result changes for relevant container metadata,
+ * while `sessionIds` retains its identity unless membership actually changes.
+ * This keeps a title/active-pane write from recreating all three per-session
+ * map selectors below.
+ */
+function listingContainerSelector(
+  ownerIds: readonly string[],
+  ticketIds: Iterable<string>,
+  projectOwnerId: string,
+): (state: SessionsStoreState) => ListingContainerScope {
+  let previousSource: SessionsStoreState["byOwner"] | null = null;
+  let selected: ListingContainerScope = { containers: {}, sessionIds: [] };
+  return (state) => {
+    const source = state.byOwner;
+    if (source === previousSource) return selected;
+    previousSource = source;
+    const containers: Record<string, SessionContainer> = {};
+    for (const ownerId of ownerIds) {
+      const container = source[ownerId];
+      if (container !== undefined) containers[ownerId] = container;
+    }
+    if (sameRecordValues(selected.containers, containers)) return selected;
+    const nextSessionIds = listingSessionIds({ containers, ticketIds, projectOwnerId });
+    selected = {
+      containers,
+      sessionIds: sameStringMembership(selected.sessionIds, nextSessionIds)
+        ? selected.sessionIds
+        : nextSessionIds,
+    };
+    return selected;
+  };
+}
+
+/**
+ * Resident chat titles for this project's durable rows only. A different
+ * project's title is not an input to this listing, and an `openTabs`-only
+ * write does not even repeat the resident-slice scan.
+ */
+function residentChatTitleSelector(
+  sessionIds: ReadonlySet<string>,
+): (state: ChatSessionsStoreState) => Record<string, string> {
+  let previousSessions: ChatSessionsStoreState["sessions"] | null = null;
+  let selected: Record<string, string> = {};
+  return (state) => {
+    if (state.sessions === previousSessions) return selected;
+    previousSessions = state.sessions;
+    const next: Record<string, string> = {};
+    for (const [sessionId, slice] of Object.entries(state.sessions)) {
+      if (!sessionIds.has(sessionId)) continue;
+      const title = slice.projection?.session.title;
+      if (title !== null && title !== undefined) next[sessionId] = title;
+    }
+    if (!sameRecordValues(selected, next)) selected = next;
+    return selected;
+  };
+}
 
 /**
  * The nesting rule under a ticket entry, tightened from `SidebarMenuSub`'s
@@ -98,23 +211,103 @@ function indexSignalsByTicket(
  * both and did the union of their work sixty times a minute, forever, for as
  * long as anything anywhere was live.
  */
-export function ActiveSessions({ project, visible }: { project: Project; visible: boolean }) {
+export function ActiveSessions({
+  project,
+  visible,
+  onProfile,
+}: {
+  project: Project;
+  visible: boolean;
+  /**
+   * Optional benchmark instrumentation. Production callers leave this absent,
+   * so the Profiler boundaries add no work to the shipped sidebar; the lab's
+   * scale fixture supplies it to separate the two bands in its artifact.
+   */
+  onProfile?: React.ProfilerOnRenderCallback;
+}) {
   const tickets = useBoardStore((state) => state.ticketsByProject[project.id]) ?? EMPTY_TICKETS;
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
-  const containers = useSessionsStore((state) => state.byOwner);
-  const openChatTabs = useChatSessionsStore((state) => state.openTabs);
-  const residentChatTitles = useChatSessionsStore(
-    useShallow((state) => {
-      const titles: Record<string, string> = {};
-      for (const [sessionId, slice] of Object.entries(state.sessions)) {
-        const title = slice.projection?.session.title;
-        if (title !== null && title !== undefined) titles[sessionId] = title;
-      }
-      return titles;
-    }),
+  const projectTicketIds = React.useMemo(
+    () => new Set(tickets.map((ticket) => ticket.id)),
+    [tickets],
   );
-  const parkState = useSessionsStore((state) => state.parkState);
-  const harness = useSessionsStore((state) => state.harness);
+  const listingOwnerIds = React.useMemo(
+    () => [project.id, ...projectTicketIds],
+    [project.id, projectTicketIds],
+  );
+
+  /**
+   * Only the containers the builder walks. `byOwner` also holds every other
+   * project's terminal layout, so a lifecycle write elsewhere must not rebuild
+   * these 1,198 rows. The selector's identity gate also means output/harness
+   * writes do not pay the 393-owner projection at all.
+   */
+  const selectContainerScope = React.useMemo(
+    () => listingContainerSelector(listingOwnerIds, projectTicketIds, project.id),
+    [listingOwnerIds, project.id, projectTicketIds],
+  );
+  const { containers, sessionIds: listingValueSessionIds } = useSessionsStore(selectContainerScope);
+
+  /** `openTabs` only contributes this project's ids to `liveSignature`. */
+  const selectOpenChatTabs = React.useMemo(
+    () => scopedRecordSelector((state: ChatSessionsStoreState) => state.openTabs, listingOwnerIds),
+    [listingOwnerIds],
+  );
+  const openChatTabs = useChatSessionsStore(selectOpenChatTabs);
+
+  // The project's Session rows, shared with the board's active-session
+  // indicator and fed by `volli:session-activity` rather than by a timer —
+  // see `stores/project-sessions.ts`. This component used to own both the
+  // fetch and a ten-second poll on top of it; what it owns now is when the
+  // BASELINE is read, which is still its call because it is the surface that
+  // knows a project has come on screen.
+  const projectRows =
+    useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  const records = projectRows.terminal;
+  const chatSessions = projectRows.chat;
+  const projectChatSessionIds = React.useMemo(
+    () => new Set(chatSessions.map((session) => session.sessionId)),
+    [chatSessions],
+  );
+  const selectResidentChatTitles = React.useMemo(
+    () => residentChatTitleSelector(projectChatSessionIds),
+    [projectChatSessionIds],
+  );
+  const residentChatTitles = useChatSessionsStore(selectResidentChatTitles);
+
+  /**
+   * The three per-session maps are narrowed to exactly the tab roots and panes
+   * the builder can name. Their selectors gate on each source map's identity,
+   * so an unrelated store slice never turns into an O(n) scan.
+   */
+  const selectLastOutputAt = React.useMemo(
+    () =>
+      scopedRecordSelector(
+        (state: SessionsStoreState) => state.lastOutputAt,
+        listingValueSessionIds,
+      ),
+    [listingValueSessionIds],
+  );
+  const selectParkState = React.useMemo(
+    () =>
+      scopedRecordSelector((state: SessionsStoreState) => state.parkState, listingValueSessionIds),
+    [listingValueSessionIds],
+  );
+  const selectHarness = React.useMemo(
+    () =>
+      scopedRecordSelector((state: SessionsStoreState) => state.harness, listingValueSessionIds),
+    [listingValueSessionIds],
+  );
+  const lastOutputAt = useSessionsStore(selectLastOutputAt);
+  const parkState = useSessionsStore(selectParkState);
+  const harness = useSessionsStore(selectHarness);
+
+  // The project's OWN container. The store files every container in one
+  // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
+  // id for Board Sessions — and the listing model walks the map by ticket, so
+  // this one has to be handed over on its own key or its live tabs are invisible.
+  const projectContainer = containers[project.id];
+
   const nav = useWorkspaceStore((state) => state.byProject[project.id]?.nav ?? "board");
   const openTicketId = useWorkspaceStore(
     (state) => state.byProject[project.id]?.openTicketId ?? null,
@@ -132,16 +325,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     (state) => state.byProject[project.id]?.expandedSessionGroups ?? EMPTY_EXPANDED,
   );
   const setSessionGroupExpanded = useWorkspaceStore((state) => state.setSessionGroupExpanded);
-  // The project's Session rows, shared with the board's active-session
-  // indicator and fed by `volli:session-activity` rather than by a timer —
-  // see `stores/project-sessions.ts`. This component used to own both the
-  // fetch and a ten-second poll on top of it; what it owns now is when the
-  // BASELINE is read, which is still its call because it is the surface that
-  // knows a project has come on screen.
-  const projectRows =
-    useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
-  const records = projectRows.terminal;
-  const chatSessions = projectRows.chat;
   // Sparse and stable: the store replaces this object only when a marked
   // Session arrives, so a project nobody has automated hands the same empty
   // map to every rebuild and the memo below is never defeated by it (VC-131).
@@ -169,37 +352,6 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
   const [refreshTick, setRefreshTick] = React.useState(0);
-
-  const projectTicketIds = React.useMemo(
-    () => new Set(tickets.map((ticket) => ticket.id)),
-    [tickets],
-  );
-  /**
-   * The output stamps THIS project's listing can read, and no others.
-   *
-   * `state.lastOutputAt` is one flat map for every live session in the app,
-   * replaced wholesale on each bump (about once a second per busy session), so
-   * subscribing to the map itself made every project's terminal output a
-   * rebuild of this project's bands. `listingOutputStamps` projects it down to
-   * the keys the build can name and `useShallow` holds the previous object when
-   * those keys are unchanged — the raw numbers ride through untouched, so this
-   * narrows the SUBSCRIPTION and not the input.
-   */
-  const lastOutputAt = useSessionsStore(
-    useShallow((state) =>
-      listingOutputStamps({
-        lastOutputAt: state.lastOutputAt,
-        containers: state.byOwner,
-        ticketIds: projectTicketIds,
-        projectOwnerId: project.id,
-      }),
-    ),
-  );
-  // The project's OWN container. The store files every container in one
-  // flat map keyed by `ownerKey` — a ticketId for Ticket Sessions, the project
-  // id for Board Sessions — and the listing model walks the map by ticket, so
-  // this one has to be handed over on its own key or its live tabs are invisible.
-  const projectContainer = containers[project.id];
   // Which of this project's Sessions are live on this surface — the key the one
   // fetch below re-reads the durable listing on. Both kinds count: a chat has no
   // PTY pane to name, so a signature made of panes alone left a streaming chat
@@ -628,90 +780,104 @@ export function ActiveSessions({ project, visible }: { project: Project; visible
     [project.id, openHome, openTicketSession, openTicketWorkspace],
   );
 
-  return (
-    <>
-      <SidebarGroup data-session-band="active" className="gap-1">
-        <SessionBandHeader label="Active" count={listing.active.length} />
-        {listing.active.length === 0 ? (
-          <p className={EMPTY_INLINE}>No active sessions</p>
-        ) : (
-          <SidebarMenu>
-            {listing.active.map((row) => (
-              <ActiveBandRow
-                key={row.id}
-                row={row}
+  const activeBand = (
+    <SidebarGroup data-session-band="active" className="gap-1">
+      <SessionBandHeader label="Active" count={listing.active.length} />
+      {listing.active.length === 0 ? (
+        <p className={EMPTY_INLINE}>No active sessions</p>
+      ) : (
+        <SidebarMenu>
+          {listing.active.map((row) => (
+            <ActiveBandRow
+              key={row.id}
+              row={row}
+              projectId={project.id}
+              ticketPrefix={project.ticketPrefix}
+              now={ageNow}
+              selected={isSelected(row)}
+              onSelect={activate}
+            />
+          ))}
+        </SidebarMenu>
+      )}
+    </SidebarGroup>
+  );
+  const previousBand = (
+    <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
+      {/* The count stays the number of SESSIONS, not of entries. It is the
+          band's answer to "how much is back there", and collapsing the rows
+          under their tickets must not make that number shrink. */}
+      <SessionBandHeader label="Previous" count={listing.previous.length}>
+        <SessionBandFilterMenu filter={filter} onChange={setFilter} />
+      </SessionBandHeader>
+      {previousEntries.length === 0 ? (
+        <p className={EMPTY_INLINE}>Nothing yet</p>
+      ) : (
+        <SidebarMenu>
+          {previousEntries.map((entry) =>
+            entry.kind === "session" ? (
+              <PreviousBandRow
+                key={entry.id}
+                row={entry.row}
                 projectId={project.id}
                 ticketPrefix={project.ticketPrefix}
                 now={ageNow}
-                selected={isSelected(row)}
+                selected={isSelected(entry.row)}
                 onSelect={activate}
               />
-            ))}
-          </SidebarMenu>
-        )}
-      </SidebarGroup>
-
-      <SidebarGroup data-session-band="previous" className="gap-1 pt-0">
-        {/* The count stays the number of SESSIONS, not of entries. It is the
-            band's answer to "how much is back there", and collapsing the rows
-            under their tickets must not make that number shrink. */}
-        <SessionBandHeader label="Previous" count={listing.previous.length}>
-          <SessionBandFilterMenu filter={filter} onChange={setFilter} />
-        </SessionBandHeader>
-        {previousEntries.length === 0 ? (
-          <p className={EMPTY_INLINE}>Nothing yet</p>
-        ) : (
-          <SidebarMenu>
-            {previousEntries.map((entry) =>
-              entry.kind === "session" ? (
-                <PreviousBandRow
-                  key={entry.id}
-                  row={entry.row}
-                  projectId={project.id}
+            ) : (
+              <SidebarMenuItem key={entry.id}>
+                <TicketGroupRow
+                  ticket={entry.ticket}
                   ticketPrefix={project.ticketPrefix}
+                  count={entry.rows.length}
+                  newestAt={entry.newestAt}
                   now={ageNow}
-                  selected={isSelected(entry.row)}
-                  onSelect={activate}
+                  open={expandedGroups.includes(entry.id)}
+                  selected={entry.id === selectedGroupId}
+                  onToggle={toggleGroup}
                 />
-              ) : (
-                <SidebarMenuItem key={entry.id}>
-                  <TicketGroupRow
-                    ticket={entry.ticket}
-                    ticketPrefix={project.ticketPrefix}
-                    count={entry.rows.length}
-                    newestAt={entry.newestAt}
-                    now={ageNow}
-                    open={expandedGroups.includes(entry.id)}
-                    selected={entry.id === selectedGroupId}
-                    onToggle={toggleGroup}
-                  />
-                  {expandedGroups.includes(entry.id) ? (
-                    <SidebarMenuSub
-                      id={sessionGroupPanelId(entry.id)}
-                      className={SESSION_GROUP_NEST}
-                    >
-                      {entry.rows.map((row) => (
-                        <PreviousBandRow
-                          key={row.id}
-                          row={row}
-                          projectId={project.id}
-                          ticketPrefix={project.ticketPrefix}
-                          now={ageNow}
-                          selected={isSelected(row)}
-                          onSelect={activate}
-                          // The id is what the reader just expanded; repeating
-                          // it on every child costs ink and ~45px of title.
-                          showIdentity={false}
-                        />
-                      ))}
-                    </SidebarMenuSub>
-                  ) : null}
-                </SidebarMenuItem>
-              ),
-            )}
-          </SidebarMenu>
-        )}
-      </SidebarGroup>
+                {expandedGroups.includes(entry.id) ? (
+                  <SidebarMenuSub id={sessionGroupPanelId(entry.id)} className={SESSION_GROUP_NEST}>
+                    {entry.rows.map((row) => (
+                      <PreviousBandRow
+                        key={row.id}
+                        row={row}
+                        projectId={project.id}
+                        ticketPrefix={project.ticketPrefix}
+                        now={ageNow}
+                        selected={isSelected(row)}
+                        onSelect={activate}
+                        // The id is what the reader just expanded; repeating
+                        // it on every child costs ink and ~45px of title.
+                        showIdentity={false}
+                      />
+                    ))}
+                  </SidebarMenuSub>
+                ) : null}
+              </SidebarMenuItem>
+            ),
+          )}
+        </SidebarMenu>
+      )}
+    </SidebarGroup>
+  );
+
+  if (onProfile === undefined)
+    return (
+      <>
+        {activeBand}
+        {previousBand}
+      </>
+    );
+  return (
+    <>
+      <React.Profiler id="ActiveSessions.active" onRender={onProfile}>
+        {activeBand}
+      </React.Profiler>
+      <React.Profiler id="ActiveSessions.previous" onRender={onProfile}>
+        {previousBand}
+      </React.Profiler>
     </>
   );
 }

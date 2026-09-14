@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  createContextTokenProjector,
   estimateContextTokens,
   estimateMessageTokens,
   projectedContextTokens,
@@ -288,5 +289,95 @@ describe("projectedContextTokens", () => {
       }),
     ];
     expect(projectedContextTokens(messages, model())).toBeGreaterThanOrEqual(5010);
+  });
+
+  it("reuses settled prefixes without changing projections as messages are appended", () => {
+    const projector = createContextTokenProjector();
+    const anthropic = model();
+    const openai = model({ id: "gpt-4o", api: "openai-completions", provider: "openai" });
+    const messages: AgentMessage[] = [user("first ".repeat(100)), user("second ".repeat(100))];
+    const systemPrompt = "system instructions ".repeat(100);
+    const tools = [tool];
+
+    for (const currentModel of [anthropic, openai]) {
+      expect(projector(messages, currentModel, systemPrompt, tools)).toBe(
+        projectedContextTokens(messages, currentModel, systemPrompt, tools),
+      );
+    }
+
+    messages.push(user("appended tail ".repeat(100)));
+    expect(projector(messages, anthropic, systemPrompt, tools)).toBe(
+      projectedContextTokens(messages, anthropic, systemPrompt, tools),
+    );
+  });
+
+  it("matches the direct projection when no system prompt or tools are provided", () => {
+    const messages = [user("plain context")];
+    const currentModel = model();
+    expect(createContextTokenProjector()(messages, currentModel)).toBe(
+      projectedContextTokens(messages, currentModel),
+    );
+  });
+
+  it("reuses one cache across different models of the same tokenizer family", () => {
+    // The cache is keyed by tokenizer FAMILY, not by model, because
+    // `estimateMessageTokens` depends on the model only through its counter.
+    // Two models that share a family must therefore share an answer — and a
+    // model from another family must not be served from that cache.
+    const projector = createContextTokenProjector();
+    const fable = model();
+    const otherAnthropic = model({ id: "claude-opus-5", name: "Claude Opus 5" });
+    const messages = [user("shared conservative context ".repeat(40))];
+
+    const first = projector(messages, fable);
+    expect(projector(messages, otherAnthropic)).toBe(first);
+    expect(first).toBe(projectedContextTokens(messages, otherAnthropic));
+
+    // A different family is a different count, and the shared cache must not
+    // flatten the two together.
+    const gpt = model({ id: "gpt-4o", api: "openai-completions", provider: "openai" });
+    expect(projector(messages, gpt)).toBe(projectedContextTokens(messages, gpt));
+  });
+
+  it("agrees with the direct projection on the cl100k family", () => {
+    const projector = createContextTokenProjector();
+    const gpt4 = model({ id: "gpt-4", api: "openai-completions", provider: "openai" });
+    const messages = [user("cl100k context ".repeat(30))];
+    const systemPrompt = "cl100k system ".repeat(30);
+    expect(projector(messages, gpt4, systemPrompt, [tool])).toBe(
+      projectedContextTokens(messages, gpt4, systemPrompt, [tool]),
+    );
+  });
+
+  it("takes the measured-usage shortcut and estimates only the suffix after it", () => {
+    // The branch the other cases never reach: when a settled reply carries this
+    // model's own usage, the prefix is not estimated at all. A cache that
+    // quietly estimated it anyway would still return a plausible number, so the
+    // only honest check is against the uncached function on the same input.
+    const projector = createContextTokenProjector();
+    const currentModel = model();
+    const systemPrompt = "system instructions ".repeat(50);
+    const measured = assistant([{ type: "text", text: "settled reply" }], {
+      usage: usage({ input: 9_000, output: 120, totalTokens: 9_120 }),
+    });
+    const messages: AgentMessage[] = [
+      user("early ".repeat(50)),
+      measured,
+      user("tail ".repeat(50)),
+    ];
+
+    const projected = projector(messages, currentModel, systemPrompt, [tool]);
+    expect(projected).toBe(projectedContextTokens(messages, currentModel, systemPrompt, [tool]));
+    // Cheaper than the pure estimate, which is the point of the shortcut.
+    expect(projected).toBeLessThan(
+      estimateContextTokens(messages, currentModel, systemPrompt, [tool]) + 9_120,
+    );
+
+    // Appending after the measurement extends only the suffix, and the cached
+    // and uncached answers must still agree.
+    messages.push(user("appended after the measurement ".repeat(50)));
+    expect(projector(messages, currentModel, systemPrompt, [tool])).toBe(
+      projectedContextTokens(messages, currentModel, systemPrompt, [tool]),
+    );
   });
 });
