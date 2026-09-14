@@ -13,7 +13,14 @@
  * outlives every view — the store's three lifecycle actions are the whole of
  * what a client asks of it, plus the fold.
  */
-import { errorMessage, isDefaultModelRequired, type ModelSelection } from "@volli/shared";
+import {
+  errorMessage,
+  inlineImageBytesIn,
+  isDefaultModelRequired,
+  sessionImageBudgetRefusal,
+  type BlobLinkView,
+  type ModelSelection,
+} from "@volli/shared";
 import { create } from "zustand";
 
 import {
@@ -178,23 +185,28 @@ export interface ChatSessionsState extends ChatSessionWrites {
 }
 
 /** Every ownerless Blob a provisional Draft has to hand to its Session, once per hash. */
-function provisionalBlobDrafts(draft: ChatDraft): { blobHash: string; label?: string }[] {
-  const byHash = new Map<string, { blobHash: string; label?: string }>();
-  const remember = (
-    attachments: readonly { linkId: string | null; blobHash: string; label: string }[] | undefined,
-  ) => {
+function provisionalOwnerlessAttachments(draft: ChatDraft): BlobLinkView[] {
+  const byHash = new Map<string, BlobLinkView>();
+  const remember = (attachments: readonly BlobLinkView[] | undefined) => {
     for (const attachment of attachments ?? []) {
       if (attachment.linkId === null && !byHash.has(attachment.blobHash)) {
-        byHash.set(attachment.blobHash, {
-          blobHash: attachment.blobHash,
-          ...(attachment.label.length === 0 ? {} : { label: attachment.label }),
-        });
+        byHash.set(attachment.blobHash, attachment);
       }
     }
   };
   remember(draft.attachments);
   for (const message of draft.held) remember(message.attachments);
   return [...byHash.values()];
+}
+
+/** The link payload for those Blobs — the two fields the owner-transfer needs. */
+function blobLinkDrafts(
+  attachments: readonly BlobLinkView[],
+): { blobHash: string; label?: string }[] {
+  return attachments.map((attachment) => ({
+    blobHash: attachment.blobHash,
+    ...(attachment.label.length === 0 ? {} : { label: attachment.label }),
+  }));
 }
 
 /** Factory so tests get isolated instances (sessions.ts's convention). */
@@ -344,6 +356,27 @@ export function createChatSessionsStore(
       promoteChatSession(sessionId) {
         return useChatDraftsStore.getState().promote(sessionId, async (provisional) => {
           const edge = transport();
+          // The chat image budget is a per-Session rule, so a Draft's imports
+          // were never held to it — there was no Session to measure (VC-358).
+          // Ask it HERE, before anything durable exists: a strip that cannot
+          // join a conversation must not first mint the empty Session it would
+          // then have to be refused from. The cohort is closed by the time this
+          // runs — ChatPlane holds later gestures, and this barrier settles the
+          // imports that began before Send — so nothing can arrive behind it.
+          // A brand-new Session has inlined nothing, hence `0` used.
+          await useChatDraftsStore.getState().waitForAttachmentImports(sessionId);
+          const staged = useChatDraftsStore.getState().drafts[sessionId];
+          const overBudget =
+            staged === undefined
+              ? null
+              : sessionImageBudgetRefusal(
+                  0,
+                  inlineImageBytesIn(provisionalOwnerlessAttachments(staged)),
+                );
+          if (overBudget !== null) {
+            toastError(overBudget);
+            return false;
+          }
           const createdId = await mint(
             edge,
             {
@@ -381,7 +414,8 @@ export function createChatSessionsStore(
           while (true) {
             await useChatDraftsStore.getState().waitForAttachmentImports(sessionId);
             const draft = useChatDraftsStore.getState().drafts[sessionId];
-            const blobs = draft === undefined ? [] : provisionalBlobDrafts(draft);
+            const blobs =
+              draft === undefined ? [] : blobLinkDrafts(provisionalOwnerlessAttachments(draft));
             if (blobs.length === 0) break;
             try {
               const linked = await window.api.attachments.linkDrafts({ sessionId, blobs });

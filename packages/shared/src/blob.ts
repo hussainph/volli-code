@@ -190,6 +190,53 @@ export function fitsSessionImageBudget(usedBytes: number, candidateBytes: number
 }
 
 /**
+ * The inlinable image bytes in a set of staged files, by the one rule that
+ * decides what inlining costs ({@link isInlinableImageMime}).
+ *
+ * Shared because two processes count the same strip at two moments: the
+ * renderer measures a provisional chat's staged Blobs BEFORE it asks for a
+ * Session (VC-358), and main measures the same Blobs again at the link
+ * boundary it is the authority for. Counting them with one function is what
+ * keeps those two answers from disagreeing.
+ */
+export function inlineImageBytesIn(
+  files: Iterable<{ readonly mime: string; readonly sizeBytes: number }>,
+): number {
+  let total = 0;
+  for (const file of files) {
+    if (isInlinableImageMime(file.mime)) total += file.sizeBytes;
+  }
+  return total;
+}
+
+/** `12.3`, the one rendering of a byte count every budget refusal states. */
+function budgetMegabytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+/**
+ * Why a whole staged strip cannot join a Session's conversation, or `null`
+ * when it fits.
+ *
+ * The batch counterpart of the per-file refusal raised at import: by the time a
+ * strip is adopted nobody is holding one file, so naming one would be a lie
+ * about which image to remove. Lives here rather than in main because the
+ * renderer asks it first — before a provisional chat mints anything durable —
+ * and a person must not be told two different things by the two askers.
+ */
+export function sessionImageBudgetRefusal(
+  usedBytes: number,
+  incomingBytes: number,
+): string | null {
+  if (fitsSessionImageBudget(usedBytes, incomingBytes)) return null;
+  return (
+    `These images come to ${budgetMegabytes(usedBytes + incomingBytes)} MB, past the ` +
+    `${budgetMegabytes(MAX_SESSION_INLINE_IMAGE_BYTES)} MB a single chat can carry. ` +
+    `Remove one and send again.`
+  );
+}
+
+/**
  * What a Blob link looks like to the renderer: the link, plus the few Blob
  * columns a chip or a preview needs. Everything else the UI wants is derived
  * from these by pure helpers both sides already share — {@link isImageMime}

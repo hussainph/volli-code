@@ -13,6 +13,7 @@ import {
   chatDraftAttachmentHashes,
   draftAttachmentHashes,
   fitsSessionImageBudget,
+  inlineImageBytesIn,
   isBlobHash,
   isBlobLinkView,
   isImageMime,
@@ -20,6 +21,7 @@ import {
   materializedBlobNames,
   parseBlobUrl,
   resolveAttachment,
+  sessionImageBudgetRefusal,
 } from "./blob";
 
 const HASH = "a".repeat(64);
@@ -230,6 +232,59 @@ describe("fitsSessionImageBudget", () => {
   });
 });
 
+describe("inlineImageBytesIn", () => {
+  const png = (sizeBytes: number) => ({ mime: "image/png", sizeBytes });
+
+  it("counts only what can be inlined into a conversation", () => {
+    // A PDF is read from disk when a turn asks for it; an image is replayed
+    // into every subsequent turn. Only the second spends the budget, so a
+    // 40 MB spec beside a 1 KB screenshot must count 1 KB.
+    expect(
+      inlineImageBytesIn([
+        png(1024),
+        { mime: "application/pdf", sizeBytes: 40 * 1024 * 1024 },
+        { mime: "text/plain", sizeBytes: 900 },
+      ]),
+    ).toBe(1024);
+  });
+
+  it("sums a whole strip rather than taking its largest", () => {
+    expect(inlineImageBytesIn([png(10), png(20), png(30)])).toBe(60);
+  });
+
+  it("counts nothing in an empty strip", () => {
+    expect(inlineImageBytesIn([])).toBe(0);
+  });
+});
+
+describe("sessionImageBudgetRefusal", () => {
+  it("says nothing while the batch still fits", () => {
+    expect(sessionImageBudgetRefusal(0, MAX_SESSION_INLINE_IMAGE_BYTES)).toBeNull();
+  });
+
+  it("refuses the byte that crosses the ceiling, and names the total", () => {
+    // The wording is the contract: it states what the images come to, not
+    // which one is at fault, because by this moment nobody is holding a file.
+    expect(sessionImageBudgetRefusal(0, MAX_SESSION_INLINE_IMAGE_BYTES + 1)).toBe(
+      "These images come to 20.0 MB, past the 20.0 MB a single chat can carry. " +
+        "Remove one and send again.",
+    );
+    expect(sessionImageBudgetRefusal(15 * 1024 * 1024, 10 * 1024 * 1024)).toBe(
+      "These images come to 25.0 MB, past the 20.0 MB a single chat can carry. " +
+        "Remove one and send again.",
+    );
+  });
+
+  it("counts what the Session already holds, not just the batch", () => {
+    // The same incoming batch is fine for a fresh chat and refused for one
+    // that has been collecting screenshots — which is the whole reason the
+    // used half is a parameter.
+    const incoming = 6 * 1024 * 1024;
+    expect(sessionImageBudgetRefusal(0, incoming)).toBeNull();
+    expect(sessionImageBudgetRefusal(15 * 1024 * 1024, incoming)).not.toBeNull();
+  });
+});
+
 describe("resolveAttachment", () => {
   it("snapshots a file with no home in the project", () => {
     expect(resolveAttachment(null, "application/pdf")).toBe("snapshot");
@@ -398,7 +453,26 @@ describe("chatDraftAttachmentHashes", () => {
     expect(chatDraftAttachmentHashes(JSON.stringify({ state: { drafts: [] } }))).toEqual([]);
   });
 
-  it("names the same app_state key main and the renderer use", () => {
+  it("reads the envelope the renderer's own persist middleware writes", () => {
+    // The point of the shared key is that ONE writer and ONE reader agree.
+    // Asserting the literal proves nothing about that, so this drives the
+    // reader with a payload shaped exactly as zustand's `persist` emits it
+    // under {@link CHAT_DRAFTS_APP_STATE_KEY} — the shape main parses at boot.
+    const persisted = JSON.stringify({
+      state: {
+        drafts: {
+          "draft-1": {
+            text: "words",
+            touchedAt: 1,
+            provisional: { projectId: "p1", ticketId: null, operationId: "op", phase: "draft" },
+            attachments: [{ linkId: null, blobHash: HASH }],
+            held: [],
+          },
+        },
+      },
+      version: 1,
+    });
     expect(CHAT_DRAFTS_APP_STATE_KEY).toBe("volli:chat-drafts");
+    expect(chatDraftAttachmentHashes(persisted)).toEqual([HASH]);
   });
 });

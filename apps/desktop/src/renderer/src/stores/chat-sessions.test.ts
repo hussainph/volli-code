@@ -602,7 +602,7 @@ describe("promoteChatSession", () => {
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
   });
 
-  it("waits for an import that began before Send but finishes after the first Blob scan", async () => {
+  it("holds the whole mint for an import that began before Send", async () => {
     const { attaches, store, ticketStarts } = fixture();
     openDraft();
     const finishImport = useChatDraftsStore.getState().beginAttachmentImport(DRAFT_ID);
@@ -623,8 +623,13 @@ describe("promoteChatSession", () => {
     });
 
     const promotion = store.getState().promoteChatSession(DRAFT_ID);
-    await vi.waitFor(() => expect(ticketStarts).toHaveLength(1));
+    // Not merely the link: the CREATE waits too. The image budget is asked
+    // before anything durable exists, and it cannot be answered while a file
+    // that belongs to this same first message is still arriving — minting
+    // first would be minting a Session we might have to refuse (VC-358).
     await Promise.resolve();
+    await Promise.resolve();
+    expect(ticketStarts).toEqual([]);
     expect(linkDrafts).not.toHaveBeenCalled();
     expect(attaches).toEqual([]);
 
@@ -632,6 +637,7 @@ describe("promoteChatSession", () => {
     finishImport();
 
     await expect(promotion).resolves.toBe(true);
+    expect(ticketStarts).toHaveLength(1);
     expect(linkDrafts).toHaveBeenCalledWith({
       sessionId: DRAFT_ID,
       blobs: [{ blobHash: linked.blobHash, label: "late.png" }],
@@ -774,6 +780,83 @@ describe("promoteChatSession", () => {
     // Nothing durable happened, so the Draft is still the whole truth.
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe("draft");
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.text).toBe("first message");
+  });
+
+  it("refuses an over-budget image strip BEFORE it mints anything durable", async () => {
+    const { attaches, store, ticketStarts } = fixture();
+    openDraft();
+    const linkDrafts = vi.fn();
+    vi.stubGlobal("window", {
+      api: {
+        attachments: { linkDrafts },
+        sessions: { listForTicket: vi.fn(async () => ({ ok: true as const, sessions: [] })) },
+      },
+    });
+    // Three images, each individually legal at import (under the 5 MB per-file
+    // cap), together past the 20 MB one chat may carry. A durable chat is held
+    // to that ceiling at every import; a Draft could not be, because it had no
+    // Session to measure. This is the moment the rule catches up (VC-358).
+    useChatDraftsStore.getState().setDraftAttachments(
+      DRAFT_ID,
+      ["ab", "cd", "ef", "12", "34"].map((byte) => ({
+        linkId: null,
+        blobHash: byte.repeat(32),
+        label: `shot-${byte}.png`,
+        originalName: `shot-${byte}.png`,
+        mime: "image/png",
+        sizeBytes: 4.5 * 1024 * 1024,
+      })),
+    );
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toBe(
+      "These images come to 22.5 MB, past the 20.0 MB a single chat can carry. " +
+        "Remove one and send again.",
+    );
+    // The point of the whole fix: no Session row, no attachment, no link call.
+    expect(ticketStarts).toEqual([]);
+    expect(attaches).toEqual([]);
+    expect(linkDrafts).not.toHaveBeenCalled();
+    expect(store.getState().sessions).toEqual({});
+    // And the words are still the Draft's, so removing one image and sending
+    // again is the whole recovery.
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe("draft");
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.text).toBe("first message");
+  });
+
+  it("mints when a heavy strip is non-inlinable, which spends no conversation budget", async () => {
+    const { store, ticketStarts } = fixture();
+    openDraft();
+    // Same bytes, but a PDF is read from disk once rather than replayed into
+    // every turn, so it is a disk question and never a budget one.
+    useChatDraftsStore.getState().setDraftAttachments(DRAFT_ID, [
+      {
+        linkId: null,
+        blobHash: "ab".repeat(32),
+        label: "spec.pdf",
+        originalName: "spec.pdf",
+        mime: "application/pdf",
+        sizeBytes: 40 * 1024 * 1024,
+      },
+    ]);
+    vi.mocked(window.api.attachments.linkDrafts).mockImplementation(async () => ({
+      ok: true as const,
+      blobs: [
+        {
+          linkId: "link-1",
+          blobHash: "ab".repeat(32),
+          label: "spec.pdf",
+          originalName: "spec.pdf",
+          mime: "application/pdf",
+          sizeBytes: 40 * 1024 * 1024,
+        },
+      ],
+    }));
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(ticketStarts).toHaveLength(1);
   });
 
   it("promotes a ticketless Draft without asking any ticket to refresh its rail", async () => {

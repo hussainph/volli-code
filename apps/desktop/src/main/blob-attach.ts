@@ -15,9 +15,11 @@ import { readFile } from "node:fs/promises";
 import type Database from "better-sqlite3";
 import {
   type BlobLinkView,
+  inlineImageBytesIn,
   isInlinableImageMime,
   resolveAttachment,
   fitsSessionImageBudget,
+  sessionImageBudgetRefusal,
   MAX_SESSION_INLINE_IMAGE_BYTES,
 } from "@volli/shared";
 import { importBlob, importOwnerless, mimeForFileName } from "./blob-import";
@@ -127,9 +129,14 @@ function assertFitsSessionBudget(
  * Promotion is the one moment a provisional chat's images become a Session's
  * (VC-358), and an import that happened while there was no Session to own it
  * never passed {@link assertFitsSessionBudget} — the owner had no `sessionId`
- * to measure. This is that same rule, asked later and for the whole batch at
- * once, because by promotion nobody is holding a file and refusing them one by
- * one would leave the strip half-adopted.
+ * to measure. This is that same rule, asked for the whole batch at once,
+ * because by promotion nobody is holding a file and refusing them one by one
+ * would leave the strip half-adopted.
+ *
+ * The renderer asks {@link sessionImageBudgetRefusal} first, against the same
+ * shared arithmetic, so an over-budget strip is normally refused BEFORE a
+ * Session is minted at all. This remains the authority: main owns `blob_links`
+ * and is the only asker a non-Electron client could not bypass.
  *
  * Blobs the Session already links are skipped rather than counted twice, so a
  * retried promotion asks the same question it asked the first time.
@@ -139,19 +146,16 @@ export function sessionLinkBudgetRefusal(
   sessionId: string,
   blobHashes: readonly string[],
 ): string | null {
-  const used = sessionInlineImageBytes(db, sessionId);
   const linked = new Set(listSessionLinks(db, sessionId).map((link) => link.blobHash));
-  let incoming = 0;
+  const incoming: { mime: string; sizeBytes: number }[] = [];
   for (const hash of blobHashes) {
     if (linked.has(hash)) continue;
     const blob = getBlob(db, hash);
-    if (blob && isInlinableImageMime(blob.mime)) incoming += blob.sizeBytes;
+    if (blob) incoming.push(blob);
   }
-  if (fitsSessionImageBudget(used, incoming)) return null;
-  return (
-    `These images come to ${megabytes(used + incoming)} MB, past the ` +
-    `${megabytes(MAX_SESSION_INLINE_IMAGE_BYTES)} MB a single chat can carry. ` +
-    `Remove one and send again.`
+  return sessionImageBudgetRefusal(
+    sessionInlineImageBytes(db, sessionId),
+    inlineImageBytesIn(incoming),
   );
 }
 
