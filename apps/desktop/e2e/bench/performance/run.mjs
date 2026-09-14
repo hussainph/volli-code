@@ -1092,6 +1092,30 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
   let completingExposure = false;
   try {
     if (!args.streamOnly) {
+      // One discarded iteration before every arm.
+      //
+      // Arms run in sequence, so without this the first arm pays for a cold
+      // page cache on a 373 MB fixture and a cold Electron code cache while
+      // the second arm inherits both warm. That confound is larger than the
+      // effect being measured: the first published run of this matrix showed
+      // the LOADED arm faster than idle on every interaction, with the idle
+      // arm's first launch its slowest sample and its variance an order of
+      // magnitude wider. A warm-up per arm makes the two arms differ by the
+      // load rather than by their position in the run. It is discarded, never
+      // summarized, and its cost is two iterations.
+      console.log(`warm-up iteration (discarded) for ${name}`);
+      const warmup = await underLoad(`${name} warm-up`, (signal) =>
+        fullAppIteration({
+          fixtureDirectory,
+          runRoot,
+          armName: `${name}-warmup`,
+          index: 0,
+          manifest,
+          signal,
+        }),
+      );
+      // A broken renderer during warm-up is still a broken renderer.
+      validateRendererErrors(warmup.rendererErrors, `${name} warm-up`);
       for (let index = 0; index < args.repetitions; index += 1) {
         const label = `full app sample ${index + 1}/${args.repetitions}`;
         console.log(label);
@@ -1194,6 +1218,7 @@ export function summaryReport(report) {
       durationSeconds: report.config.loadDurationSeconds,
     },
     repetitions: report.config.repetitions,
+    warmupIterationsPerArm: report.config.warmupIterationsPerArm ?? 0,
     arms: report.arms.map((arm) => ({
       name: arm.name,
       busyCores: arm.busyCores,
@@ -1219,6 +1244,7 @@ export function markdown(report) {
     `macOS: ${report.host.os.macosVersion} (${report.host.os.macosBuild})`,
     `Fixture: \`${report.fixture.preset}\`, seed \`${report.fixture.seed}\`, ${report.fixture.counts.sessions.toLocaleString()} Sessions / ${report.fixture.counts.sessionEvents.toLocaleString()} Session Events / ${report.fixture.counts.tickets.toLocaleString()} Tickets`,
     `Sampling: ${report.config.repetitions} repetitions per interaction and arm; arms: ${report.arms.map((arm) => arm.name).join(", ")}.`,
+    `Each arm discards ${report.config.warmupIterationsPerArm ?? 0} warm-up iteration(s) first, so the arms differ by load rather than by which met a cold cache.`,
     `Loaded-arm contract: ${report.config.busyCores} busy cores for a fixed ${report.config.loadDurationSeconds.toLocaleString()} seconds.`,
     "",
     "## Results",
@@ -1333,6 +1359,10 @@ async function main() {
     config: {
       command: process.argv.join(" "),
       repetitions: args.repetitions,
+      // Stated in the artifact because it changes what the numbers mean: each
+      // arm discards one iteration first so the arms differ by load rather
+      // than by which of them met a cold cache.
+      warmupIterationsPerArm: args.streamOnly ? 0 : 1,
       busyCores: args.busyCores,
       loadDurationSeconds: args.loadDurationSeconds,
       streamSteps: args.streamSteps,
