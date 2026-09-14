@@ -76,6 +76,7 @@ export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
 export * from "./session-watchdog";
+export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";
 export * from "./session-streak";

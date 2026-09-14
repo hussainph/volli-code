@@ -25,7 +25,12 @@ import type {
   RendererSessionCommandResult,
   RendererSessionStreamEmission,
 } from "@volli/session-rpc";
-import { SESSION_RPC_IPC_PROCEDURES, type SessionPresentationProjection } from "@volli/shared";
+import {
+  isolatePerformanceObserver,
+  readOptionalPerformanceClock,
+  SESSION_RPC_IPC_PROCEDURES,
+  type SessionPresentationProjection,
+} from "@volli/shared";
 import type {
   SessionRpcIpcEvent,
   SessionRpcIpcProcedure,
@@ -127,54 +132,51 @@ export function sessionRpcIpcLink(
   const unclaimed = new Map<string, SessionRpcIpcEvent[]>();
   let awaitingAck = 0;
 
-  const now = () => {
-    try {
-      return performanceObserver?.now?.() ?? performance.now();
-    } catch {
-      return performance.now();
-    }
-  };
   const bufferedFrameCount = () => {
     let count = 0;
     for (const frames of unclaimed.values()) count += frames.length;
     return count;
   };
   const record = (sample: SessionRpcPerformanceSample): void => {
-    try {
+    isolatePerformanceObserver(() => {
       performanceObserver?.record(sample);
-    } catch {
-      // A benchmark observer is never allowed to break the measured path.
-    }
+    });
   };
   const measuredRequest = async (value: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> => {
     if (!performanceObserver) return bridge.request(value);
-    const startedAt = now();
+    const startedAt = readOptionalPerformanceClock(performanceObserver);
     try {
       const response = await bridge.request(value);
-      record({
-        kind: "round-trip",
-        procedure: value.procedure,
-        durationMs: now() - startedAt,
-        requestBytes: jsonBytes(value),
-        responseBytes: jsonBytes(response),
-        outcome: response.ok ? "ok" : "rpc-error",
-      });
+      const endedAt = readOptionalPerformanceClock(performanceObserver);
+      if (startedAt !== null && endedAt !== null) {
+        record({
+          kind: "round-trip",
+          procedure: value.procedure,
+          durationMs: Math.max(0, endedAt - startedAt),
+          requestBytes: jsonBytes(value),
+          responseBytes: jsonBytes(response),
+          outcome: response.ok ? "ok" : "rpc-error",
+        });
+      }
       return response;
     } catch (error) {
-      record({
-        kind: "round-trip",
-        procedure: value.procedure,
-        durationMs: now() - startedAt,
-        requestBytes: jsonBytes(value),
-        responseBytes: 0,
-        outcome: "transport-error",
-      });
+      const endedAt = readOptionalPerformanceClock(performanceObserver);
+      if (startedAt !== null && endedAt !== null) {
+        record({
+          kind: "round-trip",
+          procedure: value.procedure,
+          durationMs: Math.max(0, endedAt - startedAt),
+          requestBytes: jsonBytes(value),
+          responseBytes: 0,
+          outcome: "transport-error",
+        });
+      }
       throw error;
     }
   };
 
   bridge.onEvent((event) => {
-    const startedAt = performanceObserver ? now() : 0;
+    const startedAt = readOptionalPerformanceClock(performanceObserver);
     let disposition: Extract<SessionRpcPerformanceSample, { kind: "push" }>["disposition"];
     const consumer = consumers.get(event.subscriptionId);
     if (consumer) {
@@ -193,12 +195,13 @@ export function sessionRpcIpcLink(
       else unclaimed.set(event.subscriptionId, [event]);
       disposition = "buffered-before-ack";
     }
-    if (performanceObserver) {
+    const endedAt = readOptionalPerformanceClock(performanceObserver);
+    if (performanceObserver && startedAt !== null && endedAt !== null) {
       record({
         kind: "push",
         procedure: "session.subscribe",
         eventKind: event.kind,
-        durationMs: now() - startedAt,
+        durationMs: Math.max(0, endedAt - startedAt),
         eventBytes: jsonBytes(event),
         disposition,
         awaitingAck,
@@ -402,12 +405,17 @@ export function sessionRpcClient(): SessionRpcClient {
  * surface merely for diagnostics.
  */
 function windowPerformanceObserver(): SessionRpcPerformanceObserver | undefined {
-  const candidate = (
-    window as unknown as {
-      [key: string]: SessionRpcPerformanceObserver | undefined;
-    }
-  )["__VOLLI_SESSION_RPC_PERFORMANCE__"];
-  return candidate && typeof candidate.record === "function" ? candidate : undefined;
+  const candidate = (window as unknown as Record<string, unknown>)[
+    "__VOLLI_SESSION_RPC_PERFORMANCE__"
+  ];
+  if (!isRecord(candidate) || typeof candidate.record !== "function") return undefined;
+
+  const record = candidate.record;
+  const now = candidate.now;
+  return {
+    record: (sample) => record.call(candidate, sample),
+    ...(typeof now === "function" ? { now: () => now.call(candidate) } : {}),
+  };
 }
 
 /**
@@ -469,4 +477,8 @@ function ackForACall(path: string): string {
 
 function callForAnAck(path: string): string {
   return `${path} answered without a subscription id`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

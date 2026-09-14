@@ -250,6 +250,13 @@ export function watchSessionActivity(
       mark(request.sessionId);
       return result;
     },
+    // Passthroughs are written out rather than spread from `engine`, and the
+    // cost of that is real: a new Engine method must be added here and in
+    // `session-wake.ts` before this compiles. That is the point. A spread would
+    // adopt every future method silently, including a new WRITE, which would
+    // then never mark its Session dirty and would simply stop appearing in the
+    // activity stream. The type error is the prompt to classify the new method
+    // as intercepted or inert; only the answer "inert" belongs in this list.
     getSession: (query) => engine.getSession(query),
     getBaseSession: (query) => engine.getBaseSession(query),
     listSessions: (query) => engine.listSessions(query),

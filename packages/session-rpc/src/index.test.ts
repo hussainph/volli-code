@@ -907,6 +907,31 @@ describe("Session tRPC router", () => {
     ).resolves.toBeDefined();
   });
 
+  it("skips a procedure sample when either performance clock read fails", async () => {
+    for (const failedRead of [1, 2]) {
+      const fixture = runtimeFixture();
+      const samples: unknown[] = [];
+      let reads = 0;
+      const caller = createSessionRouter().createCaller({
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        performanceObserver: {
+          now: () => {
+            reads += 1;
+            if (reads === failedRead) throw new Error("clock failed");
+            return reads;
+          },
+          record: (sample) => samples.push(sample),
+        },
+      });
+
+      await expect(
+        caller.session.projection({ sessionId: "session-clock-failure" }),
+      ).resolves.toBeDefined();
+      expect(samples).toEqual([]);
+    }
+  });
+
   it("exposes Model Access without adapter, profile, or credential inputs", async () => {
     const fixture = runtimeFixture();
     const calls: unknown[] = [];

@@ -17,7 +17,9 @@ import {
 } from "@volli/session-engine";
 import {
   MODEL_PICKER_VIEWS,
+  isolatePerformanceObserver,
   MODEL_PURPOSES,
+  readOptionalPerformanceClock,
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
@@ -637,7 +639,7 @@ const t = initTRPC.context<SessionRouterContext>().create();
 const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
   const transport = ctx.transport ?? "unknown";
   ctx.diagnostics.record({ procedure: path, phase: "start", transport, code: null, message: null });
-  const performanceStartedAt = readPerformanceClock(ctx.performanceObserver);
+  const performanceStartedAt = readOptionalPerformanceClock(ctx.performanceObserver);
   const result = await next();
   if (result.ok) {
     ctx.diagnostics.record({
@@ -656,39 +658,32 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
       message: result.error.message,
     });
   }
-  const performanceEndedAt = readPerformanceClock(ctx.performanceObserver);
+  const performanceEndedAt = readOptionalPerformanceClock(ctx.performanceObserver);
   recordProcedurePerformance(ctx.performanceObserver, {
     procedure: path,
-    durationMs:
-      performanceStartedAt === null || performanceEndedAt === null
-        ? 0
-        : Math.max(0, performanceEndedAt - performanceStartedAt),
+    startedAt: performanceStartedAt,
+    endedAt: performanceEndedAt,
     outcome: result.ok ? "success" : "error",
   });
   return result;
 });
 
-function readPerformanceClock(
-  observer: RpcProcedurePerformanceObserver | undefined,
-): number | null {
-  if (!observer) return null;
-  try {
-    return observer.now?.() ?? performance.now();
-  } catch {
-    return null;
-  }
-}
-
 function recordProcedurePerformance(
   observer: RpcProcedurePerformanceObserver | undefined,
-  sample: RpcProcedurePerformanceSample,
+  input: {
+    procedure: string;
+    startedAt: number | null;
+    endedAt: number | null;
+    outcome: RpcProcedurePerformanceSample["outcome"];
+  },
 ): void {
-  if (!observer) return;
-  try {
-    observer.record(sample);
-  } catch {
-    // Measurement is optional and must not change the procedure it observes.
-  }
+  // A missing clock endpoint means this sample has no trustworthy duration.
+  // Skipping it is preferable to publishing a plausible-looking zero.
+  if (!observer || input.startedAt === null || input.endedAt === null) return;
+  const durationMs = Math.max(0, input.endedAt - input.startedAt);
+  isolatePerformanceObserver(() => {
+    observer.record({ procedure: input.procedure, durationMs, outcome: input.outcome });
+  });
 }
 
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */

@@ -166,29 +166,27 @@ describe("query and mutation", () => {
     await expect(answer).resolves.toEqual(response.data);
   });
 
-  it("records transport failures even when the observer clock fails", async () => {
-    const bridge = fakeBridge();
-    const samples: SessionRpcPerformanceSample[] = [];
-    const client = createSessionRpcClient(bridge, {
-      now: () => {
-        throw new Error("clock failed");
-      },
-      record: (sample) => samples.push(sample),
-    });
+  it("skips a round-trip sample when either performance clock read fails", async () => {
+    for (const failedRead of [1, 2]) {
+      const bridge = fakeBridge();
+      const samples: SessionRpcPerformanceSample[] = [];
+      let reads = 0;
+      const client = createSessionRpcClient(bridge, {
+        now: () => {
+          reads += 1;
+          if (reads === failedRead) throw new Error("clock failed");
+          return reads;
+        },
+        record: (sample) => samples.push(sample),
+      });
 
-    const answer = client.session.snapshot.query({ sessionId: "session-1" });
-    await flush();
-    bridge.rejectRequest(new Error("bridge failed"));
+      const answer = client.session.snapshot.query({ sessionId: "session-1" });
+      await flush();
+      bridge.reply({ ok: true, data: { projection: {}, frames: [], throughSequence: 4 } });
 
-    await expect(answer).rejects.toMatchObject({ message: "bridge failed" });
-    expect(samples).toEqual([
-      expect.objectContaining({
-        kind: "round-trip",
-        procedure: "session.snapshot",
-        responseBytes: 0,
-        outcome: "transport-error",
-      }),
-    ]);
+      await expect(answer).resolves.toEqual({ projection: {}, frames: [], throughSequence: 4 });
+      expect(samples).toEqual([]);
+    }
   });
 
   it("routes a mutation the same way", async () => {
