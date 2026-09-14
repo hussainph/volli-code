@@ -4,6 +4,7 @@ import type { BlobLinkView } from "@volli/shared";
 
 import {
   createChatDraftsStore,
+  isEmptyProvisionalChatDraft,
   isVisibleProvisionalChatDraft,
   MAX_DRAFTS,
   type ChatDraft,
@@ -87,6 +88,11 @@ describe("provisional chat", () => {
     });
 
     expect(isVisibleProvisionalChatDraft(store.getState().drafts["draft-1"]!)).toBe(false);
+    expect(isEmptyProvisionalChatDraft(store.getState().drafts["draft-1"])).toBe(true);
+    // And an id with no Draft at all is neither: a durable Session's tab must
+    // not be mistaken for something the workspace may not record.
+    expect(isEmptyProvisionalChatDraft(undefined)).toBe(false);
+    expect(isEmptyProvisionalChatDraft(store.getState().drafts["never-opened"])).toBe(false);
     expect(readPersisted(storage)).toBeNull();
     expect(write).not.toHaveBeenCalled();
   });

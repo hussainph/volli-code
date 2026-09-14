@@ -920,6 +920,32 @@ describe("promoteChatSession", () => {
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.text).toBe("first message");
   });
 
+  it("mints nothing at all when the tab closes before the create goes out", async () => {
+    // The last window in which abandoning can leave NO trace. Once
+    // `session.create` has gone out the row is durable and stays visible, by
+    // design — so this window is the only place the ticket's promise that
+    // abandoning leaves nothing durable can actually be kept.
+    const { attaches, store, ticketStarts } = fixture();
+    openDraft();
+    store.getState().openChatTab("t1", DRAFT_ID);
+    let releaseImport!: () => void;
+    const finishImport = useChatDraftsStore.getState().beginAttachmentImport(DRAFT_ID);
+    releaseImport = finishImport;
+
+    const promotion = store.getState().promoteChatSession(DRAFT_ID);
+    await Promise.resolve();
+    expect(ticketStarts).toEqual([]);
+
+    store.getState().closeChatTab("t1", DRAFT_ID);
+    releaseImport();
+
+    await expect(promotion).resolves.toBe(false);
+    expect(ticketStarts).toEqual([]);
+    expect(attaches).toEqual([]);
+    expect(store.getState().sessions).toEqual({});
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
+  });
+
   it("refuses an over-budget image strip BEFORE it mints anything durable", async () => {
     const { attaches, store, ticketStarts } = fixture();
     openDraft();

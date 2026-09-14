@@ -383,13 +383,15 @@ export function createChatSessionsStore(
           // A brand-new Session has inlined nothing, hence `0` used.
           await useChatDraftsStore.getState().waitForAttachmentImports(sessionId);
           const staged = useChatDraftsStore.getState().drafts[sessionId];
-          const overBudget =
-            staged === undefined
-              ? null
-              : sessionImageBudgetRefusal(
-                  0,
-                  inlineImageBytesIn(provisionalOwnerlessAttachments(staged)),
-                );
+          // A close can land while that barrier is awaited. Nothing durable
+          // exists yet, so the honest answer is to mint nothing at all: this is
+          // the one window where withdrawn intent can still leave no trace,
+          // and once `session.create` has gone out it never can again.
+          if (staged?.provisional === undefined) return false;
+          const overBudget = sessionImageBudgetRefusal(
+            0,
+            inlineImageBytesIn(provisionalOwnerlessAttachments(staged)),
+          );
           if (overBudget !== null) {
             toastError(overBudget);
             return false;
