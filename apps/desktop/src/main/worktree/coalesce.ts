@@ -23,12 +23,26 @@
  * whole extra spawn set. `shareWindowMs` names how close to a run's START a
  * caller must arrive to be considered part of the same burst and share it.
  *
- * It stays honest because the window is far below the watch debounce
- * (`WATCH_DEBOUNCE_MS` = 250ms): a caller reacting to a filesystem change
- * arrives at least a debounce after the burst that produced the previous run,
- * so it never lands inside the window and always gets its fresh follow-up. The
- * default of 0 is exactly the old behaviour, which is what the Change Set keeps.
+ * It stays honest because the window is far below the watch debounce: a caller
+ * reacting to a filesystem change arrives at least a debounce after the burst
+ * that produced the previous run, so it never lands inside the window and always
+ * gets its fresh follow-up. That relationship is the whole safety argument, so
+ * {@link RAIL_READ_SHARE_WINDOW_MS} is DERIVED from the debounce rather than
+ * written as a number. The default of 0 is exactly the old behaviour, which is
+ * what the Change Set keeps.
  */
+import { WATCH_DEBOUNCE_MS } from "./change-set-watch";
+
+/**
+ * How close together two rail reads of the same ticket count as one burst
+ * (VC-369). The Details rail mounts `ticket-repository-summary` and
+ * `ticket-changes-panel` in the same frame and each asks for `worktree.status`;
+ * an IPC round trip between them is a couple of milliseconds, so a fifth of the
+ * watch debounce is generous for "the same mount" while staying far below the
+ * debounce that makes sharing safe at all. `coalesce.test.ts` holds the ratio,
+ * so raising the debounce can never silently widen this past what is safe.
+ */
+export const RAIL_READ_SHARE_WINDOW_MS = Math.floor(WATCH_DEBOUNCE_MS / 5);
 
 /** Runs `task` under the coalescing rule for `key`. */
 export type Coalescer = <T>(key: string, task: () => Promise<T>) => Promise<T>;

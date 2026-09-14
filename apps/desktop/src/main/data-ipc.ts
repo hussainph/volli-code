@@ -206,7 +206,7 @@ import {
   trimFinishedWorktree,
   WorktreeChangeWatchManager,
 } from "./worktree";
-import { createCoalescer } from "./worktree/coalesce";
+import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./worktree/coalesce";
 import { credentialHelperIssues } from "./credential-helper-diagnostics";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
@@ -217,16 +217,6 @@ import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
 import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-
-/**
- * How close together two rail reads of the same ticket count as one burst
- * (VC-369). The Details rail mounts `ticket-repository-summary` and
- * `ticket-changes-panel` in the same frame and each asks for `worktree.status`;
- * an IPC round trip between them is a couple of milliseconds, so 50ms is
- * generous for "the same mount" while staying far under the 250ms watch
- * debounce that separates genuinely new filesystem events.
- */
-const RAIL_READ_SHARE_WINDOW_MS = 50;
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };

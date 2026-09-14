@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { createCoalescer } from "./coalesce";
+import { WATCH_DEBOUNCE_MS } from "./change-set-watch";
+import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./coalesce";
 
 /** A task whose completion the test controls, counting how often it started. */
 function controllable() {
@@ -141,6 +142,20 @@ describe("createCoalescer with a share window", () => {
     expect(work.starts()).toBe(2);
     work.settle(1, "fresh");
     expect(await second).toBe("fresh");
+  });
+
+  /**
+   * The invariant the whole share window rests on. A caller reacting to a
+   * filesystem change cannot arrive until its burst has cleared the watch
+   * debounce, so it must never land inside the window — which is only true
+   * while the window stays well under the debounce. If someone lowers the
+   * debounce (or widens the window), sharing could start handing a
+   * change-driven caller a run that began BEFORE the change it is reacting to,
+   * and this is the assertion that stops that landing silently.
+   */
+  it("keeps the rail window far below the watch debounce that makes it safe", () => {
+    expect(RAIL_READ_SHARE_WINDOW_MS).toBeGreaterThan(0);
+    expect(RAIL_READ_SHARE_WINDOW_MS * 4).toBeLessThanOrEqual(WATCH_DEBOUNCE_MS);
   });
 
   it("defaults to no window, so the Change Set rule is unchanged", async () => {
