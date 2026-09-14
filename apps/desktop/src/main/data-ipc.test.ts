@@ -197,6 +197,17 @@ async function expectDataChanged(payload: unknown): Promise<void> {
   });
 }
 
+/**
+ * Assert this handler queued NOTHING. The flush is what makes the claim mean
+ * anything: the invalidation is coalesced into a frame window, so an unflushed
+ * `toEqual([])` inside a synchronous test body is true whether the handler
+ * queued an invalidation or not.
+ */
+function expectNoDataChange(): void {
+  flushDataChangedForTest();
+  expect(dataChangedSends).toEqual([]);
+}
+
 let ctx: TestDb;
 
 // `volli:project-create` now requires an existing directory (main-side path
@@ -227,9 +238,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Drain a mutation this test did not inspect before the next test clears the
-  // shared send log and creates unrelated ids.
-  flushDataChangedForTest();
+  // A mutation this test did not inspect is DISCARDED, not delivered, by
+  // `src/main/test-setup.ts` — delivering it would put ids this test created
+  // into the next test's send log.
   ctx.cleanup();
   for (const dir of createdProjectDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -983,7 +994,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
     invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: false });
 
     // No transition, no checkout moved, nothing for a venue reader to re-read.
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 
   it("does not re-materialize when scope is re-asserted as already on", () => {
@@ -2985,7 +2996,7 @@ describe("the build-artifact channels", () => {
 
     await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
 
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 
   it("reads and writes the trim settings", async () => {
@@ -3575,6 +3586,6 @@ describe("the ticket wake bus (VC-85)", () => {
     invoke<TicketResult>("volli:ticket-set-priority", { ticketId: ticket.id, priority: "high" });
 
     expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["priority_changed"]);
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 });

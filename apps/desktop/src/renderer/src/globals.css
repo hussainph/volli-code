@@ -1157,7 +1157,23 @@
  * the shadow run 60px past the other three, comfortably more than the widest
  * layer reaches. Nothing else is lost to it: the card already clips its content
  * with `overflow-hidden`, popovers portal to the body, and the seam edge is
- * square anyway. */
+ * square anyway.
+ *
+ * THE TWO HALVES ARE KEYED SEPARATELY, and for the length of a pin they are
+ * allowed to disagree. The sidebar half answers to the SHELL
+ * (`[data-volli-shell="framed"]`), which flips on the first frame of a pin; the
+ * card half answers to the surface's own `[data-sidebar-layout]`, which does
+ * not flip until the journey lands (app-shell.tsx, `useSidebarContentMotion`).
+ * So during those ~200ms the sidebar is already drawing its docked half while
+ * the card is still the floating card, sliding right on a compositor translate.
+ *
+ * That is the trade the transform bought, taken deliberately. Keying the card
+ * to the shell too would put both halves in agreement at every instant — and
+ * charge one full layout of every terminal canvas and Monaco editor in the
+ * window at the start of the animation, and another at the end, purely to
+ * exchange the card's 8px left inset for a square edge. The unit below is a
+ * contract about where these two REST. Mid-journey the eye is tracking one
+ * moving edge, and the moving edge is correct in both renderings. */
 
 /* The two numbers the rest of this geometry is built from: the margin that
  * insets the unit, and the hairline it draws around it. `primary-sidebar.tsx`
@@ -1193,12 +1209,10 @@
   height: auto;
 }
 
-/* The framed content card, floating on the canvas — the other half of the unit. */
-/* The surface owns this marker separately from the shell while a pin opens:
- * its wide ephemeral layout stays put under the compositor translate until the
- * endpoint, then both the marker and spacer settle in one layout pass. Keying
- * this rule to the shell would resize terminals once at animation start and
- * again at the end just to exchange the card's 8px left inset. */
+/* The framed content card, floating on the canvas — the other half of the unit,
+ * keyed to the surface's own endpoint marker rather than to the shell. See the
+ * seam block above for why the two halves are allowed to disagree while a pin
+ * is travelling. */
 [data-slot="sidebar-inset"][data-sidebar-layout="framed"] {
   /* 0, not −1px.
    *

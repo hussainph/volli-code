@@ -50,7 +50,6 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
@@ -88,7 +87,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  flushDataChangedForTest();
+  // The coalescer is drained by `src/main/test-setup.ts`, which discards rather
+  // than delivers — see there for why that is the isolating choice.
   resetRetentionWatcherForTest();
   ctx.cleanup();
 });

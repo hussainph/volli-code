@@ -10,8 +10,9 @@ vi.mock("electron", () => ({
 import {
   broadcastDataChanged,
   broadcastPendingArmedRuns,
-  DATA_CHANGED_BATCH_WINDOW_MS,
+  flushDataChangedForTest,
 } from "./broadcast";
+import { DATA_CHANGED_BATCH_WINDOW_MS } from "./data-change-coalescer";
 
 const PENDING: PendingArmedRun = {
   id: "arrival-1",
@@ -45,6 +46,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/*
+ * What lives here is the FAN-OUT: which windows a delivered invalidation
+ * reaches and what it says on the wire. The coalescing rule itself — merging,
+ * the window, re-entrancy, disposal — is a unit of `data-change-coalescer.ts`
+ * and is tested there against a recording sink rather than through Electron.
+ */
 describe("data change broadcast", () => {
   it("turns a synchronous mutation burst into one re-hydrate per live window", () => {
     const first = windowFixture();
@@ -69,7 +76,19 @@ describe("data change broadcast", () => {
     expect(destroyed.webContents.send).not.toHaveBeenCalled();
   });
 
-  it("widens conflicting scopes and keeps the worktree venue invalidation", () => {
+  it("stamps the entity discriminant call sites never pass", () => {
+    const window = windowFixture();
+    windows.push(window);
+
+    broadcastDataChanged();
+    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS);
+
+    expect(window.webContents.send).toHaveBeenCalledExactlyOnceWith("volli:data-changed", {
+      entity: "tickets",
+    });
+  });
+
+  it("carries the merged scope, not the first or last call's", () => {
     const window = windowFixture();
     windows.push(window);
 
@@ -84,35 +103,29 @@ describe("data change broadcast", () => {
     });
   });
 
-  it("never narrows a batch after an untargeted invalidation", () => {
-    const window = windowFixture();
-    windows.push(window);
+  it("queues nothing anyone can receive when no window is open", () => {
+    // Quit, or the moment between windows on macOS. The invalidation is simply
+    // dropped: nothing survives that could act on it, and the next window
+    // hydrates from SQLite at boot anyway.
+    broadcastDataChanged({ kind: "worktree" });
+    expect(() => vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS)).not.toThrow();
 
-    broadcastDataChanged();
-    broadcastDataChanged({ ticketId: "ticket-1", projectId: "project-1", kind: "ticket" });
-    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS);
-
-    expect(window.webContents.send).toHaveBeenCalledExactlyOnceWith("volli:data-changed", {
-      entity: "tickets",
-    });
+    const late = windowFixture();
+    windows.push(late);
+    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS * 10);
+    expect(late.webContents.send).not.toHaveBeenCalled();
   });
 
-  it("starts a fresh coalescing window after each flush", () => {
+  it("delivers on demand for the tests that assert on an absence", () => {
     const window = windowFixture();
     windows.push(window);
 
     broadcastDataChanged({ kind: "ticket" });
-    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS);
-    broadcastDataChanged({ kind: "comment" });
-    vi.advanceTimersByTime(DATA_CHANGED_BATCH_WINDOW_MS);
+    flushDataChangedForTest();
 
-    expect(window.webContents.send).toHaveBeenNthCalledWith(1, "volli:data-changed", {
+    expect(window.webContents.send).toHaveBeenCalledExactlyOnceWith("volli:data-changed", {
       entity: "tickets",
       kind: "ticket",
-    });
-    expect(window.webContents.send).toHaveBeenNthCalledWith(2, "volli:data-changed", {
-      entity: "tickets",
-      kind: "comment",
     });
   });
 });

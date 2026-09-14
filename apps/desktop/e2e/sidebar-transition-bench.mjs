@@ -6,12 +6,23 @@
  * observes the terminal hosts while the ordinary Cmd+B path closes and opens the
  * sidebar, and records renderer frame intervals plus Electron process CPU.
  *
- * Run both revisions under the same load arm. `--load` records the arm's
- * externally-managed name; it does not manufacture CPU load itself:
+ * TWO ARMS, and the gap between them is the whole point of the ticket. `--busy`
+ * is how many CPU-burning worker threads this bench starts BEFORE Electron and
+ * stops after the report, so the loaded arm is manufactured here rather than
+ * described here. A local stand-in: when VC-353's background-load generator
+ * lands, this should call that instead of rolling its own busy loop.
+ *
  *   pnpm -C apps/desktop run build
- *   node apps/desktop/e2e/sidebar-transition-bench.mjs --label before --load idle
+ *   node apps/desktop/e2e/sidebar-transition-bench.mjs --label after --busy 0
+ *   node apps/desktop/e2e/sidebar-transition-bench.mjs --label after --busy 2
+ *
+ * It EXITS NON-ZERO on a fixture fault, a lost terminal identity, an endpoint
+ * that never settles, a renderer console error, a reduced-motion endpoint that
+ * took long enough to have been animated, and — unless `--no-budget` is passed
+ * — a pin whose worst frame missed the budget. `--budget-ms` moves that bar.
  */
 import { promises as fs } from "node:fs";
+import { Worker } from "node:worker_threads";
 
 import {
   assertBuiltRendererLoaded,
@@ -31,15 +42,50 @@ const flag = (name, fallback) => {
   return index === -1 ? fallback : args[index + 1];
 };
 const LABEL = flag("label", "run");
-const LOAD = flag("load", "unspecified");
 const PANES = Number(flag("panes", "4"));
 const SAMPLE_MS = Number(flag("sample-ms", "500"));
+const BUSY = Number(flag("busy", "0"));
 const CHECK_BEHAVIOR = !args.includes("--skip-behavior-checks");
+const CHECK_BUDGET = !args.includes("--no-budget");
+// One dropped frame inside a 200ms pin is a stutter a person can see; two
+// consecutive 60Hz frames is where it stops being deniable. The bar is the
+// WORST frame, not the mean, because the mean of a 200ms transition with one
+// 300ms stall still reads as smooth.
+const BUDGET_MS = Number(flag("budget-ms", "33.3"));
+// Reduced motion is an endpoint SWAP. Anything under a third of the shorter
+// clock (CLOSE_MS = 160) could not have been a played animation, and anything
+// over it is a bug this bench must not pass.
+const REDUCED_SETTLE_MS = 50;
 
 if (!Number.isInteger(PANES) || PANES < 1) throw new Error(`invalid --panes: ${PANES}`);
 if (!Number.isFinite(SAMPLE_MS) || SAMPLE_MS < 250) {
   throw new Error(`invalid --sample-ms: ${SAMPLE_MS}`);
 }
+if (!Number.isInteger(BUSY) || BUSY < 0) throw new Error(`invalid --busy: ${BUSY}`);
+if (!Number.isFinite(BUDGET_MS) || BUDGET_MS <= 0) throw new Error(`invalid --budget-ms`);
+
+/**
+ * The background load, manufactured rather than assumed. Fixed integer mixing
+ * with no allocation, so each worker is a steady core of CPU and never a GC
+ * partner for the process under test.
+ */
+function startBackgroundLoad(workers) {
+  const running = Array.from(
+    { length: workers },
+    () =>
+      new Worker(
+        `let mix = 1;
+         for (;;) { for (let i = 0; i < 5e6; i += 1) mix = (mix * 1103515245 + 12345) >>> 1; }`,
+        { eval: true },
+      ),
+  );
+  return async () => {
+    await Promise.allSettled(running.map((worker) => worker.terminate()));
+  };
+}
+
+const LOAD = BUSY === 0 ? "idle" : `${BUSY}-busy-core`;
+const stopBackgroundLoad = startBackgroundLoad(BUSY);
 
 const scratchState = await makeScratch("volli-sidebar-transition-bench-");
 const { scratch, userDataDir, dbPath, cleanup } = scratchState;
@@ -181,8 +227,6 @@ try {
       entries: 0,
       widths: [],
       timestamps: [],
-      resizeIpcCalls: 0,
-      resizeIpcPatch: "not attempted",
       terminalIdentityBroken: false,
     };
     const hosts = Array.from(document.querySelectorAll("[data-terminal-renderer]")).filter(
@@ -223,16 +267,10 @@ try {
     };
     frame = requestAnimationFrame(tick);
 
-    try {
-      const original = window.api.terminal.resize;
-      window.api.terminal.resize = (...callArgs) => {
-        if (state.running) state.resizeIpcCalls += 1;
-        return original(...callArgs);
-      };
-      state.resizeIpcPatch = window.api.terminal.resize === original ? "read-only" : "installed";
-    } catch (error) {
-      state.resizeIpcPatch = `read-only: ${error instanceof Error ? error.message : String(error)}`;
-    }
+    // The preload API is frozen, so `window.api.terminal.resize` cannot be
+    // wrapped to count PTY resize IPC directly. The terminal hosts' own
+    // ResizeObserver callbacks are the cascade metric: a resize that never
+    // reaches a host cannot reach its pty either.
 
     window.volliSidebarBench = {
       start() {
@@ -240,7 +278,6 @@ try {
         state.entries = 0;
         state.widths = [];
         state.timestamps = [];
-        state.resizeIpcCalls = 0;
         state.running = true;
       },
       stop() {
@@ -250,7 +287,6 @@ try {
           entries: state.entries,
           widths: [...state.widths],
           timestamps: [...state.timestamps],
-          resizeIpcCalls: state.resizeIpcCalls,
         };
       },
       terminalIdentity() {
@@ -282,7 +318,6 @@ try {
 
     return {
       terminalHosts: hosts.length,
-      resizeIpcPatch: state.resizeIpcPatch,
       sidebarPinned: document.querySelector('[data-volli-shell="framed"]') !== null,
     };
   });
@@ -311,7 +346,11 @@ try {
 
   let behaviorChecks = null;
   if (CHECK_BEHAVIOR) {
+    // Reports how LONG the endpoint took, not only that it arrived. Without the
+    // elapsed time a 5s allowance cannot tell an instant swap from a played
+    // animation, which is the only thing the reduced-motion cases are asking.
     const settledSidebar = async (expected) => {
+      const startedAt = Date.now();
       await waitUntil(
         `sidebar ${expected} endpoint to settle`,
         () =>
@@ -326,7 +365,8 @@ try {
           }, expected),
         { timeout: 5_000 },
       );
-      return page.evaluate(() => {
+      const settledMs = Date.now() - startedAt;
+      const reading = await page.evaluate(() => {
         const content = document.querySelector("[data-sidebar-layout]");
         if (!(content instanceof HTMLElement)) return null;
         return {
@@ -335,6 +375,17 @@ try {
           translate: getComputedStyle(content).translate,
         };
       });
+      return { ...reading, settledMs };
+    };
+
+    /** A reduced-motion endpoint that took long enough to have been animated. */
+    const assertSwapped = (what, reading) => {
+      if (reading.settledMs > REDUCED_SETTLE_MS) {
+        throw new Error(
+          `${what} took ${reading.settledMs}ms to settle under reduced motion; ` +
+            `an endpoint swap must land within ${REDUCED_SETTLE_MS}ms`,
+        );
+      }
     };
 
     // Exercise both directions of interruption. The presentation can reverse in
@@ -359,8 +410,10 @@ try {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.keyboard.press("Meta+b");
     const reducedClose = await settledSidebar("ephemeral");
+    assertSwapped("reduced-motion close", reducedClose);
     await page.keyboard.press("Meta+b");
     const reducedOpen = await settledSidebar("framed");
+    assertSwapped("reduced-motion open", reducedOpen);
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
     // Changing the system preference mid-journey must cancel the compositor
@@ -428,8 +481,13 @@ try {
   const report = {
     label: LABEL,
     load: LOAD,
+    busyWorkers: BUSY,
     machine: `${process.platform}/${process.arch}`,
-    fixture: { kind: "real", terminalPanes: PANES },
+    // Named for what it actually builds, not for VC-353's `real` fixture: this
+    // is the built app with ONE Session and `PANES` live restty canvases, on a
+    // fresh database. It is the expensive-sibling half of that fixture and not
+    // its migrated 1,200-Session/260k-event half.
+    fixture: { kind: "live-app", sessions: 1, terminalPanes: PANES },
     sampleMs: SAMPLE_MS,
     probe,
     samples: [idle, close, open],
@@ -438,9 +496,7 @@ try {
     consoleErrors,
   };
 
-  console.log(
-    "\nlabel\taction ms\tresize callbacks\tresize entries\tPTY resize IPC\tfps\tp95 ms\tmax ms\t>33ms",
-  );
+  console.log("\nlabel\taction ms\tresize callbacks\tresize entries\tfps\tp95 ms\tmax ms\t>33ms");
   for (const reading of report.samples) {
     console.log(
       [
@@ -448,7 +504,6 @@ try {
         reading.actionMs,
         reading.callbacks,
         reading.entries,
-        reading.resizeIpcCalls,
         reading.frame.fps.toFixed(1),
         reading.frame.p95Ms.toFixed(1),
         reading.frame.maxMs.toFixed(1),
@@ -457,6 +512,27 @@ try {
     );
   }
   console.log(`\n__BENCH__${JSON.stringify(report)}__BENCH__`);
+
+  // A report generator answers "what happened". These make it answer "is this
+  // still true", which is what a regression needs.
+  if (consoleErrors.length > 0) {
+    throw new Error(
+      `renderer reported ${consoleErrors.length} console error(s):\n${consoleErrors.join("\n")}`,
+    );
+  }
+  if (CHECK_BUDGET) {
+    const missed = report.samples
+      .filter((reading) => reading.label !== "idle control")
+      .filter((reading) => reading.frame.maxMs > BUDGET_MS);
+    if (missed.length > 0) {
+      throw new Error(
+        `frame budget of ${BUDGET_MS}ms missed on the ${LOAD} arm: ` +
+          missed
+            .map((reading) => `${reading.label} worst ${reading.frame.maxMs.toFixed(1)}ms`)
+            .join(", "),
+      );
+    }
+  }
 } finally {
   // End the fixture PTYs explicitly before asking Electron to quit. Four live
   // login shells can keep Playwright's graceful close pending long after the
@@ -476,5 +552,6 @@ try {
     })
     .catch(() => {});
   await app.close().catch(() => {});
+  await stopBackgroundLoad();
   await cleanup();
 }
