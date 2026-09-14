@@ -107,19 +107,12 @@ Do not run unrelated builds, tests, screen recording, or energy-mode changes dur
 
 A harness is only worth its baseline if it moves when the product gets slower. That is proven by injecting a deliberate regression, measuring the movement, and then **removing** the injection: leaving a slow path behind — even an opt-in one — leaves a foot-gun in the bench and a flag that a future baseline could accidentally carry. The bench carries no such flag today.
 
-The proof itself has not been re-taken since the harness was fixed; see [the sensitivity record](performance-baselines/vc-353-owner-real/sensitivity.md), which holds the exact injection to apply. To take it, apply that injection as a temporary local edit, run two back-to-back stream-only controls against the same built code, and revert:
+It is measured as a **curve rather than a single point**, because where the threshold sits is the useful fact: [the sensitivity record](performance-baselines/vc-353-owner-real/sensitivity.md) holds the injection, the command and the numbers. In short, on the baseline machine the stream+scroll probe calls a per-step main-thread regression of ≥40 ms unmistakably (1.5× wall time, 120+ dropped frames against a control that drops none), detects 20 ms through the dropped-frame counter alone, and does not see ≤10 ms — which is correct, since that still fits the frame budget the user actually experiences.
 
-```sh
-pnpm bench:desktop -- --preset real --stream-only --arms idle --repetitions 20 \
-  --output /tmp/vc353-control
-# apply the temporary injection recorded in
-# docs/performance-baselines/vc-353-owner-real/sensitivity.md, rebuild, then:
-pnpm bench:desktop -- --preset real --stream-only --arms idle --repetitions 20 \
-  --output /tmp/vc353-deliberate-slowdown
-git checkout -- apps/desktop/e2e/bench/chat-window
-```
+Two traps that record explains and every future reader should know:
 
-The expected signal is higher stream frame-time and wall-time p50/p95 and more dropped frames in the second report. Publish both runs' Markdown under `performance-baselines/vc-353-owner-real/sensitivity/`, name the injection used, and confirm the working tree is clean again afterwards.
+- The stream interaction's **wall time is floored by the scripted token schedule** (120 steps at 30 tokens/s take ~4.0s regardless), so latency alone would have called a real 20 ms regression clean. Read dropped frames and frame times beside it.
+- A **development-React bench has less frame budget to spare**, so sensitivity measured on one does not transfer to the shipped build. The old +40%-at-20 ms claim came from exactly that mistake and is withdrawn.
 
 ## Research references
 
@@ -132,8 +125,10 @@ The harness decisions are supported by these scoped research records:
 
 ## Baseline use
 
-**There is currently no valid owner baseline.** The one published on 2026-09-13 was withdrawn rather than corrected: it was measured through a harness that built the renderer bench with development React, accepted a run whose renderer had thrown, gave its two arms different cache warmth, and used a fixture at 145 MB rather than the measured 373 MB. [The record](performance-baselines/vc-353-owner-real/benchmark.md) says so in full and gives the command that produces the real one; it needs a quiet machine and about 75 minutes.
+The owner-machine `real` baseline is [`docs/performance-baselines/vc-353-owner-real/benchmark.md`](performance-baselines/vc-353-owner-real/benchmark.md), taken at commit `e3c936ed` on a clean tree: both arms, 20 repetitions plus a discarded warm-up, zero renderer errors, every health check true. The 2026-09-13 baseline it replaces was withdrawn rather than corrected — development React, a published run whose renderer had thrown, arms with different cache warmth, and a 145 MB fixture standing in for 373 MB.
 
-When a baseline is published there, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration before using it as a comparison point — the report records all of them for exactly this purpose. A later ticket should publish its own before/after pair on one machine rather than compare its machine to an owner baseline.
+One caveat travels with it and is recorded in the file: the host was **not exclusively idle** (mean load 7.66 and 306% of 800% CPU during the idle arm, from the owner's own running app). Absolute numbers are therefore pessimistic and the idle → loaded gap is understated. Re-taking it on a quiet machine is worth about 75 minutes whenever one is free.
+
+Before using any baseline as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration — the report records all of them for exactly this purpose. A later ticket should publish its own before/after pair on one machine rather than compare its machine to an owner baseline.
 
 The program tickets that consume this instrument are `VC-316` (board and sidebar profiling at ticket scale) and `VC-319` (the packed-app release matrix); both reuse `pnpm bench:desktop` and these presets rather than build a second fixture stack. The Session RPC round-trip primitive is published separately in `apps/desktop/e2e/bench/performance/session-rpc-round-trip.mjs` so the RPC ticket can import it instead of re-deriving it.
