@@ -44,7 +44,7 @@ import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
-import { sessionPanes, type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
+import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -248,13 +248,6 @@ export function ActiveSessions({
   );
   const { containers, sessionIds: listingValueSessionIds } = useSessionsStore(selectContainerScope);
 
-  /** `openTabs` only contributes this project's ids to `liveSignature`. */
-  const selectOpenChatTabs = React.useMemo(
-    () => scopedRecordSelector((state: ChatSessionsStoreState) => state.openTabs, listingOwnerIds),
-    [listingOwnerIds],
-  );
-  const openChatTabs = useChatSessionsStore(selectOpenChatTabs);
-
   // The project's Session rows, shared with the board's active-session
   // indicator and fed by `volli:session-activity` rather than by a timer —
   // see `stores/project-sessions.ts`. This component used to own both the
@@ -352,30 +345,6 @@ export function ActiveSessions({
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
   const [refreshTick, setRefreshTick] = React.useState(0);
-  // Which of this project's Sessions are live on this surface — the key the one
-  // fetch below re-reads the durable listing on. Both kinds count: a chat has no
-  // PTY pane to name, so a signature made of panes alone left a streaming chat
-  // out of every refetch, and its row sat stale until something else moved.
-  const liveSignature = React.useMemo(
-    () =>
-      [
-        ...Object.values(containers).flatMap((container) =>
-          container.tabs
-            .filter(
-              (tab) =>
-                (tab.scope.kind === "project" && tab.scope.projectId === project.id) ||
-                (tab.scope.kind === "ticket" &&
-                  tab.scope.projectId === project.id &&
-                  projectTicketIds.has(tab.scope.ticketId)),
-            )
-            .flatMap((tab) => sessionPanes(tab.layout).map((pane) => pane.sessionId)),
-        ),
-        ...Object.entries(openChatTabs)
-          .filter(([ownerId]) => ownerId === project.id || projectTicketIds.has(ownerId))
-          .flatMap(([, sessionIds]) => sessionIds),
-      ].join(","),
-    [containers, openChatTabs, project.id, projectTicketIds],
-  );
   const needsReviewIds = React.useMemo(
     () => tickets.filter((ticket) => ticket.status === "needs_review").map((ticket) => ticket.id),
     [tickets],
@@ -383,20 +352,37 @@ export function ActiveSessions({
 
   // The BASELINE read, and only that. A window that has just opened has missed
   // every push that came before it, so the listing is read once per project and
-  // `volli:session-activity` carries it from there — which is why this no longer
-  // re-fires on `liveSignature`. A Session coming up IS a durable fact, so the
-  // channel announces it; refetching on the same trigger would just race the push
-  // to say the same thing. `refreshTick` survives for the one thing the channel
-  // genuinely cannot see: rows that changed while this project was off screen
-  // because its ticket left the board.
+  // `volli:session-activity` carries it from there — a Session coming up IS a
+  // durable fact, so the channel announces it; refetching on any session churn
+  // would just race the push to say the same thing. `refreshTick` survives for
+  // the one thing the channel genuinely cannot see: rows that changed while
+  // this project was off screen because its ticket left the board.
   React.useEffect(() => {
     void refreshProjectSessions(project.id);
   }, [project.id, refreshTick, refreshProjectSessions]);
 
+  // The board's column history, reduced to the one thing that can move it:
+  // which ticket sits in which column. Order-insensitive by construction — the
+  // pairs are sorted — so a same-column reorder, which writes no
+  // `status_changed` event and only permutes `tickets`, leaves this string
+  // equal; a column change, a create or an archive moves it. A wholesale
+  // `hydrate` — a CLI move arriving from outside this renderer — rewrites the
+  // slice and moves the signature with it.
+  const ticketStatusSignature = React.useMemo(
+    () =>
+      tickets
+        .map((ticket) => `${ticket.id}:${ticket.status}`)
+        .toSorted()
+        .join(","),
+    [tickets],
+  );
+
   // Two of the Previous band's cleanup rules need to know when a ticket entered
   // its CURRENT column, and neither guesses without it — a ticket missing here
-  // simply keeps its Sessions. Same triggers as the listing fetch: the rules
-  // read a column history that only moves when the board does.
+  // simply keeps its Sessions. The column history moves when the BOARD does, so
+  // this read is keyed on the status signature above and not on session churn:
+  // opening a terminal pane or a chat tab moves no ticket between columns, and
+  // it must not refetch this project-wide window for one.
   const statusFetch = useLatestAsync();
   React.useEffect(() => {
     const token = statusFetch.claim();
@@ -417,10 +403,13 @@ export function ActiveSessions({
           toastError(`Couldn't load ticket history: ${errorMessage(error)}`);
       });
     return () => statusFetch.invalidate();
-  }, [project.id, liveSignature, refreshTick, statusFetch]);
-  /* `liveSignature` still keys the ticket-history read above: a Session coming
-     up is usually a ticket about to move columns, and that history has no push
-     channel of its own. It no longer keys the SESSION listing — that is pushed. */
+  }, [project.id, ticketStatusSignature, refreshTick, statusFetch]);
+  /* Why the signature and not session churn: a Session coming up is not a
+     ticket about to move columns, and when a column does move the board store
+     already sees it — `tickets` carries each ticket's `status`, and a CLI move
+     arriving as a wholesale `hydrate` rewrites the slice, so the signature
+     above catches both. The SESSION listing is pushed; this column history is
+     the thing with no push channel of its own. */
 
   const signalsFetch = useLatestAsync();
   const loadAttentionSignals = React.useCallback(() => {
