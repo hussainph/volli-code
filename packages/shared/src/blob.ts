@@ -440,6 +440,17 @@ export function isProvisionalChatDraftPhase(value: unknown): value is Provisiona
 }
 
 /**
+ * A staged file with no `blob_links` row yet.
+ *
+ * The one thing the two retained-Blob readers disagree about: an entry that
+ * already has a `linkId` is kept alive by its row, so retaining it here would
+ * say the same thing twice.
+ */
+function isOwnerlessAttachment(attachment: Record<string, unknown>): boolean {
+  return attachment["linkId"] === null;
+}
+
+/**
  * Blob hashes retained by persisted provisional chat Drafts (VC-358).
  *
  * A provisional chat Draft can name files in its live composer strip and in
@@ -456,18 +467,18 @@ export function isProvisionalChatDraftPhase(value: unknown): value is Provisiona
 export function chatDraftAttachmentHashes(value: unknown): string[] {
   const drafts = childRecord(childRecord(parsedAppState(value), "state"), "drafts");
   if (drafts === undefined) return [];
-  const ownerless = (attachment: Record<string, unknown>) => attachment["linkId"] === null;
   const hashes: string[] = [];
   for (const entry of Object.values(drafts)) {
     const draft = asRecord(entry);
     if (draft === undefined) continue;
     const phase = childRecord(draft, "provisional")?.["phase"];
     if (!isProvisionalChatDraftPhase(phase)) continue;
-    hashes.push(...blobHashesIn(draft["attachments"], ownerless));
+    hashes.push(...blobHashesIn(draft["attachments"], isOwnerlessAttachment));
     if (!Array.isArray(draft["held"])) continue;
     for (const held of draft["held"]) {
       const message = asRecord(held);
-      if (message !== undefined) hashes.push(...blobHashesIn(message["attachments"], ownerless));
+      if (message !== undefined)
+        hashes.push(...blobHashesIn(message["attachments"], isOwnerlessAttachment));
     }
   }
   return hashes;
