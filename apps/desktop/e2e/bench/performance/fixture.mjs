@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +12,18 @@ import {
   FIXTURE_SCHEMA_VERSION,
   presetNamed,
 } from "./presets.mjs";
+import {
+  allocateFamilyUnits,
+  attachmentClosedPayload,
+  attachmentOpenedPayload,
+  authoritySnapshot,
+  eventsInUnits,
+  modelSelectedPayload,
+  orderFamilyUnits,
+  sessionCreatedPayload,
+  EVENT_FAMILIES,
+} from "./event-mix.mjs";
+import { proseBytes, seededRandom } from "./deterministic.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(HERE, "..", "..", "..");
@@ -24,6 +37,9 @@ const PROVENANCE = Object.freeze({
 const STATUSES = ["backlog", "todo", "doing", "needs_review", "done"];
 const PRIORITIES = ["low", "medium", "high"];
 const FIXTURE_FILE = "performance-fixture.json";
+const PORTABLE_ROOT = "/__volli_performance_fixture__";
+const PORTABLE_PROJECT_PATH = join(PORTABLE_ROOT, "project");
+const PORTABLE_WORKTREE_ROOT = join(PORTABLE_ROOT, "worktrees");
 
 function parseArgs(argv) {
   const args = { preset: "real", seed: DEFAULT_SEED, force: false, verify: false };
@@ -54,16 +70,7 @@ function usage() {
   ].join("\n");
 }
 
-/** xorshift32, with no implicit platform entropy. */
-export function seededRandom(seed) {
-  let state = seed >>> 0 || 0x9e3779b9;
-  return () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 0x1_0000_0000;
-  };
-}
+export { seededRandom } from "./deterministic.mjs";
 
 /**
  * Allocate an exact count with a deterministic Pareto-like long tail and an
@@ -222,60 +229,26 @@ function message(index, role) {
   };
 }
 
-function genericPayload(kindIndex, sessionIndex, attachmentId, turnId) {
-  switch (kindIndex % 8) {
-    case 0:
-      return { kind: "run.started", attachmentId, runId: `run-${sessionIndex}-${kindIndex}` };
-    case 1:
-      return {
-        kind: "adapter.observed",
-        attachmentId,
-        name: "progress",
-        native: { phase: kindIndex },
-      };
-    case 2:
-      return { kind: "turn.started", attachmentId, turnId };
-    case 3:
-      return {
-        kind: "adapter.observed",
-        attachmentId,
-        name: "token.batch",
-        native: { tokens: 24 },
-      };
-    case 4:
-      return { kind: "turn.completed", attachmentId, turnId };
-    case 5:
-      return { kind: "run.completed", attachmentId, runId: `run-${sessionIndex}-${kindIndex - 5}` };
-    case 6:
-      return {
-        kind: "usage.recorded",
-        attachmentId,
-        turnId,
-        attribution: { projectId: PROJECT_ID, ticketId: null },
-        usage: {
-          cause: "assistant",
-          providerId: "fixture",
-          modelId: "benchmark-v1",
-          inputTokens: 768,
-          outputTokens: 192,
-          cacheReadTokens: 128,
-          cacheWriteTokens: 0,
-          costUsd: 0.001,
-          costBasis: "provider-reported",
-        },
-      };
-    default:
-      return { kind: "adapter.observed", attachmentId, name: "checkpoint", native: null };
-  }
-}
-
 async function loadProductionModules() {
+  // Creating a Vite dev server sets `process.env.NODE_ENV = "development"` on
+  // THIS process, and it stays set after the server closes. The benchmark
+  // runner generates a fixture and then spawns the renderer bench, which
+  // inherits the environment and quietly builds itself in development mode:
+  // dev JSX, dev React, profiling instrumentation inside the frames it times.
+  // That cost several hours and two invalid baselines, so the loan is repaid
+  // here where it is taken rather than papered over downstream.
+  const priorNodeEnv = process.env.NODE_ENV;
+  const restoreNodeEnv = () => {
+    if (priorNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = priorNodeEnv;
+  };
   const vite = await createServer({
     root: APP_DIR,
     server: { middlewareMode: true, hmr: false },
     appType: "custom",
     logLevel: "error",
   });
+  restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
     const [db, sessionControl, artifacts, shared] = await Promise.all([
@@ -300,6 +273,71 @@ function fixturePaths(outputDirectory) {
     worktreeRoot: join(userDataDir, "worktrees"),
     manifestPath: join(userDataDir, FIXTURE_FILE),
   };
+}
+
+/**
+ * The force path is deliberately narrower than rm -rf. A benchmark profile is
+ * disposable only when it is empty or carries our marker; a path that looks
+ * like a checkout is never an acceptable typo target. Keeping this decision
+ * pure makes the destructive boundary testable without touching a filesystem.
+ */
+export function forceTargetRefusal({
+  targetPath,
+  exists,
+  isDirectory,
+  isSymlink = false,
+  isEmpty = false,
+  hasFixtureMarker = false,
+  hasPackageJson = false,
+  hasGit = false,
+  homeDirectory = homedir(),
+  repoRoot = resolve(APP_DIR, "..", ".."),
+}) {
+  const target = resolve(targetPath);
+  const home = resolve(homeDirectory);
+  const repo = resolve(repoRoot);
+  if (target === "/") return `${target} is the filesystem root`;
+  if (target === home) return `${target} is the home directory`;
+  if (target === repo) return `${target} is the repository root`;
+  if (isSymlink) return `${target} is a symlink`;
+  if (!exists) return null;
+  if (!isDirectory) return `${target} is not a directory`;
+  if (hasPackageJson || hasGit) {
+    const marker = hasPackageJson ? "package.json" : ".git";
+    return `${target} contains ${marker}; refusing to treat a checkout as disposable`;
+  }
+  if (!isEmpty && !hasFixtureMarker) {
+    return `${target} is non-empty and does not contain ${FIXTURE_FILE}`;
+  }
+  return null;
+}
+
+async function assertSafeForceTarget(targetPath) {
+  const target = resolve(targetPath);
+  const targetStat = await stat(target).catch(() => null);
+  const targetLink = await lstat(target).catch(() => null);
+  let details = {
+    targetPath: target,
+    exists: targetStat !== null,
+    isDirectory: targetStat?.isDirectory() ?? false,
+    isSymlink: targetLink?.isSymbolicLink() ?? false,
+    isEmpty: false,
+    hasFixtureMarker: false,
+    hasPackageJson: false,
+    hasGit: false,
+  };
+  if (targetStat?.isDirectory()) {
+    const entries = await readdir(target);
+    details = {
+      ...details,
+      isEmpty: entries.length === 0,
+      hasFixtureMarker: entries.includes(FIXTURE_FILE),
+      hasPackageJson: entries.includes("package.json"),
+      hasGit: entries.includes(".git"),
+    };
+  }
+  const refusal = forceTargetRefusal(details);
+  if (refusal !== null) throw new Error(`Refusing --force deletion: ${refusal}`);
 }
 
 function createTickets(db, preset, paths) {
@@ -420,7 +458,7 @@ function createCommands(db, preset) {
   }
 }
 
-async function createEvents(db, preset, seed, artifactStore) {
+async function createEvents(db, preset, seed, artifactStore, assertSessionEvent) {
   const allocation = allocateLongTail({
     count: preset.sessions,
     total: preset.sessionEvents,
@@ -441,7 +479,7 @@ async function createEvents(db, preset, seed, artifactStore) {
         attachment_id, command_id, payload)
      VALUES
        (@id, @sessionId, @sequence, @occurredAt, @recordedAt, 1,
-        @attachmentId, NULL, @payload)`,
+        @attachmentId, @commandId, @payload)`,
   );
   const referenceCache = [];
   for (let index = 0; index < preset.transcriptMessages; index += 1) {
@@ -457,8 +495,10 @@ async function createEvents(db, preset, seed, artifactStore) {
     );
   }
 
-  // One interned provenance row is enough for all synthetic events and avoids
-  // inflating the fixture with repeated JSON. It is the real v42 storage shape.
+  // Raw INSERT is intentional here: it keeps a 259k-row fixture within minutes
+  // while preserving rule 2's invariant in-process. This is one writer, every
+  // event passes assertSessionEvent, and each Session's sequence starts at one
+  // and increases monotonically exactly as appendEvent would assign it.
   db.prepare("INSERT INTO session_provenances (id, provenance) VALUES (1, ?)").run(
     JSON.stringify(PROVENANCE),
   );
@@ -466,99 +506,123 @@ async function createEvents(db, preset, seed, artifactStore) {
     for (let sessionIndex = 0; sessionIndex < allocation.length; sessionIndex += 1) {
       const id = sessionId(sessionIndex);
       const attachmentId = `perf-attachment-${digits(4, sessionIndex + 1)}`;
+      const ticket = ticketId(sessionIndex % preset.tickets);
+      const title =
+        sessionIndex === 0
+          ? "VC-353 long chat benchmark"
+          : `Fixture Session ${digits(4, sessionIndex + 1)}`;
+      const createdAt = BASE_TIME - (preset.sessions - sessionIndex) * 30_000;
       insertAttachment.run({
         id: attachmentId,
         sessionId: id,
         nativeId: `fixture-native-${sessionIndex + 1}`,
         nativeDetail: JSON.stringify({ fixture: true, lane: sessionIndex % 8 }),
       });
-      const createdAt = BASE_TIME - (preset.sessions - sessionIndex) * 30_000;
-      for (let sequence = 1; sequence <= allocation[sessionIndex]; sequence += 1) {
-        let payload;
-        let eventAttachment = null;
-        if (sequence === 1) {
-          payload = {
+      const middleEvents = allocation[sessionIndex] - 5;
+      const familyCounts = allocateFamilyUnits(middleEvents);
+      if (eventsInUnits(familyCounts) !== middleEvents) {
+        throw new Error(`event mix allocated ${eventsInUnits(familyCounts)} of ${middleEvents}`);
+      }
+      const familyOrder = orderFamilyUnits(familyCounts, `${seed}:${sessionIndex}`);
+      const random = seededRandom(seed + sessionIndex);
+      const attachment = {
+        id: attachmentId,
+        sessionId: id,
+        adapterId: "pi",
+        venue: { id: "local:perf", kind: "local" },
+        continuity: "fresh",
+        native: { id: `fixture-native-${sessionIndex + 1}`, detail: { fixture: true } },
+        authority: authoritySnapshot(["read", "execute", "edit", "write"]),
+      };
+      const contextFor = (sequence, unitIndex, unitKey) => ({
+        sessionId: id,
+        sessionTitle: title,
+        projectId: PROJECT_ID,
+        ticketId: ticket,
+        attachmentId,
+        adapterId: "pi",
+        occurredAt: createdAt + sequence,
+        turnId: `perf-turn-${sessionIndex}-${Math.floor(sequence / 8)}`,
+        unitIndex,
+        unitKey,
+        toolIds: ["read", "execute", "edit", "write"],
+        pick: (size) => Math.floor(random() * size),
+        uuid: (scope, name) => `perf-${scope}-${sessionIndex}-${name}`,
+        body: (bytes) => proseBytes(bytes, `${seed}:${sessionIndex}:${unitKey}:${bytes}`),
+        transcriptReference: (index) => referenceCache[index % referenceCache.length],
+      });
+      const events = [
+        {
+          payload: {
             kind: "command.recorded",
             command: {
               id: commandId(sessionIndex, 0),
               sessionId: id,
               createdAt,
-              intent: {
-                kind: "session.retitle",
-                title: `Fixture Session ${digits(4, sessionIndex + 1)}`,
-              },
+              intent: { kind: "session.retitle", title },
               route: null,
             },
-          };
-        } else if (sequence === 2) {
-          payload = {
-            kind: "session.created",
-            session: {
-              id,
-              projectId: PROJECT_ID,
-              ticketId: ticketId(sessionIndex % preset.tickets),
-              role: "ticket",
-              parentSessionId: null,
-              title:
-                sessionIndex === 0
-                  ? "VC-353 long chat benchmark"
-                  : `Fixture Session ${digits(4, sessionIndex + 1)}`,
-              createdAt,
-            },
-          };
-        } else if (sequence === 3) {
-          payload = {
-            kind: "model.selected",
-            selection: {
-              providerId: "openai-codex",
-              modelId: "gpt-5.4",
-              reasoningLevel: "medium",
-            },
-          };
-        } else if (sequence === 4) {
-          payload = {
-            kind: "attachment.opened",
-            attachment: {
-              id: attachmentId,
-              sessionId: id,
-              adapterId: "pi",
-              venue: { id: "local:perf", kind: "local" },
-              continuity: "fresh",
-              native: { id: `fixture-native-${sessionIndex + 1}`, detail: { fixture: true } },
-              authority: null,
-            },
-          };
-          eventAttachment = attachmentId;
-        } else if (sequence === allocation[sessionIndex]) {
-          payload = { kind: "attachment.closed", attachmentId, outcome: "completed" };
-          eventAttachment = attachmentId;
-        } else if (sessionIndex === 0 && sequence - 5 < referenceCache.length) {
-          const reference = referenceCache[sequence - 5];
-          payload = {
-            kind: "transcript.referenced",
-            attachmentId,
-            turnId: `perf-turn-${Math.floor((sequence - 5) / 2)}`,
-            reference,
-          };
-          eventAttachment = attachmentId;
-        } else {
-          const turnId = `perf-turn-${sessionIndex}-${Math.floor(sequence / 8)}`;
-          payload = genericPayload(sequence - 5, sessionIndex, attachmentId, turnId);
-          // `usage.recorded` attribution must reflect the Session's ticket.
-          if (payload.kind === "usage.recorded") {
-            payload.attribution.ticketId = ticketId(sessionIndex % preset.tickets);
-          }
-          eventAttachment = attachmentId;
-        }
+          },
+          attachmentId: null,
+          commandId: commandId(sessionIndex, 0),
+        },
+        {
+          payload: sessionCreatedPayload({
+            id,
+            projectId: PROJECT_ID,
+            ticketId: ticket,
+            role: "ticket",
+            parentSessionId: null,
+            title,
+            createdAt,
+          }),
+          attachmentId: null,
+          commandId: null,
+        },
+        { payload: modelSelectedPayload(), attachmentId: null, commandId: null },
+        { payload: attachmentOpenedPayload({ attachment }), attachmentId, commandId: null },
+      ];
+      for (const [unitIndex, familyIndex] of familyOrder.entries()) {
+        const family = EVENT_FAMILIES[familyIndex];
+        const built = family.build(
+          contextFor(5 + unitIndex, unitIndex, `${family.id}:${unitIndex}`),
+        );
+        for (const item of built) events.push({ ...item, commandId: null });
+      }
+      events.push({
+        payload: attachmentClosedPayload(attachmentId),
+        attachmentId,
+        commandId: null,
+      });
+      if (events.length !== allocation[sessionIndex]) {
+        throw new Error(
+          `session ${id} event mix produced ${events.length}, expected ${allocation[sessionIndex]}`,
+        );
+      }
+      for (const [index, item] of events.entries()) {
+        const sequence = index + 1;
         const occurredAt = createdAt + sequence;
-        insertEvent.run({
+        const event = {
           id: eventId(sessionIndex, sequence),
           sessionId: id,
           sequence,
           occurredAt,
           recordedAt: occurredAt,
-          attachmentId: eventAttachment,
-          payload: JSON.stringify(payload),
+          provenance: PROVENANCE,
+          payload: item.payload,
+          ...(item.attachmentId === null ? {} : { attachmentId: item.attachmentId }),
+          ...(item.commandId === null ? {} : { commandId: item.commandId }),
+        };
+        assertSessionEvent(event, `fixture event ${event.id}`);
+        insertEvent.run({
+          id: event.id,
+          sessionId: id,
+          sequence,
+          occurredAt,
+          recordedAt: occurredAt,
+          attachmentId: item.attachmentId ?? null,
+          commandId: item.commandId ?? null,
+          payload: JSON.stringify(item.payload),
         });
       }
     }
@@ -567,10 +631,105 @@ async function createEvents(db, preset, seed, artifactStore) {
   return allocation;
 }
 
+/**
+ * Grow the database with ordinary ticket-event rows, then delete those rows.
+ * SQLite keeps the pages released by the delete on its freelist; unlike an
+ * app_state blob, this exercises the same table/index allocation that a
+ * long-lived database gets from churn while leaving no synthetic rows live.
+ *
+ * The page-count loop deliberately checks every insert near the target. That
+ * makes the resulting physical size page-exact (rounded up from the byte
+ * target) and keeps the allocation order deterministic for a given seed.
+ */
+function createChurnFreelist(db, preset, seed, pageSize) {
+  const targetPageCount = Math.ceil(preset.targetFileBytes / pageSize);
+  if (db.pragma("page_count", { simple: true }) >= targetPageCount) return 0;
+
+  const insert = db.prepare(
+    `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
+     VALUES (@id, @ticketId, @kind, 'user', @payload, @createdAt)`,
+  );
+  const churnPayloads = [
+    { kind: "created" },
+    { kind: "title_edited", title: "Churned benchmark ticket" },
+    {
+      kind: "body_edited",
+      body: proseBytes(3_000, `vc-353:freelist:${seed}`),
+    },
+    { kind: "priority_changed", from: "medium", to: "high" },
+    { kind: "moved", from: "todo", to: "doing" },
+  ];
+  let rows = 0;
+  const fill = db.transaction(() => {
+    while (db.pragma("page_count", { simple: true }) < targetPageCount) {
+      const payload = churnPayloads[rows % churnPayloads.length];
+      insert.run({
+        id: `vc-353:freelist:${seed}:${digits(8, rows + 1)}`,
+        ticketId: ticketId(rows % preset.tickets),
+        kind: payload.kind,
+        payload: JSON.stringify(payload),
+        createdAt: BASE_TIME - rows,
+      });
+      rows += 1;
+    }
+  });
+  fill();
+
+  const remove = db.transaction(() => {
+    db.prepare("DELETE FROM ticket_events WHERE id LIKE 'vc-353:freelist:%'").run();
+  });
+  remove();
+  return rows;
+}
+
+function sessionEventTableBytes(db) {
+  try {
+    return {
+      bytes: db
+        .prepare(
+          "SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat WHERE name = 'session_events'",
+        )
+        .get().bytes,
+      measurement: "dbstat",
+    };
+  } catch {
+    return {
+      bytes: db
+        .prepare("SELECT COALESCE(SUM(length(payload)), 0) AS bytes FROM session_events")
+        .get().bytes,
+      measurement: "payload-plus-pages-fallback",
+    };
+  }
+}
+
+async function physicalDatabaseBytes(db, dbPath) {
+  const pageCount = db.pragma("page_count", { simple: true });
+  const pageSize = db.pragma("page_size", { simple: true });
+  const freePageBytes = db.pragma("freelist_count", { simple: true }) * pageSize;
+  const totalFileBytes = (await stat(dbPath)).size;
+  const sessionEvents = sessionEventTableBytes(db);
+  const largestAppStateRowBytes = db
+    .prepare("SELECT COALESCE(MAX(length(CAST(value AS BLOB))), 0) AS bytes FROM app_state")
+    .get().bytes;
+  return {
+    totalFileBytes,
+    liveBytes: totalFileBytes - freePageBytes,
+    freePageBytes,
+    sessionEventsBytes: sessionEvents.bytes,
+    largestAppStateRowBytes,
+    pageCount,
+    pageSize,
+    byteMeasurement: sessionEvents.measurement,
+  };
+}
+
 export async function generateFixture(input) {
   const preset = presetNamed(input.preset);
   const paths = fixturePaths(input.outputDirectory);
-  if (input.force) await rm(paths.userDataDir, { recursive: true, force: true });
+  if (input.force) {
+    await assertSafeForceTarget(paths.userDataDir);
+    await rm(paths.userDataDir, { recursive: true, force: true });
+  }
   await mkdir(paths.userDataDir, { recursive: true });
   if (!input.force) {
     const existing = await stat(paths.dbPath).catch(() => null);
@@ -584,6 +743,7 @@ export async function generateFixture(input) {
 
   const modules = await loadProductionModules();
   let db;
+  let result;
   try {
     // This is the production file-backed open/migration path by requirement —
     // never :memory:, never a copied schema.
@@ -601,24 +761,25 @@ export async function generateFixture(input) {
     ).run(
       PROJECT_ID,
       "VC-353 Performance Fixture",
-      paths.projectPath,
+      PORTABLE_PROJECT_PATH,
       PROJECT_PREFIX,
       BASE_TIME,
       BASE_TIME,
     );
-    createTickets(db, preset, paths);
-    const worktreePaths = db
-      .prepare("SELECT DISTINCT worktree_path AS path FROM tickets WHERE worktree_path IS NOT NULL")
-      .all()
-      .map((row) => row.path);
-    await Promise.all(worktreePaths.map((path) => mkdir(path, { recursive: true })));
+    createTickets(db, preset, { ...paths, worktreeRoot: PORTABLE_WORKTREE_ROOT });
     createTicketEvents(db, preset);
     createSessionRows(db, preset);
     createCommands(db, preset);
     const artifactStore = modules.createFileTranscriptArtifactStore(
       modules.sessionTranscriptsRoot(paths.userDataDir),
     );
-    const eventAllocation = await createEvents(db, preset, input.seed, artifactStore);
+    const eventAllocation = await createEvents(
+      db,
+      preset,
+      input.seed,
+      artifactStore,
+      modules.shared.assertSessionEvent,
+    );
     const insertAppState = db.prepare(
       "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)",
     );
@@ -644,7 +805,33 @@ export async function generateFixture(input) {
       }),
       BASE_TIME,
     );
+    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
+    // fixture cannot attribute row-for-row (indexes, months of churn, deleted
+    // history). The fixture reproduces the Session Event mass exactly and
+    // reproduces the remaining physical file mass as free pages, which is what
+    // churn actually leaves behind. It does not claim equivalent live content.
+    createChurnFreelist(db, preset, input.seed, db.pragma("page_size", { simple: true }));
     db.pragma("wal_checkpoint(TRUNCATE)");
+    const physicalBytes = await physicalDatabaseBytes(db, paths.dbPath);
+    // What the sidebar shows is the FOLDED title, not the row the generator
+    // inserted: the weighted mix contains `session.retitled`, so a benchmark
+    // that searched for the seeded string would hunt for a title the product
+    // never renders. Ask the production projection what it will display and
+    // publish that, so the runner never hard-codes a guess about the fold.
+    const projectedLongChatTitle = (
+      await modules
+        .createDesktopSessionEngine(db, {
+          now: () => BASE_TIME,
+          nextId: () => "manifest-id-not-used",
+        })
+        .getSession({ sessionId: sessionId(0) })
+    )?.session?.title;
+    if (typeof projectedLongChatTitle !== "string" || projectedLongChatTitle.length === 0) {
+      throw new Error("long Session projection produced no title for the manifest");
+    }
+    const ticketTitleOf = (id) =>
+      db.prepare("SELECT title FROM tickets WHERE id = ?").get(id)?.title;
+    const switchTicketId = ticketId(Math.min(1, preset.tickets - 1));
     const manifest = {
       schemaVersion: FIXTURE_SCHEMA_VERSION,
       preset: input.preset,
@@ -657,25 +844,73 @@ export async function generateFixture(input) {
         sessionId: sessionId(0),
         ticketId: ticketId(0),
         displayId: `${PROJECT_PREFIX}-1`,
+        title: projectedLongChatTitle,
+        ticketTitle: ticketTitleOf(ticketId(0)),
       },
-      workspaceTickets: [ticketId(0), ticketId(Math.min(1, preset.tickets - 1))],
+      switchTarget: {
+        ticketId: switchTicketId,
+        displayId: `${PROJECT_PREFIX}-${Math.min(2, preset.tickets)}`,
+        title: ticketTitleOf(switchTicketId),
+      },
+      workspaceTickets: [ticketId(0), switchTicketId],
       counts: { ...preset },
       busiestSessionEvents: Math.max(...eventAllocation),
       eventDistribution: eventDistribution(eventAllocation),
       eventAllocationSha256: createHash("sha256")
         .update(JSON.stringify(eventAllocation))
         .digest("hex"),
+      physicalBytes: {
+        totalFileBytes: physicalBytes.totalFileBytes,
+        liveBytes: physicalBytes.liveBytes,
+        freePageBytes: physicalBytes.freePageBytes,
+        sessionEventsBytes: physicalBytes.sessionEventsBytes,
+        largestAppStateRowBytes: physicalBytes.largestAppStateRowBytes,
+      },
       warning:
         "Performance numbers are comparable only on the same machine under the same load arm.",
     };
-    await import("node:fs/promises").then(({ writeFile }) =>
-      writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`),
-    );
-    return { ...paths, manifest };
+    await writeFile(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    result = { ...paths, manifest };
   } finally {
     db?.close();
     await modules.vite.close();
   }
+  if (input.localize !== false) await localizeFixture(paths.userDataDir);
+  return result;
+}
+
+/**
+ * Rewrite only schema columns that migrations identify as machine paths. The
+ * database is portable until this explicit step; runners that clone a profile
+ * can call the same function after copying it to its destination.
+ */
+export async function localizeFixture(profileDirectory) {
+  const paths = fixturePaths(profileDirectory);
+  const modules = await loadProductionModules();
+  let db;
+  let worktreePaths = [];
+  try {
+    db = modules.openVolliDb(paths.dbPath);
+    db.prepare("UPDATE projects SET path = ? WHERE path = ?").run(
+      paths.projectPath,
+      PORTABLE_PROJECT_PATH,
+    );
+    db.prepare(
+      "UPDATE tickets SET worktree_path = replace(worktree_path, ?, ?) WHERE worktree_path LIKE ?",
+    ).run(PORTABLE_WORKTREE_ROOT, paths.worktreeRoot, `${PORTABLE_WORKTREE_ROOT}%`);
+    worktreePaths = db
+      .prepare("SELECT DISTINCT worktree_path AS path FROM tickets WHERE worktree_path IS NOT NULL")
+      .all()
+      .map((row) => row.path);
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } finally {
+    db?.close();
+    await modules.vite.close();
+  }
+  await mkdir(paths.projectPath, { recursive: true });
+  await mkdir(paths.worktreeRoot, { recursive: true });
+  await Promise.all(worktreePaths.map((path) => mkdir(path, { recursive: true })));
+  return paths;
 }
 
 function tableCount(db, table) {
@@ -752,9 +987,25 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       throw new Error(
         `fixture has foreign-key violations: ${JSON.stringify(foreignKeys.slice(0, 3))}`,
       );
+    const largestAppStateRowBytes = db
+      .prepare("SELECT COALESCE(MAX(length(CAST(value AS BLOB))), 0) AS bytes FROM app_state")
+      .get().bytes;
+    if (largestAppStateRowBytes > 300_000) {
+      throw new Error(
+        `fixture app_state row is ${largestAppStateRowBytes} bytes; expected at most 300000`,
+      );
+    }
 
     // Production codecs and projection code must read the fixture, not just
-    // SQLite. Decode a cross-section and fold the long Session in full.
+    // SQLite. Decode every payload: a sample can never prove a future schema
+    // change left the other 259,855 rows readable.
+    let decodedEventCount = 0;
+    for (const row of db
+      .prepare("SELECT id, payload FROM session_events ORDER BY rowid")
+      .iterate()) {
+      modules.shared.decodeSessionEventPayload(JSON.parse(row.payload), `session_events ${row.id}`);
+      decodedEventCount += 1;
+    }
     const ledger = modules.createSqliteSessionLedger(db);
     const engine = modules.createDesktopSessionEngine(db, {
       now: () => BASE_TIME,
@@ -772,11 +1023,35 @@ export async function verifyFixture(outputDirectory, expected = {}) {
     if (longProjection.modelSelection === null) {
       throw new Error("long Session has no model selection for an interactive composer");
     }
+    // The manifest tells the benchmark which strings the UI will show. If the
+    // fold stops agreeing with it — a new event kind in the mix that retitles,
+    // a changed reducer — the benchmark would otherwise discover it as a
+    // 30-second locator timeout several minutes into a run. Fail here instead.
+    if (longProjection.session.title !== manifest.longChat.title) {
+      throw new Error(
+        `long Session folds to ${JSON.stringify(longProjection.session.title)} but the manifest publishes ${JSON.stringify(manifest.longChat.title)}`,
+      );
+    }
+    for (const target of [manifest.longChat, manifest.switchTarget]) {
+      const title = db
+        .prepare("SELECT title FROM tickets WHERE id = ?")
+        .get(target.ticketId)?.title;
+      if (title !== target.title && title !== target.ticketTitle) {
+        throw new Error(
+          `${target.displayId} is titled ${JSON.stringify(title)} but the manifest publishes ${JSON.stringify(target.title ?? target.ticketTitle)}`,
+        );
+      }
+    }
     const sample = await ledger.transaction((transaction) =>
       transaction.listEvents({ sessionId: sessionId(0), afterSequence: 0, limit: 20 }),
     );
     if (sample.length !== 20)
       throw new Error(`production codec read ${sample.length} sample events, expected 20`);
+    if (decodedEventCount !== preset.sessionEvents) {
+      throw new Error(
+        `production codec decoded ${decodedEventCount} events, expected ${preset.sessionEvents}`,
+      );
+    }
     const artifactStore = modules.createFileTranscriptArtifactStore(
       modules.sessionTranscriptsRoot(paths.userDataDir),
     );
@@ -790,6 +1065,7 @@ export async function verifyFixture(outputDirectory, expected = {}) {
     if (artifact.version !== 1 || artifact.message?.id === undefined) {
       throw new Error("transcript artifact was not readable through the production store");
     }
+    const physicalBytes = await physicalDatabaseBytes(db, paths.dbPath);
     return {
       ok: true,
       preset: manifest.preset,
@@ -800,13 +1076,27 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       eventDistribution: actualEventDistribution,
       overlappingWorktrees: overlap,
       decodedSampleEvents: sample.length,
+      decodedEventCount,
       busiestSessionEvents: busiest.count,
       longProjectionModel: longProjection.modelSelection,
       firstArtifactMessageId: artifact.message.id,
       manifestSha256: createHash("sha256")
         .update(await readFile(paths.manifestPath))
         .digest("hex"),
-      databaseBytes: (await stat(paths.dbPath)).size,
+      databaseBytes: physicalBytes.totalFileBytes,
+      liveBytes: physicalBytes.liveBytes,
+      freePageBytes: physicalBytes.freePageBytes,
+      sessionEventBytes: physicalBytes.sessionEventsBytes,
+      largestAppStateRowBytes: physicalBytes.largestAppStateRowBytes,
+      byteMeasurement: physicalBytes.byteMeasurement,
+      pageBytes: physicalBytes.pageCount * physicalBytes.pageSize,
+      physicalBytes: {
+        totalFileBytes: physicalBytes.totalFileBytes,
+        liveBytes: physicalBytes.liveBytes,
+        freePageBytes: physicalBytes.freePageBytes,
+        sessionEventsBytes: physicalBytes.sessionEventsBytes,
+        largestAppStateRowBytes: physicalBytes.largestAppStateRowBytes,
+      },
     };
   } finally {
     db?.close();

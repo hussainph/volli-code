@@ -385,14 +385,6 @@ function settleStream(sessionId: string): void {
   });
 }
 
-function busyWait(ms: number): void {
-  const until = performance.now() + ms;
-  while (performance.now() < until) {
-    // The opt-in regression-sensitivity arm burns this renderer task on
-    // purpose. Default measurements always pass zero.
-  }
-}
-
 /**
  * Grow one transcript snapshot at a wall-clock token rate while moving its
  * scroller every animation frame. Both actions share one frame loop by
@@ -404,7 +396,6 @@ async function streamAndScroll(
   sessionId: string,
   index: number,
   steps: number,
-  slowdownMs: number,
   tokenRate: number,
 ): Promise<unknown> {
   const scroller = planeScroller(index);
@@ -510,7 +501,6 @@ async function streamAndScroll(
 
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
-    busyWait(slowdownMs);
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
     if (tokenCount !== priorTokenCount) {
       streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
@@ -585,7 +575,6 @@ async function streamAndScroll(
   return {
     ok: true,
     steps,
-    slowdownMs,
     tokenRate,
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
@@ -737,6 +726,29 @@ async function tailProbe(sessionId: string, index: number): Promise<unknown> {
   };
 }
 
+/**
+ * Uncaught errors, with their stacks.
+ *
+ * The runner only sees Chromium's console text, and "Cannot convert object to
+ * primitive value" with no frame behind it costs more to chase than the bug
+ * itself. The harness fails a run on any renderer error, so the run that fails
+ * should also say where.
+ */
+const uncaught: { message: string; stack: string | null }[] = [];
+window.addEventListener("error", (event) => {
+  uncaught.push({
+    message: event.message,
+    stack: event.error instanceof Error ? (event.error.stack ?? null) : null,
+  });
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const reason: unknown = event.reason;
+  uncaught.push({
+    message: `unhandled rejection: ${reason instanceof Error ? reason.message : "non-Error reason"}`,
+    stack: reason instanceof Error ? (reason.stack ?? null) : null,
+  });
+});
+
 interface ChatBench {
   seed(sessions: number, turns: number): Promise<{ ids: string[]; nodes: number }>;
   show(count: number): Promise<{ mounted: number; nodes: number }>;
@@ -744,13 +756,9 @@ interface ChatBench {
   geometry(index: number): unknown;
   reachFirst(index: number, steps: number): Promise<unknown>;
   tailProbe(index: number): Promise<unknown>;
-  streamAndScroll(
-    index: number,
-    steps: number,
-    slowdownMs: number,
-    tokenRate: number,
-  ): Promise<unknown>;
+  streamAndScroll(index: number, steps: number, tokenRate: number): Promise<unknown>;
   collect(): void;
+  uncaught(): { message: string; stack: string | null }[];
 }
 
 let sessionIds: string[] = [];
@@ -780,16 +788,19 @@ const bench: ChatBench = {
     if (sessionId === undefined) return { ok: false, why: "no session" };
     return tailProbe(sessionId, index);
   },
-  async streamAndScroll(index, steps, slowdownMs, tokenRate) {
+  async streamAndScroll(index, steps, tokenRate) {
     const sessionId = sessionIds[index];
     if (sessionId === undefined) return { ok: false, why: "no session" };
-    return streamAndScroll(sessionId, index, steps, slowdownMs, tokenRate);
+    return streamAndScroll(sessionId, index, steps, tokenRate);
   },
   collect() {
     // Present because the bench runner launches Electron with --expose-gc: a
     // number sampled before the garbage of the previous step is collected is a
     // number about the garbage.
     (globalThis as { gc?: () => void }).gc?.();
+  },
+  uncaught() {
+    return uncaught;
   },
 };
 

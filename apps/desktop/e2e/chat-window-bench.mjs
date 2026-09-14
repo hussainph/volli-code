@@ -27,6 +27,7 @@
  * nothing else; run both arms back to back.
  */
 import { spawn } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -45,7 +46,6 @@ const LABEL = flag("label", "run");
 const STREAM_SAMPLES = flag("stream-samples", "8");
 const STREAM_STEPS = flag("stream-steps", "120");
 const STREAM_TOKEN_RATE = flag("stream-token-rate", "30");
-const SLOWDOWN_MS = flag("slowdown-ms", "0");
 const SKIP_BUILD = args.includes("--skip-build");
 
 function run(command, commandArgs, options = {}) {
@@ -97,8 +97,44 @@ process.env.NODE_ENV = "production";
 if (!SKIP_BUILD) {
   console.log(`building the bench page (${BENCH})`);
   const { build } = await import("vite");
-  await build({ configFile: join(BENCH, "vite.config.ts"), logLevel: "warn" });
+  await build({ configFile: join(BENCH, "vite.config.ts"), mode: "production", logLevel: "warn" });
 }
+
+/**
+ * A benchmark that measures a development React build measures nothing the
+ * product ships. This happened: React's dual-build entry is a `require` behind
+ * `process.env.NODE_ENV`, the bench bundled both halves and ran the debug one,
+ * and its profiling instrumentation was inside every frame this bench times.
+ * The build now pins production explicitly — and this refuses to measure
+ * anything until the emitted bundle proves it, because the failure mode is a
+ * plausible-looking number rather than a crash.
+ */
+async function assertProductionReact(distDir) {
+  const assets = join(distDir, "assets");
+  const entries = await readdir(assets).catch(() => []);
+  const bundles = entries.filter((name) => name.startsWith("index-") && name.endsWith(".js"));
+  if (bundles.length === 0) throw new Error(`no bench bundle found in ${assets}`);
+  // String literals survive minification; identifiers do not. The first two
+  // exist only in react-dom's development build; `jsxDEV)(` is the minified
+  // shape of a development JSX call, which carries per-element source metadata
+  // and, against production React, does not even run.
+  const developmentOnly = [
+    "Consider memoization",
+    "Each child in a list should have a unique",
+    "jsxDEV)(",
+  ];
+  for (const bundle of bundles) {
+    const source = await readFile(join(assets, bundle), "utf8");
+    const found = developmentOnly.filter((marker) => source.includes(marker));
+    if (found.length > 0) {
+      throw new Error(
+        `${bundle} was built for development (${found.join(", ")}); the bench must measure the build the app ships`,
+      );
+    }
+  }
+}
+
+await assertProductionReact(join(BENCH, "dist"));
 
 console.log(`\nrunning: ${SESSIONS} sessions x ${TURNS} turns`);
 const output = await run(
@@ -119,8 +155,6 @@ const output = await run(
     STREAM_STEPS,
     "--stream-token-rate",
     STREAM_TOKEN_RATE,
-    "--slowdown-ms",
-    SLOWDOWN_MS,
   ],
   { cwd: APP, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
 );
@@ -153,7 +187,7 @@ if (match?.groups?.json === undefined) {
       sample.ok === true ? sample.longTasksMs.length : "failed",
     );
     console.log(
-      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s, ${SLOWDOWN_MS}ms slowdown): latency ms [${latencies.join(", ")}], ` +
+      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s): latency ms [${latencies.join(", ")}], ` +
         `dropped [${dropped.join(", ")}], long tasks [${longTasks.join(", ")}]`,
     );
   }
