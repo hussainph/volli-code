@@ -27,6 +27,7 @@
  * nothing else; run both arms back to back.
  */
 import { spawn } from "node:child_process";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -73,6 +74,36 @@ if (!SKIP_BUILD) {
   const { build } = await import("vite");
   await build({ configFile: join(BENCH, "vite.config.ts"), logLevel: "warn" });
 }
+
+/**
+ * A benchmark that measures a development React build measures nothing the
+ * product ships. This happened: React's dual-build entry is a `require` behind
+ * `process.env.NODE_ENV`, the bench bundled both halves and ran the debug one,
+ * and its profiling instrumentation was inside every frame this bench times.
+ * The build now pins production explicitly — and this refuses to measure
+ * anything until the emitted bundle proves it, because the failure mode is a
+ * plausible-looking number rather than a crash.
+ */
+async function assertProductionReact(distDir) {
+  const assets = join(distDir, "assets");
+  const entries = await readdir(assets).catch(() => []);
+  const bundles = entries.filter((name) => name.startsWith("index-") && name.endsWith(".js"));
+  if (bundles.length === 0) throw new Error(`no bench bundle found in ${assets}`);
+  // String literals survive minification; identifiers do not. These exist only
+  // in react-dom's development build.
+  const developmentOnly = ["Consider memoization", "Each child in a list should have a unique"];
+  for (const bundle of bundles) {
+    const source = await readFile(join(assets, bundle), "utf8");
+    const found = developmentOnly.filter((marker) => source.includes(marker));
+    if (found.length > 0) {
+      throw new Error(
+        `${bundle} contains development React (${found.join(", ")}); the bench must measure the build the app ships`,
+      );
+    }
+  }
+}
+
+await assertProductionReact(join(BENCH, "dist"));
 
 console.log(`\nrunning: ${SESSIONS} sessions x ${TURNS} turns`);
 const output = await run(
