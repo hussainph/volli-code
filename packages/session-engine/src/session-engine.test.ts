@@ -922,16 +922,28 @@ describe("SessionEngine creation and explicit commands", () => {
   it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];
+    const auditReads: string[] = [];
     const ledger: SessionLedger = {
       transaction: (work) =>
         stored.transaction((transaction) =>
           work(
             new Proxy(transaction, {
               get(target, property, receiver) {
-                if (property !== "listEvents") return Reflect.get(target, property, receiver);
-                return (query: Parameters<SessionLedgerTransaction["listEvents"]>[0]) => {
+                // The fold path must use the provenance-free read (VC-355), so
+                // the cursors are observed there and any use of the audit read
+                // by a projection is recorded as a regression.
+                if (property === "listEvents") {
+                  return (query: Parameters<SessionLedgerTransaction["listEvents"]>[0]) => {
+                    auditReads.push(query.sessionId);
+                    return transaction.listEvents(query);
+                  };
+                }
+                if (property !== "listProjectionEvents") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
                   cursors.push(query.afterSequence);
-                  return transaction.listEvents(query);
+                  return transaction.listProjectionEvents(query);
                 };
               },
             }),
@@ -966,10 +978,14 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(cursors).toEqual([checkpoint.throughSequence]);
 
     cursors.length = 0;
+    auditReads.length = 0;
     await expect(
       plane.listSessions({ projectId: "project-1", scope: "all" }),
     ).resolves.toHaveLength(1);
     expect(cursors).toEqual([checkpoint.throughSequence]);
+    // A listing folds every Session it returns, so paying one provenance
+    // decode per event here is the cost the split exists to remove.
+    expect(auditReads).toEqual([]);
     expect(
       (await plane.getProjectionCheckpoint({ sessionId: created.session.id }))?.throughSequence,
     ).toBe(checkpoint.throughSequence);
@@ -1018,6 +1034,122 @@ describe("SessionEngine creation and explicit commands", () => {
     await expect(
       plane.getProjectionCheckpoint({ sessionId: created.session.id }),
     ).resolves.toMatchObject({ throughSequence: checkpoint.throughSequence });
+  });
+
+  it("resumes a checkpoint with the live row while retaining projected title", async () => {
+    const stored = createInMemorySessionLedger();
+    let ticketDeleted = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getSession") return Reflect.get(target, property, receiver);
+                return (sessionId: string) => {
+                  const session = transaction.getSession(sessionId);
+                  return session && ticketDeleted ? { ...session, ticketId: null } : session;
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-checkpoint-live-row"));
+    await plane.submit({
+      commandId: "command-checkpoint-live-title",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Projected checkpoint title" },
+      provenance: userProvenance,
+    });
+    const events = await plane.listEvents({ sessionId: created.session.id });
+    await plane.saveProjectionCheckpoint(
+      createSessionProjectionCheckpoint(created.session, events),
+    );
+
+    ticketDeleted = true;
+
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: {
+        ticketId: null,
+        title: "Projected checkpoint title",
+      },
+      bornTicketless: false,
+    });
+  });
+
+  it("reports a checkpoint it could not use instead of silently refolding forever", async () => {
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint row could not be decoded");
+    let failReads = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (sessionId: string) => {
+                  if (failReads) throw failure;
+                  return transaction.getProjectionCheckpoint(sessionId);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const created = await plane.createSession(createRequest("command-checkpoint-report"));
+
+    failReads = true;
+    // The read still answers from the immutable log: a cache failure is never
+    // allowed to fail a read, which is exactly why it has to be reported.
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: { id: created.session.id },
+    });
+    expect(reported).toEqual([failure]);
+  });
+
+  it("keeps a read working when the host's own failure reporter throws", async () => {
+    const stored = createInMemorySessionLedger();
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return () => {
+                  throw new Error("unreadable checkpoint");
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: () => {
+        throw new Error("diagnostics sink is broken");
+      },
+    });
+    const created = await plane.createSession(createRequest("command-checkpoint-sink"));
+    await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
+      session: { id: created.session.id },
+    });
   });
 
   it("lists deep Session projections through explicit project scopes in stable descending order", async () => {

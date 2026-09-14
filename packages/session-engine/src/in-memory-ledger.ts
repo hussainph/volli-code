@@ -1,4 +1,4 @@
-import { assertSessionEvent, SESSION_PROJECTION_CHECKPOINT_VERSION } from "@volli/shared";
+import { assertSessionEvent, assertSessionProjectionCheckpoint } from "@volli/shared";
 import type {
   CommandReceipt,
   ListLatestTicketSignalsQuery,
@@ -121,6 +121,14 @@ class InMemorySessionLedger implements SessionLedger {
       listEvents: (query) => {
         assertOpen();
         return this.#listEvents(query);
+      },
+      listProjectionEvents: (query) => {
+        assertOpen();
+        // This adapter holds decoded objects, so there is no provenance decode
+        // to skip and no cheaper read to offer. Dropping the field anyway keeps
+        // it honest about what a fold is allowed to see, so a reducer that
+        // started reading provenance would fail here and not only in SQLite.
+        return this.#listEvents(query).map(({ provenance: _provenance, ...event }) => event);
       },
       latestEventSequence: (sessionId) => {
         assertOpen();
@@ -324,20 +332,13 @@ class InMemorySessionLedger implements SessionLedger {
   }
 
   #saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
-    if (
-      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
-      checkpoint.sessionId !== checkpoint.projection?.session?.id ||
-      !Number.isInteger(checkpoint.throughSequence) ||
-      checkpoint.throughSequence < 0 ||
-      !Array.isArray(checkpoint.pendingExecutorStarts) ||
-      !this.#sessions.has(checkpoint.sessionId)
-    ) {
+    if (!this.#sessions.has(checkpoint.sessionId)) {
       throw new Error("Session projection checkpoint is invalid");
     }
-    const latestSequence = this.#latestEventSequence(checkpoint.sessionId);
-    if (checkpoint.throughSequence > latestSequence) {
-      throw new Error("Session projection checkpoint is ahead of durable history");
-    }
+    assertSessionProjectionCheckpoint(checkpoint, {
+      latestSequence: this.#latestEventSequence(checkpoint.sessionId),
+      invalidMessage: "Session projection checkpoint is invalid",
+    });
     const existing = this.#projectionCheckpoints.get(checkpoint.sessionId);
     if (existing && existing.throughSequence > checkpoint.throughSequence) return;
     this.#projectionCheckpoints.set(checkpoint.sessionId, clone(checkpoint));

@@ -130,7 +130,18 @@ export interface SessionEngine {
     query: ListLatestTicketSignalsQuery,
   ): Promise<readonly LatestSessionSignal[]>;
   listEvents(query: ListSessionEventsQuery): Promise<readonly SessionEvent[]>;
-  /** Metadata-only event head, without payload/provenance decoding. */
+  /**
+   * Metadata-only event head, without payload/provenance decoding.
+   *
+   * `0` means "this Session has no committed events", and that is a total
+   * answer rather than an ambiguous one: sequences are 1-based, and a Session
+   * that does not exist has no committed events either, so both cases are the
+   * same true statement about history. It is deliberately NOT an error channel
+   * — a caller that additionally needs the Session to exist has already asked
+   * for it, and the one caller for which `0` is impossible
+   * (`SessionRuntime`'s post-commit result) raises its own error rather than
+   * pushing that concern into every reader of this head.
+   */
   latestEventSequence(query: GetSessionQuery): Promise<number>;
   /** A derived projection cache row; null means the immutable log must be folded. */
   getProjectionCheckpoint(query: GetSessionQuery): Promise<SessionProjectionCheckpoint | null>;
@@ -152,6 +163,17 @@ export interface SessionEnginePorts {
   ledger: SessionLedger;
   clock: SessionLedgerClock;
   ids: SessionLedgerIds;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be used.
+   *
+   * A checkpoint is a rebuildable cache, so a failure here is always recovered
+   * by refolding the immutable log — but a cache that fails on EVERY read is
+   * indistinguishable from one that is merely absent, and the symptom is only
+   * that reads are quietly slow forever. Reporting the miss is what makes that
+   * condition observable. Seam failures are isolated, exactly as the runtime's
+   * {@link SessionRuntimePorts.onSubscriberFailure} is.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void;
 }
 
 export class SessionEngineConflictError extends Error {
@@ -170,6 +192,15 @@ export class SessionEngineNotFoundError extends Error {
 
 /** The storage-agnostic Session Engine; its host supplies one transactional ledger writer. */
 export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
+  // Isolated here rather than at each call site: a diagnostics seam that could
+  // itself throw would turn a recovered cache miss into a failed read.
+  const reportCheckpointFailure = (error: unknown): void => {
+    try {
+      ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
+    }
+  };
   return {
     async createSession(request) {
       return ports.ledger.transaction((transaction) => {
@@ -589,7 +620,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     async getSession(query) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(query.sessionId);
-        return session ? projectStoredSession(transaction, session) : null;
+        return session ? projectStoredSession(transaction, session, reportCheckpointFailure) : null;
       });
     },
 
@@ -601,7 +632,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) =>
         transaction
           .listSessions(query)
-          .map((session) => projectStoredSession(transaction, session)),
+          .map((session) => projectStoredSession(transaction, session, reportCheckpointFailure)),
       );
     },
 
@@ -656,24 +687,30 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 function projectStoredSession(
   transaction: SessionLedgerTransaction,
   session: Session,
+  onCheckpointFailure: (error: unknown) => void,
 ): SessionProjection {
   try {
     const checkpoint = transaction.getProjectionCheckpoint(session.id);
     if (checkpoint) {
-      const tail = transaction.listEvents({
+      // The fold read, not the audit read: a listing over every Session would
+      // otherwise JSON-decode one provenance per event to produce state that
+      // never looks at it (VC-355).
+      const tail = transaction.listProjectionEvents({
         sessionId: session.id,
         afterSequence: checkpoint.throughSequence,
       });
-      return advanceSessionProjection(checkpoint, tail).projection;
+      return advanceSessionProjection(checkpoint, tail, session).projection;
     }
-  } catch {
+  } catch (error) {
     // A projection checkpoint is a rebuildable cache. Any unsupported,
-    // malformed, or stale value falls through to the immutable event log.
+    // malformed, or stale value falls through to the immutable event log —
+    // reported, so a cache that never succeeds is visible as more than slowness.
+    onCheckpointFailure(error);
   }
 
   return createSessionProjectionCheckpoint(
     session,
-    transaction.listEvents({ sessionId: session.id }),
+    transaction.listProjectionEvents({ sessionId: session.id }),
   ).projection;
 }
 

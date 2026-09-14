@@ -109,6 +109,16 @@ export interface SessionRuntimePorts {
   ids: SessionRuntimeIds;
   /** Host diagnostics seam for a failing client stream; failures are isolated. */
   onSubscriberFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be read,
+   * folded, or written; failures are isolated.
+   *
+   * Every such failure is recovered by refolding the immutable log, so none of
+   * them can fail a read. That is precisely why they need reporting: a cache
+   * that misses permanently behaves exactly like one that is merely cold, and
+   * the only symptom would be that opening a long chat never got faster.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void | Promise<void>;
 }
 
 export type SessionClientCommand =
@@ -1989,12 +1999,18 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#closed = true;
     // The cache is derived and best-effort: a failed shutdown write only makes
     // the next launch refold. Capture before clearing so even an attachment
-    // that has not emitted its close yet leaves a reusable prefix.
-    await Promise.allSettled(
+    // that has not emitted its close yet leaves a reusable prefix. The results
+    // are inspected rather than discarded: shutdown is the write most likely to
+    // fail as a group (a closing database), and that is worth reporting once
+    // per failure instead of silently losing every session's prefix.
+    const shutdownWrites = await Promise.allSettled(
       [...this.#histories.values()].map((history) =>
         this.ports.engine.saveProjectionCheckpoint(history.checkpoint),
       ),
     );
+    for (const write of shutdownWrites) {
+      if (write.status === "rejected") await this.#reportCheckpointFailure(write.reason);
+    }
     for (const subscribers of this.#subscribers.values()) {
       for (const subscriber of subscribers) subscriber.active = false;
     }
@@ -2976,8 +2992,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       let persisted: SessionProjectionCheckpoint | null = null;
       try {
         persisted = await this.ports.engine.getProjectionCheckpoint({ sessionId });
-      } catch {
+      } catch (error) {
         // A host that cannot decode its cache still has the immutable log.
+        await this.#reportCheckpointFailure(error);
       }
       if (persisted) {
         try {
@@ -2989,9 +3006,10 @@ class DefaultSessionRuntime implements SessionRuntime {
           // Advance a stale checkpoint after the read that proved its tail.
           if (tail.length > 0) await this.#persistProjectionCheckpoint(history.checkpoint);
           return this.#keepHistory(sessionId, history);
-        } catch {
+        } catch (error) {
           // A checkpoint is a cache, never authority. Unsupported or corrupt
           // JSON falls through to the same whole-log fold as a missing row.
+          await this.#reportCheckpointFailure(error);
         }
       }
       const events = await this.#listEventsPaged({ sessionId });
@@ -3014,17 +3032,34 @@ class DefaultSessionRuntime implements SessionRuntime {
     try {
       const history = await this.#history(sessionId);
       await this.#persistProjectionCheckpoint(history.checkpoint);
-    } catch {
+    } catch (error) {
       // Closing an attachment must not fail because its derived cache missed.
+      await this.#reportCheckpointFailure(error);
     }
   }
 
   async #persistProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void> {
     try {
       await this.ports.engine.saveProjectionCheckpoint(checkpoint);
-    } catch {
+    } catch (error) {
       // Missing a cache write is recoverable by definition. The immutable log
       // remains canonical and the next read takes the full-fold fallback.
+      await this.#reportCheckpointFailure(error);
+    }
+  }
+
+  /**
+   * Reports a recovered checkpoint failure to the host.
+   *
+   * The seam's own failure is swallowed here for the same reason the callers
+   * swallow theirs: a diagnostic must never convert a recovered cache miss
+   * into a failed read.
+   */
+  async #reportCheckpointFailure(error: unknown): Promise<void> {
+    try {
+      await this.ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
     }
   }
 
@@ -3083,7 +3118,7 @@ function foldHistory(
   prior?: ProjectedHistory,
 ): ProjectedHistory {
   const folded = checkpoint
-    ? advanceSessionProjection(checkpoint, events)
+    ? advanceSessionProjection(checkpoint, events, session)
     : createSessionProjectionCheckpoint(session, events);
   return {
     projection: folded.projection,

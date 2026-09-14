@@ -23,6 +23,7 @@ import {
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
   SESSION_INTERRUPTION_REASONS,
+  SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY,
   SESSION_USER_BLOCKING_ATTENTION_KINDS,
   sessionAwaitsUser,
   sessionEndedInterrupted,
@@ -36,6 +37,7 @@ import type {
   SessionInteraction,
   SessionInteractionPrompt,
   SessionObservation,
+  SessionProjectionCheckpoint,
 } from "./session-ledger";
 import type { SessionUsage } from "./session-usage";
 
@@ -1198,12 +1200,15 @@ describe("Session projection checkpoints", () => {
 
   it("rejects malformed checkpoint metadata", () => {
     const checkpoint = createSessionProjectionCheckpoint(session, []);
+    expect(checkpoint.compatibility).toBe(SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY);
     const invalid = [
       { ...checkpoint, version: 2 as typeof checkpoint.version },
+      { ...checkpoint, compatibility: "session-event-kinds:retired" },
+      { ...checkpoint, projection: undefined },
       { ...checkpoint, sessionId: "another-session" },
       { ...checkpoint, throughSequence: 0.5 },
       { ...checkpoint, throughSequence: -1 },
-    ];
+    ] as unknown as SessionProjectionCheckpoint[];
 
     for (const candidate of invalid) {
       expect(() => advanceSessionProjection(candidate, [])).toThrow(
@@ -1701,6 +1706,23 @@ describe("projectSession usage", () => {
       knownCostUsd: 0.25,
       costCoverage: "partial",
     });
+  });
+
+  it("preserves sub-micro-dollar usage across every checkpoint split", () => {
+    const events = [
+      recorded(1, metered({ costUsd: 0.0000015 })),
+      recorded(2, metered({ costUsd: 0.0000004 })),
+      recorded(3, metered({ costUsd: 0.0000004 })),
+    ];
+    const whole = projectSession(session, events);
+
+    for (let split = 0; split <= events.length; split += 1) {
+      const checkpoint = createSessionProjectionCheckpoint(session, events.slice(0, split));
+      const resumed = advanceSessionProjection(checkpoint, events.slice(split));
+      expect(resumed.projection.usage).toEqual(whole.usage);
+      expect(resumed.usageCostUsdExact).toBe(0.0000023);
+      expect(resumed.projection.usage.knownCostUsd).toBe(0.000002);
+    }
   });
 
   // Telemetry arriving is not the agent doing something. A backfill or a

@@ -16,6 +16,7 @@ import type { ModelTier } from "./model-access-policy";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   mergeSessionUsageSummaries,
+  roundSessionUsageCost,
   summarizeSessionUsage,
 } from "./session-usage";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
@@ -778,6 +779,65 @@ export type SessionEventPayload =
       usage: SessionUsage;
     };
 
+/**
+ * The exact Session event vocabulary understood by this projection build.
+ *
+ * This is deliberately an explicit, sorted list rather than a hash produced by
+ * a runtime API. A checkpoint is a cache of a fold: if an older build skipped
+ * a kind it did not know, a build that adds or retires that kind must not reuse
+ * the old fold as though the skipped fact had been applied. The type assertions
+ * below make adding a payload arm without updating this marker a compile error.
+ */
+export const SESSION_PROJECTION_EVENT_KINDS = [
+  "adapter.observed",
+  "attention.cleared",
+  "attention.raised",
+  "attachment.closed",
+  "attachment.exited",
+  "attachment.failed",
+  "attachment.native_referenced",
+  "attachment.opened",
+  "authority.denied",
+  "command.receipt.recorded",
+  "command.recorded",
+  "context.compacted",
+  "context.compaction_failed",
+  "context.reasoning_dropped",
+  "interaction.cancelled",
+  "interaction.opened",
+  "interaction.resolved",
+  "model.selected",
+  "run.completed",
+  "run.started",
+  "session.archived",
+  "session.created",
+  "session.input.recorded",
+  "session.retitled",
+  "session.signaled",
+  "session.stopped",
+  "transcript.referenced",
+  "turn.completed",
+  "turn.interrupted",
+  "turn.started",
+  "usage.recorded",
+] as const satisfies readonly SessionEventPayload["kind"][];
+
+type MissingProjectionEventKind = Exclude<
+  SessionEventPayload["kind"],
+  (typeof SESSION_PROJECTION_EVENT_KINDS)[number]
+>;
+type ExtraProjectionEventKind = Exclude<
+  (typeof SESSION_PROJECTION_EVENT_KINDS)[number],
+  SessionEventPayload["kind"]
+>;
+type AssertProjectionEventVocabulary<T extends never> = T;
+export type CompleteProjectionEventVocabulary = AssertProjectionEventVocabulary<
+  MissingProjectionEventKind | ExtraProjectionEventKind
+>;
+
+/** A deterministic marker for the exact event vocabulary captured by a checkpoint. */
+export const SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY = `session-event-kinds:${SESSION_PROJECTION_EVENT_KINDS.join("|")}`;
+
 /** A failed attachment preserves adapter and venue metadata without pretending it ever opened. */
 export interface SessionAttachmentFailure {
   code: string;
@@ -785,8 +845,37 @@ export interface SessionAttachmentFailure {
   diagnostic: SessionNativeDetail | null;
 }
 
+/**
+ * One immutable local fact WITHOUT its audit provenance (VC-355).
+ *
+ * Provenance answers "which door did this come through", which is an audit and
+ * future-replay question. Folding a Session's state never asks it: the reducer
+ * switches on `payload.kind` and reads nothing else about the source. Storing
+ * provenance interned and joining it back per row therefore costs one JSON
+ * decode per event to answer a question the caller did not ask, and a Session
+ * listing pays that across every event in the profile.
+ *
+ * This is the shape a fold consumes. {@link SessionEvent} extends it for the
+ * callers that genuinely need the audit field, so anything holding a full
+ * event can still be passed wherever this is accepted.
+ */
+export interface SessionProjectionEvent {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  /** When the fact occurred according to the source, in epoch milliseconds. */
+  occurredAt: number;
+  /** When Volli durably recorded the fact, in epoch milliseconds. */
+  recordedAt: number;
+  /** The executor concerned by this fact, when one exists. */
+  attachmentId?: string | null;
+  /** The explicit user intent that caused this fact, when one exists. */
+  commandId?: string | null;
+  payload: SessionEventPayload;
+}
+
 /** One immutable local fact. Sequence, not wall-clock time, defines its order. */
-export interface SessionEvent {
+export interface SessionEvent extends SessionProjectionEvent {
   id: string;
   sessionId: string;
   sequence: number;
@@ -1400,16 +1489,110 @@ export interface SessionProjection {
  * reducer detail that read model intentionally collapses to its latest item;
  * retaining the complete set makes a later rejection able to reveal an older
  * still-pending start exactly as a whole-log fold would.
+ *
+ * `usageCostUsdExact` is intentionally separate from the public summary. The
+ * summary rounds for display, while a checkpoint must retain the unrounded
+ * accumulator or a split at a checkpoint can charge the same operation twice
+ * at the display precision (or lose a sub-micro-dollar operation entirely).
  */
 export interface SessionProjectionCheckpoint {
   version: typeof SESSION_PROJECTION_CHECKPOINT_VERSION;
+  /** The exact event vocabulary this projection knows how to fold. */
+  compatibility: typeof SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY;
   sessionId: string;
   throughSequence: number;
   projection: SessionProjection;
   pendingExecutorStarts: readonly SessionCommand[];
+  /** Unrounded sum of every priced `usage.recorded` fact through the cursor. */
+  usageCostUsdExact: number | null;
 }
 
 export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
+
+export interface SessionProjectionCheckpointValidationOptions {
+  /** Reject a checkpoint that belongs to another Session. */
+  expectedSessionId?: string;
+  /** Reject a checkpoint whose cursor is ahead of the adapter's durable head. */
+  latestSequence?: number;
+  /** Preserve an adapter's established structural-validation error wording. */
+  invalidMessage?: string;
+}
+
+/**
+ * Validates the common checkpoint contract for every adapter.
+ *
+ * Adapters still decide whether a Session exists and how to obtain its latest
+ * sequence. Passing that sequence here centralizes the structural and
+ * ahead-of-history checks, so an in-memory adapter and SQLite cannot drift in
+ * the cascade they use at their write boundary. The assertion accepts unknown
+ * data because persisted JSON is untrusted cache state.
+ */
+export function assertSessionProjectionCheckpoint(
+  candidate: unknown,
+  options: SessionProjectionCheckpointValidationOptions = {},
+): asserts candidate is SessionProjectionCheckpoint {
+  const invalidMessage = options.invalidMessage ?? "Invalid Session projection checkpoint";
+  if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error(invalidMessage);
+  }
+  const checkpoint = candidate as {
+    version?: unknown;
+    compatibility?: unknown;
+    sessionId?: unknown;
+    throughSequence?: unknown;
+    projection?: unknown;
+    pendingExecutorStarts?: unknown;
+    usageCostUsdExact?: unknown;
+  };
+  const projection = checkpoint.projection;
+  const projectionSession =
+    projection !== null &&
+    typeof projection === "object" &&
+    !Array.isArray(projection) &&
+    "session" in projection
+      ? (projection as { session?: unknown }).session
+      : undefined;
+  const projectionSessionId =
+    projectionSession !== null &&
+    typeof projectionSession === "object" &&
+    !Array.isArray(projectionSession) &&
+    "id" in projectionSession
+      ? (projectionSession as { id?: unknown }).id
+      : undefined;
+  const validExactCost =
+    checkpoint.usageCostUsdExact === null ||
+    (typeof checkpoint.usageCostUsdExact === "number" &&
+      Number.isFinite(checkpoint.usageCostUsdExact));
+  const throughSequence = checkpoint.throughSequence as number;
+
+  if (
+    checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
+    checkpoint.compatibility !== SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY ||
+    typeof checkpoint.sessionId !== "string" ||
+    typeof projectionSessionId !== "string" ||
+    checkpoint.sessionId !== projectionSessionId ||
+    !Number.isInteger(throughSequence) ||
+    throughSequence < 0 ||
+    !Array.isArray(checkpoint.pendingExecutorStarts) ||
+    !validExactCost ||
+    (options.expectedSessionId !== undefined && checkpoint.sessionId !== options.expectedSessionId)
+  ) {
+    throw new Error(invalidMessage);
+  }
+
+  if (
+    options.latestSequence !== undefined &&
+    (!Number.isInteger(options.latestSequence) ||
+      options.latestSequence < 0 ||
+      throughSequence > options.latestSequence)
+  ) {
+    throw new Error(
+      throughSequence > (options.latestSequence ?? 0)
+        ? "Session projection checkpoint is ahead of durable history"
+        : invalidMessage,
+    );
+  }
+}
 
 /**
  * Derives UI-ready Session state from ordered facts. Turn and executor end
@@ -1417,7 +1600,7 @@ export const SESSION_PROJECTION_CHECKPOINT_VERSION = 1 as const;
  */
 export function projectSession(
   session: Session,
-  events: readonly SessionEvent[],
+  events: readonly SessionProjectionEvent[],
 ): SessionProjection {
   return createSessionProjectionCheckpoint(session, events).projection;
 }
@@ -1425,34 +1608,37 @@ export function projectSession(
 /** Folds a whole Session log into state that can later resume from its tail. */
 export function createSessionProjectionCheckpoint(
   session: Session,
-  events: readonly SessionEvent[],
+  events: readonly SessionProjectionEvent[],
 ): SessionProjectionCheckpoint {
   return foldSessionProjection(session, events, null);
 }
 
 /**
- * Applies only facts after a checkpoint. Callers treat an invalid checkpoint
- * as a cache miss; this function rejects mixed Sessions and non-tail input so
- * a bad cache row can never become a second durable opinion about history.
+ * Applies facts strictly after a checkpoint's cursor. Inputs from another
+ * Session or at/before the cursor are filtered, and the remaining facts are
+ * ordered by sequence; callers therefore do not need to pre-filter a shared
+ * event read. Invalid checkpoint metadata is rejected as a cache miss.
+ *
+ * `liveSession` is the current row for row-backed fields. The checkpoint's
+ * event-projected fields (notably its title) remain authoritative for the
+ * prefix already folded into the cache.
  */
 export function advanceSessionProjection(
   checkpoint: SessionProjectionCheckpoint,
-  events: readonly SessionEvent[],
+  events: readonly SessionProjectionEvent[],
+  liveSession: Session | undefined = undefined,
 ): SessionProjectionCheckpoint {
-  if (
-    checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
-    checkpoint.sessionId !== checkpoint.projection.session.id ||
-    !Number.isInteger(checkpoint.throughSequence) ||
-    checkpoint.throughSequence < 0
-  ) {
-    throw new Error("Invalid Session projection checkpoint");
-  }
-  return foldSessionProjection(checkpoint.projection.session, events, checkpoint);
+  assertSessionProjectionCheckpoint(
+    checkpoint,
+    liveSession === undefined ? {} : { expectedSessionId: liveSession.id },
+  );
+  const session = liveSession ?? checkpoint.projection.session;
+  return foldSessionProjection(session, events, checkpoint);
 }
 
 function foldSessionProjection(
   session: Session,
-  events: readonly SessionEvent[],
+  events: readonly SessionProjectionEvent[],
   checkpoint: SessionProjectionCheckpoint | null,
 ): SessionProjectionCheckpoint {
   const base = checkpoint?.projection;
@@ -1474,7 +1660,9 @@ function foldSessionProjection(
     checkpoint?.pendingExecutorStarts.map((command) => [command.id, command]) ?? [],
   );
   let status: SessionProjection["status"] = base?.status ?? "open";
-  let title = base?.session.title ?? session.title;
+  // `null` is a real event-projected title, so do not use `??` here: a
+  // retitle-to-empty prefix must not be replaced by the live row's old title.
+  let title = base === undefined ? session.title : base.session.title;
   let signal: SessionProjection["signal"] = base?.signal ?? null;
   let stopped: SessionProjection["stopped"] = base?.stopped ?? null;
   let modelSelection: ModelSelection | null = base?.modelSelection ?? null;
@@ -1483,6 +1671,7 @@ function foldSessionProjection(
   let lastTurnOutcome: SessionTurnOutcome | null = base?.lastTurnOutcome ?? null;
   let authorityDenials = base?.authorityDenials ?? 0;
   const usage: SessionUsage[] = [];
+  let usageCostUsdExact = checkpoint?.usageCostUsdExact ?? 0;
   let lastActivityAt = base?.lastActivityAt ?? session.createdAt;
   // Seeded from the live session row so a fold given no `session.created`
   // event (a degenerate/partial event list) still has an honest answer;
@@ -1722,6 +1911,9 @@ function foldSessionProjection(
       // written here would be a second opinion about the same money.
       case "usage.recorded":
         usage.push(event.payload.usage);
+        if (event.payload.usage.costUsd !== null) {
+          usageCostUsdExact += event.payload.usage.costUsd;
+        }
         break;
       /* v8 ignore next 4 -- unreachable while the union is exhausted above; it exists to stop being so at compile time. */
       default: {
@@ -1736,6 +1928,13 @@ function foldSessionProjection(
   const activeAttention = [...attention.values()];
   const pendingExecutorStart = [...pendingExecutorStarts.values()].at(-1) ?? null;
 
+  const usageSummary =
+    usage.length === 0
+      ? (base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY)
+      : mergeSessionUsageSummaries([
+          base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY,
+          summarizeSessionUsage(usage),
+        ]);
   const projection: SessionProjection = {
     session: { ...session, title },
     status,
@@ -1756,22 +1955,25 @@ function foldSessionProjection(
     turnActive,
     lastTurnOutcome,
     authorityDenials,
-    usage:
-      usage.length === 0
-        ? (base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY)
-        : mergeSessionUsageSummaries([
-            base?.usage ?? EMPTY_SESSION_USAGE_SUMMARY,
-            summarizeSessionUsage(usage),
-          ]),
+    // `usageSummary` supplies exact counters, bases and token totals. Money is
+    // recomputed from the checkpoint's unrounded accumulator instead of adding
+    // the already-rounded public summaries together.
+    usage: {
+      ...usageSummary,
+      knownCostUsd:
+        usageSummary.pricedRequestCount === 0 ? null : roundSessionUsageCost(usageCostUsdExact),
+    },
     lastActivityAt,
     bornTicketless,
   };
   return {
     version: SESSION_PROJECTION_CHECKPOINT_VERSION,
+    compatibility: SESSION_PROJECTION_CHECKPOINT_COMPATIBILITY,
     sessionId: session.id,
     throughSequence: ordered.at(-1)?.sequence ?? throughSequence,
     projection,
     pendingExecutorStarts: [...pendingExecutorStarts.values()],
+    usageCostUsdExact: usageSummary.pricedRequestCount === 0 ? null : usageCostUsdExact,
   };
 }
 
@@ -1883,6 +2085,16 @@ export interface SessionLedgerTransaction {
   appendEvent(event: SessionEvent): void;
   /** Returns events in ascending per-Session sequence order. */
   listEvents(query: ListSessionEventsQuery): readonly SessionEvent[];
+  /**
+   * The same events in the same order, without their audit provenance (VC-355).
+   *
+   * For a caller that folds Session state. The reducer reads `payload.kind` and
+   * never asks which door a fact came through, so joining and JSON-decoding an
+   * interned provenance per row is work spent on a question nobody asked. An
+   * adapter that cannot separate the two may return full events: the fold
+   * accepts them, and the difference is cost, never meaning.
+   */
+  listProjectionEvents(query: ListSessionEventsQuery): readonly SessionProjectionEvent[];
   /** Metadata-only event head; does not decode payload or provenance JSON. */
   latestEventSequence(sessionId: string): number;
   /**
