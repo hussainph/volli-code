@@ -1,5 +1,9 @@
 import type Database from "better-sqlite3";
-import { prepared } from "./prepared";
+// Explicit `.ts`, unlike the extensionless imports elsewhere in this directory:
+// `automations-notification-smoke.mjs` loads THIS module directly through Node's
+// native TypeScript ESM, which resolves specifiers literally and cannot find an
+// extensionless one. Bundled and test builds accept either form.
+import { prepared } from "./prepared.ts";
 
 /**
  * Returns the integer key for byte-exact Session event provenance JSON.
