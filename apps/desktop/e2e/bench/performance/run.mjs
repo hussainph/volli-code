@@ -28,7 +28,14 @@ const execFileAsync = promisify(execFile);
 const CHAT_BENCH = join(APP_DIR, "e2e", "chat-window-bench.mjs");
 const DEFAULT_STREAM_STEPS = 120;
 const DEFAULT_STREAM_TOKEN_RATE = 30;
-const DEFAULT_LOAD_DURATION_SECONDS = 1_200;
+// The loaded arm must FIT inside its exposure: the arm fails if measurement is
+// still running when the deadline lands. Twenty full-app repetitions against
+// the `real` fixture take about nineteen minutes idle on the machine this was
+// written on, and materially longer with two cores busy, so a twenty-minute
+// exposure guaranteed the failure it was meant to bound. This is deliberately
+// generous; it is a ceiling, not a target, and a run that ends early holds the
+// load until the deadline so both arms stay comparable.
+const DEFAULT_LOAD_DURATION_SECONDS = 3_600;
 const WARNING =
   "Performance numbers are comparable only on the same machine, in the same power/thermal state, with the same load arm.";
 const INTERACTIONS = Object.freeze([
@@ -1375,6 +1382,22 @@ async function main() {
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  // A run drives Electron through Playwright for tens of minutes. When a load
+  // arm aborts, in-flight browser calls reject after the harness has stopped
+  // awaiting them, and Node's default handler kills the process with a bare
+  // `TimeoutError` and a stack made entirely of Playwright internals — no
+  // arm, no interaction, nothing a reader can act on. Name it instead, and
+  // still fail: a benchmark that swallowed this would publish a partial
+  // matrix as if it were whole.
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    console.error(
+      `benchmark aborted by an unhandled rejection — most often an Electron or Playwright call\n` +
+        `that outlived its load arm's deadline. Raise --load-duration-seconds if the loaded arm\n` +
+        `no longer fits its exposure on this machine.\n\n${detail}`,
+    );
+    process.exit(1);
+  });
   main().catch((error) => {
     console.error(error?.stack ?? error);
     process.exitCode = 1;
