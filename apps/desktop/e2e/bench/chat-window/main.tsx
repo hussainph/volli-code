@@ -332,14 +332,6 @@ function settleStream(sessionId: string): void {
   });
 }
 
-function busyWait(ms: number): void {
-  const until = performance.now() + ms;
-  while (performance.now() < until) {
-    // The opt-in regression-sensitivity arm burns this renderer task on
-    // purpose. Default measurements always pass zero.
-  }
-}
-
 /**
  * Grow one transcript snapshot at a wall-clock token rate while moving its
  * scroller every animation frame. Both actions share one frame loop by
@@ -351,7 +343,6 @@ async function streamAndScroll(
   sessionId: string,
   index: number,
   steps: number,
-  slowdownMs: number,
   tokenRate: number,
 ): Promise<unknown> {
   const scroller = planeScroller(index);
@@ -399,7 +390,6 @@ async function streamAndScroll(
   let priorTokenCount = 0;
   const started = performance.now();
   for (let step = 0; step < steps; step += 1) {
-    busyWait(slowdownMs);
     const tokenCount = Math.max(1, Math.floor(((performance.now() - started) * tokenRate) / 1_000));
     if (tokenCount !== priorTokenCount) {
       streamedCharacters = streamSnapshot(sessionId, base, tokenCount);
@@ -438,7 +428,6 @@ async function streamAndScroll(
   return {
     ok: true,
     steps,
-    slowdownMs,
     tokenRate,
     streamedTokens: priorTokenCount,
     streamedWhileWorking,
@@ -585,12 +574,7 @@ interface ChatBench {
   geometry(index: number): unknown;
   reachFirst(index: number, steps: number): Promise<unknown>;
   tailProbe(index: number): Promise<unknown>;
-  streamAndScroll(
-    index: number,
-    steps: number,
-    slowdownMs: number,
-    tokenRate: number,
-  ): Promise<unknown>;
+  streamAndScroll(index: number, steps: number, tokenRate: number): Promise<unknown>;
   collect(): void;
 }
 
@@ -621,10 +605,10 @@ const bench: ChatBench = {
     if (sessionId === undefined) return { ok: false, why: "no session" };
     return tailProbe(sessionId, index);
   },
-  async streamAndScroll(index, steps, slowdownMs, tokenRate) {
+  async streamAndScroll(index, steps, tokenRate) {
     const sessionId = sessionIds[index];
     if (sessionId === undefined) return { ok: false, why: "no session" };
-    return streamAndScroll(sessionId, index, steps, slowdownMs, tokenRate);
+    return streamAndScroll(sessionId, index, steps, tokenRate);
   },
   collect() {
     // Present because the bench runner launches Electron with --expose-gc: a

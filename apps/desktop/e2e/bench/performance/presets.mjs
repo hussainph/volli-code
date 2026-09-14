@@ -19,6 +19,13 @@ export const PRESETS = Object.freeze({
     overlappingWorktrees: 3,
     maxSessionEvents: 1_200,
     transcriptMessages: 220,
+    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
+    // fixture cannot attribute row-for-row (indexes, months of churn, deleted
+    // history). We reproduce the Session Event mass exactly and reproduce the
+    // remaining physical file mass as free pages, which is what churn leaves
+    // behind; this small budget is ten percent of that captured profile.
+    targetFileBytes: 37_300_000,
+    targetSessionEventBytes: 17_300_000,
   }),
   real: Object.freeze({
     sessions: 1_198,
@@ -30,6 +37,14 @@ export const PRESETS = Object.freeze({
     overlappingWorktrees: 17,
     maxSessionEvents: 1_668,
     transcriptMessages: 1_600,
+    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
+    // fixture cannot attribute row-for-row (indexes, months of churn, deleted
+    // history). We reproduce the Session Event mass exactly and reproduce the
+    // remaining physical file mass as free pages, which is what churn leaves
+    // behind. This is an honest physical target, not a claim about equivalent
+    // live content.
+    targetFileBytes: 373_000_000,
+    targetSessionEventBytes: 173_000_000,
   }),
   "2x": Object.freeze({
     sessions: 2_396,
@@ -41,6 +56,8 @@ export const PRESETS = Object.freeze({
     overlappingWorktrees: 34,
     maxSessionEvents: 3_336,
     transcriptMessages: 3_200,
+    targetFileBytes: 746_000_000,
+    targetSessionEventBytes: 346_000_000,
   }),
 });
 

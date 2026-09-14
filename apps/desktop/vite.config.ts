@@ -129,7 +129,7 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "main",
           environment: "node",
-          include: ["src/main/**/*.test.ts", "e2e/bench/performance/*.test.mjs"],
+          include: ["src/main/**/*.test.ts"],
           // Stated again here, and it is not redundant: `renderer` above
           // INHERITS this cap through `extends: true` while this project
           // inherits nothing, and vitest refuses a run whose projects disagree

@@ -45,7 +45,6 @@ const LABEL = flag("label", "run");
 const STREAM_SAMPLES = flag("stream-samples", "8");
 const STREAM_STEPS = flag("stream-steps", "120");
 const STREAM_TOKEN_RATE = flag("stream-token-rate", "30");
-const SLOWDOWN_MS = flag("slowdown-ms", "0");
 const SKIP_BUILD = args.includes("--skip-build");
 
 function run(command, commandArgs, options = {}) {
@@ -94,8 +93,6 @@ const output = await run(
     STREAM_STEPS,
     "--stream-token-rate",
     STREAM_TOKEN_RATE,
-    "--slowdown-ms",
-    SLOWDOWN_MS,
   ],
   { cwd: APP, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
 );
@@ -128,7 +125,7 @@ if (match?.groups?.json === undefined) {
       sample.ok === true ? sample.longTasksMs.length : "failed",
     );
     console.log(
-      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s, ${SLOWDOWN_MS}ms slowdown): latency ms [${latencies.join(", ")}], ` +
+      `stream+scroll (${STREAM_TOKEN_RATE} tokens/s): latency ms [${latencies.join(", ")}], ` +
         `dropped [${dropped.join(", ")}], long tasks [${longTasks.join(", ")}]`,
     );
   }

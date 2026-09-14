@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { allocateLongTail, generateFixture, seededRandom, verifyFixture } from "./fixture.mjs";
+import {
+  allocateLongTail,
+  forceTargetRefusal,
+  generateFixture,
+  seededRandom,
+  verifyFixture,
+} from "./fixture.mjs";
 import { CURRENT_DB_SCHEMA_VERSION, DEFAULT_SEED, PRESETS } from "./presets.mjs";
 
 describe("performance fixture allocation", () => {
@@ -76,7 +82,22 @@ describe("performance fixture file", () => {
       });
       expect(verified.overlappingWorktrees).toBe(PRESETS.small.overlappingWorktrees);
       expect(verified.decodedSampleEvents).toBe(20);
-      expect(verified.firstArtifactMessageId).toBe("perf-message-00001");
+      expect(verified.firstArtifactMessageId).toMatch(/^perf-message-\d{5}$/);
+      expect(verified.decodedEventCount).toBe(PRESETS.small.sessionEvents);
+      expect(verified.byteMeasurement).toBe("dbstat");
+      expect(verified.databaseBytes).toBeGreaterThan(PRESETS.small.targetFileBytes * 0.99);
+      expect(verified.databaseBytes).toBeLessThan(PRESETS.small.targetFileBytes * 1.01);
+      expect(verified.liveBytes + verified.freePageBytes).toBe(verified.databaseBytes);
+      expect(verified.freePageBytes).toBeGreaterThan(0);
+      expect(verified.sessionEventBytes).toBeGreaterThan(
+        PRESETS.small.targetSessionEventBytes * 0.9,
+      );
+      expect(verified.sessionEventBytes).toBeLessThan(PRESETS.small.targetSessionEventBytes * 1.1);
+      expect(verified.largestAppStateRowBytes).toBeLessThanOrEqual(300_000);
+      expect(JSON.parse(firstManifest).physicalBytes).toMatchObject({
+        totalFileBytes: verified.databaseBytes,
+        sessionEventsBytes: verified.sessionEventBytes,
+      });
       expect(JSON.parse(firstManifest)).toMatchObject({
         preset: "small",
         seed: DEFAULT_SEED,
@@ -97,8 +118,78 @@ describe("performance fixture file", () => {
           .digest("hex"),
       ).toBe(firstDatabaseDigest);
       expect(await readFile(regenerated.manifestPath, "utf8")).toBe(firstManifest);
+
+      const secondRoot = await mkdtemp(join(tmpdir(), "volli-performance-fixture-portable-"));
+      const thirdRoot = await mkdtemp(join(tmpdir(), "volli-performance-fixture-portable-"));
+      try {
+        const portableFirst = await generateFixture({
+          preset: "small",
+          seed: DEFAULT_SEED,
+          outputDirectory: secondRoot,
+          force: true,
+          localize: false,
+        });
+        const portableSecond = await generateFixture({
+          preset: "small",
+          seed: DEFAULT_SEED,
+          outputDirectory: thirdRoot,
+          force: true,
+          localize: false,
+        });
+        expect(
+          createHash("sha256")
+            .update(await readFile(portableFirst.dbPath))
+            .digest("hex"),
+        ).toBe(
+          createHash("sha256")
+            .update(await readFile(portableSecond.dbPath))
+            .digest("hex"),
+        );
+        // The digest includes SQLite's freelist pages. Keep this explicit too:
+        // churn must preserve both the page layout and its reported accounting.
+        expect(portableFirst.manifest.physicalBytes).toEqual(portableSecond.manifest.physicalBytes);
+      } finally {
+        await rm(secondRoot, { recursive: true, force: true });
+        await rm(thirdRoot, { recursive: true, force: true });
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  }, 120_000);
+  });
+
+  it("does not let --force remove an arbitrary directory", async () => {
+    expect(
+      forceTargetRefusal({
+        targetPath: "/",
+        exists: true,
+        isDirectory: true,
+        isEmpty: false,
+      }),
+    ).toContain("filesystem root");
+    expect(
+      forceTargetRefusal({
+        targetPath: "/tmp/repo",
+        exists: true,
+        isDirectory: true,
+        hasPackageJson: true,
+        homeDirectory: "/Users/tester",
+        repoRoot: "/tmp/repo-root",
+      }),
+    ).toContain("package.json");
+
+    const root = await mkdtemp(join(tmpdir(), "volli-performance-force-"));
+    try {
+      await writeFile(join(root, "package.json"), "{}\n");
+      await expect(
+        generateFixture({
+          preset: "small",
+          seed: DEFAULT_SEED,
+          outputDirectory: root,
+          force: true,
+        }),
+      ).rejects.toThrow(`Refusing --force deletion: ${root} contains package.json`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

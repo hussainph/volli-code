@@ -13,10 +13,13 @@ pnpm install
 pnpm bench:desktop -- --preset real --output performance-results/my-real-run
 ```
 
-The command builds the production Electron app and the real-`ChatPlane` renderer bench, creates and verifies a deterministic migrated fixture, runs the idle and `2-busy-core` arms, and writes:
+The command builds the production Electron app and the real-`ChatPlane` renderer bench, creates and verifies a deterministic migrated fixture, runs the idle and loaded arms, and writes three artifacts:
 
-- `benchmark.json`: host, macOS, Git SHA, fixture manifest and verification, load configuration, raw samples, p50/p95/variance summaries, RSS, frame times, dropped frames, and long tasks.
+- `benchmark.json`: everything, including every raw sample and every frame delta. It is the evidence, and at baseline settings it is tens of thousands of lines, so it stays local — `performance-results/` is gitignored.
+- `benchmark.summary.json`: the same run with the raw arrays removed — device, macOS, Git SHA and dirty flag, fixture preset/seed/verification, load name, worker count and duration, repetition count, per-interaction aggregates for both arms, and the arm gap. This is the artifact worth committing next to a baseline, because it is small enough to review in a pull request.
 - `benchmark.md`: a compact table and the method needed to interpret it.
+
+A run fails, rather than publishes, if any renderer emitted a console error, any health check came back false, or any streaming sample reported itself not ok — in any iteration of any arm. A baseline whose renderer was broken is not a baseline, so the gate refuses to summarize one.
 
 A full baseline uses 20 repetitions. That makes the nearest-rank p95 the second-largest sample instead of relabelling the maximum of a small sample. For a quick harness check:
 
@@ -30,15 +33,29 @@ Use `--help` for all controls. When reusing `--fixture`, also pass the preset th
 
 The generator is `apps/desktop/e2e/bench/performance/fixture.mjs`. It creates a user-data directory containing `volli.db`, transcript artifacts, project/worktree directories, and `performance-fixture.json`. It always opens the file through production `openVolliDb(dbPath)` and the production migration runner; it never creates an in-memory schema or copies SQL.
 
-| preset | Sessions | Session Events | Tickets | Ticket Events | Commands | Live worktrees | overlaps | busiest Session | transcript messages |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `small` | 120 | 26,040 | 40 | 547 | 856 | 8 | 3 | 1,200 | 220 |
-| `real` | 1,198 | 259,855 | 392 | 5,361 | 8,541 | 50 | 17 | 1,668 | 1,600 |
-| `2x` | 2,396 | 519,710 | 784 | 10,722 | 17,082 | 100 | 34 | 3,336 | 3,200 |
+| preset | Sessions | Session Events | Tickets | Ticket Events | Commands | Live worktrees | overlaps | busiest Session | transcript messages | file bytes | `session_events` bytes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `small` | 120 | 26,040 | 40 | 547 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
+| `real` | 1,198 | 259,855 | 392 | 5,361 | 8,541 | 50 | 17 | 1,668 | 1,600 | 373 MB | 173 MB |
+| `2x` | 2,396 | 519,710 | 784 | 10,722 | 17,082 | 100 | 34 | 3,336 | 3,200 | 746 MB | 346 MB |
 
-The default seed is `353259855`. A capped deterministic long-tail allocator preserves exact totals and puts the maximum on `perf-session-0001` (`PERF-1`). The `real` preset has 21 Sessions at or above 1,000 events (p50 149, p95 592, p99 1,164), while retaining exactly one 1,668-event maximum. Event and transcript payloads contain generated prose, fenced code, and tool results only. Fixture verification opens the DB through production code, checks schema/counts/distribution/foreign keys/worktree overlap, folds the long Session, decodes ledger events, and reads a content-addressed transcript artifact.
+The default seed is `353259855`. A capped deterministic long-tail allocator preserves exact totals and puts the maximum on `perf-session-0001` (`PERF-1`). The `real` preset has 21 Sessions at or above 1,000 events (p50 149, p95 592, p99 1,164), while retaining exactly one 1,668-event maximum. Event and transcript payloads contain generated prose, fenced code, and tool results only.
 
-`fixture.test.mjs` pins the real allocation digest and regenerates the small database byte-for-byte at the same path. Absolute fixture paths are deliberately part of database bytes, so database digests are comparable only for the same output path; the event-allocation digest is path-independent.
+### Row counts are not the workload — payload mass is
+
+Session Events are generated from a weighted, unit-aware mix (`event-mix.mjs`) rather than a uniform cycle of tiny rows: mostly runtime observations, a third of them tool-result-sized, wrapped in turn and run lifecycle pairs, with transcript references, spend, interactions, attention and authority in the proportions a long-running Session accumulates them. Families that are inherently paired allocate in units and declare how many events a unit costs, so a history never contains half a turn. That mix is what puts the `real` preset's `session_events` at ~175 MB over 259,855 rows — about 674 physical bytes per event, which is what the captured owner profile measured.
+
+Every generated payload is validated with the production write-side gate `assertSessionEvent` from `@volli/shared` before insert, so a payload this build cannot decode fails at generation instead of at the first benchmark that reads it. `verifyFixture` then decodes **every** `session_events` row through the production codec and reports the count, rather than sampling.
+
+The owner's file was 373 MB with 173 MB in `session_events`. The remaining ~200 MB cannot be attributed row-for-row — it is indexes, months of churn, and deleted history — so the fixture does not invent rows to fake it. It reproduces the Session Event mass exactly and reproduces the remaining physical file mass as free pages, by inserting and deleting real rows without vacuuming, which is what churn actually leaves behind. Verification reports total file bytes, live bytes, free-page bytes and `session_events` bytes separately, so nobody has to guess which part of the file is content.
+
+### Determinism and safety
+
+The database is generated **portable**: project and worktree columns hold a fixed sentinel root, so the same seed produces byte-identical database bytes at any output path. `localizeFixture(profileDirectory)` then rewrites exactly those schema-confirmed columns to the real profile location, and `generateFixture` calls it by default. `fixture.test.mjs` proves this by generating the same seed into two different directories and comparing digests.
+
+`--force` will not delete anything it cannot recognise as a fixture. It refuses the filesystem root, the home directory, the repository root, symlinks, non-directories, any directory containing `package.json` or `.git`, and any non-empty directory without a `performance-fixture.json` marker. The refusal names the path and the reason.
+
+Fixture verification opens the DB through production code, checks schema/counts/distribution/foreign keys/worktree overlap, folds the long Session, decodes every ledger event, reads a content-addressed transcript artifact, and asserts that no `app_state` row is oversized — that last one exists so nobody is ever tempted to reach a byte target with a padding blob, which would be read straight into the renderer bootstrap and would corrupt the very numbers this fixture exists to produce.
 
 ## Matrix and timing boundaries
 
@@ -50,7 +67,7 @@ Each full-app repetition uses a fresh APFS clone of the verified fixture and a f
 4. **New chat** — `+ Chat` until the newly visible composer is enabled and accepts focus.
 5. **New terminal** — terminal menu action until a visible real terminal canvas answers `stty size` through its PTY.
 6. **Sidebar** — close and open separately, retaining rAF frame deltas through each complete transition.
-7. **Ticket workspace switch** — direct command-palette switch from `PERF-1` to `PERF-2` until the target workspace tab is visible.
+7. **Ticket workspace switch** — both workspaces are opened to a usable state first and the first is returned to, so the timed step is a switch between two existing Ticket workspaces rather than a first open. It runs until the target tab is selected, its heading and description editor are visible, and that content accepts focus.
 8. **Board render** — navigate back to Board until every fixture ticket slot is present.
 9. **RPC round trip** — one native preload/session-RPC `session.projection` call timed wholly in the renderer.
 
@@ -64,9 +81,9 @@ The stream rate is wall-clock based. If a frame stalls, the next snapshot coales
 
 ## Reproducible background load
 
-The loaded arm is named `N-busy-core`. It starts N Node worker threads running the fixed integer-mixing loop in `apps/desktop/e2e/bench/performance/busy-worker.mjs` before measurements and stops them after the arm. The JSON records N, actual arm duration, worker iterations, and checksums. It is a scheduler/thermal pressure primitive, not a simulation of any particular compiler.
+The loaded arm is named `N-busy-core-for-Ns` — worker count **and** a fixed exposure, because a load that simply runs until the arm finishes gives a slower build more load and more thermal pressure than a faster one, which is precisely backwards for a regression gate. N Node worker threads run the fixed integer-mixing loop in `apps/desktop/e2e/bench/performance/busy-worker.mjs`, warm up, then share one monotonic deadline; the arm fails if measurement outlives that deadline, and short smoke runs that stop early say so in JSON. The JSON records N, the configured and actual duration, worker iterations, and checksums. It is a scheduler/thermal pressure primitive, not a simulation of any particular compiler.
 
-The default is two workers. Choose a different N explicitly and keep it fixed for all runs being compared:
+The defaults are two workers and a 1,200-second exposure (`--busy-cores`, `--load-duration-seconds`). Choose different values explicitly and keep them fixed for all runs being compared:
 
 ```sh
 pnpm bench:desktop -- --preset real --busy-cores 4 --output performance-results/real-4-busy-core
@@ -76,17 +93,33 @@ Do not run unrelated builds, tests, screen recording, or energy-mode changes dur
 
 ## Regression-sensitivity proof
 
-The renderer bench has an opt-in busy wait that is zero in all ordinary baselines. To prove the instrument moves without leaving a product slow path behind, run back-to-back stream-only controls against the same built code:
+A harness is only worth its baseline if it moves when the product gets slower. That was proven by injecting a deliberate regression, measuring the movement, and then **removing** the injection: leaving a slow path behind — even an opt-in one — leaves a foot-gun in the bench and a flag that a future baseline could accidentally carry.
+
+To repeat the proof, apply the injection as a temporary local edit, run two back-to-back stream-only controls against the same built code, and revert:
 
 ```sh
 pnpm bench:desktop -- --preset real --stream-only --arms idle --repetitions 20 \
   --output /tmp/vc353-control
+# apply the temporary injection recorded in
+# docs/performance-baselines/vc-353-owner-real/sensitivity.md, rebuild, then:
 pnpm bench:desktop -- --preset real --stream-only --arms idle --repetitions 20 \
-  --slowdown-ms 20 --output /tmp/vc353-deliberate-slowdown
+  --output /tmp/vc353-deliberate-slowdown
+git checkout -- apps/desktop/e2e/bench/chat-window
 ```
 
-The expected signal is higher stream frame-time and wall-time p50/p95 and more dropped frames in the second report. `--slowdown-ms` defaults to zero and the committed owner baseline must record zero. The committed proof alongside the baseline records the observed movement.
+The expected signal is higher stream frame-time and wall-time p50/p95 and more dropped frames in the second report. The committed proof alongside the baseline records the exact injection used and the movement observed.
+
+## Research references
+
+The harness decisions are supported by these scoped research records:
+
+- [Electron app measurement precedent](research/perf/electron-app-prior-art.md)
+- [Ephemeral Sessions and background load](research/perf/ephemeral-sessions-and-load.md)
+- [IPC, Session RPC, and SQLite](research/perf/ipc-rpc-sqlite.md)
+- [React, Zustand, and streaming transcripts](research/perf/react-zustand-streaming.md)
 
 ## Baseline use
 
-The owner-machine `real` baseline is under `docs/performance-baselines/vc-353-owner-real/`. Before using it as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load names, worker counts, and slowdown value. A later ticket should publish its own before/after pair on one machine rather than compare its machine to this owner baseline.
+The owner-machine `real` baseline is under `docs/performance-baselines/vc-353-owner-real/` as `benchmark.md` (human) and `benchmark.summary.json` (machine-readable). Before using it as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration. A later ticket should publish its own before/after pair on one machine rather than compare its machine to this owner baseline.
+
+The program tickets that consume this instrument are `VC-316` (board and sidebar profiling at ticket scale) and `VC-319` (the packed-app release matrix); both reuse `pnpm bench:desktop` and these presets rather than build a second fixture stack. The Session RPC round-trip primitive is published separately in `apps/desktop/e2e/bench/performance/session-rpc-round-trip.mjs` so the RPC ticket can import it instead of re-deriving it.

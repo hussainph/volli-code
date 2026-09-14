@@ -25,6 +25,9 @@ vite.config.ts.timestamp-*.mjs
 volli.db*
 # The chat-window bench's built page (VC-338) — rebuilt by its runner on demand.
 apps/desktop/e2e/bench/**/dist/
+# VC-353 benchmark outputs and generated fixture profiles are local evidence.
+/performance-results/
+/apps/desktop/.performance-fixtures/
 
 # Captures from the e2e shot scripts (onboarding-shots, tab-strip-shots): both
 # default to a repo-relative dir rather than a predictable shared-temp path, so
