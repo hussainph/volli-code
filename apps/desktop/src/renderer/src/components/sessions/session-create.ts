@@ -305,11 +305,26 @@ export interface ChatBoot {
    */
   model?: ModelSelection;
   /**
+   * Skips the Chat Draft and creates a Session immediately (VC-358).
+   *
+   * True for every NON-INTERACTIVE creator — a kickoff from the new-Ticket
+   * composer, Automation authoring — because each already holds the opening
+   * message, so there is no human about to type and nothing to defer the mint
+   * for. False (the default) opens a Chat Draft, which becomes a Session when
+   * someone sends a first message.
+   */
+  createsSessionNow?: boolean;
+  /**
    * Registers the tab against FRESH store state, returning whether it landed —
    * false ⇒ the owner vanished mid-flight, so this surface lets the identity go.
-   * `durable` distinguishes an immediate kickoff from a renderer-only Draft.
+   *
+   * `isSession` says which of the two things just landed: a durable Session
+   * (so the workspace may record its tab and the Ticket rail may refresh), or
+   * a Chat Draft, whose tab stays renderer-local until it has content. It is
+   * the same distinction {@link createsSessionNow} asked for, read back at the
+   * one place that has to act differently.
    */
-  land(sessionId: string, durable: boolean): boolean;
+  land(sessionId: string, isSession: boolean): boolean;
 }
 
 /**
@@ -384,9 +399,9 @@ export async function startProjectChat(
 ): Promise<void> {
   await bootChatSession(projectScope(projectId), {
     skills,
-    land: (sessionId, durable) => {
+    land: (sessionId, isSession) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      if (durable) useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
+      if (isSession) useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -469,15 +484,16 @@ export async function startTicketChat(
     skills,
     title,
     model,
-    eager: message !== undefined,
-    land: (booted, durable) => {
+    // A kickoff carries its opening message, so it is a Session from the start.
+    createsSessionNow: message !== undefined,
+    land: (booted, isSession) => {
       // The ticket itself may have been deleted while the create was in flight;
       // a tab on a card that no longer exists is unreachable, so let the Session
       // go (its durable row stands — see {@link bootChatSession}).
       const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
-      if (durable) {
+      if (isSession) {
         useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
         // So the rail's row for an immediate kickoff appears without waiting on
         // a terminal event. Draft promotion performs the same refresh later.
@@ -506,11 +522,11 @@ function newMessageId(): string {
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, title, model, land, eager = false }: ChatBoot & { eager?: boolean },
+  { skills, title, model, land, createsSessionNow = false }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
-      if (!eager) {
+      if (!createsSessionNow) {
         // A Draft is deliberately not a Session. Both UUIDs are minted in the
         // browser: `sessionId` remains the tab/draft/durable identity through
         // promotion, while `operationId` makes every create retry one command.
@@ -532,7 +548,7 @@ export async function bootChatSession(
         return sessionId;
       }
 
-      // Kickoff already has a first message, so it keeps the explicit eager
+      // Kickoff already has a first message, so it keeps the explicit
       // create/attach route used by every other non-interactive creator.
       const sessionId = await useChatSessionsStore.getState().createChatSession({
         projectId: scope.projectId,

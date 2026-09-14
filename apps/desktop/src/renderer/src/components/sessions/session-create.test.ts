@@ -111,26 +111,28 @@ describe("bootChatSession", () => {
     });
   });
 
-  it("keeps kickoff on the eager durable path", async () => {
+  it("keeps kickoff on the immediate Session path", async () => {
     const create = vi.fn(async () => "durable-1");
     stubChatStore(create);
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { eager: true, land })).resolves.toBe("durable-1");
+    await expect(bootChatSession(SCOPE, { createsSessionNow: true, land })).resolves.toBe(
+      "durable-1",
+    );
 
     expect(create).toHaveBeenCalledWith({ projectId: "p1", ticketId: "t1", title: null });
     expect(land).toHaveBeenCalledWith("durable-1", true);
     expect(useChatDraftsStore.getState().drafts).toEqual({});
   });
 
-  it("holds one eager create per owner, and hands the second nothing", async () => {
+  it("holds one immediate create per owner, and hands the second nothing", async () => {
     let release!: (sessionId: string) => void;
     const create = vi.fn(() => new Promise<string | null>((resolve) => (release = resolve)));
     stubChatStore(create);
 
-    const first = bootChatSession(SCOPE, { eager: true, land: () => true });
+    const first = bootChatSession(SCOPE, { createsSessionNow: true, land: () => true });
     expect(useChatSessionsStore.getState().starting).toEqual({ t1: true });
-    const second = await bootChatSession(SCOPE, { eager: true, land: () => true });
+    const second = await bootChatSession(SCOPE, { createsSessionNow: true, land: () => true });
 
     expect(second).toBeNull();
     expect(create).toHaveBeenCalledOnce();
@@ -159,31 +161,35 @@ describe("bootChatSession", () => {
     expect(useChatDraftsStore.getState().drafts).toEqual({});
   });
 
-  it("opens no tab when an eager create left nothing durable behind", async () => {
+  it("opens no tab when an immediate create left nothing durable behind", async () => {
     const { closeChatSession } = stubChatStore(async () => null);
     const land = vi.fn(() => true);
 
-    await expect(bootChatSession(SCOPE, { eager: true, land })).resolves.toBeNull();
+    await expect(bootChatSession(SCOPE, { createsSessionNow: true, land })).resolves.toBeNull();
 
     expect(land).not.toHaveBeenCalled();
     expect(closeChatSession).not.toHaveBeenCalled();
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
 
-  it("lets an eagerly created Session go when its owner vanished mid-flight", async () => {
+  it("lets an immediately created Session go when its owner vanished mid-flight", async () => {
     const { closeChatSession } = stubChatStore(async () => "durable-1");
 
-    await expect(bootChatSession(SCOPE, { eager: true, land: () => false })).resolves.toBeNull();
+    await expect(
+      bootChatSession(SCOPE, { createsSessionNow: true, land: () => false }),
+    ).resolves.toBeNull();
 
     expect(closeChatSession).toHaveBeenCalledWith("durable-1");
   });
 
-  it("toasts and clears the flag when an eager create throws", async () => {
+  it("toasts and clears the flag when an immediate create throws", async () => {
     stubChatStore(async () => {
       throw new Error("socket hang up");
     });
 
-    await expect(bootChatSession(SCOPE, { eager: true, land: () => true })).resolves.toBeNull();
+    await expect(
+      bootChatSession(SCOPE, { createsSessionNow: true, land: () => true }),
+    ).resolves.toBeNull();
 
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't start chat: socket hang up",

@@ -108,12 +108,9 @@ import {
   stripBrowserTabs,
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
-import {
-  isEmptyChatDraft,
-  isVisibleProvisionalChatDraft,
-  useChatDraftsStore,
-} from "@renderer/stores/chat-drafts";
+import { isEmptyProvisionalChatDraft, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProvisionalChatTabs } from "@renderer/hooks/use-provisional-chat-tabs";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
@@ -270,39 +267,18 @@ export function TicketDetail({
       ),
     ),
   );
-  const draftChatTitles = useChatDraftsStore(
-    useShallow((state) =>
-      openChatIds.map((sessionId) => state.drafts[sessionId]?.provisional?.title ?? null),
-    ),
-  );
-  const provisionalActiveId = useChatSessionsStore(
-    (state) => state.provisionalActive[ticket.id] ?? null,
-  );
-  const provisionalActiveDraft = useChatDraftsStore((state) =>
-    provisionalActiveId === null ? undefined : state.drafts[provisionalActiveId],
-  );
-  const provisionalActiveVisible =
-    provisionalActiveDraft !== undefined && isVisibleProvisionalChatDraft(provisionalActiveDraft);
-  const provisionalActive =
-    provisionalActiveId !== null && openChatIds.includes(provisionalActiveId)
-      ? provisionalActiveId
-      : null;
-  const provisionalWasPromoted =
-    provisionalActiveDraft !== undefined && provisionalActiveDraft.provisional === undefined;
-  // Empty Draft ids are renderer-only until text or a staged file exists, so
-  // pane/order writers must leave them out of persisted workspace state.
-  const emptyProvisionalChatIds = useChatDraftsStore(
-    useShallow((state) =>
-      openChatIds.filter((sessionId) => {
-        const draft = state.drafts[sessionId];
-        return draft?.provisional !== undefined && isEmptyChatDraft(draft);
-      }),
-    ),
-  );
-  const emptyProvisionalTabIds = React.useMemo(
-    () => new Set(emptyProvisionalChatIds.map(chatTabId)),
-    [emptyProvisionalChatIds],
-  );
+  // Everything this workspace needs to know about its Chat Drafts, and the
+  // rule about them, in one place shared with Home (VC-358).
+  const {
+    activeOverride: provisionalActive,
+    activeOverrideTabId: provisionalTabId,
+    emptyTabIds: emptyProvisionalTabIds,
+    guardLayoutWrites,
+    releaseActive,
+    shouldCommitActive,
+    takeActive,
+    titles: draftChatTitles,
+  } = useProvisionalChatTabs(ticket.id, openChatIds);
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
@@ -448,8 +424,7 @@ export function TicketDetail({
   // again the moment a close leaves one pane.
   const splitView = ticketTabsState?.splitView ?? null;
   const persistedActiveTabId = ticketTabsState?.active ?? BODY_TAB_ID;
-  const activeTabId =
-    provisionalActive === null ? persistedActiveTabId : chatTabId(provisionalActive);
+  const activeTabId = provisionalTabId ?? persistedActiveTabId;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
   // only the FileView knows after reading — it reports back via `onSource`.
@@ -728,39 +703,38 @@ export function TicketDetail({
   const setActiveTab = React.useCallback(
     (tabId: string) => {
       const chatId = parseChatTabId(tabId);
-      const draft = chatId === null ? undefined : useChatDraftsStore.getState().drafts[chatId];
-      if (draft?.provisional !== undefined && isEmptyChatDraft(draft)) {
+      if (
+        chatId !== null &&
+        isEmptyProvisionalChatDraft(useChatDraftsStore.getState().drafts[chatId])
+      ) {
         // Returning to an empty Draft is another renderer-only focus change,
         // not the content boundary that earns a persisted workspace tab.
-        useChatSessionsStore.getState().setProvisionalActive(ticket.id, chatId);
+        takeActive(chatId);
         return;
       }
-      useChatSessionsStore.getState().setProvisionalActive(ticket.id, null);
+      releaseActive();
       setTicketActiveTab(projectId, ticket.id, tabId);
     },
-    [setTicketActiveTab, projectId, ticket.id],
+    [releaseActive, setTicketActiveTab, projectId, takeActive, ticket.id],
   );
 
   // Empty Draft focus is renderer-only. The first content makes the Draft a
   // relaunchable workspace tab under the same id; promotion later changes only
   // its kind, never its identity or pane assignment.
   React.useEffect(() => {
-    if (provisionalActive === null || (!provisionalActiveVisible && !provisionalWasPromoted)) {
-      return;
-    }
-    const tabId = chatTabId(provisionalActive);
+    if (provisionalTabId === null || !shouldCommitActive) return;
     // Preserve the focused pane the renderer-only overlay used before this tab
     // crossed into persisted workspace layout.
     if (splitView !== null) {
-      moveTicketTabToPane(projectId, ticket.id, tabId, splitView.focusedPaneId);
+      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, splitView.focusedPaneId);
     }
-    setTicketActiveTab(projectId, ticket.id, tabId);
-    useChatSessionsStore.getState().setProvisionalActive(ticket.id, null);
+    setTicketActiveTab(projectId, ticket.id, provisionalTabId);
+    releaseActive();
   }, [
     projectId,
-    provisionalActive,
-    provisionalActiveVisible,
-    provisionalWasPromoted,
+    provisionalTabId,
+    releaseActive,
+    shouldCommitActive,
     setTicketActiveTab,
     moveTicketTabToPane,
     splitView,
@@ -1188,16 +1162,16 @@ export function TicketDetail({
     async (chatSkills?: readonly string[]) => {
       await bootChatSession(ticketScope(projectId, ticket.id), {
         skills: chatSkills,
-        land: (sessionId, durable) => {
+        land: (sessionId, isSession) => {
           // The ticket itself may have been deleted while the create was in
           // flight; a tab on a card that no longer exists is unreachable, so let
           // the Session go (its durable row stands — see `bootChatSession`).
           const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
           if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
           useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
-          if (durable) {
+          if (isSession) {
             setActiveTab(chatTabId(sessionId));
-            // So an eager creator's rail row appears without waiting on a
+            // So an immediate creator's rail row appears without waiting on a
             // terminal event. Provisional promotion refreshes it later.
             void useTicketSessionRecordsStore.getState().refresh(ticket.id);
           }
@@ -1332,60 +1306,26 @@ export function TicketDetail({
    * activation door, the first split's strip claim — live in the seam, one
    * copy shared with Home.
    */
-  const dropWrites: SplitSurfaceWrites = {
-    reorderSurface: (movedId, ids) => {
-      if (emptyProvisionalTabIds.has(movedId)) return;
-      moveTicketTab(
-        projectId,
-        ticket.id,
-        movedId,
-        ids.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
-      );
-    },
-    reorderPane: (paneId, movedId, ids) => {
-      if (emptyProvisionalTabIds.has(movedId)) return;
-      moveTicketTabInPane(
-        projectId,
-        ticket.id,
-        paneId,
-        movedId,
-        ids.filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
-      );
-    },
-    moveTabToPane: (tabId, paneId) => {
-      if (emptyProvisionalTabIds.has(tabId)) {
-        focusTicketPane(projectId, ticket.id, paneId);
-        const sessionId = parseChatTabId(tabId);
-        if (sessionId !== null) {
-          useChatSessionsStore.getState().setProvisionalActive(ticket.id, sessionId);
-        }
-        return;
-      }
-      moveTicketTabToPane(projectId, ticket.id, tabId, paneId);
-    },
-    splitPane: (paneId, edge, tabId, surfaceTabIds) => {
-      const persistableIds = surfaceTabIds.filter(
-        (candidate) => !emptyProvisionalTabIds.has(candidate),
-      );
-      if (emptyProvisionalTabIds.has(tabId)) {
-        splitTicketPane(projectId, ticket.id, paneId, edge, {
-          surfaceTabIds: persistableIds,
-        });
-        const sessionId = parseChatTabId(tabId);
-        if (sessionId !== null) {
-          useChatSessionsStore.getState().setProvisionalActive(ticket.id, sessionId);
-        }
-        return;
-      }
+  // Every writer here records durable workspace layout, so each is wrapped by
+  // the one rule about an empty Chat Draft — see `useProvisionalChatTabs`,
+  // which Home shares.
+  const paneWrites: SplitSurfaceWrites = {
+    reorderSurface: (movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids),
+    reorderPane: (paneId, movedId, ids) =>
+      moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids),
+    moveTabToPane: (tabId, paneId) => moveTicketTabToPane(projectId, ticket.id, tabId, paneId),
+    splitPane: (paneId, edge, tabId, surfaceTabIds) =>
       splitTicketPane(projectId, ticket.id, paneId, edge, {
-        tabId,
-        surfaceTabIds: persistableIds,
-      });
-    },
+        ...(tabId === null ? {} : { tabId }),
+        surfaceTabIds,
+      }),
     // The door the strip's own select takes.
     activateTab: (tabId) => setActiveTab(tabId),
     openPayload: openDroppedPayload,
   };
+  const dropWrites = guardLayoutWrites(paneWrites, (paneId) =>
+    focusTicketPane(projectId, ticket.id, paneId),
+  );
   const dropState = { isSplit: splitView !== null, orderedTabIds: tabs.map((tab) => tab.id) };
 
   /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */

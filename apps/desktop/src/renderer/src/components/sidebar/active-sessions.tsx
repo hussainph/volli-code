@@ -47,7 +47,7 @@ import { nextAgeChangeAt } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import {
-  isEmptyChatDraft,
+  isEmptyProvisionalChatDraft,
   isVisibleProvisionalChatDraft,
   type ProvisionalChatDraft,
   useChatDraftsStore,
@@ -843,8 +843,8 @@ export function ActiveSessions({
           return;
         }
         case "ticket-chat": {
-          const provisional = useChatDraftsStore.getState().drafts[route.sessionId];
-          if (provisional?.provisional !== undefined && isEmptyChatDraft(provisional)) {
+          const drafts = useChatDraftsStore.getState().drafts;
+          if (isEmptyProvisionalChatDraft(drafts[route.sessionId])) {
             const chat = useChatSessionsStore.getState();
             chat.openChatTab(route.ticketId, route.sessionId);
             chat.setProvisionalActive(route.ticketId, route.sessionId);
@@ -874,8 +874,8 @@ export function ActiveSessions({
           return;
         }
         case "home-chat": {
-          const provisional = useChatDraftsStore.getState().drafts[route.sessionId];
-          if (provisional?.provisional !== undefined && isEmptyChatDraft(provisional)) {
+          const drafts = useChatDraftsStore.getState().drafts;
+          if (isEmptyProvisionalChatDraft(drafts[route.sessionId])) {
             const chat = useChatSessionsStore.getState();
             chat.openChatTab(project.id, route.sessionId);
             chat.setProvisionalActive(project.id, route.sessionId);

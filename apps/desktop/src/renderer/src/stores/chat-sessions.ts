@@ -53,7 +53,7 @@ export interface CreateChatSessionInput {
   projectId: string;
   ticketId: string | null;
   title: string | null;
-  /** Stable for a promotion retry; omitted by every eager creator. */
+  /** Stable for a promotion retry; omitted by every immediate creator. */
   operationId?: string;
   /** The provisional UUID the durable Session adopts. */
   requestedSessionId?: string;
@@ -296,7 +296,7 @@ export function createChatSessionsStore(
       })();
     };
 
-    /** The durable mint shared by eager starts and Draft promotion. */
+    /** The durable mint shared by immediate starts and Draft promotion. */
     const mint = async (
       edge: ChatSessionTransport,
       input: CreateChatSessionInput,

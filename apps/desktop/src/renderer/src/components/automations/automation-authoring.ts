@@ -37,10 +37,10 @@ export async function startAutomationAuthoring(
 ): Promise<string | null> {
   const sessionId = await bootChatSession(projectScope(projectId), {
     title: "Draft automation",
-    // Authoring arrives with its first message already written, so it takes the
-    // eager create/attach route every non-interactive creator takes (VC-358):
-    // there is no human about to type, and nothing to defer the mint for.
-    eager: true,
+    // Authoring arrives with its first message already written, so it takes
+    // the immediate create/attach route every non-interactive creator takes
+    // (VC-358): there is no human about to type, nothing to defer the mint for.
+    createsSessionNow: true,
     land: (id) => {
       useChatSessionsStore.getState().openChatTab(projectId, id);
       return true;

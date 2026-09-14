@@ -308,6 +308,20 @@ export function isVisibleProvisionalChatDraft(draft: ChatDraft): boolean {
   return draft.provisional !== undefined && !isEmptyChatDraft(draft);
 }
 
+/**
+ * The counterpart: a Draft nobody has typed into yet.
+ *
+ * This is the state that must stay entirely renderer-local — out of the
+ * persisted envelope, out of the workspace's tab order and pane assignments,
+ * out of the sidebar. Every surface asks the same question, so they ask it
+ * through one function rather than each re-deriving "provisional AND empty".
+ * `undefined` for an identity with no Draft at all: a durable Session's tab is
+ * neither visible-provisional nor empty-provisional.
+ */
+export function isEmptyProvisionalChatDraft(draft: ChatDraft | undefined): boolean {
+  return draft?.provisional !== undefined && isEmptyChatDraft(draft);
+}
+
 /** True for a value that is a plain object (not null, not an array). */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
