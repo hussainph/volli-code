@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   isDeliverable,
   isWorking,
+  queueNeedsExecutor,
   racingFlushScheduler,
   settledLifecycle,
   type ChatCommandRequest,
@@ -577,6 +578,32 @@ describe("session derivations", () => {
   it("has nowhere to deliver without a live executor, whatever model is recorded", () => {
     expect(isDeliverable(sliceOf({ projection: projectionFor(null) }))).toBe(false);
     expect(isDeliverable(sliceOf())).toBe(false);
+  });
+
+  // VC-367. `isDeliverable` answers "can this leave now", which is false for
+  // both a Session coming up and a Session whose executor is gone. Only the
+  // second never ends on its own, and only the second is worth a process.
+  it("tells a queue nothing is coming for from one that is merely waiting", () => {
+    const dead = { projection: projectionFor(null), queue: [{ id: "q1", text: "hi" }] };
+
+    expect(queueNeedsExecutor(sliceOf(dead))).toBe(true);
+    // An attach already in flight needs no second one.
+    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "starting" }))).toBe(false);
+    // A refused attach does not become a wall: sending again asks again.
+    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "error" }))).toBe(true);
+    // Nothing to attach to.
+    expect(
+      queueNeedsExecutor(
+        sliceOf({ ...dead, projection: { ...projectionFor(null), status: "archived" } }),
+      ),
+    ).toBe(false);
+    // A live executor is already the answer, and an empty queue asks nothing.
+    expect(queueNeedsExecutor(sliceOf({ ...dead, projection: projectionFor("attach-1") }))).toBe(
+      false,
+    );
+    expect(queueNeedsExecutor(sliceOf({ projection: projectionFor(null) }))).toBe(false);
+    // A client that has not read the Session yet knows nothing to act on.
+    expect(queueNeedsExecutor(sliceOf({ queue: [{ id: "q1", text: "hi" }] }))).toBe(false);
   });
 
   it("holds starting and error against anything the stream says", () => {

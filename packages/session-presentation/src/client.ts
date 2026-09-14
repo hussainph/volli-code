@@ -535,23 +535,13 @@ export class ChatSessionClient {
    * that says whether an executor is live.
    */
   async retryAttach(): Promise<boolean> {
-    if (!this.#beginAttach()) return false;
-    void this.connect();
-    return this.#attachOnce();
-  }
-
-  /**
-   * The guard both attach doors share: refuse while one is already in flight,
-   * or before this client has read the Session at all, then latch `starting`
-   * so nothing derives a lifecycle from the stream until this lands.
-   */
-  #beginAttach(): boolean {
     const slice = this.#slice();
     if (slice === undefined || slice.lifecycle === "starting" || slice.projection === null) {
       return false;
     }
     this.#writes().attaching(this.sessionId);
-    return true;
+    void this.connect();
+    return this.#attachOnce();
   }
 
   /**
@@ -1089,11 +1079,14 @@ export class ChatSessionClient {
    * is the door that reopens ({@link recover}).
    *
    * One attempt per queue, not per pass — {@link #queueAttachRequest} is that
-   * latch.
+   * latch, and it has already established everything {@link retryAttach} guards
+   * on: a slice that exists, a projection read, and a lifecycle that is not
+   * `starting`. Re-asking here would be an unreachable branch, so the
+   * `attaching` latch is written directly.
    */
   async #attachForQueue(signature: string): Promise<boolean> {
-    if (!this.#beginAttach()) return false;
     this.#queueAttachSignature = signature;
+    this.#writes().attaching(this.sessionId);
     return this.#attachOnce();
   }
 
@@ -1107,13 +1100,13 @@ export class ChatSessionClient {
    *
    * The drain re-enters on every store write, including the several an attach
    * makes, so an unlatched arm would spend a process per frame. The signature is
-   * length-and-head rather than a bare boolean so that typing a SECOND message
+   * the queue itself rather than a bare boolean so that typing a SECOND message
    * after a refusal asks again — a person sending again is asking again, and a
    * latch that ignored them would be the same silence in a different place.
    */
   #queueAttachRequest(slice: ChatSessionSlice): string | null {
     if (!queueNeedsExecutor(slice)) return null;
-    const signature = `${slice.queue.length}:${slice.queue[0]?.id ?? ""}`;
+    const signature = slice.queue.map((entry) => entry.id).join(",");
     return this.#queueAttachSignature === signature ? null : signature;
   }
 
