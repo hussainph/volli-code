@@ -53,18 +53,20 @@ const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
  * draws a transcript. The composer, the model pill and the blocker row all did,
  * once per frame, under the hand that was typing.
  *
- * So each field is its own subscription, and the two questions read as booleans
- * are stored as booleans: `working` and `deliverable` derive from objects that
- * are replaced wholesale on every projection refresh, and a boolean that did not
- * flip is a subscription that does not fire. `turnActive` and `turnEpoch` are
- * absent because no view reads them from here — the two callbacks that need an
- * epoch read it from `getState()` at the moment they act, which is the only
- * moment its value is meaningful.
+ * So each field is its own subscription, and the questions read as booleans
+ * are stored as booleans: `working`, `deliverable` and `turnActive` derive from
+ * objects that are replaced wholesale on every projection refresh or stream
+ * batch, and a boolean that did not flip is a subscription that does not fire.
+ * `turnEpoch` stays absent because the two callbacks that need an epoch read it
+ * from `getState()` at the moment they act, which is the only moment its value
+ * is meaningful.
  */
 export interface SessionView {
   /** `null` until the Session's first durable snapshot arrives. */
   projection: SessionPresentationProjection | null;
   messages: readonly UIMessage[];
+  /** The stream has opened a Turn that has not reached its durable boundary. */
+  turnActive: boolean;
   /**
    * The settled transcript only — no live overlay. Its identity moves once
    * per settle rather than once per streamed frame, which is what lets the
@@ -150,6 +152,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.messages ?? NO_MESSAGES,
   );
+  const turnActive = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.turnActive === true,
+  );
   const durableMessages = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.durableMessages ?? NO_MESSAGES,
@@ -186,6 +192,7 @@ export function useSessionController(
     () => ({
       projection,
       messages,
+      turnActive,
       durableMessages,
       openedInteractions,
       working,
@@ -209,6 +216,7 @@ export function useSessionController(
       queue,
       reasoningDrops,
       sessionError,
+      turnActive,
       working,
     ],
   );

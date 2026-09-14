@@ -33,3 +33,9 @@ apps/desktop/e2e/bench/**/dist/
 
 # VC-291 investigation evidence (screenshots, OCR sidecars, matrix JSON)
 /evidence/
+
+# Published performance baselines keep their markdown report and drop the raw
+# JSON beside it. One stream-and-scroll run emits tens of thousands of lines of
+# frame timings: unreviewable in a diff, and stale the moment the machine or its
+# thermal state changes. The command that regenerates it is in the report.
+/docs/performance-baselines/**/*.json
