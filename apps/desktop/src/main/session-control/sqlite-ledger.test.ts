@@ -1767,4 +1767,169 @@ describe("the Session usage projection", () => {
     await ledger.transaction((t) => t.listSessions({ scope: "project", projectId: "project" }));
     expect(prepare.mock.calls.length).toBe(preparesAfterWarmup);
   });
+
+  // The test above proves the cache works for two read statements. This one is
+  // the Ticket's actual requirement — that this FILE no longer prepares outside
+  // the cache — which two reads cannot show: the direct `.prepare(...)` calls
+  // that VC-355 removed were on the receipt-link, receipt-pairing, and
+  // foreign-key paths, all of which run only while WRITING an event.
+  it("prepares no statement twice across a whole write/read cycle (VC-355)", async () => {
+    const { ledger, control, projectId } = setup();
+    const exercise = async (suffix: string): Promise<void> => {
+      const created = await control.createSession({
+        commandId: `create-prepared-${suffix}`,
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: `Prepared ${suffix}`,
+        provenance,
+      });
+      // A command with a receipt: this is what exercises the receipt link and
+      // the receipt/event pairing assertions on the write path.
+      await control.submit({
+        commandId: `retitle-prepared-${suffix}`,
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: `Renamed ${suffix}` },
+        provenance,
+      });
+      await ledger.transaction((transaction) => {
+        transaction.listEvents({ sessionId: created.session.id });
+        transaction.listProjectionEvents({ sessionId: created.session.id });
+        transaction.latestEventSequence(created.session.id);
+        transaction.getProjectionCheckpoint(created.session.id);
+        transaction.listSessions({ scope: "project", projectId });
+        transaction.countSessions({ scope: "project", projectId });
+      });
+      await control.getSession({ sessionId: created.session.id });
+      await control.listSessions({ scope: "project", projectId });
+    };
+
+    await exercise("warmup");
+    const prepare = vi.spyOn(ctx.db, "prepare");
+    await exercise("measured");
+    // Every statement this cycle needs was already prepared by the warm-up, so
+    // a single call here means some site still calls `db.prepare` directly.
+    expect(prepare.mock.calls.map(([sql]) => sql)).toEqual([]);
+  });
+
+  describe("listProjectionEvents (VC-355)", () => {
+    it("returns the same facts in the same order without the provenance field", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-events",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection events",
+        provenance,
+      });
+      await control.submit({
+        commandId: "retitle-projection-events",
+        sessionId: created.session.id,
+        intent: { kind: "session.retitle", title: "Renamed" },
+        provenance,
+      });
+
+      const { audit, fold } = await ledger.transaction((transaction) => ({
+        audit: transaction.listEvents({ sessionId: created.session.id }),
+        fold: transaction.listProjectionEvents({ sessionId: created.session.id }),
+      }));
+
+      expect(fold.length).toBeGreaterThan(1);
+      expect(fold).toEqual(audit.map(({ provenance: _provenance, ...event }) => event));
+      for (const event of fold) expect("provenance" in event).toBe(false);
+      // The point of the split: the audit field is never fetched, so the same
+      // rows fold to the same state without decoding one provenance per event.
+      expect(createSessionProjectionCheckpoint(created.session, fold).projection).toEqual(
+        createSessionProjectionCheckpoint(created.session, audit).projection,
+      );
+    });
+
+    it("keeps the pagination contract when a page is entirely retired kinds", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-retired",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection retired",
+        provenance,
+      });
+      for (const sequence of [4, 5]) {
+        ctx.db
+          .prepare(
+            `INSERT INTO session_events
+               (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+          )
+          .run(
+            `projection-retired-${sequence}`,
+            created.session.id,
+            sequence,
+            sequence * 100,
+            sequence * 100,
+            provenanceId(),
+            JSON.stringify({ kind: "capabilities.retired" }),
+          );
+      }
+      await ledger.transaction((transaction) => {
+        transaction.appendEvent({
+          id: "after-projection-retired",
+          sessionId: created.session.id,
+          sequence: 6,
+          occurredAt: 600,
+          recordedAt: 600,
+          provenance,
+          payload: { kind: "session.archived" },
+        });
+      });
+
+      const page = await ledger.transaction((transaction) =>
+        transaction.listProjectionEvents({
+          sessionId: created.session.id,
+          afterSequence: 3,
+          limit: 1,
+        }),
+      );
+      expect(page.map((event) => event.sequence)).toEqual([6]);
+    });
+
+    it("reads facts whose interned provenance row would fail the audit read", async () => {
+      const { ledger, control, projectId } = setup();
+      const created = await control.createSession({
+        commandId: "create-projection-unjoined",
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Projection unjoined",
+        provenance,
+      });
+      // Point one event at a provenance id that does not exist. Only a read
+      // that JOINS provenance can notice, so this is the sharpest available
+      // proof that the fold read does not perform that join.
+      ctx.db.pragma("foreign_keys = OFF");
+      ctx.db
+        .prepare("UPDATE session_events SET provenance_id = 999999 WHERE session_id = ? ")
+        .run(created.session.id);
+      ctx.db.pragma("foreign_keys = ON");
+
+      await expect(
+        ledger.transaction((transaction) =>
+          transaction.listEvents({ sessionId: created.session.id }),
+        ),
+      ).rejects.toThrow("missing its referenced provenance row");
+      const fold = await ledger.transaction((transaction) =>
+        transaction.listProjectionEvents({ sessionId: created.session.id }),
+      );
+      expect(fold.map((event) => event.payload.kind)).toEqual([
+        "command.recorded",
+        "session.created",
+        "command.receipt.recorded",
+      ]);
+    });
+  });
 });
