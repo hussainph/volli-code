@@ -1,5 +1,5 @@
 export const FIXTURE_SCHEMA_VERSION = 1;
-export const CURRENT_DB_SCHEMA_VERSION = 46;
+export const CURRENT_DB_SCHEMA_VERSION = 47;
 export const DEFAULT_SEED = 353_259_855;
 export const REAL_BUSY_CORE_DEFAULT = 2;
 
