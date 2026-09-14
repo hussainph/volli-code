@@ -28,6 +28,10 @@ apps/desktop/e2e/bench/**/dist/
 # VC-353 benchmark outputs and generated fixture profiles are local evidence.
 /performance-results/
 /apps/desktop/.performance-fixtures/
+# Published baselines are Markdown. The JSON a run emits is machine output —
+# large, wholly rewritten every run, and useless in a diff — so it never lands
+# here even when someone copies a report into the baseline directory.
+docs/performance-baselines/**/*.json
 
 # Captures from the e2e shot scripts (onboarding-shots, tab-strip-shots): both
 # default to a repo-relative dir rather than a predictable shared-temp path, so

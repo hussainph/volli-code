@@ -21,5 +21,5 @@ Machine: MacBookPro17,1, Apple M1, 8 logical cores, 16 GiB, macOS 26.5.1 (25F80)
 
 Raw reports:
 
-- [`sensitivity/control.json`](sensitivity/control.json) and [`sensitivity/control.md`](sensitivity/control.md)
-- [`sensitivity/deliberate-slowdown.json`](sensitivity/deliberate-slowdown.json) and [`sensitivity/deliberate-slowdown.md`](sensitivity/deliberate-slowdown.md)
+- [`sensitivity/control.md`](sensitivity/control.md)
+- [`sensitivity/deliberate-slowdown.md`](sensitivity/deliberate-slowdown.md)

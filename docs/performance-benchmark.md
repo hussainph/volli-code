@@ -15,19 +15,31 @@ pnpm bench:desktop -- --preset real --output performance-results/my-real-run
 
 The command builds the production Electron app and the real-`ChatPlane` renderer bench, creates and verifies a deterministic migrated fixture, runs the idle and loaded arms, and writes three artifacts:
 
-- `benchmark.json`: everything, including every raw sample and every frame delta. It is the evidence, and at baseline settings it is tens of thousands of lines, so it stays local — `performance-results/` is gitignored.
-- `benchmark.summary.json`: the same run with the raw arrays removed — device, macOS, Git SHA and dirty flag, fixture preset/seed/verification, load name, worker count and duration, repetition count, per-interaction aggregates for both arms, and the arm gap. This is the artifact worth committing next to a baseline, because it is small enough to review in a pull request.
-- `benchmark.md`: a compact table and the method needed to interpret it.
+- `benchmark.json`: everything, including every raw sample and every frame delta. At baseline settings it is tens of thousands of lines.
+- `benchmark.summary.json`: the same run with the raw arrays removed — device, macOS, Git SHA and dirty flag, fixture preset/seed/verification, load name, worker count and duration, repetition count, per-interaction aggregates for both arms, and the arm gap. Machine-readable, for anything that wants to diff two runs.
+- `benchmark.md`: a compact table, the full run context, and the method needed to interpret it.
+
+**None of the JSON is committed.** `performance-results/` is gitignored and so is every JSON under `docs/performance-baselines/`: a benchmark report is machine output, it is large, it changes wholesale on every run, and a repository is a poor place to keep it. What gets committed is the Markdown — which carries the numbers, the device, the macOS build, the commit SHA, the fixture preset and seed, and the load arm, so a published baseline is still self-describing. Keep the JSON next to the run that produced it, or attach it to the ticket.
 
 A run fails, rather than publishes, if any renderer emitted a console error, any health check came back false, or any streaming sample reported itself not ok — in any iteration of any arm. A baseline whose renderer was broken is not a baseline, so the gate refuses to summarize one.
 
-A full baseline uses 20 repetitions. That makes the nearest-rank p95 the second-largest sample instead of relabelling the maximum of a small sample. For a quick harness check:
+A full baseline uses 20 repetitions. That makes the nearest-rank p95 the second-largest sample instead of relabelling the maximum of a small sample.
+
+Each arm discards one full iteration before it samples. Arms run in sequence, and without that the first arm pays for a cold page cache over a 373 MB fixture and a cold Electron code cache while the second inherits both warm — a confound larger than the effect being measured. The first run of this matrix reported the loaded arm faster than idle on every single interaction for exactly that reason. The warm-up is discarded, never summarized, and both artifacts record that it happened.
+
+For a quick harness check:
 
 ```sh
 pnpm bench:desktop -- --preset small --repetitions 2 --arms idle --stream-steps 30 --output /tmp/volli-perf-smoke
 ```
 
 Use `--help` for all controls. When reusing `--fixture`, also pass the preset that generated it. `--skip-build` is only for repeated local probes after the relevant app and chat-bench bundles have already been built. Short smoke runs may finish while the scripted code fence is still open; the default 120-frame baseline reaches and closes it, and each raw sample records both phases.
+
+## The bench measures the build the app ships
+
+The renderer bench builds its own page, and that build must be the production one. It was not, for a while: React's dual-build entry is a `require` behind `process.env.NODE_ENV`, and the runner reads its fixture through a Vite dev server, which sets `NODE_ENV=development` on the runner process and leaves it set — so the bench, spawned afterwards, inherited `development` and built itself with dev React, its profiling instrumentation running inside every frame the bench times.
+
+Three things now hold that shut: the fixture restores `NODE_ENV` around its dev server, the bench and the runner each state `production` explicitly, and `chat-window-bench.mjs` refuses to measure at all if the emitted bundle still contains react-dom's development string literals or development JSX calls. The last one matters most, because this failure mode produces a plausible-looking number rather than a crash.
 
 ## Fixture contract
 
@@ -83,7 +95,7 @@ The stream rate is wall-clock based. If a frame stalls, the next snapshot coales
 
 The loaded arm is named `N-busy-core-for-Ns` — worker count **and** a fixed exposure, because a load that simply runs until the arm finishes gives a slower build more load and more thermal pressure than a faster one, which is precisely backwards for a regression gate. N Node worker threads run the fixed integer-mixing loop in `apps/desktop/e2e/bench/performance/busy-worker.mjs`, warm up, then share one monotonic deadline; the arm fails if measurement outlives that deadline, and short smoke runs that stop early say so in JSON. The JSON records N, the configured and actual duration, worker iterations, and checksums. It is a scheduler/thermal pressure primitive, not a simulation of any particular compiler.
 
-The defaults are two workers and a 1,200-second exposure (`--busy-cores`, `--load-duration-seconds`). Choose different values explicitly and keep them fixed for all runs being compared:
+The defaults are two workers and a 3,600-second exposure (`--busy-cores`, `--load-duration-seconds`). The exposure is a ceiling rather than a target: the arm fails if measurement is still running when the deadline lands, and a run that finishes early holds the load until the deadline so both arms see the same exposure. Twenty repetitions against the `real` fixture take roughly twenty minutes idle on the machine this was written on and longer under load, so an hour leaves room; if a slower machine outlives it, the run says so and names this flag. Choose values explicitly and keep them fixed for all runs being compared:
 
 ```sh
 pnpm bench:desktop -- --preset real --busy-cores 4 --output performance-results/real-4-busy-core
@@ -120,6 +132,6 @@ The harness decisions are supported by these scoped research records:
 
 ## Baseline use
 
-The owner-machine `real` baseline is under `docs/performance-baselines/vc-353-owner-real/` as `benchmark.md` (human) and `benchmark.summary.json` (machine-readable). Before using it as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration. A later ticket should publish its own before/after pair on one machine rather than compare its machine to this owner baseline.
+The owner-machine `real` baseline is `docs/performance-baselines/vc-353-owner-real/benchmark.md`. Before using it as a comparison point, check its SHA, dirty flag, device/macOS fields, preset/seed, load name, worker count, and load duration — the report records all of them for exactly this purpose. A later ticket should publish its own before/after pair on one machine rather than compare its machine to this owner baseline.
 
 The program tickets that consume this instrument are `VC-316` (board and sidebar profiling at ticket scale) and `VC-319` (the packed-app release matrix); both reuse `pnpm bench:desktop` and these presets rather than build a second fixture stack. The Session RPC round-trip primitive is published separately in `apps/desktop/e2e/bench/performance/session-rpc-round-trip.mjs` so the RPC ticket can import it instead of re-deriving it.
