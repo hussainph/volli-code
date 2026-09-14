@@ -95,7 +95,8 @@ export function parseArgs(argv) {
     else if (argument === "--skip-build") args.skipBuild = true;
     else if (argument === "--keep-fixture") args.keepFixture = true;
     else if (argument === "--stream-only") args.streamOnly = true;
-    else if (argument === "--interactions") args.interactions = valueAfter(argument, index++).split(",");
+    else if (argument === "--interactions")
+      args.interactions = valueAfter(argument, index++).split(",");
     else if (argument === "--help") args.help = true;
     else throw new Error(`Unknown benchmark argument ${argument}`);
   }
@@ -1174,10 +1175,7 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
     // and reusing a window would measure a different thing. A narrowed run is
     // for iteration, not publishing: interactions with no samples are left
     // out of the report rather than reported as zeros.
-    if (
-      !args.streamOnly &&
-      INTERACTIONS.some(([id]) => id !== "stream_scroll" && wanted.has(id))
-    ) {
+    if (!args.streamOnly && INTERACTIONS.some(([id]) => id !== "stream_scroll" && wanted.has(id))) {
       // One discarded iteration before every arm.
       //
       // Arms run in sequence, so without this the first arm pays for a cold
