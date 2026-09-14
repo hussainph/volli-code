@@ -191,6 +191,7 @@ function composition(
     /** One clock for engine and runtime, as the composition root supplies. */
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
+    onProjectionCheckpointFailure?: (error: unknown) => void;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -214,6 +215,9 @@ function composition(
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
       ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
+      ...(options.onProjectionCheckpointFailure
+        ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
+        : {}),
     }),
   };
 }
@@ -3331,7 +3335,11 @@ describe("SessionRuntime native adapter contract", () => {
     stop();
     expect(adapter.releaseReasons).toContain("shutdown");
 
-    const emptyEvents: SessionEngine = { ...engine, listEvents: async () => [] };
+    const emptyEvents: SessionEngine = {
+      ...engine,
+      listEvents: async () => [],
+      getProjectionCheckpoint: async () => null,
+    };
     const external = composition({
       engine: emptyEvents,
       adapter: new FakeAdapter(),
@@ -3648,6 +3656,181 @@ describe("SessionRuntime native adapter contract", () => {
     expect(appended.projection.attention.primary?.kind).toBe("auth_required");
     expect(appended.throughSequence).toBeGreaterThan(folded.throughSequence);
     expect(reads).toEqual([sessionId]);
+  });
+
+  it("restores a cold projection from a checkpoint and folds only its durable tail", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+    const checkpoint = await base.engine.getProjectionCheckpoint({ sessionId });
+    expect(checkpoint?.throughSequence).toBe(before.throughSequence);
+
+    await base.engine.submit({
+      commandId: "command-after-checkpoint",
+      sessionId,
+      intent: { kind: "session.signal", signal: "done", reason: "Tail applied" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue },
+    });
+    const cursors: (number | undefined)[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        cursors.push(query.afterSequence);
+        return base.engine.listEvents(query);
+      },
+    };
+    const restarted = composition({ engine: counting }).runtime;
+
+    const after = await restarted.projection({ sessionId });
+
+    expect(after.projection.signal).toMatchObject({ signal: "done", reason: "Tail applied" });
+    expect(after.throughSequence).toBe(before.throughSequence + 3);
+    expect(cursors).toEqual([before.throughSequence]);
+  });
+
+  it("reports a checkpoint write it could not perform, and still answers the read", async () => {
+    const base = composition();
+    const failure = new Error("checkpoint table is read-only");
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    // The projection is correct whether or not its cache could be written:
+    // that is what makes the write failure invisible without this report.
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await runtime.close();
+
+    expect(reported.length).toBeGreaterThan(0);
+    expect(new Set(reported)).toEqual(new Set([failure]));
+  });
+
+  it("reports an unreadable checkpoint and falls back to the whole-log fold", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("checkpoint row could not be decoded");
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      getProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+  });
+
+  it("reports a tail read that fails on a checkpoint hit, and refolds the whole log", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("tail page could not be read");
+    let failTail = true;
+    const failingTail: SessionEngine = {
+      ...base.engine,
+      // Only the tail read after a checkpoint cursor fails; the whole-log read
+      // starts at zero and still succeeds, which is the fallback under test.
+      listEvents: async (query) => {
+        if (failTail && (query.afterSequence ?? 0) > 0) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingTail,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+    failTail = false;
+    await runtime.close();
+  });
+
+  it("reports a checkpoint it could not capture when an attachment closes", async () => {
+    const base = composition();
+    const failure = new Error("event read failed while closing");
+    let failReads = false;
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        if (failReads) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const sessionId = await createAndAttach(runtime);
+    await runtime.projection({ sessionId });
+
+    failReads = true;
+    // The executor closing itself must still be recorded: capturing the prefix
+    // is a best-effort cache write, not part of making the close durable.
+    await expect(
+      base.adapter.emit({ kind: "attachment", state: "closed" }),
+    ).resolves.toBeUndefined();
+    expect(reported).toContain(failure);
+
+    failReads = false;
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { liveExecutor: null },
+    });
+    await runtime.close();
+  });
+
+  it("keeps working when the host's checkpoint failure reporter itself throws", async () => {
+    const base = composition();
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw new Error("checkpoint table is read-only");
+      },
+    };
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: () => {
+        throw new Error("diagnostics sink is broken");
+      },
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await expect(runtime.close()).resolves.toBeUndefined();
   });
 
   it("bounds how many folded histories it keeps", async () => {

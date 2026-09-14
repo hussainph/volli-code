@@ -2050,6 +2050,85 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
   WHERE merged_into_id IS NULL;
 `;
 
+/** App-owned, per-project MCP configuration and its last successful discovery. */
+const MIGRATION_047_MCP_SERVERS = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  transport    TEXT NOT NULL CHECK (json_valid(transport)),
+  catalog      TEXT NOT NULL CHECK (json_valid(catalog)),
+  stale        INTEGER NOT NULL CHECK (stale IN (0, 1)),
+  error        TEXT,
+  refreshed_at INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, created_at, id);
+`;
+
+/**
+ * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
+ *
+ * The immutable event log remains canonical. This table is an additive cache:
+ * a missing, stale-ahead, unsupported, or malformed row is ignored and the
+ * Session refolds from event one. `ON DELETE CASCADE` keeps the cache's lifetime
+ * no longer than the immutable Session row it summarizes.
+ */
+const MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS = `
+CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
+  session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  schema_version   INTEGER NOT NULL CHECK (schema_version > 0),
+  through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+  checkpoint       TEXT NOT NULL CHECK (json_valid(checkpoint)),
+  digest           TEXT NOT NULL CHECK (length(digest) = 64),
+  updated_at       INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 049: canonical-prefix repair invalidates projection checkpoints.
+ *
+ * These triggers briefly lived inside the checkpoint migration itself while
+ * it was unreleased. Keeping them in their own follow-up migration converges
+ * profiles that opened after the checkpoint table landed but before its
+ * repair invalidation did.
+ */
+const MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
+-- App writes append immutable facts, so inserts are handled as checkpoint
+-- tails. If repair tooling changes a canonical prefix out of band, invalidate
+-- its derived row instead of allowing the cache to hide that change.
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_updated
+AFTER UPDATE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.session_id OR session_id = NEW.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_deleted
+AFTER DELETE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints WHERE session_id = OLD.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_provenance_updated
+AFTER UPDATE ON session_provenances
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id IN (
+     SELECT session_id FROM session_events WHERE provenance_id = NEW.id OR provenance_id = OLD.id
+   );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_session_updated
+AFTER UPDATE ON sessions
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.id OR session_id = NEW.id;
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2288,6 +2367,21 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "labels — one live identity per NOCASE name, with retained merge aliases",
     sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
     apply: applyMigration046LabelCaseIdentity,
+  },
+  {
+    version: 47,
+    name: "mcp_servers — per-project configuration and last working tool catalog",
+    sql: MIGRATION_047_MCP_SERVERS,
+  },
+  {
+    version: 48,
+    name: "session_projection_checkpoints — rebuildable per-Session read models",
+    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS,
+  },
+  {
+    version: 49,
+    name: "session projection checkpoints — invalidate on canonical-prefix repair",
+    sql: MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
   },
 ];
 
@@ -2769,8 +2863,15 @@ export interface MigrateOptions {
   toVersion?: number;
 }
 
-/** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
-export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
+/**
+ * Applies every migration whose `version` is greater than the db's current
+ * `user_version`, in order. Returns whether any migration ran.
+ */
+export function migrate(
+  db: Database.Database,
+  dbPath: string,
+  options: MigrateOptions = {},
+): boolean {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
   const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
   const pending = MIGRATIONS.filter(
@@ -2778,7 +2879,7 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   ).toSorted((a, b) => a.version - b.version);
   if (pending.length === 0) {
     logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
-    return;
+    return false;
   }
 
   // Only an already-populated database needs a safety copy — a fresh
@@ -2824,4 +2925,5 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
     const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
     logMigrationBackupRetention(retentionReport);
   }
+  return true;
 }

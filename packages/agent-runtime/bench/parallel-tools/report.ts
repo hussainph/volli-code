@@ -41,7 +41,14 @@ function padLeft(value: string, width: number): string {
   return value.length >= width ? value : `${" ".repeat(width - value.length)}${value}`;
 }
 
-function table(headers: string[], rows: string[][]): string {
+/**
+ * One markdown table, numeric cells right-aligned.
+ *
+ * Exported because it is the shape every bench in this directory prints, and a
+ * second copy of it would be a second answer to "what does a bench table look
+ * like" — see `runtime-cost-report.ts`, which prints its own rows through this.
+ */
+export function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((header, column) =>
     Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
   );

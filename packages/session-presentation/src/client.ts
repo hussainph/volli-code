@@ -114,6 +114,37 @@ export function isDeliverable(slice: ChatSessionSlice): boolean {
 }
 
 /**
+ * Whether the queue is holding words that nothing is coming to collect.
+ *
+ * The queue's own rule (VC-367). {@link isDeliverable} says a message cannot
+ * leave *right now*, which is an ordinary and temporary thing: an executor is
+ * starting, a model is being written down, a turn is mid-flight. What it cannot
+ * distinguish is the one case where waiting is not temporary at all — a Session
+ * whose executor is GONE. Nothing about that state ever ends on its own, so a
+ * message held behind it is held forever, which is the silent queue this
+ * predicate exists to end.
+ *
+ * Asked only of a queue that has something in it, because the answer is an
+ * ACTION: bringing an executor back costs a process and a model turn, and
+ * nothing should pay that for a Session nobody is trying to talk to. The three
+ * exclusions are the states where an attach would be wrong rather than merely
+ * early — no projection yet (this client has not read the Session), `starting`
+ * (an attach is already in flight, and `retryAttach` would refuse it anyway),
+ * and `archived` (there is nothing left to attach to).
+ *
+ * `error` is deliberately NOT excluded: a person who types after a failed
+ * attach is asking for it again, and that is the whole difference between a
+ * latch a command set and a wall.
+ */
+export function queueNeedsExecutor(slice: ChatSessionSlice): boolean {
+  if (slice.queue.length === 0) return false;
+  if (slice.lifecycle === "starting") return false;
+  const projection = slice.projection;
+  if (projection === null || projection.status === "archived") return false;
+  return projection.liveExecutor === null;
+}
+
+/**
  * The lifecycle a Session settles to when its stream moves.
  *
  * Only a batch that actually crossed a turn boundary — or gained or lost an
@@ -420,8 +451,15 @@ export class ChatSessionClient {
   #projectionRefresh: Promise<void> | null = null;
   #projectionQueued = false;
   #draining = false;
+  /** A store write arrived mid-drain; the pass that owns the latch owes it one. */
+  #drainRequested = false;
   /** Queue ids owned by either an explicit persisted steer or resident drain. */
   readonly #claimedQueued = new Set<string>();
+  /**
+   * The queue this client has already tried to bring an executor back for.
+   * Null re-arms the attempt; see {@link ChatSessionClient.#attachForQueue}.
+   */
+  #queueAttachSignature: string | null = null;
 
   constructor(sessionId: string, deps: ChatSessionClientDeps) {
     this.sessionId = sessionId;
@@ -505,6 +543,19 @@ export class ChatSessionClient {
     }
     this.#writes().attaching(this.sessionId);
     void this.connect();
+    return this.#attachOnce();
+  }
+
+  /**
+   * The attach itself, with no opinion about the stream beside it.
+   *
+   * Split from {@link retryAttach} so the queue's own reattach (VC-367) can
+   * reuse the one attach door without the reopen: that path runs on a stream
+   * that is already delivering, and re-reading the snapshot under it would
+   * replace the projection this attach is about to move with the one it had
+   * before.
+   */
+  async #attachOnce(): Promise<boolean> {
     try {
       const attached = await this.#attachSession({
         operationId: this.#newCommandId(),
@@ -939,9 +990,24 @@ export class ChatSessionClient {
    * its own send to land, and a delivered message has already made the Session
    * busy by the time the next pass reads it. An id latch could not, because the
    * store write that empties the queue re-enters this synchronously.
+   *
+   * A re-entry while the latch is held is REMEMBERED rather than dropped
+   * (VC-367). The loop re-reads the slice on every pass, so a write that lands
+   * mid-pass is normally picked up by the next one — but the passes that end in
+   * `return` have no next one, and a message enqueued in that window would sit
+   * there with nothing coming for it. Which is this ticket's whole complaint,
+   * one level down: a person typing again while a reattach is in flight is the
+   * likeliest way to hit it.
+   *
+   * It also owns the other half of the same promise: a queue that cannot release
+   * because the Session has NO executor gets one brought back, rather than
+   * holding the words forever. See {@link #attachForQueue}.
    */
   async #drain(): Promise<void> {
-    if (this.#draining) return;
+    if (this.#draining) {
+      this.#drainRequested = true;
+      return;
+    }
     this.#draining = true;
     try {
       for (;;) {
@@ -952,13 +1018,25 @@ export class ChatSessionClient {
         // row becomes durable. Releasing an earlier neighbor here would start
         // a different turn and make the selected row steer the wrong work.
         if (this.#claimedQueued.size > 0) return;
+        // Re-arm the reattach the moment the Session stops needing one, so a
+        // second death is answered as readily as the first.
+        if (!queueNeedsExecutor(slice)) this.#queueAttachSignature = null;
         const next = nextRelease(slice.queue, {
           working: slice.lifecycle === "working",
           // A failure is explicit recovery, not a reason to keep feeding a
           // harness that just refused the last thing it was handed.
           ready: slice.lifecycle !== "error" && isDeliverable(slice),
         });
-        if (next === null) return;
+        if (next === null) {
+          // Nothing to release — which is either ordinary waiting, or the one
+          // state that never ends by itself. Only the second does anything, and
+          // deciding that synchronously keeps ordinary waiting on the cheap
+          // path it has always been on.
+          const signature = this.#queueAttachRequest(slice);
+          if (signature === null) return;
+          if (await this.#attachForQueue(signature)) continue;
+          return;
+        }
         this.#claimedQueued.add(next.id);
         let outcome: MessageDelivery;
         try {
@@ -971,7 +1049,67 @@ export class ChatSessionClient {
       }
     } finally {
       this.#draining = false;
+      if (this.#drainRequested) {
+        this.#drainRequested = false;
+        void this.#drain();
+      }
     }
+  }
+
+  /**
+   * Brings an executor back for a queue that has no way to drain (VC-367).
+   *
+   * This is what makes sending to a crashed Session honest. A relaunch closes
+   * the attachment of every Session whose process died, so `liveExecutor` reads
+   * null and every message typed afterwards routes to the queue — where, before
+   * this, nothing ever came for it: the release rule waits on an executor and
+   * no other path was going to produce one. The composer looked like it had
+   * accepted the message and the Session simply never started.
+   *
+   * The attach is the same door the error row's Retry presses
+   * ({@link #attachOnce}), so a send can never reattach in a way a person
+   * could not. Success leaves the ordinary release rule to deliver the words;
+   * failure settles the band, which IS the visible refusal, with that same
+   * Retry beside it.
+   *
+   * The stream is deliberately NOT reopened alongside, which is the one way
+   * this differs from Retry. This runs from inside the drain, on a client whose
+   * store is moving and whose subscription is therefore delivering — re-reading
+   * the snapshot under it would put back the very projection the attach is
+   * about to move, and the release rule reads that projection. A stream this
+   * client genuinely lost has already latched its own band, and the Retry on it
+   * is the door that reopens ({@link recover}).
+   *
+   * One attempt per queue, not per pass — {@link #queueAttachRequest} is that
+   * latch, and it has already established everything {@link retryAttach} guards
+   * on: a slice that exists, a projection read, and a lifecycle that is not
+   * `starting`. Re-asking here would be an unreachable branch, so the
+   * `attaching` latch is written directly.
+   */
+  async #attachForQueue(signature: string): Promise<boolean> {
+    this.#queueAttachSignature = signature;
+    this.#writes().attaching(this.sessionId);
+    return this.#attachOnce();
+  }
+
+  /**
+   * The signature of a queue that wants an executor and has not been tried yet,
+   * or null for one that wants nothing or has already asked.
+   *
+   * Synchronous, so the drain's ordinary "nothing to release" pass never yields
+   * — a pass that awaited there would let a concurrent store write re-enter and
+   * be refused, which is this ticket's own bug one level down.
+   *
+   * The drain re-enters on every store write, including the several an attach
+   * makes, so an unlatched arm would spend a process per frame. The signature is
+   * the queue itself rather than a bare boolean so that typing a SECOND message
+   * after a refusal asks again — a person sending again is asking again, and a
+   * latch that ignored them would be the same silence in a different place.
+   */
+  #queueAttachRequest(slice: ChatSessionSlice): string | null {
+    if (!queueNeedsExecutor(slice)) return null;
+    const signature = slice.queue.map((entry) => entry.id).join(",");
+    return this.#queueAttachSignature === signature ? null : signature;
   }
 
   /* ------------------------------------------------------------- the shared */

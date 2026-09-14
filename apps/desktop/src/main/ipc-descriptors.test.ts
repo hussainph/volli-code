@@ -1965,19 +1965,74 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("MCP settings channels", () => {
+    const project = { projectId: "project-1" };
+    const server = {
+      id: "server-1",
+      name: "Fixture",
+      enabled: true,
+      transport: { type: "stdio", command: "node", args: [] },
+    };
+
+    it("accepts each typed project-scoped operation", () => {
+      expect(DATA_IPC["volli:mcp-list"].guard([project])).toBe(true);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server }])).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: ["echo"] }]),
+      ).toBe(true);
+      expect(DATA_IPC["volli:mcp-refresh"].guard([{ ...project, serverId: "server-1" }])).toBe(
+        true,
+      );
+      expect(
+        DATA_IPC["volli:mcp-set-enabled"].guard([
+          { ...project, serverId: "server-1", enabled: false },
+        ]),
+      ).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-set-tools"].guard([
+          { ...project, serverId: "server-1", enabledTools: ["echo"] },
+        ]),
+      ).toBe(true);
+      expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: "server-1" }])).toBe(true);
+    });
+
+    it("rejects malformed operation-specific fields", () => {
+      expect(DATA_IPC["volli:mcp-list"].guard([])).toBe(false);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server: null }])).toBe(false);
+      expect(DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [1] }])).toBe(
+        false,
+      );
+      expect(DATA_IPC["volli:mcp-refresh"].guard([{ ...project, serverId: 1 }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-set-enabled"].guard([
+          { ...project, serverId: "server-1", enabled: "yes" },
+        ]),
+      ).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-set-tools"].guard([
+          { ...project, serverId: "server-1", enabledTools: [1] },
+        ]),
+      ).toBe(false);
+      expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: 1 }])).toBe(false);
+    });
+  });
+
   describe("DATA_CHANNELS derivation", () => {
     it("is exactly the descriptor table's key set — membership cannot be forgotten", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 67 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(67);
+    it("covers all 74 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(74);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
       // agent verb behind it, because the agent must not author the policy that
       // governs it.
       expect(DATA_CHANNELS).toContain("volli:project-authority-policy");
+      expect(DATA_CHANNELS).toContain("volli:mcp-list");
+      expect(DATA_CHANNELS).toContain("volli:mcp-save");
+      expect(DATA_CHANNELS).toContain("volli:mcp-remove");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");

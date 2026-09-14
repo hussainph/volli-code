@@ -25,6 +25,10 @@ const DIST = resolve(flag("dist", join(__dirname, "dist")));
 const SESSIONS = Number(flag("sessions", "10"));
 const TURNS = Number(flag("turns", "2000"));
 const LABEL = flag("label", "run");
+const STREAM_SAMPLES = Number(flag("stream-samples", "8"));
+const STREAM_STEPS = Number(flag("stream-steps", "120"));
+const STREAM_TOKEN_RATE = Number(flag("stream-token-rate", "30"));
+const SLOWDOWN_MS = Number(flag("slowdown-ms", "0"));
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -111,7 +115,15 @@ app.whenReady().then(async () => {
     };
   };
 
-  const report = { label: LABEL, sessions: SESSIONS, turns: TURNS, steps: [], checks: {}, errors };
+  const report = {
+    label: LABEL,
+    sessions: SESSIONS,
+    turns: TURNS,
+    steps: [],
+    checks: {},
+    streamingSamples: [],
+    errors,
+  };
   try {
     await contents.loadURL(`http://127.0.0.1:${port}/index.html`);
     await run("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))");
@@ -136,6 +148,20 @@ app.whenReady().then(async () => {
     await run("window.chatBench.show(0)");
     await run(`window.chatBench.show(1)`);
     report.steps.push(await sample("1 plane, after scrolling"));
+
+    // VC-353's simultaneous stream+scroll interaction. Repeated inside one
+    // production renderer so p50/p95 and variance describe the interaction,
+    // not Electron process startup. `slowdown-ms` is an opt-in sensitivity
+    // probe; ordinary baselines always leave it at zero.
+    for (let index = 0; index < STREAM_SAMPLES; index += 1) {
+      const streamingSample = await run(
+        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${SLOWDOWN_MS}, ${STREAM_TOKEN_RATE})`,
+      );
+      report.streamingSamples.push({
+        ...streamingSample,
+        rendererRssMb: rendererRssMb(contents.getOSProcessId()),
+      });
+    }
 
     await run(`window.chatBench.show(${SESSIONS})`);
     report.steps.push(await sample(`${SESSIONS} planes`));

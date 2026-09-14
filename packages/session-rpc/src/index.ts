@@ -17,7 +17,9 @@ import {
 } from "@volli/session-engine";
 import {
   MODEL_PICKER_VIEWS,
+  isolatePerformanceObserver,
   MODEL_PURPOSES,
+  readOptionalPerformanceClock,
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
@@ -132,6 +134,18 @@ export interface SessionCreateResult {
  * The server-side composition root supplies this context. It deliberately
  * carries the deep runtime rather than leaking its ports to individual RPCs.
  */
+export interface RpcProcedurePerformanceSample {
+  procedure: string;
+  durationMs: number;
+  outcome: "success" | "error";
+}
+
+/** Optional payload-free timer used by the Electron performance harness. */
+export interface RpcProcedurePerformanceObserver {
+  now?(): number;
+  record(sample: RpcProcedurePerformanceSample): void;
+}
+
 export interface SessionRouterContext {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
@@ -154,6 +168,7 @@ export interface SessionRouterContext {
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "unknown";
+  performanceObserver?: RpcProcedurePerformanceObserver;
 }
 
 export interface RpcDiagnosticEntry {
@@ -632,6 +647,7 @@ const t = initTRPC.context<SessionRouterContext>().create();
 const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
   const transport = ctx.transport ?? "unknown";
   ctx.diagnostics.record({ procedure: path, phase: "start", transport, code: null, message: null });
+  const performanceStartedAt = readOptionalPerformanceClock(ctx.performanceObserver);
   const result = await next();
   if (result.ok) {
     ctx.diagnostics.record({
@@ -650,8 +666,33 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
       message: result.error.message,
     });
   }
+  const performanceEndedAt = readOptionalPerformanceClock(ctx.performanceObserver);
+  recordProcedurePerformance(ctx.performanceObserver, {
+    procedure: path,
+    startedAt: performanceStartedAt,
+    endedAt: performanceEndedAt,
+    outcome: result.ok ? "success" : "error",
+  });
   return result;
 });
+
+function recordProcedurePerformance(
+  observer: RpcProcedurePerformanceObserver | undefined,
+  input: {
+    procedure: string;
+    startedAt: number | null;
+    endedAt: number | null;
+    outcome: RpcProcedurePerformanceSample["outcome"];
+  },
+): void {
+  // A missing clock endpoint means this sample has no trustworthy duration.
+  // Skipping it is preferable to publishing a plausible-looking zero.
+  if (!observer || input.startedAt === null || input.endedAt === null) return;
+  const durationMs = Math.max(0, input.endedAt - input.startedAt);
+  isolatePerformanceObserver(() => {
+    observer.record({ procedure: input.procedure, durationMs, outcome: input.outcome });
+  });
+}
 
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {

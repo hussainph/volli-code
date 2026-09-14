@@ -7,7 +7,7 @@ import {
   type SessionEngine,
   type TranscriptArtifactStore,
 } from "@volli/session-engine";
-import { createDesktopSessionEngine } from "../session-control";
+import { createCheckpointFailureReporter, createDesktopSessionEngine } from "../session-control";
 import { createDesktopSessionLocationResolver } from "./location";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
@@ -34,13 +34,20 @@ export function createDesktopSessionRuntime(
 ): HostedSessionRuntime {
   const now = options.now ?? Date.now;
   const nextId = options.nextId ?? randomUUID;
+  // One reporter for both halves: the engine's read path and the runtime's
+  // write path share a throttle window, so a single failing cache row cannot
+  // be announced twice for the same fault (VC-355).
+  const onProjectionCheckpointFailure = createCheckpointFailureReporter();
   return createSessionRuntime({
-    engine: options.sessionEngine ?? createDesktopSessionEngine(options.db, { now, nextId }),
+    engine:
+      options.sessionEngine ??
+      createDesktopSessionEngine(options.db, { now, nextId, onProjectionCheckpointFailure }),
     executor: options.executor,
     artifacts: options.artifacts ?? createFileTranscriptArtifactStore(options.transcriptDirectory),
     locations: createDesktopSessionLocationResolver(options.db),
     clock: { now },
     ids: { next: () => nextId() },
+    onProjectionCheckpointFailure,
   });
 }
 

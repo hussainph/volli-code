@@ -83,6 +83,7 @@ import {
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
+  isMcpToolId,
   readSkillResources,
   sessionToolIds,
   verbToolsOf,
@@ -91,6 +92,7 @@ import {
   type AuthoritySnapshot,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type McpToolDefinition,
   type ModelSelection,
   type ModelSelectionOutcome,
   type PromptResource,
@@ -99,6 +101,7 @@ import {
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
+  type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
   type RuntimeRecoveryRef,
@@ -235,6 +238,8 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Sanitized MCP definitions frozen beside their dynamic names. */
+  mcpTools?: readonly McpToolDefinition[];
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -321,6 +326,9 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
  * from outliving it.
  */
 export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+
+/** Main-owned MCP port with attachment cleanup for its clients/transports. */
+export type DesktopMcpPort = RuntimeMcpPort & { dispose: () => Promise<void> | void };
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -432,6 +440,18 @@ export interface PiAdapterOptions {
     attachmentId: string;
     workspacePath: string;
   }) => DesktopShellPort;
+  /**
+   * Main-process MCP host for this attachment's exact frozen definitions.
+   * Membership stays in Session history; this resolver owns only clients,
+   * transports, calls, and cleanup.
+   */
+  resolveMcpPort?: (scope: {
+    projectId: string;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+    mcpTools: readonly McpToolDefinition[];
+  }) => DesktopMcpPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -691,6 +711,16 @@ function piNativeAdapter(
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
         }),
+        mcp:
+          (context.mcpTools?.length ?? 0) === 0
+            ? undefined
+            : options.resolveMcpPort?.({
+                projectId: context.projectId,
+                sessionId: spec.sessionId,
+                attachmentId: spec.attachmentId,
+                workspacePath: spec.directory,
+                mcpTools: context.mcpTools ?? [],
+              }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
@@ -701,6 +731,7 @@ function piNativeAdapter(
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
       } catch (error) {
+        await binding.release("adapter_failure").catch(() => undefined);
         throw new NativeAttachmentError(
           errorMessage(error),
           recovery === undefined ? "PI_CONFIGURATION_INVALID" : "PI_RECOVERY_FAILED",
@@ -776,6 +807,8 @@ interface PiBindingOptions {
   browser: DesktopBrowserPort | undefined;
   /** The Session's scoped background shell capability; `undefined` is "no shells". */
   shell: DesktopShellPort | undefined;
+  /** Attachment-scoped MCP host for the frozen dynamic definitions. */
+  mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -791,6 +824,7 @@ class PiBinding implements BindingHandle {
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
+  readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -825,6 +859,7 @@ class PiBinding implements BindingHandle {
     this.#web = options.web;
     this.#browser = options.browser;
     this.#shell = options.shell;
+    this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
@@ -901,6 +936,19 @@ class PiBinding implements BindingHandle {
     const wantsHoldPair = context.toolSurface.includes("browser_acquire");
     // One name stands for the three (VC-270), on the browser's reasoning.
     const wantsShell = context.toolSurface.includes("shell_start");
+    const mcpTools = context.mcpTools ?? [];
+    const mcpNames = context.toolSurface.filter(isMcpToolId);
+    if (
+      JSON.stringify(mcpNames) !==
+      JSON.stringify(mcpTools.map((definition) => definition.providerName))
+    ) {
+      throw new Error("This Session's frozen MCP definitions do not match its tool surface.");
+    }
+    if (mcpTools.length > 0 && this.#mcp === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes MCP tools, but this launch wired no MCP host.",
+      );
+    }
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -1001,6 +1049,7 @@ class PiBinding implements BindingHandle {
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
         ...(verbs.length === 0 ? {} : { verbs }),
+        ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
@@ -1013,6 +1062,7 @@ class PiBinding implements BindingHandle {
         ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
+      ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1241,6 +1291,7 @@ class PiBinding implements BindingHandle {
     // the attachment's token, and a shell still being SIGTERMed should not
     // outlive the identity it was spawned under (VC-270).
     this.#shell?.dispose();
+    await this.#mcp?.dispose();
     await this.#handle?.close();
   }
 

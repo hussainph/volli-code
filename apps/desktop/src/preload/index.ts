@@ -147,6 +147,15 @@ import type {
   LegacyImportResult,
   ListDirectoryResult,
   ModelAccessSignInBeginResult,
+  McpCatalogResult,
+  McpProjectInput,
+  McpSaveInput,
+  McpServerIdInput,
+  McpServerInput,
+  McpServerResult,
+  McpServersResult,
+  McpSetEnabledInput,
+  McpSetToolsInput,
   PickFolderResult,
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimResult,
@@ -490,6 +499,18 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
+  },
+  mcp: {
+    list: (input: McpProjectInput): Promise<McpServersResult> => invoke("volli:mcp-list", input),
+    test: (input: McpServerInput): Promise<McpCatalogResult> => invoke("volli:mcp-test", input),
+    save: (input: McpSaveInput): Promise<McpServerResult> => invoke("volli:mcp-save", input),
+    refresh: (input: McpServerIdInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-refresh", input),
+    setEnabled: (input: McpSetEnabledInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-set-enabled", input),
+    setTools: (input: McpSetToolsInput): Promise<McpServerResult> =>
+      invoke("volli:mcp-set-tools", input),
+    remove: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-remove", input),
   },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),

@@ -91,6 +91,7 @@ function transcript(count: number): UIMessage[] {
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+const nativeScrollTo = HTMLElement.prototype.scrollTo;
 
 beforeEach(() => {
   forgetTranscriptViews();
@@ -111,6 +112,7 @@ beforeEach(() => {
   );
   vi.stubGlobal("api", refusingBridge());
   Element.prototype.scrollIntoView = function () {};
+  HTMLElement.prototype.scrollTo = function () {};
   MotionGlobalConfig.skipAnimations = true;
   useBrowserTabsStore.setState({ byId: {}, hydratedProjects: new Set([PROJECT]) });
   useBackgroundShellsStore.setState({ byId: {}, hydrated: true });
@@ -130,6 +132,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
+  HTMLElement.prototype.scrollTo = nativeScrollTo;
   vi.unstubAllGlobals();
 });
 
@@ -150,7 +153,14 @@ function provisionalChatStore(promote: () => Promise<boolean> = async () => true
   return { enqueue, promoteChatSession, store };
 }
 
-function chatStore(messages: readonly UIMessage[]) {
+function chatStore(
+  messages: readonly UIMessage[],
+  stream: {
+    turnActive?: boolean;
+    lifecycle?: "ready" | "working" | "error";
+    sessionError?: string | null;
+  } = {},
+) {
   const store = createChatSessionsStore(
     () => ({ connect: async () => {}, dispose: () => {} }) as unknown as ChatSessionTransport,
   );
@@ -171,9 +181,14 @@ function chatStore(messages: readonly UIMessage[]) {
           liveExecutor: null,
           authority: null,
         },
-        transcript: { ...EMPTY_TRANSCRIPT, durableMessages: messages, messages },
-        lifecycle: "ready",
-        sessionError: null,
+        transcript: {
+          ...EMPTY_TRANSCRIPT,
+          turnActive: stream.turnActive ?? false,
+          durableMessages: messages,
+          messages,
+        },
+        lifecycle: stream.lifecycle ?? "ready",
+        sessionError: stream.sessionError ?? null,
         queue: [],
       },
     },
@@ -258,6 +273,17 @@ const turnRows = () => container?.querySelectorAll(".is-user, .is-assistant").le
 const composer = () => container?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
 const earlierButton = () => container?.querySelector("[data-transcript-earlier]") ?? null;
 const shows = (index: number) => container?.textContent?.includes(`turn number ${index}`) === true;
+const TOKEN_SELECTOR = '[style*="--shiki-dark"]';
+
+async function waitFor(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for highlight");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+  }
+}
 
 /**
  * Typing, as React sees it. Assigning `.value` and firing `input` is not enough:
@@ -528,6 +554,46 @@ describe("a provisional chat plane", () => {
 });
 
 describe("a chat plane holding a long transcript", () => {
+  it("uses the stream Turn boundary when Session lifecycle fails and recovers", async () => {
+    const source = "```ts\nexport const answer = 42;\n```";
+    const message: UIMessage = {
+      id: "a1",
+      role: "assistant",
+      parts: [{ type: "text", text: source }],
+    };
+    const store = chatStore([message], {
+      turnActive: true,
+      lifecycle: "error",
+      sessionError: "Lost the Session stream",
+    });
+
+    await mountPlane(store);
+
+    expect(container?.textContent).toContain("export const answer = 42;");
+    expect(container?.querySelector('[data-streamdown="code-block"]')).not.toBeNull();
+    expect(container?.querySelector('[data-streamdown="code-block-actions"]')).not.toBeNull();
+    expect(container?.querySelector(TOKEN_SELECTOR)).toBeNull();
+
+    await act(async () => {
+      store.setState((state) => {
+        const slice = state.sessions[SESSION];
+        if (slice === undefined) return state;
+        return {
+          sessions: {
+            ...state.sessions,
+            [SESSION]: {
+              ...slice,
+              transcript: { ...slice.transcript, turnActive: false },
+            },
+          },
+        };
+      });
+    });
+
+    await waitFor(() => container?.querySelector(TOKEN_SELECTOR) !== null);
+    expect(container?.textContent).toContain("export const answer = 42;");
+  }, 12_000);
+
   it("mounts the tail and not the history", async () => {
     await mountPlane(chatStore(transcript(TURNS)));
 

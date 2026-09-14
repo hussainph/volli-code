@@ -216,6 +216,9 @@ function harness(
     listSessionStarts: unusedRead,
     listLatestTicketSignals: unusedRead,
     listEvents: unusedRead,
+    latestEventSequence: unusedRead,
+    getProjectionCheckpoint: unusedRead,
+    saveProjectionCheckpoint: unusedRead,
     reportUsage: unusedRead,
   };
   const bus = createSessionWakeBus(engine, { db });

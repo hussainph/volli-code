@@ -497,6 +497,62 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid authority policy",
   },
+  "volli:mcp-list": {
+    guard: (args): args is IpcArgs<"volli:mcp-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid MCP project",
+  },
+  "volli:mcp-test": {
+    guard: (args): args is IpcArgs<"volli:mcp-test"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isRecord(args[0]["server"]),
+    invalidError: "Invalid MCP server test",
+  },
+  "volli:mcp-save": {
+    guard: (args): args is IpcArgs<"volli:mcp-save"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isRecord(args[0]["server"]) &&
+      isStringArray(args[0]["enabledTools"]),
+    invalidError: "Invalid MCP server save",
+  },
+  "volli:mcp-refresh": {
+    guard: (args): args is IpcArgs<"volli:mcp-refresh"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP server refresh",
+  },
+  "volli:mcp-set-enabled": {
+    guard: (args): args is IpcArgs<"volli:mcp-set-enabled"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string" &&
+      typeof args[0]["enabled"] === "boolean",
+    invalidError: "Invalid MCP server enablement",
+  },
+  "volli:mcp-set-tools": {
+    guard: (args): args is IpcArgs<"volli:mcp-set-tools"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string" &&
+      isStringArray(args[0]["enabledTools"]),
+    invalidError: "Invalid MCP tool selection",
+  },
+  "volli:mcp-remove": {
+    guard: (args): args is IpcArgs<"volli:mcp-remove"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP server removal",
+  },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
       if (args.length !== 1) return false;

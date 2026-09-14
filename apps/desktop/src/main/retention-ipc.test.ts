@@ -65,6 +65,15 @@ function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
   return (handler as (...callArgs: unknown[]) => T)(fakeEvent, ...args);
 }
 
+/** The production invalidation is frame-window coalesced; handler tests await its delivery. */
+async function expectDataChangeCount(count: number): Promise<void> {
+  await vi.waitFor(() => {
+    expect(dataChangedSends.filter((send) => send.channel === "volli:data-changed")).toHaveLength(
+      count,
+    );
+  });
+}
+
 let ctx: TestDb;
 
 beforeEach(() => {
@@ -78,6 +87,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The coalescer is drained by `src/main/test-setup.ts`, which discards rather
+  // than delivers — see there for why that is the isolating choice.
   resetRetentionWatcherForTest();
   ctx.cleanup();
 });
@@ -106,7 +117,7 @@ describe("volli:retention-state", () => {
 });
 
 describe("volli:retention-keep", () => {
-  it("persists the pin, reflects it in state, and re-hydrates", () => {
+  it("persists the pin, reflects it in state, and re-hydrates", async () => {
     seedTicket();
     const set = invoke<RetentionKeepResult>("volli:retention-keep", {
       ticketId: "t1",
@@ -114,13 +125,14 @@ describe("volli:retention-keep", () => {
     });
     expect(set).toEqual({ ok: true, keep: true });
     expect(getTicketRow(ctx.db, "t1")!.retention_keep).toBe(1);
-    expect(dataChangedSends.some((s) => s.channel === "volli:data-changed")).toBe(true);
+    await expectDataChangeCount(1);
 
     const state = invoke<RetentionStateResult>("volli:retention-state", { ticketId: "t1" });
     expect(state.ok && state.state.keep).toBe(true);
 
     invoke<RetentionKeepResult>("volli:retention-keep", { ticketId: "t1", keep: false });
     expect(getTicketRow(ctx.db, "t1")!.retention_keep).toBe(0);
+    await expectDataChangeCount(2);
   });
 
   it("rejects a malformed request", () => {
@@ -139,7 +151,7 @@ describe("volli:retention-dismiss", () => {
 });
 
 describe("volli:retention-ttl-get / -set", () => {
-  it("defaults to 14 days and round-trips a set (clamped, re-hydrates)", () => {
+  it("defaults to 14 days and round-trips a set (clamped, re-hydrates)", async () => {
     expect(invoke<RetentionTtlResult>("volli:retention-ttl-get")).toEqual({ ok: true, days: 14 });
 
     expect(invoke<RetentionTtlResult>("volli:retention-ttl-set", { days: 30 })).toEqual({
@@ -152,7 +164,7 @@ describe("volli:retention-ttl-get / -set", () => {
       ok: true,
       days: 1,
     });
-    expect(dataChangedSends.some((s) => s.channel === "volli:data-changed")).toBe(true);
+    await expectDataChangeCount(1);
   });
 
   it("rejects a non-numeric TTL", () => {
@@ -168,7 +180,7 @@ describe("volli:retention-archive-clean", () => {
     });
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
-    expect(dataChangedSends.some((s) => s.channel === "volli:data-changed")).toBe(true);
+    await expectDataChangeCount(1);
   });
 
   it("refuses to archive a worktree an agent is still working in", async () => {
