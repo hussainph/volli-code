@@ -2050,15 +2050,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
   WHERE merged_into_id IS NULL;
 `;
 
+/** App-owned, per-project MCP configuration and its last successful discovery. */
+const MIGRATION_047_MCP_SERVERS = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  transport    TEXT NOT NULL CHECK (json_valid(transport)),
+  catalog      TEXT NOT NULL CHECK (json_valid(catalog)),
+  stale        INTEGER NOT NULL CHECK (stale IN (0, 1)),
+  error        TEXT,
+  refreshed_at INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, created_at, id);
+`;
+
 /**
- * Migration 047: rebuildable per-Session projection checkpoints (VC-355).
+ * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
  *
  * The immutable event log remains canonical. This table is an additive cache:
  * a missing, stale-ahead, unsupported, or malformed row is ignored and the
  * Session refolds from event one. `ON DELETE CASCADE` keeps the cache's lifetime
  * no longer than the immutable Session row it summarizes.
  */
-const MIGRATION_047_SESSION_PROJECTION_CHECKPOINTS = `
+const MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS = `
 CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
   session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   schema_version   INTEGER NOT NULL CHECK (schema_version > 0),
@@ -2070,13 +2088,14 @@ CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
 `;
 
 /**
- * Migration 048: canonical-prefix repair invalidates projection checkpoints.
+ * Migration 049: canonical-prefix repair invalidates projection checkpoints.
  *
- * These triggers briefly lived in the unreleased migration 047. Keeping them
- * in their own follow-up migration also converges profiles that opened after
- * the checkpoint table landed but before its repair invalidation did.
+ * These triggers briefly lived inside the checkpoint migration itself while
+ * it was unreleased. Keeping them in their own follow-up migration converges
+ * profiles that opened after the checkpoint table landed but before its
+ * repair invalidation did.
  */
-const MIGRATION_048_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
+const MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
 -- App writes append immutable facts, so inserts are handled as checkpoint
 -- tails. If repair tooling changes a canonical prefix out of band, invalidate
 -- its derived row instead of allowing the cache to hide that change.
@@ -2351,13 +2370,18 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 47,
-    name: "session_projection_checkpoints — rebuildable per-Session read models",
-    sql: MIGRATION_047_SESSION_PROJECTION_CHECKPOINTS,
+    name: "mcp_servers — per-project configuration and last working tool catalog",
+    sql: MIGRATION_047_MCP_SERVERS,
   },
   {
     version: 48,
+    name: "session_projection_checkpoints — rebuildable per-Session read models",
+    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS,
+  },
+  {
+    version: 49,
     name: "session projection checkpoints — invalidate on canonical-prefix repair",
-    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
+    sql: MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
   },
 ];
 

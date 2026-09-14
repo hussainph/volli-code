@@ -77,8 +77,24 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
           fill: true,
           label: "MCP Servers",
           icon: PlugsConnectedIcon,
-          keywords: ["mcp", "server", "servers", "tool", "tools", "context protocol", "status"],
-          content: <McpPane />,
+          keywords: [
+            "mcp",
+            "server",
+            "servers",
+            "tool",
+            "tools",
+            "context protocol",
+            "status",
+            "stdio",
+            "streamable http",
+            // The editor section's two titles. Rail search matches a
+            // lowercased SUBSTRING of a stored term, so "server" alone does
+            // not answer someone typing the whole label — and
+            // `settings-search-smoke.mjs` walks every visible one.
+            "add server",
+            "edit server",
+          ],
+          content: <McpPane project={project} />,
         },
         {
           key: "plugins",

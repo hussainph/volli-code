@@ -294,10 +294,10 @@ row.
 
 ## Projection checkpoints
 
-Migration 047 adds `session_projection_checkpoints` with schema version,
+Migration 048 adds `session_projection_checkpoints` with schema version,
 through-sequence, checkpoint JSON, SHA-256 digest, and update time. Migration
-048 adds repair-invalidation triggers separately so profiles that opened during
-the pre-release v47 lineage also converge. The checkpoint contains the complete
+049 adds repair-invalidation triggers separately so profiles that opened after
+the checkpoint table landed, but before its invalidation did, also converge. The checkpoint contains the complete
 public projection plus hidden pending executor-start state and the **unrounded**
 usage accumulator. It is written after a full fold, a tail advance, attachment
 close/failure, and runtime shutdown.

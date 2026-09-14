@@ -3312,12 +3312,12 @@ function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   return db;
 }
 
-describe("migrate — 047–048, Session projection checkpoints (VC-355)", () => {
+describe("migrate — 048–049, Session projection checkpoints (VC-355)", () => {
   it("adds an empty, JSON-checked cache table to an existing profile", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    migrate(db, dbPath, { toVersion: 46 });
+    migrate(db, dbPath, { toVersion: 47 });
     expect(tableExists(db, "session_projection_checkpoints")).toBe(false);
 
     migrate(db, dbPath);
@@ -3352,11 +3352,11 @@ describe("migrate — 047–048, Session projection checkpoints (VC-355)", () =>
     db.close();
   });
 
-  it("adds repair invalidation to a profile that already claimed the pre-trigger v47", () => {
+  it("adds repair invalidation to a profile that already claimed the pre-trigger v48", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    migrate(db, dbPath, { toVersion: 47 });
+    migrate(db, dbPath, { toVersion: 48 });
 
     expect(tableExists(db, "session_projection_checkpoints")).toBe(true);
     expect(

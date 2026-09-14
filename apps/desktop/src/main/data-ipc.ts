@@ -26,6 +26,7 @@ import {
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
 import type {
@@ -60,6 +61,12 @@ import type {
   LabelSetColorInput,
   LegacyImportRequest,
   LegacyImportResult,
+  McpProjectInput,
+  McpSaveInput,
+  McpServerIdInput,
+  McpServerInput,
+  McpSetEnabledInput,
+  McpSetToolsInput,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
@@ -436,6 +443,8 @@ export function registerDataIpcHandlers(
      * rather than writing somewhere arbitrary.
      */
     blobsRoot?: string;
+    /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
+    mcpSettings?: McpSettingsService;
   } = {},
 ): void {
   if (!handle.ok) {
@@ -459,6 +468,7 @@ export function registerDataIpcHandlers(
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
+  const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
 
@@ -672,6 +682,17 @@ export function registerDataIpcHandlers(
       if (!project) return { ok: false, error: "Unknown project" };
       return { ok: true, project };
     },
+
+    "volli:mcp-list": (input: McpProjectInput) => ({
+      ok: true as const,
+      servers: mcpSettings.list(input.projectId),
+    }),
+    "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
+    "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
+    "volli:mcp-refresh": (input: McpServerIdInput) => mcpSettings.refresh(input),
+    "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
+    "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
+    "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
 
     "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
       reorderProjects(db, orderedIds, Date.now());

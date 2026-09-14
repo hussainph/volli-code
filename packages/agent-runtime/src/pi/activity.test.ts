@@ -1212,25 +1212,34 @@ describe("mapPiActivity browser tools (VC-238)", () => {
     });
   });
 
-  it("leaves another tool's image blocks alone: only a browser result has a picture standing in", () => {
+  it("keeps MCP image and audio bytes out of the ordinary durable activity payload", () => {
     const pixels = "A".repeat(1_000);
+    const audio = "B".repeat(1_000);
     const completed = mapPiActivity(
       {
         type: "tool_execution_end",
         toolCallId: "mcp-1",
         toolName: "mcp__figma__render",
         result: {
-          content: [{ type: "image", data: pixels, mimeType: "image/png" }],
+          content: [
+            { type: "image", data: pixels, mimeType: "image/png" },
+            { type: "audio", data: audio, mimeType: "audio/wav" },
+          ],
         },
         isError: false,
       },
       activityContext({ input: {}, startedAt: 10, observedAt: 20 }),
     );
 
-    // The picture path is the browser's; substituting `[image]` everywhere
-    // would quietly change what an unrelated tool's payload carries, with
-    // nothing standing in for the bytes it dropped.
-    expect(JSON.stringify(completed.output)).toContain("AAAAAAAAAA");
+    expect(completed).toMatchObject({ activityId: "mcp-1", state: "completed" });
+    expect(JSON.stringify(completed.output)).not.toContain("AAAAAAAAAA");
+    expect(JSON.stringify(completed.output)).not.toContain("BBBBBBBBBB");
+    expect(completed.output).toMatchObject({
+      content: [
+        { type: "image", data: "[image]", mimeType: "image/png" },
+        { type: "audio", data: "[audio]", mimeType: "audio/wav" },
+      ],
+    });
     expect(completed.descriptor.kind).toBe("other");
   });
 });

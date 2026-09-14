@@ -36,6 +36,7 @@
  */
 
 import type { JudgmentMode } from "./authority-config";
+import type { McpToolId } from "./mcp";
 import type { VerbToolKey } from "./verb-registry";
 
 /**
@@ -190,7 +191,7 @@ export const CAPABILITY_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] 
  * over these names is `isSessionToolId` in `agent-tool-surface.ts`, which is
  * downstream of both.
  */
-export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey;
+export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey | McpToolId;
 
 /**
  * When silent denial stops being the right answer and the user should be asked.

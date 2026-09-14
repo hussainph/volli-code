@@ -5,12 +5,13 @@ import type {
 } from "@volli/session-engine";
 import type {
   ModelAccessSnapshot,
+  McpToolDefinition,
   ModelSelection,
   SessionCommand,
   TicketEventActor,
 } from "@volli/shared";
 
-import { defaultModelRequiredForTier } from "@volli/shared";
+import { defaultModelRequiredForTier, mcpProviderToolName } from "@volli/shared";
 
 import {
   createSessions,
@@ -75,6 +76,70 @@ function sessions(
 }
 
 describe("Sessions", () => {
+  it("freezes selected MCP definitions at root birth and gives a child its parent's exact frozen definitions", async () => {
+    const parentTool: McpToolDefinition = {
+      serverId: "server-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("server-1", "Fixture", "echo"),
+      description: "Original description",
+      inputSchema: { type: "object" },
+    };
+    const settingsTool: McpToolDefinition = {
+      ...parentTool,
+      description: "Changed after parent birth",
+    };
+    const records: Array<{
+      sessionId: string;
+      tools: readonly string[];
+      mcpTools: readonly McpToolDefinition[];
+    }> = [];
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: (_role, _grants, within, mcpTools = []) => [
+          "read",
+          ...mcpTools
+            .map((tool) => tool.providerName)
+            .filter((name) => within?.includes(name) ?? true),
+        ],
+        resolveMcp: () => [settingsTool],
+        recorded: async () => ["read", parentTool.providerName],
+        recordedMcp: async () => [parentTool],
+        record: async (sessionId, tools, mcpTools = []) => {
+          records.push({ sessionId, tools, mcpTools });
+        },
+      },
+    });
+
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    await door.create({
+      operationId: "child",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: "parent-1",
+      title: "Child",
+    });
+
+    expect(records).toEqual([
+      {
+        sessionId: "session-1",
+        tools: ["read", settingsTool.providerName],
+        mcpTools: [settingsTool],
+      },
+      {
+        sessionId: "session-1",
+        tools: ["read", parentTool.providerName],
+        mcpTools: [parentTool],
+      },
+    ]);
+  });
+
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {
     // The Role decides the rung (VC-53): a Ticket Session reads the `ticket`
     // tier, a project chat the `global` one. Spoken as a tier since VC-259,
