@@ -28,7 +28,6 @@ const LABEL = flag("label", "run");
 const STREAM_SAMPLES = Number(flag("stream-samples", "8"));
 const STREAM_STEPS = Number(flag("stream-steps", "120"));
 const STREAM_TOKEN_RATE = Number(flag("stream-token-rate", "30"));
-const SLOWDOWN_MS = Number(flag("slowdown-ms", "0"));
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -151,11 +150,10 @@ app.whenReady().then(async () => {
 
     // VC-353's simultaneous stream+scroll interaction. Repeated inside one
     // production renderer so p50/p95 and variance describe the interaction,
-    // not Electron process startup. `slowdown-ms` is an opt-in sensitivity
-    // probe; ordinary baselines always leave it at zero.
+    // not Electron process startup.
     for (let index = 0; index < STREAM_SAMPLES; index += 1) {
       const streamingSample = await run(
-        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${SLOWDOWN_MS}, ${STREAM_TOKEN_RATE})`,
+        `window.chatBench.streamAndScroll(0, ${STREAM_STEPS}, ${STREAM_TOKEN_RATE})`,
       );
       report.streamingSamples.push({
         ...streamingSample,
@@ -170,6 +168,14 @@ app.whenReady().then(async () => {
     report.steps.push(await sample("back to 1 plane"));
   } catch (error) {
     report.failure = String(error && error.stack ? error.stack : error);
+  }
+
+  // Console text alone names the error and not its origin. The harness fails a
+  // run on any renderer error, so carry the stacks out with the report.
+  try {
+    report.errorDetails = await run("window.chatBench.uncaught()");
+  } catch {
+    report.errorDetails = [];
   }
 
   process.stdout.write(`\n__BENCH__${JSON.stringify(report)}__BENCH__\n`);

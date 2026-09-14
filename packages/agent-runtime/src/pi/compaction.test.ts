@@ -668,4 +668,177 @@ describe("compactSession", () => {
     expect(outcome.message).toContain("Summarization failed");
     expect(await sidecar.findEntries(undefined, piContext())).toEqual([]);
   });
+
+  it.each([
+    { api: "openai-completions" },
+    { api: "openai-responses" },
+    { api: "anthropic-messages" },
+  ] as const)(
+    "sends one stable OpenCode Go session header on summarization through $api (VC-349 follow-up)",
+    async ({ api }) => {
+      const GO_PROVIDER = "opencode-go";
+      const GO_MODEL = `go-${api}`;
+      const seen: Array<Record<string, string> | undefined> = [];
+      const faux = fauxProvider({ api, provider: GO_PROVIDER, models: [{ id: GO_MODEL }] });
+      const models = createModels();
+      let call = 0;
+      models.setProvider({
+        ...faux.provider,
+        streamSimple: ((
+          model: Model<string>,
+          _context: Context,
+          options?: { headers?: Record<string, string> },
+        ) => {
+          seen.push(options?.headers);
+          const stream = createAssistantMessageEventStream();
+          const text = [
+            "## Goal\nfirst summary",
+            "## Goal\nsecond summary",
+            "## Goal\nthird summary",
+          ][call++];
+          const message: AssistantMessage = {
+            ...assistant(text ?? ""),
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            ...(text === undefined
+              ? { stopReason: "error" as const, errorMessage: "no scripted reply", content: [] }
+              : {}),
+          };
+          stream.push(
+            text === undefined
+              ? { type: "error", reason: "error", error: message }
+              : { type: "done", reason: "stop", message },
+          );
+          stream.end(message);
+          return stream;
+        }) as typeof faux.provider.streamSimple,
+      });
+      const model = models.getModel(GO_PROVIDER, GO_MODEL)!;
+
+      // Two compactions in one conversation share the header; a third in
+      // another conversation sends a different one. The value is the opaque
+      // sidecar id, never prompt material or a credential.
+      const firstSidecar = await memorySession();
+      const first = await compactSession({
+        sidecar: firstSidecar,
+        path: longPath(),
+        models,
+        model,
+        settings,
+        sessionId: "sidecar-1",
+      });
+      expect(first.kind).toBe("compacted");
+      const secondSidecar = await memorySession();
+      const second = await compactSession({
+        sidecar: secondSidecar,
+        path: longPath(),
+        models,
+        model,
+        settings,
+        sessionId: "sidecar-1",
+      });
+      expect(second.kind).toBe("compacted");
+      const thirdSidecar = await memorySession();
+      const third = await compactSession({
+        sidecar: thirdSidecar,
+        path: longPath(),
+        models,
+        model,
+        settings,
+        sessionId: "sidecar-2",
+      });
+      expect(third.kind).toBe("compacted");
+
+      expect(seen).toHaveLength(3);
+      expect(seen[0]?.["x-opencode-session"]).toBe("sidecar-1");
+      expect(seen[1]?.["x-opencode-session"]).toBe("sidecar-1");
+      expect(seen[2]?.["x-opencode-session"]).toBe("sidecar-2");
+    },
+  );
+
+  it("does not send the OpenCode Go session header to an unrelated provider", async () => {
+    const seen: Array<Record<string, string> | undefined> = [];
+    const faux = fauxProvider({
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      models: [{ id: MODEL_ID }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      streamSimple: ((
+        model: Model<string>,
+        _context: Context,
+        options?: { headers?: Record<string, string> },
+      ) => {
+        seen.push(options?.headers);
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          ...assistant("## Goal\nfinish the ticket"),
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+        };
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+        return stream;
+      }) as typeof faux.provider.streamSimple,
+    });
+    const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+    const sidecar = await memorySession();
+
+    const outcome = await compactSession({
+      sidecar,
+      path: longPath(),
+      models,
+      model,
+      settings,
+      sessionId: "sidecar-1",
+    });
+
+    expect(outcome.kind).toBe("compacted");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.["x-opencode-session"]).toBeUndefined();
+  });
+
+  it("sends no session header when the caller supplies no session id", async () => {
+    const GO_PROVIDER = "opencode-go";
+    const GO_MODEL = "go-model";
+    const seen: Array<Record<string, string> | undefined> = [];
+    const faux = fauxProvider({
+      api: "openai-completions",
+      provider: GO_PROVIDER,
+      models: [{ id: GO_MODEL }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      streamSimple: ((
+        model: Model<string>,
+        _context: Context,
+        options?: { headers?: Record<string, string> },
+      ) => {
+        seen.push(options?.headers);
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          ...assistant("## Goal\nfinish the ticket"),
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+        };
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end(message);
+        return stream;
+      }) as typeof faux.provider.streamSimple,
+    });
+    const model = models.getModel(GO_PROVIDER, GO_MODEL)!;
+    const sidecar = await memorySession();
+
+    const outcome = await compactSession({ sidecar, path: longPath(), models, model, settings });
+
+    expect(outcome.kind).toBe("compacted");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.["x-opencode-session"]).toBeUndefined();
+  });
 });

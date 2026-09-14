@@ -238,7 +238,7 @@ export default function TicketKickoffScratch({
               {empty ? "Fill the board" : "Empty the board"}
             </Button>
             <span className="text-ui text-muted-foreground">
-              ⌘↵ selected action · ⇧⌘↵ starts chat
+              ⌘↵ creates · ⇧⌘↵ runs the selected action
             </span>
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border">

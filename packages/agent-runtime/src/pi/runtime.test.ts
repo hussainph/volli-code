@@ -2288,6 +2288,44 @@ describe("startSession", () => {
     expect(sessionHeaders).toEqual([undefined]);
   });
 
+  it("sends the OpenCode Go session header on the compaction summary request", async () => {
+    // VC-349 follow-up: Pi's summarizer bypasses the live turn's streamFn
+    // wrapper, so /compact on an opencode chat 400s without its own header.
+    const modelId = "go-compact-model";
+    const attachment = fixture({
+      model: { providerId: "opencode-go", modelId, reasoningLevel: "off" },
+    });
+    const sessionHeaders: Array<string | null | undefined> = [];
+    const stream: StreamFn = (model, context, options) => {
+      sessionHeaders.push(options?.headers?.["x-opencode-session"]);
+      return scriptedStream([settles("done")])(model, context, options);
+    };
+    const faux = fauxProvider({
+      api: "openai-completions",
+      provider: "opencode-go",
+      models: [{ id: modelId }],
+    });
+    const models = createModels();
+    models.setProvider({
+      ...faux.provider,
+      streamSimple: stream as typeof faux.provider.streamSimple,
+    });
+    const runtime = createPiAgentRuntime({ sessionDataDir: attachment.sessionDataDir, models });
+
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+    const sessionId = handle.recovery?.sessionId;
+    await handle.close();
+
+    // Two turns plus the summary request, every one carrying the same stable
+    // opaque sidecar id — the summary is a provider request like any other.
+    expect(sessionId).toEqual(expect.any(String));
+    expect(sessionHeaders.length).toBeGreaterThanOrEqual(3);
+    expect(sessionHeaders).toEqual(sessionHeaders.map(() => sessionId));
+  });
+
   it("propagates an execution-environment factory rejection without observing it", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const stream = vi.fn(scriptedStream([]));

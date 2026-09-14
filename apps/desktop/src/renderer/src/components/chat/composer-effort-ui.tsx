@@ -76,6 +76,11 @@ import {
   effortWashMix,
   readEffortPointer,
 } from "@volli/session-presentation";
+import {
+  COMPOSER_CONFIG_CHIP,
+  COMPOSER_CONTROL_SIZE,
+  COMPOSER_GLYPH_WEIGHT,
+} from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
@@ -88,6 +93,8 @@ export interface EffortPillProps {
   onChange(level: string): void;
   /** Model policy is immutable during an active turn, and effort is part of it. */
   disabled?: boolean;
+  /** Lets a responsive composer retire this peer when effort joins the model control. */
+  className?: string;
 }
 
 /**
@@ -99,7 +106,13 @@ export interface EffortPillProps {
  * popover up — it is a smaller decision than picking a model, and it is the one
  * you take a second look at.
  */
-export function EffortPill({ levels, value, onChange, disabled = false }: EffortPillProps) {
+export function EffortPill({
+  levels,
+  value,
+  onChange,
+  disabled = false,
+  className,
+}: EffortPillProps) {
   const [open, setOpen] = React.useState(false);
   const railRef = React.useRef<HTMLDivElement>(null);
 
@@ -108,22 +121,27 @@ export function EffortPill({ levels, value, onChange, disabled = false }: Effort
       <PopoverTrigger asChild>
         <Button
           type="button"
-          size="xs"
+          size={COMPOSER_CONTROL_SIZE}
           variant="ghost"
           disabled={disabled}
           aria-label={`Reasoning effort: ${effortLabel(value)}`}
-          className={cn("min-w-0 text-muted-foreground", open && "bg-accent text-foreground")}
+          className={cn(
+            COMPOSER_CONFIG_CHIP,
+            "min-w-0 text-muted-foreground",
+            open && "bg-accent text-foreground",
+            className,
+          )}
         >
-          {/* `bold`, not the outline default and not `fill`. Checked at 12px on
-              the footer's resting dim: Gauge is arcs and a needle, and regular
-              draws lighter than the 13px label beside it at this size — the
-              exact case the house rule answers with bold's flat 1.50x, since
-              coverage is scale-invariant and a bigger `size-*` could not fix
-              it. `fill` would be wrong for the other reason: this chip is one
-              of two peers in a control row, not the exception among them. */}
-          <GaugeIcon className="size-3 shrink-0" weight="bold" />
+          {/* `bold`, not the outline default and not `fill`. Gauge is arcs and
+              a needle, and at the control rung's 14px regular draws lighter
+              than the 13px label beside it — the exact case the house rule
+              answers with bold's flat 1.50x, since coverage is scale-invariant
+              and a bigger `size-*` could not fix it. `fill` would be wrong for
+              the other reason: this chip is one of two peers in a control row,
+              not the exception among them. */}
+          <GaugeIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
           <span className="min-w-0 truncate">{effortLabel(value)}</span>
-          <CaretUpDownIcon className="size-3 shrink-0" weight="bold" />
+          <CaretUpDownIcon className="shrink-0" weight={COMPOSER_GLYPH_WEIGHT} />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -200,7 +218,7 @@ function stretchLimit(reduced: boolean): number {
  * interior stops only — the pill's two ends are the first and last stops, and
  * a hairline drawn on top of a rounded cap is a smudge, not a tick.
  */
-function EffortSlider({
+export function EffortSlider({
   levels,
   value,
   onChange,

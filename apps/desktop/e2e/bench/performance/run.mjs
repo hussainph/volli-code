@@ -5,7 +5,6 @@ import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Worker } from "node:worker_threads";
 
 import {
   APP_DIR,
@@ -20,11 +19,23 @@ import {
   tabStripNewChatButton,
   TICKET_TAB_STRIP,
 } from "../../lib/smoke-kit.mjs";
+import { busyLoadName, startBusyLoad } from "./background-load.mjs";
 import { generateFixture, verifyFixture } from "./fixture.mjs";
 import { DEFAULT_SEED, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
+import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
 
 const execFileAsync = promisify(execFile);
 const CHAT_BENCH = join(APP_DIR, "e2e", "chat-window-bench.mjs");
+const DEFAULT_STREAM_STEPS = 120;
+const DEFAULT_STREAM_TOKEN_RATE = 30;
+// The loaded arm must FIT inside its exposure: the arm fails if measurement is
+// still running when the deadline lands. Twenty full-app repetitions against
+// the `real` fixture take about nineteen minutes idle on the machine this was
+// written on, and materially longer with two cores busy, so a twenty-minute
+// exposure guaranteed the failure it was meant to bound. This is deliberately
+// generous; it is a ceiling, not a target, and a run that ends early holds the
+// load until the deadline so both arms stay comparable.
+const DEFAULT_LOAD_DURATION_SECONDS = 3_600;
 const WARNING =
   "Performance numbers are comparable only on the same machine, in the same power/thermal state, with the same load arm.";
 const INTERACTIONS = Object.freeze([
@@ -48,31 +59,43 @@ export function parseArgs(argv) {
       REAL_BUSY_CORE_DEFAULT,
       Math.max(1, os.availableParallelism?.() ?? os.cpus().length - 1),
     ),
+    loadDurationSeconds: DEFAULT_LOAD_DURATION_SECONDS,
     arms: ["idle", "loaded"],
-    streamSteps: 120,
-    streamTokenRate: 30,
-    slowdownMs: 0,
+    streamSteps: DEFAULT_STREAM_STEPS,
+    streamTokenRate: DEFAULT_STREAM_TOKEN_RATE,
     skipBuild: false,
     keepFixture: false,
     streamOnly: false,
   };
+  const valueAfter = (argument, index) => {
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`${argument} requires a value`);
+    }
+    return value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--") continue;
-    if (argument === "--preset") args.preset = argv[++index];
-    else if (argument === "--seed") args.seed = Number(argv[++index]);
-    else if (argument === "--repetitions") args.repetitions = Number(argv[++index]);
-    else if (argument === "--busy-cores") args.busyCores = Number(argv[++index]);
-    else if (argument === "--arms") args.arms = argv[++index].split(",");
-    else if (argument === "--stream-steps") args.streamSteps = Number(argv[++index]);
-    else if (argument === "--stream-token-rate") args.streamTokenRate = Number(argv[++index]);
-    else if (argument === "--slowdown-ms") args.slowdownMs = Number(argv[++index]);
-    else if (argument === "--fixture") args.fixture = argv[++index];
-    else if (argument === "--output") args.output = argv[++index];
+    if (argument === "--preset") args.preset = valueAfter(argument, index++);
+    else if (argument === "--seed") args.seed = Number(valueAfter(argument, index++));
+    else if (argument === "--repetitions") {
+      args.repetitions = Number(valueAfter(argument, index++));
+    } else if (argument === "--busy-cores") {
+      args.busyCores = Number(valueAfter(argument, index++));
+    } else if (argument === "--load-duration-seconds") {
+      args.loadDurationSeconds = Number(valueAfter(argument, index++));
+    } else if (argument === "--arms") args.arms = valueAfter(argument, index++).split(",");
+    else if (argument === "--stream-steps") {
+      args.streamSteps = Number(valueAfter(argument, index++));
+    } else if (argument === "--stream-token-rate") {
+      args.streamTokenRate = Number(valueAfter(argument, index++));
+    } else if (argument === "--fixture") args.fixture = valueAfter(argument, index++);
+    else if (argument === "--output") args.output = valueAfter(argument, index++);
     else if (argument === "--skip-build") args.skipBuild = true;
     else if (argument === "--keep-fixture") args.keepFixture = true;
     else if (argument === "--stream-only") args.streamOnly = true;
-    else if (argument === "--interactions") args.interactions = argv[++index].split(",");
+    else if (argument === "--interactions") args.interactions = valueAfter(argument, index++).split(",");
     else if (argument === "--help") args.help = true;
     else throw new Error(`Unknown benchmark argument ${argument}`);
   }
@@ -84,17 +107,21 @@ export function parseArgs(argv) {
   if (!Number.isInteger(args.busyCores) || args.busyCores < 1) {
     throw new Error("--busy-cores must be a positive integer");
   }
-  if (!args.arms.every((arm) => arm === "idle" || arm === "loaded")) {
-    throw new Error("--arms accepts idle, loaded, or idle,loaded");
+  if (!Number.isSafeInteger(args.loadDurationSeconds) || args.loadDurationSeconds < 1) {
+    throw new Error("--load-duration-seconds must be a positive integer");
+  }
+  if (
+    args.arms.length === 0 ||
+    new Set(args.arms).size !== args.arms.length ||
+    !args.arms.every((arm) => arm === "idle" || arm === "loaded")
+  ) {
+    throw new Error("--arms accepts idle, loaded, or idle,loaded without duplicates");
   }
   if (!Number.isInteger(args.streamSteps) || args.streamSteps < 2) {
     throw new Error("--stream-steps must be an integer >= 2");
   }
   if (!Number.isFinite(args.streamTokenRate) || args.streamTokenRate <= 0) {
     throw new Error("--stream-token-rate must be a positive number");
-  }
-  if (!Number.isFinite(args.slowdownMs) || args.slowdownMs < 0) {
-    throw new Error("--slowdown-ms must be a non-negative number");
   }
   if (args.interactions !== undefined) {
     const known = new Set(INTERACTIONS.map(([id]) => id));
@@ -106,21 +133,24 @@ export function parseArgs(argv) {
   return args;
 }
 
-function usage() {
+export function usage() {
   return [
     "Usage: pnpm bench:desktop -- [options]",
     "",
-    "  --preset small|real|2x    fixture scale (default: real)",
-    "  --repetitions N           samples per interaction and load arm (default: 20)",
+    "  --preset small|real|2x     fixture scale (default: real)",
+    "  --seed N                   fixture seed; the same seed is the same database",
+    "  --repetitions N            samples per interaction and load arm (default: 20)",
     "  --busy-cores N             loaded arm worker count (default: 2)",
+    `  --load-duration-seconds N  fixed loaded-arm exposure (default: ${DEFAULT_LOAD_DURATION_SECONDS})`,
     "  --arms idle,loaded         arms to run",
-    "  --output DIR               write benchmark.json and benchmark.md here",
+    "  --output DIR               write benchmark.json (raw samples), benchmark.summary.json",
+    "                             (compact, committable aggregates) and benchmark.md here",
     "  --fixture DIR              reuse a generated fixture profile",
-    "  --stream-token-rate N      scripted stream rate in tokens/s (default: 30)",
+    `  --stream-steps N           scrolling frames per stream sample (default: ${DEFAULT_STREAM_STEPS})`,
+    `  --stream-token-rate N      scripted stream rate in tokens/s (default: ${DEFAULT_STREAM_TOKEN_RATE})`,
     "  --skip-build               use current built app and chat bench",
     "  --stream-only              run only the stream+scroll renderer bench",
     `  --interactions a,b         measure only these (${INTERACTIONS.map(([id]) => id).join(", ")})`,
-    "  --slowdown-ms N            opt-in renderer slow path for sensitivity proof",
     "  --keep-fixture             keep generated fixture and run profiles",
     "",
     WARNING,
@@ -129,6 +159,12 @@ function usage() {
 
 function round(value) {
   return value === null ? null : Math.round(value * 1_000) / 1_000;
+}
+
+export function addNullableMeasurements(...values) {
+  return values.every((value) => Number.isFinite(value))
+    ? values.reduce((sum, value) => sum + value, 0)
+    : null;
 }
 
 export function summarize(values) {
@@ -151,10 +187,16 @@ export function summarize(values) {
   };
 }
 
-function aggregateInteraction(id, label, samples) {
-  const frames = samples.flatMap((sample) => sample.frameTimesMs ?? []);
-  const longTasks = samples.flatMap((sample) => sample.longTasksMs ?? []);
-  const settleLongTasks = samples.flatMap((sample) => sample.settleLongTasksMs ?? []);
+export function aggregateInteraction(id, label, samples) {
+  const frames = samples.flatMap((sample) =>
+    Array.isArray(sample.frameTimesMs) ? sample.frameTimesMs : [],
+  );
+  const longTasks = samples.flatMap((sample) =>
+    Array.isArray(sample.longTasksMs) ? sample.longTasksMs : [],
+  );
+  const settleLongTasks = samples.flatMap((sample) =>
+    Array.isArray(sample.settleLongTasksMs) ? sample.settleLongTasksMs : [],
+  );
   const extra = {};
   for (const key of [
     "firstPaintMs",
@@ -186,7 +228,11 @@ function aggregateInteraction(id, label, samples) {
       droppedFrames: summarize(samples.map((sample) => sample.droppedFrames)),
       longTasks: {
         observedCount: longTasks.length,
-        countPerSample: summarize(samples.map((sample) => sample.longTasksMs?.length ?? 0)),
+        countPerSample: summarize(
+          samples.map((sample) =>
+            Array.isArray(sample.longTasksMs) ? sample.longTasksMs.length : null,
+          ),
+        ),
         durationMs: summarize(longTasks),
       },
       settleLongTasks: {
@@ -199,7 +245,7 @@ function aggregateInteraction(id, label, samples) {
   };
 }
 
-function backgroundLoadGap(arms) {
+export function backgroundLoadGap(arms) {
   const idle = arms.find((arm) => arm.busyCores === 0);
   const loaded = arms.find((arm) => arm.busyCores > 0);
   if (idle === undefined || loaded === undefined) return null;
@@ -233,6 +279,7 @@ async function command(executable, args, options = {}) {
     cwd: options.cwd ?? REPO,
     env: { ...process.env, ...options.env },
     maxBuffer: 100 * 1024 * 1024,
+    signal: options.signal,
   });
   return result.stdout;
 }
@@ -282,53 +329,6 @@ async function hostMetadata() {
     os: { platform: process.platform, release: os.release(), macosVersion, macosBuild },
     git: { sha, dirty: status.length > 0 },
     node: process.version,
-  };
-}
-
-async function startBusyLoad(count) {
-  const workers = [];
-  const progress = Array.from({ length: count }, () => ({
-    ready: false,
-    iterations: 0,
-    checksum: 0,
-  }));
-  await Promise.all(
-    Array.from(
-      { length: count },
-      (_value, index) =>
-        new Promise((resolvePromise, reject) => {
-          const worker = new Worker(new URL("./busy-worker.mjs", import.meta.url), {
-            workerData: { index },
-          });
-          workers.push(worker);
-          worker.on("message", (message) => {
-            progress[index] = { ...progress[index], ...message };
-            if (message.ready) resolvePromise();
-          });
-          worker.on("error", reject);
-        }),
-    ),
-  );
-  // Start measurements only after every worker has completed real work and a
-  // warmup scheduling window has established the named load arm.
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
-  if (progress.some((entry) => entry.iterations === 0)) {
-    await Promise.all(workers.map((worker) => worker.terminate()));
-    throw new Error("busy-core load workers did not make progress during warmup");
-  }
-  const startedAt = performance.now();
-  return {
-    name: `${count}-busy-core`,
-    workers: count,
-    progress,
-    async stop() {
-      await Promise.all(workers.map((worker) => worker.terminate()));
-      return {
-        durationMs: round(performance.now() - startedAt),
-        workers: count,
-        progress,
-      };
-    },
   };
 }
 
@@ -494,18 +494,43 @@ async function measureLongChat(page, app, title) {
       timeout: 120_000,
     });
     const firstPaintMs = await captureElapsed(page);
-    const responsiveness = await page.evaluate(async () => {
+    // "Interactive" is a question about the scroller answering within a window,
+    // not about one assignment surviving exactly two frames. A long transcript
+    // that is still hydrating legitimately re-anchors its own scroll position
+    // — tail pinning is the product working, not a stall — and a single-shot
+    // assertion races that, which showed up as one failed iteration in twenty.
+    // So poll to a deadline, and accept either landing on the target or moving
+    // in response to it; report elapsed time so a slow answer is still visible
+    // in the sample rather than hidden by a pass.
+    const responsiveness = await page.evaluate(async (deadlineMs) => {
       const scroller = document.querySelector('[role="log"] > div');
-      if (!(scroller instanceof HTMLElement)) return false;
-      const before = scroller.scrollTop;
-      const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      const target = before > 0 ? Math.max(0, before - 16) : Math.min(maximum, 16);
-      scroller.scrollTop = target;
-      await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
-      await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
-      return maximum === 0 || Math.abs(scroller.scrollTop - target) < 1;
-    });
-    if (!responsiveness) throw new Error("long-chat scroller did not become interactive");
+      if (!(scroller instanceof HTMLElement)) return { responsive: false, why: "no scroller" };
+      const startedAt = performance.now();
+      let attempts = 0;
+      while (performance.now() - startedAt < deadlineMs) {
+        attempts += 1;
+        const before = scroller.scrollTop;
+        const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        if (maximum === 0) {
+          return { responsive: true, attempts, elapsedMs: performance.now() - startedAt };
+        }
+        const target = before > 0 ? Math.max(0, before - 16) : Math.min(maximum, 16);
+        scroller.scrollTop = target;
+        await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
+        await new Promise((resolvePromise) => requestAnimationFrame(resolvePromise));
+        const landed = Math.abs(scroller.scrollTop - target) < 1;
+        const moved = Math.abs(scroller.scrollTop - before) >= 1;
+        if (landed || moved) {
+          return { responsive: true, attempts, elapsedMs: performance.now() - startedAt };
+        }
+      }
+      return { responsive: false, why: "scroller never answered", attempts, elapsedMs: deadlineMs };
+    }, 10_000);
+    if (!responsiveness.responsive) {
+      throw new Error(
+        `long-chat scroller did not become interactive: ${responsiveness.why} after ${responsiveness.attempts ?? 0} attempts`,
+      );
+    }
     return {
       ...(await stopCapture(page)),
       firstPaintMs,
@@ -615,7 +640,7 @@ async function measureSidebar(page, app) {
     closeMs: close.latencyMs,
     openMs: open.latencyMs,
     frameTimesMs: [...close.frameTimesMs, ...open.frameTimesMs],
-    droppedFrames: close.droppedFrames + open.droppedFrames,
+    droppedFrames: addNullableMeasurements(close.droppedFrames, open.droppedFrames),
     longTasksMs: [...close.longTasksMs, ...open.longTasksMs],
     refreshIntervalMs: close.refreshIntervalMs ?? open.refreshIntervalMs,
     rendererRssMb: open.rendererRssMb,
@@ -632,16 +657,62 @@ async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
   await row.click();
 }
 
+async function waitForTicketWorkspace(page, targetTitle, targetDisplayId) {
+  const bodyTab = tabStrip(page, TICKET_TAB_STRIP).getByRole("tab", {
+    name: targetDisplayId,
+    exact: true,
+  });
+  await bodyTab.waitFor({ state: "visible", timeout: 30_000 });
+  await page.waitForFunction(
+    ({ displayId, title }) => {
+      // This predicate is serialized into Playwright's page context with the callback.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const visible = (node) =>
+        node instanceof HTMLElement &&
+        node.offsetParent !== null &&
+        node.getBoundingClientRect().width > 0 &&
+        node.getBoundingClientRect().height > 0;
+      const tabs = Array.from(
+        document.querySelectorAll('[role="tablist"][aria-label="Ticket tabs"] [role="tab"]'),
+      );
+      const selected = tabs.find(
+        (node) =>
+          node.textContent?.trim() === displayId && node.getAttribute("aria-selected") === "true",
+      );
+      const heading = Array.from(document.querySelectorAll('[role="button"]')).find(
+        (node) => node.textContent?.trim() === title && visible(node),
+      );
+      const editor = Array.from(
+        document.querySelectorAll('[aria-label="Ticket description"]'),
+      ).find(visible);
+      return (
+        selected !== undefined && visible(selected) && heading !== undefined && editor !== undefined
+      );
+    },
+    { displayId: targetDisplayId, title: targetTitle },
+    { timeout: 30_000 },
+  );
+  const editor = page.getByLabel("Ticket description", { exact: true }).first();
+  await editor.focus();
+  const acceptedFocus = await editor.evaluate(
+    (node) => node === document.activeElement || node.contains(document.activeElement),
+  );
+  if (!acceptedFocus) {
+    throw new Error(`${targetDisplayId} ticket workspace content did not accept focus`);
+  }
+}
+
+async function openTicketWorkspaceFromPalette(page, targetTitle, targetDisplayId) {
+  await selectTicketFromPalette(page, targetTitle, targetDisplayId);
+  await waitForTicketWorkspace(page, targetTitle, targetDisplayId);
+}
+
 async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
   return measured(
     page,
     app,
     () => selectTicketFromPalette(page, targetTitle, targetDisplayId),
-    async () => {
-      await tabStrip(page, TICKET_TAB_STRIP)
-        .getByRole("tab", { name: targetDisplayId, exact: true })
-        .waitFor({ state: "visible", timeout: 30_000 });
-    },
+    () => waitForTicketWorkspace(page, targetTitle, targetDisplayId),
   );
 }
 
@@ -664,15 +735,7 @@ async function measureBoardRender(page, app, ticketCount) {
 async function measureRpc(page, app, sessionId) {
   await startCapture(page);
   try {
-    const rpc = await page.evaluate(async (id) => {
-      const started = performance.now();
-      const response = await window.api.sessionRpc.request({
-        procedure: "session.projection",
-        input: { sessionId: id },
-      });
-      return { response, latencyMs: performance.now() - started };
-    }, sessionId);
-    if (!rpc.response.ok) throw new Error(`RPC failed: ${JSON.stringify(rpc.response)}`);
+    const rpc = await page.evaluate(sessionRpcRoundTrip, sessionProjectionRequest(sessionId));
     await settleFrames(page);
     return {
       ...(await stopCapture(page)),
@@ -693,13 +756,29 @@ async function measureRpc(page, app, sessionId) {
  * every skipped measurement returns `null`, and an interaction with no samples
  * is left out of the report rather than reported as a zero.
  */
-async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, manifest, wanted }) {
+async function fullAppIteration({
+  fixtureDirectory,
+  runRoot,
+  armName,
+  index,
+  manifest,
+  wanted,
+  signal,
+}) {
   const profile = join(runRoot, `${armName}-${String(index + 1).padStart(2, "0")}`);
   await cloneFixture(fixtureDirectory, profile);
   const errors = [];
   let app;
   let launchStarted;
+  let abortedClose;
+  const closeOnAbort = () => {
+    if (app !== undefined && abortedClose === undefined) {
+      abortedClose = closeAppBounded(app).catch(() => null);
+    }
+  };
+  signal?.addEventListener("abort", closeOnAbort, { once: true });
   try {
+    signal?.throwIfAborted();
     app = await launch({
       dbPath: join(profile, "volli.db"),
       userDataDir: profile,
@@ -712,6 +791,7 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
         VOLLI_WORKTREE_HOME_DIR: join(profile, "runtime-worktrees"),
       },
     });
+    signal?.throwIfAborted();
     if (launchStarted === undefined) throw new Error("launch timing seam did not run");
     await assertProfileIsolated(app, profile);
     const page = await app.firstWindow();
@@ -742,8 +822,12 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
     };
 
     await openTicket(page, manifest.longChat.displayId);
+    // Every string this benchmark looks for comes from the fixture manifest,
+    // which publishes what the production projection folds to. A literal here
+    // would silently become a 30-second locator timeout the day the fixture's
+    // event mix retitles a Session.
     const longChat = await measure("long_chat", "long chat", () =>
-      measureLongChat(page, app, "VC-353 long chat benchmark"),
+      measureLongChat(page, app, manifest.longChat.title),
     );
     const newChat = await measure("new_chat", "new chat", () =>
       measureNewChat(page, app, manifest.longChat.displayId),
@@ -755,17 +839,20 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
     let ticketSwitch = null;
     if (wanted.has("ticket_switch")) {
       console.log("  preparing ticket switch");
-      await selectTicketFromPalette(page, "Benchmark ticket 0001", manifest.longChat.displayId);
-      await tabStrip(page, TICKET_TAB_STRIP)
-        .getByRole("tab", { name: manifest.longChat.displayId, exact: true })
-        .waitFor({ state: "visible", timeout: 30_000 });
-      console.log("  measuring ticket switch");
-      ticketSwitch = await measureTicketSwitch(
+      const { displayId: switchDisplayId, title: switchTitle } = manifest.switchTarget;
+      await openTicketWorkspaceFromPalette(
         page,
-        app,
-        "Benchmark ticket 0002",
-        `${manifest.projectPrefix}-2`,
+        manifest.longChat.ticketTitle,
+        manifest.longChat.displayId,
       );
+      await openTicketWorkspaceFromPalette(page, switchTitle, switchDisplayId);
+      await openTicketWorkspaceFromPalette(
+        page,
+        manifest.longChat.ticketTitle,
+        manifest.longChat.displayId,
+      );
+      console.log("  measuring ticket switch");
+      ticketSwitch = await measureTicketSwitch(page, app, switchTitle, switchDisplayId);
     }
     const rpc = await measure("rpc_round_trip", "RPC", () =>
       measureRpc(page, app, manifest.longChat.sessionId),
@@ -787,11 +874,238 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
       rendererErrors: errors.slice(0, 20),
     };
   } finally {
-    if (app !== undefined) await closeAppBounded(app).catch(() => null);
+    signal?.removeEventListener("abort", closeOnAbort);
+    if (abortedClose !== undefined) await abortedClose;
+    else if (app !== undefined) await closeAppBounded(app).catch(() => null);
     if (process.env.VOLLI_PERF_KEEP_RUNS !== "1") {
       await fs.rm(profile, { recursive: true, force: true });
     }
   }
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function failedHealthChecks(value, path = "checks", failures = []) {
+  if (value === false) {
+    failures.push(path);
+    return failures;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => failedHealthChecks(entry, `${path}[${index}]`, failures));
+    return failures;
+  }
+  if (!isRecord(value)) return failures;
+  for (const [key, entry] of Object.entries(value)) {
+    if (["ok", "passed", "healthy", "reached"].includes(key) && entry !== true) {
+      failures.push(`${path}.${key}`);
+    } else {
+      failedHealthChecks(entry, `${path}.${key}`, failures);
+    }
+  }
+  return failures;
+}
+
+export function validateChatBenchReport(
+  report,
+  { expectedSamples, expectedSteps, requireCodeFence = false },
+) {
+  if (!isRecord(report)) throw new Error("ChatPlane bench report must be an object");
+  if (Object.hasOwn(report, "failure")) {
+    throw new Error(`ChatPlane bench reported a failure: ${String(report.failure)}`);
+  }
+  if (!Array.isArray(report.errors)) {
+    throw new Error("ChatPlane bench report is missing its console error list");
+  }
+  if (report.errors.length > 0) {
+    // The bench page records uncaught errors with their stacks. Console text
+    // alone names an error without saying where it came from, and this gate
+    // fails whole runs, so whoever reads the failure gets the frames too.
+    const stacks = Array.isArray(report.errorDetails)
+      ? report.errorDetails
+          .filter((detail) => isRecord(detail) && typeof detail.stack === "string")
+          .map((detail) => `\n---\n${detail.stack}`)
+          .join("")
+      : "";
+    throw new Error(
+      `ChatPlane bench reported console errors: ${report.errors.join(" | ")}${stacks}`,
+    );
+  }
+  if (!isRecord(report.checks)) {
+    throw new Error("ChatPlane bench report is missing health checks");
+  }
+  if (!isRecord(report.checks.firstTurn) || report.checks.firstTurn.reached !== true) {
+    throw new Error("ChatPlane health check failed: checks.firstTurn.reached");
+  }
+  const failures = [...new Set(failedHealthChecks(report.checks))];
+  if (failures.length > 0) {
+    throw new Error(`ChatPlane health checks failed: ${failures.join(", ")}`);
+  }
+  if (!Array.isArray(report.streamingSamples)) {
+    throw new Error("ChatPlane bench report is missing streaming samples");
+  }
+  if (report.streamingSamples.length !== expectedSamples) {
+    throw new Error(
+      `ChatPlane bench returned ${report.streamingSamples.length} streaming samples; expected ${expectedSamples}`,
+    );
+  }
+  report.streamingSamples.forEach((sample, index) => {
+    const at = `streamingSamples[${index}]`;
+    if (!isRecord(sample) || sample.ok !== true) {
+      throw new Error(`ChatPlane ${at} failed`);
+    }
+    if (sample.steps !== expectedSteps) {
+      throw new Error(
+        `ChatPlane ${at} used ${String(sample.steps)} steps; expected ${expectedSteps}`,
+      );
+    }
+    if (sample.streamedWhileWorking !== true) {
+      throw new Error(`ChatPlane ${at} did not stream in the working state`);
+    }
+    if (sample.streamedWhileTurnActive !== true) {
+      throw new Error(`ChatPlane ${at} did not stream while the turn was active`);
+    }
+    // The fence contract belongs to a full-length run. A documented quick
+    // smoke (`--stream-steps 30`) legitimately ends while the fence is still
+    // open, and failing it would make the fast harness check unusable; a
+    // baseline, which is what these numbers are published from, must reach
+    // every phase. `requireCodeFence` is true exactly when the run used the
+    // default step count and token rate.
+    if (requireCodeFence) {
+      if (sample.codeFenceOpened !== true || sample.codeFenceClosed !== true) {
+        throw new Error(`ChatPlane ${at} did not open and close the default code fence`);
+      }
+      // Streamdown defers offscreen code with `content-visibility`, so a probe
+      // that streamed into no mounted, highlighted block measured nothing and
+      // would otherwise report a clean zero.
+      if (
+        sample.liveCodeBlocks < 1 ||
+        sample.settledCodeBlocks < 1 ||
+        sample.settledHighlightedCodeBlocks < 1
+      ) {
+        throw new Error(`ChatPlane ${at} missed its live-fence contract`);
+      }
+    }
+    if (!Number.isFinite(sample.latencyMs) || sample.latencyMs < 0) {
+      throw new Error(`ChatPlane ${at} has invalid latency`);
+    }
+    if (!Array.isArray(sample.frameTimesMs) || !Array.isArray(sample.longTasksMs)) {
+      throw new Error(`ChatPlane ${at} is missing frame or long-task measurements`);
+    }
+  });
+  return report;
+}
+
+export function validateRendererErrors(errors, label = "renderer") {
+  if (!Array.isArray(errors)) throw new Error(`${label} console error list is missing`);
+  if (errors.length > 0) throw new Error(`${label} reported console errors: ${errors.join(" | ")}`);
+}
+
+function validateInteraction(interaction, expectedSamples) {
+  if (!isRecord(interaction) || typeof interaction.id !== "string") {
+    throw new Error("benchmark interaction is malformed");
+  }
+  if (!Array.isArray(interaction.samples) || interaction.samples.length !== expectedSamples) {
+    throw new Error(
+      `${interaction.id} returned ${interaction.samples?.length ?? 0} samples; expected ${expectedSamples}`,
+    );
+  }
+  interaction.samples.forEach((sample, index) => {
+    if (!isRecord(sample) || !Number.isFinite(sample.latencyMs) || sample.latencyMs < 0) {
+      throw new Error(`${interaction.id} sample ${index + 1} has invalid latency`);
+    }
+  });
+  if (interaction.summary?.latencyMs?.n !== expectedSamples) {
+    throw new Error(`${interaction.id} latency summary does not include every sample`);
+  }
+}
+
+export function validateBenchmarkReport(report) {
+  if (!isRecord(report) || !isRecord(report.config) || !Array.isArray(report.arms)) {
+    throw new Error("benchmark report is malformed");
+  }
+  const expectedInteractions = report.config.streamOnly
+    ? ["stream_scroll"]
+    : INTERACTIONS.map(([id]) => id);
+  const expectedArmNames = report.config.arms.map((arm) =>
+    arm === "idle"
+      ? "idle"
+      : busyLoadName(report.config.busyCores, report.config.loadDurationSeconds * 1_000),
+  );
+  const actualArmNames = report.arms.map((arm) => arm?.name);
+  if (
+    actualArmNames.length !== expectedArmNames.length ||
+    actualArmNames.some((name, index) => name !== expectedArmNames[index])
+  ) {
+    throw new Error(
+      `benchmark arms differ: expected ${expectedArmNames.join(", ")}; got ${actualArmNames.join(", ")}`,
+    );
+  }
+
+  for (const arm of report.arms) {
+    validateRendererErrors(arm.rendererErrors, `${arm.name} app renderer`);
+    if (!Array.isArray(arm.interactions)) {
+      throw new Error(`${arm.name} interactions are missing`);
+    }
+    const actualInteractions = arm.interactions.map((interaction) => interaction.id);
+    if (
+      actualInteractions.length !== expectedInteractions.length ||
+      new Set(actualInteractions).size !== actualInteractions.length ||
+      expectedInteractions.some((id) => !actualInteractions.includes(id))
+    ) {
+      throw new Error(
+        `${arm.name} interactions differ: expected ${expectedInteractions.join(", ")}; got ${actualInteractions.join(", ")}`,
+      );
+    }
+    for (const interaction of arm.interactions) {
+      validateInteraction(interaction, report.config.repetitions);
+    }
+    const stream = arm.interactions.find((interaction) => interaction.id === "stream_scroll");
+    validateChatBenchReport(
+      {
+        ...arm.chatWindow,
+        streamingSamples: stream?.samples,
+      },
+      {
+        expectedSamples: report.config.repetitions,
+        expectedSteps: report.config.streamSteps,
+        requireCodeFence:
+          report.config.streamSteps === DEFAULT_STREAM_STEPS &&
+          report.config.streamTokenRate === DEFAULT_STREAM_TOKEN_RATE,
+      },
+    );
+
+    const loaded = arm.busyCores > 0;
+    if (!loaded && arm.load !== undefined)
+      throw new Error("idle arm unexpectedly recorded busy load");
+    if (loaded) {
+      const expectedDurationMs = report.config.loadDurationSeconds * 1_000;
+      if (
+        arm.busyCores !== report.config.busyCores ||
+        !isRecord(arm.load) ||
+        arm.load.configuredDurationMs !== expectedDurationMs
+      ) {
+        throw new Error(`${arm.name} load metadata differs from the configured load arm`);
+      }
+      const expectedCompletion = report.config.streamOnly
+        ? "quick-smoke-early-stop"
+        : "fixed-duration-complete";
+      if (arm.load.completion !== expectedCompletion) {
+        throw new Error(`${arm.name} load ended as ${String(arm.load.completion)}`);
+      }
+      if (
+        !report.config.streamOnly &&
+        (!Number.isFinite(arm.load.exposureDurationMs) ||
+          arm.load.exposureDurationMs < expectedDurationMs ||
+          !Number.isFinite(arm.load.measurementsDurationMs) ||
+          arm.load.measurementsDurationMs >= expectedDurationMs)
+      ) {
+        throw new Error(`${arm.name} did not receive one complete fixed-duration exposure`);
+      }
+    }
+  }
+  return report;
 }
 
 async function runChatBench({
@@ -799,9 +1113,9 @@ async function runChatBench({
   repetitions,
   streamSteps,
   streamTokenRate,
-  slowdownMs,
   skipBuild,
   label,
+  signal,
 }) {
   const output = await command(
     process.execPath,
@@ -817,44 +1131,93 @@ async function runChatBench({
       String(streamSteps),
       "--stream-token-rate",
       String(streamTokenRate),
-      "--slowdown-ms",
-      String(slowdownMs),
       "--label",
       label,
       ...(skipBuild ? ["--skip-build"] : []),
     ],
-    { cwd: APP_DIR, env: { ELECTRON_DISABLE_SECURITY_WARNINGS: "1" } },
+    {
+      cwd: APP_DIR,
+      // NODE_ENV is stated, not inherited: this process may have created a
+      // Vite dev server to read the fixture through production modules, and
+      // that sets `development` for everything spawned afterwards. The bench
+      // pins it too; a measured build is worth saying twice.
+      env: { ELECTRON_DISABLE_SECURITY_WARNINGS: "1", NODE_ENV: "production" },
+      signal,
+    },
   );
   const match = /__BENCH__(?<json>.*)__BENCH__/s.exec(output);
   if (match?.groups?.json === undefined) throw new Error("chat window bench printed no report");
   const report = JSON.parse(match.groups.json);
-  if (report.failure !== undefined) throw new Error(`chat window bench failed: ${report.failure}`);
-  return report;
+  return validateChatBenchReport(report, {
+    expectedSamples: repetitions,
+    expectedSteps: streamSteps,
+    requireCodeFence:
+      streamSteps === DEFAULT_STREAM_STEPS && streamTokenRate === DEFAULT_STREAM_TOKEN_RATE,
+  });
 }
 
 async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatBuilt }) {
-  const load = loaded ? await startBusyLoad(args.busyCores) : null;
+  const load = loaded
+    ? await startBusyLoad(args.busyCores, args.loadDurationSeconds * 1_000)
+    : null;
   const name = load?.name ?? "idle";
   console.log(`\n=== ${name} arm ===`);
   const byInteraction = Object.fromEntries(INTERACTIONS.map(([id]) => [id, []]));
   const wanted = new Set(args.interactions ?? INTERACTIONS.map(([id]) => id));
   const rendererErrors = [];
-  let armResult;
+  const underLoad = (label, operation) =>
+    load === null ? operation(undefined) : load.run(label, operation);
+  let completingExposure = false;
   try {
     // Still one launch per repetition even when a single interaction is
     // wanted: cold launch is the state every other measurement starts from,
-    // and reusing a window would measure a different thing.
-    if (!args.streamOnly && INTERACTIONS.some(([id]) => id !== "stream_scroll" && wanted.has(id))) {
-      for (let index = 0; index < args.repetitions; index += 1) {
-        console.log(`full app sample ${index + 1}/${args.repetitions}`);
-        const result = await fullAppIteration({
+    // and reusing a window would measure a different thing. A narrowed run is
+    // for iteration, not publishing: interactions with no samples are left
+    // out of the report rather than reported as zeros.
+    if (
+      !args.streamOnly &&
+      INTERACTIONS.some(([id]) => id !== "stream_scroll" && wanted.has(id))
+    ) {
+      // One discarded iteration before every arm.
+      //
+      // Arms run in sequence, so without this the first arm pays for a cold
+      // page cache on a 373 MB fixture and a cold Electron code cache while
+      // the second arm inherits both warm. That confound is larger than the
+      // effect being measured: the first published run of this matrix showed
+      // the LOADED arm faster than idle on every interaction, with the idle
+      // arm's first launch its slowest sample and its variance an order of
+      // magnitude wider. A warm-up per arm makes the two arms differ by the
+      // load rather than by their position in the run. It is discarded, never
+      // summarized, and its cost is two iterations.
+      console.log(`warm-up iteration (discarded) for ${name}`);
+      const warmup = await underLoad(`${name} warm-up`, (signal) =>
+        fullAppIteration({
           fixtureDirectory,
           runRoot,
-          armName: name,
-          index,
+          armName: `${name}-warmup`,
+          index: 0,
           manifest,
           wanted,
-        });
+          signal,
+        }),
+      );
+      // A broken renderer during warm-up is still a broken renderer.
+      validateRendererErrors(warmup.rendererErrors, `${name} warm-up`);
+      for (let index = 0; index < args.repetitions; index += 1) {
+        const label = `full app sample ${index + 1}/${args.repetitions}`;
+        console.log(label);
+        const result = await underLoad(label, (signal) =>
+          fullAppIteration({
+            fixtureDirectory,
+            runRoot,
+            armName: name,
+            index,
+            manifest,
+            wanted,
+            signal,
+          }),
+        );
+        validateRendererErrors(result.rendererErrors, `${name} ${label}`);
         for (const [id, sample] of Object.entries(result.samples)) {
           if (sample !== null) byInteraction[id].push(sample);
         }
@@ -862,10 +1225,9 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
       }
     }
     if (!wanted.has("stream_scroll")) {
-      armResult = {
+      const armResult = {
         name,
         busyCores: load?.workers ?? 0,
-        slowdownMs: args.slowdownMs,
         interactions: INTERACTIONS.flatMap(([id, label]) =>
           byInteraction[id].length === 0
             ? []
@@ -873,47 +1235,35 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
         ),
         rendererErrors: rendererErrors.slice(0, 50),
       };
+      if (load !== null) {
+        completingExposure = true;
+        armResult.load = await load.finish({
+          completeExposure: false,
+          reason: "narrowed-interactions-early-stop",
+        });
+        console.log(`stopped ${load.workers} busy workers (${armResult.load.completion})`);
+      }
       return armResult;
     }
     console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} stream steps`);
-    const chat = await runChatBench({
-      manifest,
-      repetitions: args.repetitions,
-      streamSteps: args.streamSteps,
-      streamTokenRate: args.streamTokenRate,
-      slowdownMs: args.slowdownMs,
-      skipBuild: chatBuilt.value,
-      label: `${args.preset}-${name}`,
-    });
+    const chat = await underLoad("stream+scroll bench", (signal) =>
+      runChatBench({
+        manifest,
+        repetitions: args.repetitions,
+        streamSteps: args.streamSteps,
+        streamTokenRate: args.streamTokenRate,
+        skipBuild: chatBuilt.value,
+        label: `${args.preset}-${name}`,
+        signal,
+      }),
+    );
     chatBuilt.value = true;
-    if (chat.streamingSamples.some((sample) => sample.ok !== true)) {
-      throw new Error(
-        `stream+scroll bench returned a failed sample: ${JSON.stringify(chat.streamingSamples)}`,
-      );
-    }
-    if (
-      chat.streamingSamples.some(
-        (sample) =>
-          sample.streamedWhileWorking !== true ||
-          sample.streamedWhileTurnActive !== true ||
-          sample.codeFenceOpened !== true ||
-          sample.codeFenceClosed !== true ||
-          sample.liveCodeBlocks < 1 ||
-          sample.settledCodeBlocks < 1 ||
-          sample.settledHighlightedCodeBlocks < 1,
-      )
-    ) {
-      throw new Error(
-        `stream+scroll bench missed its live-fence contract: ${JSON.stringify(chat.streamingSamples)}`,
-      );
-    }
     byInteraction.stream_scroll.push(...chat.streamingSamples);
-    armResult = {
+    const armResult = {
       name,
       busyCores: load?.workers ?? 0,
       streamTokenRate: args.streamTokenRate,
       streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
-      slowdownMs: args.slowdownMs,
       interactions: INTERACTIONS.flatMap(([id, label]) =>
         byInteraction[id].length === 0 ? [] : [aggregateInteraction(id, label, byInteraction[id])],
       ),
@@ -924,17 +1274,76 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
       },
       rendererErrors: rendererErrors.slice(0, 50),
     };
-  } finally {
-    const loadSummary = await load?.stop();
-    if (loadSummary !== undefined) {
-      console.log(`stopped ${load.workers} busy workers`);
-      if (armResult !== undefined) armResult.load = loadSummary;
+    if (load !== null) {
+      completingExposure = true;
+      const completeExposure = !args.streamOnly;
+      if (completeExposure) {
+        console.log(
+          `measurements complete; holding ${name} until its fixed deadline if time remains`,
+        );
+      }
+      armResult.load = await load.finish({
+        completeExposure,
+        reason: "quick-smoke-early-stop",
+      });
+      console.log(`stopped ${load.workers} busy workers (${armResult.load.completion})`);
     }
+    return armResult;
+  } catch (error) {
+    if (load !== null && !completingExposure) {
+      const summary = await load
+        .finish({ completeExposure: false, reason: "failed-arm-early-stop" })
+        .catch(() => null);
+      console.error(
+        `stopped ${load.workers} busy workers (${summary?.completion ?? "cleanup failed"})`,
+      );
+    }
+    throw error;
   }
-  return armResult;
 }
 
-function markdown(report) {
+export function summaryReport(report) {
+  const loadedArm = report.arms.find((arm) => arm.busyCores > 0);
+  return {
+    schemaVersion: 1,
+    generatedAt: report.generatedAt,
+    device: report.host.device,
+    macos: {
+      version: report.host.os.macosVersion,
+      build: report.host.os.macosBuild,
+    },
+    build: {
+      sha: report.host.git.sha,
+      dirty: report.host.git.dirty,
+    },
+    fixture: {
+      preset: report.fixture.preset,
+      seed: report.fixture.seed,
+    },
+    backgroundLoad: {
+      name:
+        loadedArm?.name ??
+        busyLoadName(report.config.busyCores, report.config.loadDurationSeconds * 1_000),
+      workerCount: report.config.busyCores,
+      durationMs: report.config.loadDurationSeconds * 1_000,
+      durationSeconds: report.config.loadDurationSeconds,
+    },
+    repetitions: report.config.repetitions,
+    warmupIterationsPerArm: report.config.warmupIterationsPerArm ?? 0,
+    arms: report.arms.map((arm) => ({
+      name: arm.name,
+      busyCores: arm.busyCores,
+      interactions: arm.interactions.map((interaction) => ({
+        id: interaction.id,
+        label: interaction.label,
+        aggregates: interaction.summary,
+      })),
+    })),
+    armGap: report.backgroundLoadGap,
+  };
+}
+
+export function markdown(report) {
   const lines = [
     "# Desktop performance baseline",
     "",
@@ -946,6 +1355,8 @@ function markdown(report) {
     `macOS: ${report.host.os.macosVersion} (${report.host.os.macosBuild})`,
     `Fixture: \`${report.fixture.preset}\`, seed \`${report.fixture.seed}\`, ${report.fixture.counts.sessions.toLocaleString()} Sessions / ${report.fixture.counts.sessionEvents.toLocaleString()} Session Events / ${report.fixture.counts.tickets.toLocaleString()} Tickets`,
     `Sampling: ${report.config.repetitions} repetitions per interaction and arm; arms: ${report.arms.map((arm) => arm.name).join(", ")}.`,
+    `Each arm discards ${report.config.warmupIterationsPerArm ?? 0} warm-up iteration(s) first, so the arms differ by load rather than by which met a cold cache.`,
+    `Loaded-arm contract: ${report.config.busyCores} busy cores for a fixed ${report.config.loadDurationSeconds.toLocaleString()} seconds.`,
     "",
     "## Results",
     "",
@@ -991,25 +1402,28 @@ function markdown(report) {
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
     `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
-    "- The loaded arm is named `N-busy-core`: N Node worker threads run the fixed integer-mixing loop in `busy-worker.mjs` continuously from before Electron launch through the last sample; actual arm duration and worker checksums are recorded in JSON.",
+    `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline and otherwise holds the load until the configured exposure is complete; quick stream-only smoke runs stop early and say so in JSON.`,
+    "- Ticket switching first makes both workspaces usable, returns to the first, then times selection and focus-readiness of the already-open second workspace.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",
-    "Raw samples and complete host/fixture metadata are in the adjacent JSON report.",
+    "Raw samples and complete host/fixture metadata are in benchmark.json; benchmark.summary.json is the compact, committable aggregate artifact.",
     "",
   );
   return lines.join("\n");
 }
 
-async function writeReports(report, output) {
+export async function writeReports(report, output) {
   const directory = resolve(output);
   await fs.mkdir(directory, { recursive: true });
   const jsonPath = join(directory, "benchmark.json");
+  const summaryPath = join(directory, "benchmark.summary.json");
   const markdownPath = join(directory, "benchmark.md");
   await Promise.all([
     fs.writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`),
+    fs.writeFile(summaryPath, `${JSON.stringify(summaryReport(report), null, 2)}\n`),
     fs.writeFile(markdownPath, markdown(report)),
   ]);
-  return { jsonPath, markdownPath };
+  return { jsonPath, summaryPath, markdownPath };
 }
 
 async function main() {
@@ -1045,7 +1459,7 @@ async function main() {
   const runRoot = join(runOwnerRoot, "runs");
   const host = await hostMetadata();
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     warning: WARNING,
     generatedAt: new Date().toISOString(),
     host,
@@ -1056,11 +1470,16 @@ async function main() {
     config: {
       command: process.argv.join(" "),
       repetitions: args.repetitions,
+      // Stated in the artifact because it changes what the numbers mean: each
+      // arm discards one iteration first so the arms differ by load rather
+      // than by which of them met a cold cache.
+      warmupIterationsPerArm: args.streamOnly ? 0 : 1,
       busyCores: args.busyCores,
+      loadDurationSeconds: args.loadDurationSeconds,
       streamSteps: args.streamSteps,
       streamTokenRate: args.streamTokenRate,
       streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
-      slowdownMs: args.slowdownMs,
+      streamOnly: args.streamOnly,
       arms: args.arms,
     },
     arms: [],
@@ -1080,6 +1499,7 @@ async function main() {
       );
     }
     report.backgroundLoadGap = backgroundLoadGap(report.arms);
+    validateBenchmarkReport(report);
     const defaultOutput = join(
       REPO,
       "performance-results",
@@ -1087,6 +1507,7 @@ async function main() {
     );
     const paths = await writeReports(report, args.output ?? defaultOutput);
     console.log(`\nJSON: ${paths.jsonPath}`);
+    console.log(`Summary JSON: ${paths.summaryPath}`);
     console.log(`Markdown: ${paths.markdownPath}`);
     console.log(`\n${WARNING}`);
   } finally {
@@ -1102,6 +1523,22 @@ async function main() {
 }
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  // A run drives Electron through Playwright for tens of minutes. When a load
+  // arm aborts, in-flight browser calls reject after the harness has stopped
+  // awaiting them, and Node's default handler kills the process with a bare
+  // `TimeoutError` and a stack made entirely of Playwright internals — no
+  // arm, no interaction, nothing a reader can act on. Name it instead, and
+  // still fail: a benchmark that swallowed this would publish a partial
+  // matrix as if it were whole.
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    console.error(
+      `benchmark aborted by an unhandled rejection — most often an Electron or Playwright call\n` +
+        `that outlived its load arm's deadline. Raise --load-duration-seconds if the loaded arm\n` +
+        `no longer fits its exposure on this machine.\n\n${detail}`,
+    );
+    process.exit(1);
+  });
   main().catch((error) => {
     console.error(error?.stack ?? error);
     process.exitCode = 1;

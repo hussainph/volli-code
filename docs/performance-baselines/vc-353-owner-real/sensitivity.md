@@ -1,32 +1,90 @@
-# VC-353 regression-sensitivity proof
+# VC-353 regression-sensitivity: what this harness can and cannot see
 
 > Performance numbers are comparable only on the same machine, in the same power/thermal state, with the same load arm.
 
-On 2026-09-13, the owner machine ran two back-to-back 20-sample, idle-arm stream-and-scroll probes against clean commit `c17dc86c9fa157857687062680cb5c0ae2408096`. Both used the deterministic `real` fixture (1,198 Sessions / 259,855 Session Events), the real `ChatPlane`, a 1,600-message transcript, 120 scrolling frames per sample, and a 30 token/s live assistant stream that opened and closed a growing TypeScript fence.
+A harness is only worth its baseline if it moves when the product gets slower.
+This records how much slower the product has to get before the stream+scroll
+probe says so, measured on the machine that took
+[the baseline](benchmark.md) at commit `e3c936ed`.
 
-The control left the regression injection at its normal zero value. The second run enabled the harness-only 20 ms renderer busy wait on every streamed frame. No product behavior was changed, and the committed full baseline must record `slowdownMs: 0`.
+The previous version of this file claimed a single data point — a 20 ms
+per-frame injection moving interaction latency +40.3% — and that claim is
+withdrawn. It was measured through the old harness, which built the renderer
+bench with **development React**; a debug renderer has far less frame budget to
+spare, so a regression that overruns it there can still fit inside it in the
+build the product ships. Sensitivity has to be re-measured against the shipped
+build, and it is below.
 
-| Metric | control (`0 ms`) | deliberate slowdown (`20 ms`) | movement |
-|---|---:|---:|---:|
-| interaction latency p50 | 2,154.2 ms | 3,022.7 ms | +868.5 ms (+40.3%) |
-| interaction latency p95 | 2,155.2 ms | 3,137.1 ms | +981.9 ms (+45.6%) |
-| frame time p95 | 17.6 ms | 34.7 ms | +17.1 ms (+97.2%) |
-| dropped frames p50 | 0 | 52 | +52 |
-| dropped frames p95 | 0 | 59 | +59 |
-| latency variance | 0.556 ms² | 4,791.248 ms² | +4,790.692 ms² |
+## Method
 
-All 40 raw samples reported `streamedWhileWorking: true`, `codeFenceOpened: true`, and `codeFenceClosed: true`. Both renderer-error lists were empty. The expected latency, frame-time, dropped-frame, and variance signals moved substantially, proving the instrument detects the injected regression; the ordinary path remains the zero-slowdown control.
+A temporary local edit burns a fixed slice of main-thread time inside each step
+of `streamAndScroll` in `apps/desktop/e2e/bench/chat-window/main.tsx`, before
+the step's two paint frames:
 
-Machine: MacBookPro17,1, Apple M1, 8 logical cores, 16 GiB, macOS 26.5.1 (25F80), arm64, Node v24.18.0.
+```ts
+// TEMPORARY — regression-sensitivity proof only. Revert before measuring.
+const until = performance.now() + N;
+while (performance.now() < until) {
+  /* burn one frame's worth of main-thread time */
+}
+```
 
-Reports:
+Each level ran the bench directly, two samples each, at the same settings the
+matrix uses for its stream interaction:
 
-- [`sensitivity/control.md`](sensitivity/control.md)
-- [`sensitivity/deliberate-slowdown.md`](sensitivity/deliberate-slowdown.md)
+```sh
+node apps/desktop/e2e/chat-window-bench.mjs --sessions 1 --turns 1600 \
+  --stream-samples 2 --stream-steps 120 --stream-token-rate 30 --label burn-N
+git checkout -- apps/desktop/e2e/bench/chat-window/main.tsx
+```
 
-The harness writes a `benchmark.json` beside each of these holding every raw
-frame timing. Those are not committed — one is tens of thousands of lines of
-numbers that no review can read and no diff can carry usefully. Regenerate them
-with the two commands in
-[`performance-benchmark.md`](../../performance-benchmark.md#regression-sensitivity-proof);
-the tables above are the durable record.
+The injection is not committed, and no flag carries it: a shipped slow path is
+a foot-gun and a switch a future baseline could accidentally leave on.
+
+## Result — the detection curve
+
+| Injected per step | stream wall time (2 samples) | vs control | dropped frames | long tasks |
+|---:|---|---:|---:|---:|
+| 0 ms (control) | 3996.8 / 4000.2 ms | — | 0 / 0 | 0 / 0 |
+| 5 ms | 3996.4 / 4000.0 ms | ~1.00× | 0 / 0 | 0 / 0 |
+| 10 ms | 4000.7 / 3999.9 ms | ~1.00× | 0 / 0 | 0 / 0 |
+| 20 ms | 4050.1 / 4080.9 ms | 1.02× | 3 / 5 | 0 / 0 |
+| 40 ms | 6115.5 / 6033.7 ms | 1.51× | 126 / 121 | 7 / 0 |
+| 80 ms | 11932.7 / 11915.2 ms | 2.98× | 473 / 472 | 120 / 120 |
+
+Read it as a threshold, not a single number:
+
+- **≥ 40 ms per step is unmistakable** — half again the wall time, and over a
+  hundred dropped frames where the control drops none.
+- **20 ms is the detection floor.** Wall time barely moves (+2%), but dropped
+  frames go 0 → 3-5, and zero is what every healthy sample reports, so the
+  signal is in the frame counter rather than the clock.
+- **≤ 10 ms is invisible, and correctly so.** At 30 tokens/s each step owns a
+  two-frame budget of about 33 ms and uses roughly 13 ms of it. Work that still
+  fits the budget does not miss a frame, and a frame-based probe should not
+  invent a regression where the user would see none. It does mean this probe is
+  not the instrument for shaving single milliseconds — use it for regressions
+  that threaten the frame, and measure smaller deltas with a narrower tool.
+
+A trap worth recording: the stream interaction's **wall time is floored by the
+scripted token schedule**. 120 steps at 30 tokens/s take about 4.0s no matter
+what, so a regression smaller than the per-step slack cannot show up in latency
+at all. That is why this probe reports dropped frames and frame times beside
+latency, and why the 20 ms row moves the frame counter while the clock stays
+flat. Reading latency alone would have called a real 20 ms regression clean.
+
+## The other sensitivity evidence: the load arm
+
+The published baseline carries its own controlled perturbation. Two busy cores,
+against the same build and fixture on the same machine, moved:
+
+| Interaction | p50 | p95 |
+|---|---:|---:|
+| Long-chat first paint and interactive | 1.72× | 2.46× |
+| Board render | 1.06× | 1.54× |
+| Switch between ticket workspaces | 1.21× | 1.25× |
+| New terminal session | 1.09× | 1.27× |
+
+That is a different claim from the injection above — it perturbs the machine,
+not the product's code — but it does show the full-app interactions respond to
+contention with movement far outside their sample variance.

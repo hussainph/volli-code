@@ -396,7 +396,7 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
 
     // The state VC-81 was left in: scoped to a worktree, with no worktree, and
     // the read verb refusing every question an agent asks about its work.
-    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+    expect(await readWorktreeStatus(deps, "t1")).toMatchObject({
       kind: "no-worktree",
       usesWorktree: true,
     });
@@ -411,7 +411,7 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
     expect(row?.branch).toBe("volli/VC-12-mcp-server");
     expect(row?.base_branch).toBe("main");
     expect(existsSync(row!.worktree_path!)).toBe(true);
-    expect(readWorktreeStatus(deps, "t1")).toMatchObject({
+    expect(await readWorktreeStatus(deps, "t1")).toMatchObject({
       kind: "ok",
       displayId: "VC-12",
       branch: "volli/VC-12-mcp-server",

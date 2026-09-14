@@ -494,6 +494,38 @@ export function movePickerActive(
   return rows[next]!.value;
 }
 
+/**
+ * The `/` or `@` a menu row types for the person (VC-335).
+ *
+ * The two pickers open from what is typed, and until the composer's `+` menu
+ * existed nothing on the surface said so — a first-timer could use the app
+ * for a week without learning either trigger. The menu's rows write the
+ * character the picker needs at the caret, and this is what "at the caret"
+ * has to mean for the picker to then open: both grammars want a word
+ * boundary before the trigger, so a caret mid-word gets a space first,
+ * through the same `refInsertion` rule an `@` completion already obeys. Any
+ * selection is replaced, as a keystroke would replace it. The caret lands
+ * after the trigger, which is exactly where `composerPickerToken` looks.
+ */
+export function insertPickerTrigger(input: {
+  text: string;
+  from: number;
+  to: number;
+  trigger: "/" | "@";
+}): ComposerPickerInsertion {
+  const { text, trigger } = input;
+  const from = Math.max(0, Math.min(input.from, text.length));
+  const to = Math.max(from, Math.min(input.to, text.length));
+  const written = refInsertion({
+    precedingChar: from === 0 ? "" : text.charAt(from - 1),
+    text: trigger,
+  });
+  return {
+    text: `${text.slice(0, from)}${written}${text.slice(to)}`,
+    caret: from + written.length,
+  };
+}
+
 /** The row `active` names, or the first one — what Enter commits. */
 export function activePickerRow(
   rows: readonly ComposerPickerRow[],

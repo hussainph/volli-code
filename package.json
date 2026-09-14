@@ -20,6 +20,7 @@
     "smoke:board-sort-loop": "node apps/desktop/e2e/board-sort-loop-lab.mjs",
     "smoke:docs-shots": "pnpm run build && env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/docs-shots.mjs",
     "bench:desktop": "node apps/desktop/e2e/bench/performance/run.mjs",
+    "test:performance-harness": "pnpm -C apps/desktop test:performance-harness",
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check"

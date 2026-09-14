@@ -180,6 +180,11 @@ beforeEach(() => {
       disconnect(): void {}
     },
   );
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
   window.HTMLElement.prototype.scrollIntoView = () => {};
 });
 
@@ -226,27 +231,44 @@ async function renderPill(input: {
   withTiers?: boolean;
   selectionTier?: string | null;
   onChange?: (next: ComposerModelSelection) => void;
+  compactEffort?: { onChange(level: string): void };
+  composerWidth?: number;
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
   const models = offerableModels(MODELS, PROVIDERS, []);
   const tiers = composerTierRows(input.defaults, MODELS, PROVIDERS, []);
   container = document.createElement("div");
+  if (input.compactEffort !== undefined) {
+    container.dataset.composerContainer = "";
+    Object.defineProperty(container, "clientWidth", {
+      configurable: true,
+      value: input.composerWidth ?? 320,
+    });
+  }
   document.body.append(container);
   root = createRoot(container);
+  const pill = (
+    <ModelPill
+      models={models}
+      tiers={input.withTiers === false ? undefined : tiers}
+      selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
+      selectionTier={input.selectionTier ?? null}
+      disabled={false}
+      onChange={input.onChange ?? (() => undefined)}
+      open
+      compactEffort={
+        input.compactEffort === undefined
+          ? undefined
+          : {
+              levels: ["low", "medium", "high"],
+              value: "medium",
+              onChange: input.compactEffort.onChange,
+            }
+      }
+    />
+  );
   await act(async () => {
-    root?.render(
-      <ModelAccessProvider client={client}>
-        <ModelPill
-          models={models}
-          tiers={input.withTiers === false ? undefined : tiers}
-          selection={{ providerId: "anthropic", modelId: "sonnet", reasoningLevel: "medium" }}
-          selectionTier={input.selectionTier ?? null}
-          disabled={false}
-          onChange={input.onChange ?? (() => undefined)}
-          open
-        />
-      </ModelAccessProvider>,
-    );
+    root?.render(<ModelAccessProvider client={client}>{pill}</ModelAccessProvider>);
   });
   return client;
 }
@@ -319,6 +341,45 @@ describe("the model pill's Defaults view", () => {
     });
     expect(document.querySelector('[data-testid="model-picker-view"]')).toBeNull();
     expect(document.querySelector('[data-slot="command-input"]')).not.toBeNull();
+  });
+});
+
+describe("the compact model and effort control", () => {
+  it("leaves the wide model picker alone when effort still has its own trigger", async () => {
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      composerWidth: 480,
+      compactEffort: { onChange: () => undefined },
+    });
+
+    const trigger = document.querySelector('[data-testid="model-pill"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Model: Claude Sonnet · Anthropic");
+    expect(document.querySelector('[data-testid="combined-model-effort"]')).toBeNull();
+  });
+
+  it("puts both choices behind the model trigger when its composer is below 24rem", async () => {
+    const effortChanges: string[] = [];
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      compactEffort: { onChange: (level) => effortChanges.push(level) },
+    });
+
+    const trigger = document.querySelector('[data-testid="model-pill"]');
+    const slider = document.querySelector<HTMLElement>(
+      '[role="slider"][aria-label="Reasoning effort"]',
+    );
+    expect(trigger?.getAttribute("aria-label")).toBe(
+      "Model and effort: Claude Sonnet · Anthropic · Medium",
+    );
+    expect(document.querySelector('[data-testid="combined-model-effort"]')).not.toBeNull();
+    expect(slider?.getAttribute("aria-valuetext")).toBe("Medium");
+
+    await act(async () => {
+      slider?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    });
+    expect(effortChanges).toEqual(["high"]);
   });
 });
 

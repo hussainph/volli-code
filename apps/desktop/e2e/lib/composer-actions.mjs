@@ -1,12 +1,15 @@
-/** The composer's selector configures a commit; choosing a row never submits. */
+/**
+ * The composer's selector configures what the PRIMARY commit starts; choosing a
+ * row never submits. Plain creation is not in here — it is its own button.
+ */
 export async function selectCreationAction(page, name) {
   const composer = page.getByTestId("new-ticket-composer");
-  await composer.getByRole("button", { name: "Choose creation action", exact: true }).click();
+  await composer.getByRole("button", { name: "Choose what starts", exact: true }).click();
   await page.getByRole("menuitemradio", { name, exact: true }).click();
 }
 
+/** One press: Create is a first-class button beside the primary, not a mode. */
 export async function createOnlyTicket(page) {
-  await selectCreationAction(page, "Create only");
   await page
     .getByTestId("new-ticket-composer")
     .getByRole("button", { name: "Create ticket", exact: true })

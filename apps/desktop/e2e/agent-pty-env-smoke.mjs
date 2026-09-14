@@ -132,6 +132,19 @@ async function main() {
     // Give the login shell a moment to finish sourcing, then run the probe line.
     // Labeled echoes: each OUTPUT line begins with LABEL=; the echoed *input*
     // line begins with "echo", so it never collides with the parsed outputs.
+    //
+    // The completion sentinel needs more care than that, because the PTY echoes
+    // the line as it is typed and the echo contains every word of it. A plain
+    // `PTY_PROBE_DONE` in the source text therefore lands in the buffer the
+    // instant the write does, ~150ms before the poll below looks — so the wait
+    // could return while the shell was still printing, and the checks would
+    // read a buffer holding only its first few lines. That is precisely how
+    // this probe failed on CI: checks 1-3 passed on SOCK/TICK/SESS while
+    // check 4 reported SHELLBIN and SHIM "absent", on a runner slow enough
+    // (four Electron probes at once) that they had not been printed yet.
+    // `SENTINEL` is split so that the shell CONCATENATES it at run time: the
+    // echo carries `PTY_PROBE""_DONE`, only the output carries the joined word,
+    // and seeing it proves every earlier line already arrived.
     await waitUntil(
       "shell to settle",
       () => page.evaluate(() => window.volliPtyBuffer.length > 0),
@@ -159,7 +172,7 @@ async function main() {
         'echo "SHELLBIN=$(ps -o comm= -p $$)"; ' +
         'echo "SHIM=$(test -x "$(dirname "$VOLLI_SOCKET")/bin/volli" && echo ok)"; ' +
         'if [ -r /proc/$$/environ ]; then echo "SPAWN$(tr "\\0" "\\n" < /proc/$$/environ | grep "^PATH=")"; fi; ' +
-        "echo PTY_PROBE_DONE\n";
+        'echo "PTY_PROBE""_DONE"\n';
       return window.api.terminal.write(id, line);
     }, sid);
 

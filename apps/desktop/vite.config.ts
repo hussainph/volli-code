@@ -140,11 +140,12 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "main",
           environment: "node",
-          // The performance matrix's own unit tests ride in this project
-          // rather than the renderer one: they are plain Node, they assert the
-          // fixture generator's determinism, and they need neither jsdom nor
-          // the @renderer alias.
-          include: ["src/main/**/*.test.ts", "e2e/bench/performance/*.test.mjs"],
+          // The performance matrix's tests are NOT here. They generate a
+          // real-scale migrated database more than once to prove byte-for-byte
+          // determinism, which takes minutes and blows this lane's 5s default
+          // timeout — it failed CI exactly that way. They have their own config
+          // and command: `pnpm test:performance-harness` (vite.bench.config.ts).
+          include: ["src/main/**/*.test.ts"],
           // Drains the data-change coalescer after every test. Module state
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes

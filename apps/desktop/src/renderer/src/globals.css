@@ -24,6 +24,93 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Prompt materials (VC-335). A quiet writing sheet, an accent-tinted tray,
+ * and a directional edge highlight make this a distinct object at rest.
+ * No backdrop blur, moving glow, or focus-triggered repaint of the shell.
+ * Layers are opaque over --card: transcript text cannot bleed into the draft.
+ */
+@layer components {
+  .prompt-surface {
+    border-color: transparent;
+    background:
+      linear-gradient(var(--card), var(--card)) padding-box,
+      linear-gradient(
+          135deg,
+          color-mix(in oklab, var(--primary) 50%, var(--border-strong)),
+          var(--border-strong) 38%,
+          var(--border) 72%,
+          color-mix(in oklab, var(--primary) 30%, var(--border-strong))
+        )
+        border-box;
+  }
+
+  .prompt-toolbar {
+    border-top: 1px solid color-mix(in oklab, var(--primary) 10%, var(--border));
+    background: linear-gradient(
+      110deg,
+      color-mix(in oklab, var(--primary) 10%, var(--muted)),
+      var(--muted) 70%
+    );
+  }
+
+  .prompt-add {
+    border: 1px solid var(--border-strong);
+    background-color: var(--card);
+  }
+
+  .prompt-primary {
+    /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--primary-foreground) 30%, transparent),
+      var(--shadow-raised);
+  }
+}
+
+/* Below 24rem, model and effort become one control: the separate effort pill
+ * retires and its value joins the model face. The model name gives up its 56px
+ * floor at that point because the model mark and the full accessible label
+ * still identify it while the effort value must remain readable. The floor is
+ * released on the name span itself as well as the run that holds it: the tier
+ * beside it carries a far larger shrink factor, so it still truncates away
+ * first and the model is the last text standing rather than the first to go.
+ *
+ * A live turn freezes both values. On the app's narrowest chat pane, repeating
+ * that disabled fact still costs the whole second footer line, so the live
+ * surface gives it up before Add, context, Stop, or Queue. The queued row keeps
+ * its direct Steer action but lets the icon and accessible name carry it where
+ * the printed word would squeeze the draft.
+ *
+ * `!important` is the same specificity guard the motion gates use: Tailwind's
+ * generated display utilities otherwise restore the controls after this
+ * authored container rule changes them. */
+@container composer (max-width: 23.999rem) {
+  .composer-separate-effort,
+  .composer-live-config,
+  .composer-steer-label {
+    display: none !important;
+  }
+
+  .composer-merged-effort-label {
+    display: inline !important;
+  }
+
+  .composer-model-name,
+  .composer-model-name > [data-testid="model-pill-name"] {
+    min-width: 0;
+  }
+}
+
+/* Outside the component layer so the forced-colors edge also overrides the
+ * shell's border-transparent utility when decorative fills disappear. */
+@media (forced-colors: active) {
+  .prompt-surface,
+  .prompt-toolbar,
+  .prompt-add {
+    border-color: ButtonBorder;
+  }
+}
+
 /* GENERATED THEME TOKENS — BEGIN */
 /*
  * Every color below is the canvas pipeline's output for the shipped default
