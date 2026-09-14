@@ -47,6 +47,11 @@ export function useFilePicker(onFiles: (files: readonly File[]) => void): {
       type="file"
       multiple
       className="hidden"
+      // The hook tests drive this picker's `change` path directly (jsdom has
+      // no file dialog), and the ai-elements `PromptInput` renders its own
+      // hidden file input for its local attachment context — so this one
+      // carries its own hook rather than being found by type alone.
+      data-composer-file-picker
       onChange={(event) => {
         const picked = [...(event.target.files ?? [])];
         // Cleared before the handler runs, so picking the same file twice in

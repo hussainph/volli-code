@@ -271,6 +271,16 @@ async function unmountPlane() {
 
 const turnRows = () => container?.querySelectorAll(".is-user, .is-assistant").length ?? 0;
 const composer = () => container?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+/**
+ * The composer's hidden file picker, queried by its own hook: since VC-335
+ * the Session composer offers files through the `+` menu, so the input no
+ * longer sits next to an "Attach files" button — and the ai-elements
+ * `PromptInput` renders a second hidden file input for its own local
+ * attachment context, so a bare `input[type="file"]` finds the wrong one.
+ * These tests drive the picker's `change` path, which is unchanged.
+ */
+const attachmentPicker = () =>
+  container?.querySelector<HTMLInputElement>("input[data-composer-file-picker]") ?? null;
 const earlierButton = () => container?.querySelector("[data-transcript-earlier]") ?? null;
 const shows = (index: number) => container?.textContent?.includes(`turn number ${index}`) === true;
 const TOKEN_SELECTOR = '[style*="--shiki-dark"]';
@@ -356,8 +366,7 @@ describe("a provisional chat plane", () => {
     );
     const { enqueue, promoteChatSession, store } = provisionalChatStore();
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
-    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
-    const picker = attachButton?.nextElementSibling;
+    const picker = attachmentPicker();
     const box = composer();
     if (!(picker instanceof HTMLInputElement) || box === null) {
       throw new Error("expected attachment picker and composer");
@@ -415,8 +424,7 @@ describe("a provisional chat plane", () => {
     // nothing here can be explained by the chat having become durable.
     const { enqueue, store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
-    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
-    const picker = attachButton?.nextElementSibling;
+    const picker = attachmentPicker();
     const box = composer();
     if (!(picker instanceof HTMLInputElement) || box === null) {
       throw new Error("expected attachment picker and composer");
@@ -558,8 +566,7 @@ describe("a provisional chat plane", () => {
       expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1),
     );
     await act(async () => useChatDraftsStore.getState().markProvisionalSessionCreated(SESSION));
-    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
-    const picker = attachButton?.nextElementSibling;
+    const picker = attachmentPicker();
     if (!(picker instanceof HTMLInputElement)) throw new Error("expected attachment picker");
     Object.defineProperty(picker, "files", {
       configurable: true,
@@ -596,8 +603,7 @@ describe("a provisional chat plane", () => {
       container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
     });
     await vi.waitFor(() => expect(promoteChatSession).toHaveBeenCalledWith(SESSION));
-    const attachButton = container?.querySelector<HTMLButtonElement>('[aria-label="Attach files"]');
-    const picker = attachButton?.nextElementSibling;
+    const picker = attachmentPicker();
     if (!(picker instanceof HTMLInputElement)) throw new Error("expected attachment picker");
     Object.defineProperty(picker, "files", {
       configurable: true,
