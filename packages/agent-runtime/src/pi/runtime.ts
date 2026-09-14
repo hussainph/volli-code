@@ -2224,6 +2224,10 @@ async function attachSession(
           systemPrompt: agent.state.systemPrompt,
           tools: agent.state.tools,
           onNativeRequest: observeNativeRequest,
+          // VC-349 follow-up: the summarizer is a provider request like any
+          // other, so it carries the same stable Go routing identity the live
+          // turn sends. Without this, /compact on an opencode chat 400s.
+          sessionId: sidecarMetadata.id,
           // The resources this Session had activated ride INSIDE the durable
           // entry, ahead of the kept turns, rather than being inserted into
           // the live array once the entry is written. What the model is sent
