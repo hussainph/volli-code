@@ -212,32 +212,36 @@ AND applies backpressure; the structured stream only coalesces.
 What the PTY path has:
 
 - the renderer acknowledges consumed output through `OutputPipeline.ack(chars)`
-  (`output.ts:31-41`), tracked as `unackedChars` (`output.ts:49-56`);
-- crossing a 100,000-character high watermark calls `sink.pause()` and pauses
-  the producer (`output.ts:6-7, 77-93`);
-- draining to a 5,000-character low watermark calls `sink.resume()`
-  (`output.ts:128-134`);
+  (`output.ts:37, 128`), tracked as `unackedChars` (`output.ts:55, 89`);
+- crossing the 100,000-character high watermark calls `sink.pause()` and pauses
+  the producer (`output.ts:6, 22, 90-92`);
+- draining to the 5,000-character low watermark calls `sink.resume()`
+  (`output.ts:7, 23, 130-132`);
 - the pending batch is bounded at 256,000 characters or 8 ms
-  (`output.ts:9-14, 113-123`).
+  (`output.ts:12-13, 115-122`).
 
 What the structured stream has: `#receive()` buffers and schedules one flush per
 animation frame, racing a 50 ms timer so an occluded window still drains
-(`client.ts:287-328, 858-878`). What it does not have:
+(`client.ts:319, 344, 358-359, 909-928`), and `#flush()` turns that batch into a
+single store write (`client.ts:938`). What it does not have:
 
 - no acknowledgement, credit, watermark or pause anywhere in the renderer-side
-  contract (`client.ts:244-264, 800-823`);
-- no bound on the pending batch. Durable frames are keyed by sequence so they
-  replace, but `#overlays` and `#compactionProgress` are arrays that append and
-  can grow without limit between flushes (`client.ts:864-867`);
+  contract — the subscription exposes `subscribe` and `unsubscribe` and nothing
+  else (`client.ts:287-288`);
+- no bound on the pending batch. Durable frames are keyed by sequence so a
+  repeat replaces rather than appends (`client.ts:918`), but `#overlays` and
+  `#compactionProgress` are arrays that push and can grow without limit between
+  flushes (`client.ts:915-916`);
 - no backpressure on the main side either — `pumpSubscription()` awaits each
-  iterator item and immediately `webContents.send()`s it, checking no queue
-  depth and no return value (`apps/desktop/src/main/session-rpc-ipc.ts:230-248`).
-  The runtime's per-subscriber `draining` chain
-  (`packages/session-engine/src/session-runtime.ts:2675-2705`) is ordering, not
-  flow control;
-- no cross-session fairness. Each `ChatSessionClient` owns its own scheduler
-  (`client.ts:375-399`), so N streaming Sessions are N independent producers
-  with no shared budget.
+  iterator item and immediately sends it to the renderer, checking no queue
+  depth and no return value
+  (`apps/desktop/src/main/session-rpc-ipc.ts:230-248`). The runtime's
+  per-subscriber `draining` chain
+  (`packages/session-engine/src/session-runtime.ts:516, 1861-1868`) is ordering,
+  not flow control;
+- no cross-session fairness. Each `ChatSessionClient` owns its own buffers and
+  flush handle (`client.ts:426-439`), so N streaming Sessions are N independent
+  producers with no shared budget.
 
 The concrete failure mode is several Sessions streaming at once: main keeps
 pumping, IPC queues and per-session overlay arrays grow, and store writes fall
