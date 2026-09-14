@@ -23,6 +23,7 @@ import {
   COST_BASES,
   SESSION_PROJECTION_CHECKPOINT_VERSION,
   SESSION_ROLES,
+  assertSessionProjectionCheckpoint,
   SESSION_USAGE_CAUSES,
   assertSession,
   assertSessionEvent,
@@ -599,16 +600,16 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       ) {
         return null;
       }
-      const checkpoint = JSON.parse(encoded) as SessionProjectionCheckpoint;
-      if (
-        checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
-        checkpoint.sessionId !== sessionId ||
-        checkpoint.throughSequence !== throughSequence ||
-        checkpoint.projection?.session?.id !== sessionId ||
-        !Array.isArray(checkpoint.pendingExecutorStarts)
-      ) {
-        return null;
-      }
+      const checkpoint: unknown = JSON.parse(encoded);
+      // The shared contract (version, event-kind vocabulary, Session identity,
+      // cursor, exact-cost shape) is asserted rather than re-stated here, so
+      // this adapter cannot drift from the in-memory one. It throws, and the
+      // catch below turns that into the cache miss a malformed row deserves.
+      assertSessionProjectionCheckpoint(checkpoint, { expectedSessionId: sessionId });
+      // SQLite-specific on top of it: the indexed column must agree with the
+      // encoded cursor, or the monotonic upsert guard was comparing a number
+      // that the payload does not actually contain.
+      if (checkpoint.throughSequence !== throughSequence) return null;
       return checkpoint;
     } catch {
       // Derived cache only. A malformed row is indistinguishable from a miss;
@@ -619,18 +620,12 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
 
   saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
     this.assertOpen();
-    if (
-      checkpoint.version !== SESSION_PROJECTION_CHECKPOINT_VERSION ||
-      checkpoint.sessionId !== checkpoint.projection.session.id ||
-      !Number.isInteger(checkpoint.throughSequence) ||
-      checkpoint.throughSequence < 0
-    ) {
-      throw new Error("Session projection checkpoint is invalid");
-    }
-    const latestSequence = this.latestEventSequence(checkpoint.sessionId);
-    if (checkpoint.throughSequence > latestSequence) {
-      throw new Error("Session projection checkpoint is ahead of durable history");
-    }
+    // One shared cascade for both adapters: a checkpoint this build would
+    // refuse to READ must never become a row it wrote (VC-355).
+    assertSessionProjectionCheckpoint(checkpoint, {
+      latestSequence: this.latestEventSequence(checkpoint.sessionId),
+      invalidMessage: "Session projection checkpoint is invalid",
+    });
     const encoded = encodeSessionJson(checkpoint);
     prepared(
       this.db,

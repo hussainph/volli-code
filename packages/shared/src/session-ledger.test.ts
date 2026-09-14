@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askInteractionId,
   askUserInteractionId,
+  assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
@@ -1196,6 +1197,81 @@ describe("Session projection checkpoints", () => {
     expect(resumed.projection.attachments.map(({ id }) => id)).toEqual([attachment.id]);
     expect(resumed.projection.attention.active.map(({ id }) => id)).toEqual([attention.id]);
     expect(resumed.projection.interactions.active.map(({ id }) => id)).toEqual([interaction.id]);
+  });
+
+  it("prefers the live row for row-backed fields and the fold for projected ones", () => {
+    const checkpoint = createSessionProjectionCheckpoint(session, [
+      event(1, { kind: "session.retitled", title: "Named by an event" }),
+    ]);
+    // The Ticket moved and the Session was renamed by a fact. The row owns the
+    // first (nothing in the log records it), the log owns the second — and a
+    // checkpoint that answered from its own frozen copy of the row would serve
+    // a Ticket link that no longer exists.
+    const moved: Session = { ...session, ticketId: "ticket-2", title: "Stale row title" };
+    const resumed = advanceSessionProjection(checkpoint, [], moved);
+
+    expect(resumed.projection.session.ticketId).toBe("ticket-2");
+    expect(resumed.projection.session.title).toBe("Named by an event");
+    expect(() => advanceSessionProjection(checkpoint, [], { ...moved, id: "other" })).toThrow(
+      "Invalid Session projection checkpoint",
+    );
+  });
+
+  // The adapters call the assertion directly at their write boundary, so its
+  // own cascade is tested directly rather than only through a fold.
+  describe("assertSessionProjectionCheckpoint", () => {
+    const valid = (): SessionProjectionCheckpoint => createSessionProjectionCheckpoint(session, []);
+
+    it("rejects anything that is not a checkpoint-shaped object", () => {
+      // Persisted JSON is untrusted cache state, so the input is `unknown` and
+      // a string, an array or a null row must be refused before any field read.
+      for (const candidate of [null, undefined, "checkpoint", 7, [valid()]]) {
+        expect(() => assertSessionProjectionCheckpoint(candidate)).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+    });
+
+    it("refuses a checkpoint for a Session the caller did not ask about", () => {
+      expect(() =>
+        assertSessionProjectionCheckpoint(valid(), { expectedSessionId: "another-session" }),
+      ).toThrow("Invalid Session projection checkpoint");
+      expect(() =>
+        assertSessionProjectionCheckpoint(valid(), { expectedSessionId: session.id }),
+      ).not.toThrow();
+    });
+
+    it("refuses a non-null cost accumulator that is not a finite number", () => {
+      for (const usageCostUsdExact of [Number.NaN, Number.POSITIVE_INFINITY, "0.5"]) {
+        expect(() => assertSessionProjectionCheckpoint({ ...valid(), usageCostUsdExact })).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+    });
+
+    it("separates a nonsense durable head from a checkpoint that is genuinely ahead", () => {
+      const checkpoint = { ...valid(), throughSequence: 4 };
+      // Ahead of a real head: the cache is stale-ahead and says so.
+      expect(() => assertSessionProjectionCheckpoint(checkpoint, { latestSequence: 3 })).toThrow(
+        "Session projection checkpoint is ahead of durable history",
+      );
+      // A head that is not a sequence at all is an invalid CALL, not evidence
+      // about the checkpoint, so it must not be reported as staleness.
+      for (const latestSequence of [-1, 2.5]) {
+        expect(() => assertSessionProjectionCheckpoint(checkpoint, { latestSequence })).toThrow(
+          "Invalid Session projection checkpoint",
+        );
+      }
+      expect(() =>
+        assertSessionProjectionCheckpoint(checkpoint, { latestSequence: 4 }),
+      ).not.toThrow();
+    });
+
+    it("uses the adapter's own wording when it supplies one", () => {
+      expect(() =>
+        assertSessionProjectionCheckpoint(null, { invalidMessage: "ledger says no" }),
+      ).toThrow("ledger says no");
+    });
   });
 
   it("rejects malformed checkpoint metadata", () => {

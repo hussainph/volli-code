@@ -3708,6 +3708,73 @@ describe("SessionRuntime native adapter contract", () => {
     expect(reported).toEqual([failure]);
   });
 
+  it("reports a tail read that fails on a checkpoint hit, and refolds the whole log", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("tail page could not be read");
+    let failTail = true;
+    const failingTail: SessionEngine = {
+      ...base.engine,
+      // Only the tail read after a checkpoint cursor fails; the whole-log read
+      // starts at zero and still succeeds, which is the fallback under test.
+      listEvents: async (query) => {
+        if (failTail && (query.afterSequence ?? 0) > 0) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingTail,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+    failTail = false;
+    await runtime.close();
+  });
+
+  it("reports a checkpoint it could not capture when an attachment closes", async () => {
+    const base = composition();
+    const failure = new Error("event read failed while closing");
+    let failReads = false;
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      listEvents: async (query) => {
+        if (failReads) throw failure;
+        return base.engine.listEvents(query);
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const sessionId = await createAndAttach(runtime);
+    await runtime.projection({ sessionId });
+
+    failReads = true;
+    // The executor closing itself must still be recorded: capturing the prefix
+    // is a best-effort cache write, not part of making the close durable.
+    await expect(
+      base.adapter.emit({ kind: "attachment", state: "closed" }),
+    ).resolves.toBeUndefined();
+    expect(reported).toContain(failure);
+
+    failReads = false;
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { liveExecutor: null },
+    });
+    await runtime.close();
+  });
+
   it("keeps working when the host's checkpoint failure reporter itself throws", async () => {
     const base = composition();
     const failingWrites: SessionEngine = {

@@ -1580,17 +1580,14 @@ export function assertSessionProjectionCheckpoint(
     throw new Error(invalidMessage);
   }
 
-  if (
-    options.latestSequence !== undefined &&
-    (!Number.isInteger(options.latestSequence) ||
-      options.latestSequence < 0 ||
-      throughSequence > options.latestSequence)
-  ) {
-    throw new Error(
-      throughSequence > (options.latestSequence ?? 0)
-        ? "Session projection checkpoint is ahead of durable history"
-        : invalidMessage,
-    );
+  if (options.latestSequence === undefined) return;
+  // A head that is not a sequence is an invalid CALL, not evidence about the
+  // checkpoint, so it is reported as malformed input rather than as staleness.
+  if (!Number.isInteger(options.latestSequence) || options.latestSequence < 0) {
+    throw new Error(invalidMessage);
+  }
+  if (throughSequence > options.latestSequence) {
+    throw new Error("Session projection checkpoint is ahead of durable history");
   }
 }
 

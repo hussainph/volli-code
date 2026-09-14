@@ -166,6 +166,57 @@ describe("query and mutation", () => {
     await expect(answer).resolves.toEqual(response.data);
   });
 
+  it("times a transport failure too, without carrying the payload into the sample", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let now = 10;
+    const client = createSessionRpcClient(bridge, {
+      now: () => (now += 3),
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    // A bridge that never answers is the case a latency number is most wanted
+    // for, so the failed call is measured rather than dropped. There is no
+    // response, so its byte count is zero rather than a guess.
+    bridge.rejectRequest(new Error("bridge is gone"));
+
+    await expect(answer).rejects.toThrow("bridge is gone");
+    expect(samples).toEqual([
+      {
+        kind: "round-trip",
+        procedure: "session.projection",
+        durationMs: 3,
+        requestBytes: 68,
+        responseBytes: 0,
+        outcome: "transport-error",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-1");
+  });
+
+  it("skips a round-trip sample when a clock read fails around a transport failure", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    let reads = 0;
+    const client = createSessionRpcClient(bridge, {
+      now: () => {
+        reads += 1;
+        if (reads === 2) throw new Error("clock failed");
+        return reads;
+      },
+      record: (sample) => samples.push(sample),
+    });
+
+    const answer = client.session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.rejectRequest(new Error("bridge is gone"));
+
+    await expect(answer).rejects.toThrow("bridge is gone");
+    expect(samples).toEqual([]);
+  });
+
   it("skips a round-trip sample when either performance clock read fails", async () => {
     for (const failedRead of [1, 2]) {
       const bridge = fakeBridge();
@@ -670,6 +721,32 @@ describe("sessionRpcClient", () => {
     bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
 
     await expect(answer).resolves.toEqual({ projection: {}, throughSequence: 4 });
+  });
+
+  it("accepts an init-script observer that brings no clock of its own", async () => {
+    const bridge = fakeBridge();
+    const samples: SessionRpcPerformanceSample[] = [];
+    vi.stubGlobal("window", {
+      api: { sessionRpc: bridge },
+      // `now` is optional: a harness that only wants byte counts and procedure
+      // names should not have to supply a clock, and then the ambient one is
+      // used rather than the sample being dropped.
+      __VOLLI_SESSION_RPC_PERFORMANCE__: {
+        record: (sample: SessionRpcPerformanceSample) => samples.push(sample),
+      },
+    });
+    vi.resetModules();
+    const { sessionRpcClient: isolatedSessionRpcClient } = await import("./session-rpc-ipc-link");
+
+    const answer = isolatedSessionRpcClient().session.projection.query({ sessionId: "session-1" });
+    await flush();
+    bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
+    await answer;
+
+    expect(samples).toEqual([
+      expect.objectContaining({ kind: "round-trip", procedure: "session.projection" }),
+    ]);
+    expect(samples[0]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   // A StrictMode double render must not stack a second event listener onto the
