@@ -5,6 +5,7 @@ import {
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
+import { CHECKPOINT_REFRESH_EVENTS } from "./session-engine";
 import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
@@ -1149,6 +1150,79 @@ describe("SessionEngine creation and explicit commands", () => {
     const created = await plane.createSession(createRequest("command-checkpoint-sink"));
     await expect(plane.getSession({ sessionId: created.session.id })).resolves.toMatchObject({
       session: { id: created.session.id },
+    });
+  });
+
+  it("keeps recording facts when refreshing the derived checkpoint fails", async () => {
+    // `observe` refreshes the checkpoint once the durable cache has drifted a
+    // whole window behind the log (VC-356). That write is a cache write, so it
+    // must behave like one: a Session that can never refresh is slower on its
+    // next fold and otherwise completely unaffected. The facts still land, in
+    // order, and the host hears about the failure rather than losing it.
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint table is read-only");
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "saveProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return () => {
+                  throw failure;
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => 100 },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const { session } = await plane.createSession(createRequest("command-refresh-failure"));
+    const opened = attachment(session.id);
+    await plane.observe({
+      id: "observation-refresh-opened",
+      sessionId: session.id,
+      occurredAt: 200,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+
+    // Past one refresh window, so at least one refresh is certainly attempted.
+    const facts = CHECKPOINT_REFRESH_EVENTS + 4;
+    for (let index = 0; index < facts; index += 1) {
+      await plane.observe({
+        id: `observation-refresh-${index}`,
+        sessionId: session.id,
+        occurredAt: 300 + index,
+        provenance: adapterProvenance,
+        attachmentId: opened.id,
+        kind: "attachment.native_referenced",
+        native: { id: `native-${index}`, detail: null },
+      });
+    }
+
+    expect(reported.length).toBeGreaterThan(0);
+    expect(reported.every((error) => error === failure)).toBe(true);
+
+    // The log is untouched by the cache's failure: every fact is present, in
+    // one unbroken ascending sequence.
+    const events = await plane.listEvents({ sessionId: session.id });
+    const referenced = events.filter(
+      (event) => event.payload.kind === "attachment.native_referenced",
+    );
+    expect(referenced).toHaveLength(facts);
+    expect(events.map((event) => event.sequence)).toEqual(events.map((_event, index) => index + 1));
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      liveExecutor: { id: opened.id, native: { id: `native-${facts - 1}` } },
     });
   });
 

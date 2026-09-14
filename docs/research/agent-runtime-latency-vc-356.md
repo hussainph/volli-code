@@ -1,159 +1,239 @@
-# Agent-runtime latency profile (VC-356)
+# Agent-runtime per-turn cost (VC-356)
 
 ## Scope and method
 
-This profile measures CPU overhead owned by `@volli/agent-runtime`; it does not
-replace provider and tool wall-clock measurements. The default fixture makes no
-network, browser, model, or paid-provider calls.
+This profiles the CPU a turn spends inside `@volli/agent-runtime`, plus the
+durable cost the Session Engine pays to record what that turn produced. It does
+not measure provider latency or real tool execution: those dominate a turn's
+wall clock, cannot be measured without spending money, and `bench:live` is the
+lane for them. The default lane makes no network, browser, model or paid call.
 
-The checked-in fixture extends `packages/agent-runtime/bench/parallel-tools/` with
-`runtime-cost*` modules. It covers:
+Two instruments, in the package that owns each subject:
 
-- system-prompt and first-message assembly;
-- model-switch context projection for 480 messages (about 450 KB) plus 20 tool schemas;
-- normalization of one completed tool activity with bounded nested output and a patch;
-- steady-state streamed-delta translation.
+| instrument | subject |
+|---|---|
+| `packages/agent-runtime/bench/parallel-tools/runtime-cost*` | prompt assembly, context projection, activity normalization |
+| `packages/session-engine/src/turn-write-cost.bench.test.ts` | what recording one streamed turn costs the ledger |
 
-`pnpm -C packages/agent-runtime bench:runtime` is the short regression probe.
-The longer CPU-profile arm is:
+The split is deliberate. The Agent Runtime emits observations and holds no
+durable Session state (`CONTEXT.md`), so a probe inside it cannot honestly
+price the Engine's work — an earlier draft of this profile reached across the
+package boundary into `@volli/session-engine`'s private translator to do so,
+which is both a layering inversion and a dependency the package does not
+declare.
 
 ```sh
-VOLLI_CONCURRENCY_HINT=2 pnpm -C packages/agent-runtime bench:runtime:profile
+pnpm -C packages/agent-runtime bench:runtime             # fast probe arm
+pnpm -C packages/agent-runtime bench:runtime:published   # the arm figures are quoted from
+pnpm -C packages/agent-runtime bench:runtime:profile     # --cpu-prof + bottom-up table
+pnpm -C packages/session-engine test src/turn-write-cost.bench.test.ts
 ```
 
-That command bundles the fixture, runs Node with `--cpu-prof`, and prints the
-profile's bottom-up self-sample table. The generated bundle, source map, and
-`.cpuprofile` are placed in the ignored
-`packages/agent-runtime/.runtime-profile/` directory. Open the `.cpuprofile` in
-Chrome DevTools' Performance panel to inspect the complete flame chart.
+### Reading the timing numbers honestly
 
-Measurements below used commit `09acc82e67c810d48e791d80b1605e86daa224d9`
-plus the indicated before/after working tree, Node 24.18.0, Apple M1 (8 logical
-CPUs), 16 GiB RAM, macOS 25.5.0, and `VOLLI_CONCURRENCY_HINT=2`. Each profile
-arm used three warm-up batches and 20 measured batches. Values are microseconds
-per operation; RSD is the relative standard deviation across batches.
+Two things about this harness matter more than any figure in it.
+
+**Batch scale changes the answer, not just the runtime.** These operations cost
+single-digit microseconds, which is the same order as `performance.now()`. The
+probe arm runs batches of one to a few operations and therefore prices the
+timer alongside the work; the published arm runs 20× batches. The arm and its
+scale are printed above every table so the two can never be confused.
+
+**A loaded machine cannot be measured by comparing separate runs.** During this
+work the host sat at load average 11 (other Sessions). Identical code measured
+in separate processes varied by 2×, which is far larger than any effect here.
+The first attempt to evaluate the redaction guard produced flatly contradictory
+answers that way. Anything comparing two implementations must therefore be
+**paired**: both timed in one process, interleaved, many rounds, compared by
+median and by how often each round wins.
+
+Because of that, the table now marks any figure above 20% RSD as *too noisy to
+quote* and says so beneath itself. **The regression guards that matter do not
+depend on a quiet machine at all** — they count content reads and ledger rows
+rather than microseconds, and are asserted in the bench tests.
 
 ## Ranked findings: the user is waiting
 
-These are runtime-owned CPU costs, ranked by baseline p50. Provider/model and
-actual tool execution still dominate wall time at millisecond-to-minute scale;
-they are intentionally absent from this deterministic probe.
+Ranked by cost on the path a person waits on. Everything below is
+user-waiting; see the next section for why almost nothing here is background.
 
-| Rank | Critical-path work | Before p50 / p95 | Before RSD | After p50 / p95 | After RSD | p50 change | Result |
-|---:|---|---:|---:|---:|---:|---:|---|
-| 1 | Project long context after a model switch | 1,531.9 / 1,845.1 us | 8.0% | 7.5 / 14.8 us | 35.3% | -99.5% | Fixed: attachment-local message, prompt, and tool token estimates are reused by tokenizer family. |
-| 2 | Normalize a bounded completed-tool activity | 744.7 / 1,022.9 us | 14.4% | 550.0 / 654.2 us | 8.5% | -26.1% | Fixed: one redaction guard replaces four clean-string scans, JSON length is serialized once, and patch additions/removals share one scan. |
-| 3 | Assemble the system prompt | 18.0 / 19.8 us | 5.1% | 2.9 / 3.1 us | 5.4% | -83.9% | Fixed: role-static operating/workspace layers are preassembled and prompt sections are joined without a temporary mapped array. |
-| 4 | Assemble the first delivered message | 3.5 / 4.7 us | 13.5% | 3.2 / 3.5 us | 7.6% | noise | Not changed. It runs only for the opening message. |
-| 5 | Translate one streaming delta | 0.2 / 0.4 us | 39.1% | 0.3 / 0.6 us | 45.8% | timer noise | Not changed. Deltas remain transient and do no durable write. |
+### 1. Recording a turn cost more the longer the Session had run — **fixed**
 
-The optimized context result is a steady-state per-turn result: compaction
-preflight and provider output-ceiling checks encounter the same settled prefix
-in succession. The first projection still computes every estimate. New settled
-messages are computed once as the append-only context grows.
+The largest finding, and the only one whose cost grows without bound.
 
-### Other critical-path findings not represented as local CPU timings
+`SessionEngine.observe` listed a Session's **entire** event log before
+recording each durable fact, then folded it. `submit` did the same when
+accepting a Command. So a turn's durable cost was a function of the Session's
+age rather than of what the turn reported — quadratic across a Session. The
+real profile's busiest Session holds 1,668 events.
 
-- Threshold compaction is awaited before `agent.prompt`; overflow compaction is
-  awaited before retry. A summarization call is therefore user-waiting work, not
-  background work. Its provider latency cannot be represented honestly without
-  a live call, so the default fixture does not invent one.
-- `SessionEngine.observe` currently reads and folds a Session's complete event
-  history for each durable observation. This is O(history) per fact and can
-  become O(history squared) across a long turn. VC-355 owns the adjacent
-  session-engine work; VC-356 left `observation-translation.ts`, durable event
-  shapes, event IDs, and ID derivation untouched after coordinating that
-  boundary.
-- Transcript subscribers deliberately apply backpressure. A slow listener can
-  pace streamed deltas even though those deltas are not persisted. Removing
-  that ordering/backpressure is a semantics change, not a safe CPU cleanup.
+Measured with the ledger probe, at a fixed 44-observation turn:
 
-### Paths ruled out as repeated turn cost
+| prior events | durable writes | event rows read | widest single read |
+|---:|---:|---:|---:|
+| 0 | 5 | 29 | 7 |
+| 600 | 5 | **3,040** → **145** | **610** → **31** |
+| 1,200 | 5 | — → **265** | — → **55** |
 
-- Model catalog/access resolution is owned by `createPiAgentRuntime` and reused;
-  `startSession` awaits the existing `catalogReady` promise. It is not rebuilt
-  on each turn.
-- `NodeExecutionEnv`, the session tool bundle, and the system prompt are built
-  once while attaching a Session, not for every tool call or provider request.
-  System-prompt assembly remains in the table because attachment startup is a
-  user-waiting boundary, but it is not multiplied by turn count.
-- The existing parallel-tools fixture already measures real Pi dispatch.
-  VC-245's real-transcript projection found only about 1.2% aggregate tool-time
-  savings from parallel mode, so dispatch reordering was not promoted above the
-  measured CPU work.
+Five durable facts cost 3,040 row reads to land once 600 events preceded them,
+and one of those reads was the whole Session.
+
+The fix uses the projection checkpoints VC-355 landed, and needed one thing
+VC-355 did not have: **a refresh cadence**. VC-355 persists a checkpoint when
+an attachment closes, which bounds nothing for the Session that is currently
+running — a long chat appends facts for the whole attachment. `observe` now
+refreshes the checkpoint once the durable cache has drifted a full window
+(`CHECKPOINT_REFRESH_EVENTS = 64`) behind the log. That bounds both sides: at
+most one window is ever re-folded, and at most one cache row is written per
+window.
+
+The remaining reads are bounded by the window, not by history. The two large
+arms differ only by where the Session sits inside the window when the turn
+starts — phase, not growth — which is why the probe asserts a ceiling per arm
+rather than equality between arms.
+
+Sequence assignment moved from `(events.at(-1)?.sequence ?? 0) + 1` over the
+whole log to `latestEventSequence()`, an index read. **No durable event shape,
+payload or id derivation changed**; sequences are still 1-based and assigned
+identically.
+
+One read on this path still walks the log, deliberately: resolving which event
+carries a re-delivered receipt. No index answers that question, and narrowing
+it to the observation's own id would change behaviour for a receipt
+re-delivered under a new envelope id. It is the rare replay path.
+
+### 2. Re-tokenizing a settled context on every preflight — **fixed**
+
+Compaction preflight and the provider output-ceiling check both project context
+occupancy, in succession, over the same settled prefix. Both re-tokenized every
+message, the system prompt and all tool schemas each time. Pi messages are
+append-only once settled and request metadata is frozen for an attachment, so
+rescanning them cannot improve the estimate.
+
+A per-attachment projector now reuses those estimates. It is keyed by
+**tokenizer family**, not by model, because `estimateMessageTokens` depends on
+the model only through its counter — two models of one family necessarily
+agree.
+
+The guard against this silently breaking is not a timing: the bench asserts
+that a second projection of the same prefix touches **no** message content, and
+that the cached answer always equals the uncached one.
+
+### 3. Redaction scanned clean tool output four times — **fixed, and re-measured**
+
+Every activity payload string ran four regex replacements to strip secrets.
+Most tool output holds none. One marker scan now gates the four.
+
+This one is worth reading carefully, because the first measurement of it was
+wrong. The fixture's "clean" blocks were punctuation-free prose, and
+redaction's cost is driven by how often `-`, `_`, `:` and `=` appear — which is
+constantly, in the source code a coding agent's `read` and `execute` actually
+return. The fixture now uses source-shaped output.
+
+Re-measured with paired interleaved rounds:
+
+| corpus | no guard | guard | guard wins |
+|---|---:|---:|---:|
+| prose | 7.451 us | 6.256 us | 35/41 rounds |
+| source | 7.444 us | 6.569 us | 39/41 rounds |
+
+The guard holds, on both shapes. Two smaller changes came with it: the JSON
+length in `normalizedString` is serialized once instead of twice, and a patch's
+additions and removals share one scan instead of two.
+
+**The guard is a hand-mirrored copy of the four patterns, and a marker that
+stops matching leaks a credential into durable history with nothing to notice
+it.** It is now pinned by a case per pattern arm — each written as a secret in
+an unremarkable key, so the recursive key-based redaction cannot mask a marker
+failure — plus a marker-free case. Removing any arm from the marker fails those
+tests. Separately, 400,000 fuzzed strings found no input the four patterns
+redact that the marker misses.
+
+### 4. Role-static prompt layers rebuilt per attachment — **fixed**
+
+The operating and workspace layers depend only on the Session Role and whether
+resources exist, so they are assembled once at module load. `CONTEXT.md` already
+requires the system prompt to be a pure function of Role, bundle, version and
+resource set; the bench asserts that property directly.
+
+This is the smallest of the four and is honestly labelled: it runs once per
+attachment, not per turn. A hand-rolled join was tried here and reverted — it
+bought microseconds once per Session in exchange for two non-null assertions.
 
 ## Ranked findings: background
 
-No meaningful per-turn CPU hotspot in the profiled pipeline is actually
-background. The expensive-looking paths are all awaited before the next model
-request, tool result, or subscriber delivery:
+Almost nothing in this pipeline is background, which is itself the finding.
+The expensive-looking paths are all awaited before the next model request, tool
+result or subscriber delivery:
 
-1. compaction is blocking maintenance;
-2. durable observation translation and ledger appends are serialized and
-   awaited;
-3. transient subscriber fan-out is awaited for backpressure.
+1. **Compaction is blocking maintenance.** Threshold compaction is awaited
+   before `agent.prompt`; overflow compaction is awaited before retry. A
+   summarization call is user-waiting work. Its provider latency cannot be
+   represented honestly without a live call, so the default fixture does not
+   invent one.
+2. **Durable translation and ledger appends are serialized and awaited.**
+3. **Transcript subscriber fan-out is awaited for backpressure.** A slow
+   listener paces streamed deltas. That ordering is a semantics guarantee, not
+   a CPU cost to remove.
 
-The passive observability sink is the relevant non-awaited path, but its cost is
-host-defined and the default no-op was below this fixture's useful resolution.
-It was not promoted above user-waiting work or “optimized” with an invented
-latency.
+The genuinely non-awaited path is the passive observability sink, whose cost is
+host-defined and whose default no-op is below this fixture's resolution. It was
+not promoted above user-waiting work or given an invented latency.
 
-## CPU flame-chart findings
+## Paths ruled out
 
-The profile summarizer aggregates V8 node `hitCount` values (self samples), the
-same bottom-up evidence shown by a flame chart. Operation counts are weighted to
-make short functions visible, so percentages rank CPU inside this fixture, not
-production call frequency.
+- **Model catalog and access** are resolved once by `createPiAgentRuntime` and
+  reused; `startSession` awaits the existing `catalogReady` promise. Not rebuilt
+  per turn, and no network call sits on a path a user waits on.
+- **`scoped-execution-env.ts`** builds `NodeExecutionEnv`, the tool bundle and
+  the system prompt once while attaching a Session — not per tool call.
+- **Tool dispatch.** The existing parallel-tools bench already measures real Pi
+  dispatch. VC-245 found ~1.2% aggregate tool-time saving from parallel mode on
+  real transcripts, so dispatch reordering was not promoted above the measured
+  CPU work.
 
-Before (`5,756` self samples):
+## CPU flame chart
 
-- `composeSystemPrompt`: 874 samples (15.2%);
-- `conservativeTokens`: 828 (14.4%);
-- the four payload-redaction regular expressions: 1,202 combined (20.9%);
-- `normalizedString`: 401 (7.0%);
-- `countDiffLines`: 335 (5.8%).
+`bench:runtime:profile` bundles the fixture, runs it under `--cpu-prof`, and
+prints the bottom-up self-sample table. Rows are keyed by **call frame** —
+function name plus script and line — because a bundle holds many `run`, `count`
+and `main` frames and merging them by name attributes cost to the wrong
+function.
 
-After (`2,295` self samples):
+After the changes, the fixture's remaining cost is dominated by the redaction
+marker (17.8% of self samples) and prompt composition (15.8%). The marker's
+share grew because everything around it shrank; it is kept deliberately, since
+weakening secret redaction would change durable activity payloads.
 
-- `conservativeTokens`: 5 samples (0.2%); unchanged prefixes no longer dominate;
-- `composeSystemPrompt`: no self samples; remaining prompt work is chiefly
-  `promptResourceBlock` (117 samples);
-- `normalizedString`: 145 samples, down 63.8%;
-- `countDiffLines`: 168 samples, down 49.9%;
-- the combined redaction guard is now the largest remaining fixture cost (907
-  samples). This remains deliberately conservative because removing or
-  weakening secret redaction would change the durable activity payload.
+## Concurrency and `VOLLI_CONCURRENCY_HINT`
 
-Total sampled CPU in the weighted fixture fell from 5,756 to 2,295 self samples
-(-60.1%).
+**No new runtime fan-out was introduced, and the hint is not used to reorder
+model-issued tool calls.** Runtime tool execution stays Pi's documented
+sequential mode: VC-245 measured ~1.2% aggregate saving from speculative
+parallel mode, while mixed side effects still require ordering. The hint is a
+budget for work Volli chooses to start, not permission to reorder work a model
+asked for in sequence.
 
-## Loaded arm and concurrency
+The benchmark config uses one worker even when the hint is higher, because
+concurrent benchmark files would measure contention rather than one runtime
+operation. That is consistent with `CLAUDE.md`'s rule that a budget only ever
+lowers a project's own cap.
 
-One post-change arm ran while one `yes` process kept a logical CPU busy:
-
-| Work | Loaded p50 / p95 | Loaded RSD |
-|---|---:|---:|
-| System prompt | 3.7 / 5.5 us | 30.1% |
-| First message | 3.6 / 5.6 us | 29.9% |
-| Long-context projection | 7.8 / 16.2 us | 58.7% |
-| Activity normalization | 739.9 / 948.2 us | 36.9% |
-| Delta translation | 0.2 / 0.3 us | 14.1% |
-
-The benchmark config intentionally uses one worker even when
-`VOLLI_CONCURRENCY_HINT` is larger: concurrent benchmark files would measure
-contention rather than one runtime operation. Runtime tool execution remains
-Pi's documented sequential mode. VC-245 found only about 1.2% aggregate
-real-transcript tool-time savings from speculative parallel mode, while mixed
-side effects still require ordering. `VOLLI_CONCURRENCY_HINT` is therefore not
-used as permission to reorder model-issued tool calls; no new runtime fan-out
-was introduced by this work.
+One existing fan-out is worth naming rather than leaving silent: Model Access
+probes every provider concurrently with an unbounded `Promise.all`. It is left
+as it is on purpose — those probes are network-bound and individually
+timeout-bounded, while the hint is a CPU-job budget. Gating them on core count
+would make sign-in slower without freeing a core.
 
 ## Contract notes
 
-- No durable event, activity, or observation shape changed.
-- No event or observation ID derivation changed.
-- The token cache is attachment-local. It assumes the existing Pi contract that
-  settled messages and frozen tool definitions are not mutated in place.
-- The activity optimizations retain the exact replacement expressions and the
-  exact JSON-size accounting; existing activity tests pin output, redaction,
-  bounds, and diff counts.
+- No durable event, activity or observation shape changed.
+- No event or observation id derivation changed. Sequence assignment reads the
+  same 1-based values from an index instead of from a full log scan.
+- The projection checkpoint remains a rebuildable cache: a refresh that fails
+  is reported through `onProjectionCheckpointFailure` and leaves the immutable
+  log canonical. A Session that can never refresh is slower, never wrong, and
+  that path is pinned by a test.
+- The token cache is attachment-local and assumes Pi's existing contract that
+  settled messages and frozen tool definitions are not mutated in place. That
+  assumption is a documented comment, not a type.

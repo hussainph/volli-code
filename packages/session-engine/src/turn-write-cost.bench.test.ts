@@ -5,6 +5,7 @@ import type {
   SessionLedgerIds,
   SessionLedgerTransaction,
 } from "@volli/shared";
+import { CHECKPOINT_REFRESH_EVENTS } from "./session-engine";
 import {
   createInMemorySessionLedger,
   createInMemoryTranscriptArtifactStore,
@@ -50,11 +51,13 @@ import {
 const venue = { id: "machine-1", kind: "local" as const };
 
 /**
- * Prior-history sizes the probe compares. Two points, because one cannot show
- * a slope; kept small because the cost under measurement is quadratic and this
- * runs in the default lane.
+ * Prior-history sizes the probe compares.
+ *
+ * Three points, not two. Two can show that something grew; only a third can
+ * show that it stopped growing, which is the claim this probe now makes. The
+ * last two deliberately differ by a factor of two.
  */
-const HISTORY_SIZES = [0, 120] as const;
+const HISTORY_SIZES = [0, 120, 240] as const;
 
 function fixedLocation(directory: string): SessionLocationResolver {
   const at = async () => ({ directory, venue });
@@ -105,9 +108,16 @@ class FakeAdapter implements NativeHarnessAdapter {
 interface LedgerCounts {
   /** Durable facts appended. The amplification the ticket asks about. */
   appended: number;
-  /** Event rows handed back by `listEvents`. What recording those appends costs. */
+  /**
+   * Event rows handed back, across BOTH event reads.
+   *
+   * `listEvents` is the audit read and `listProjectionEvents` the fold read
+   * (VC-355). They are counted together on purpose: a fix that moved a
+   * whole-log read from one to the other would have changed nothing, and
+   * counting only one of them is how a probe reports a rename as a win.
+   */
   rowsRead: number;
-  /** `listEvents` calls, so a large row count can be read as breadth or depth. */
+  /** Calls across both reads, so a large row count can be read as breadth or depth. */
   listCalls: number;
   /**
    * Rows returned by the single widest `listEvents` call.
@@ -131,6 +141,11 @@ function countingLedger(inner: SessionLedger): {
   reset: () => void;
 } {
   const counts: LedgerCounts = { appended: 0, rowsRead: 0, listCalls: 0, widestRead: 0 };
+  const record = (rows: number): void => {
+    counts.listCalls += 1;
+    counts.rowsRead += rows;
+    counts.widestRead = Math.max(counts.widestRead, rows);
+  };
   const ledger: SessionLedger = {
     transaction: (work) =>
       inner.transaction((transaction) => {
@@ -142,9 +157,12 @@ function countingLedger(inner: SessionLedger): {
           },
           listEvents: (query) => {
             const events = transaction.listEvents(query);
-            counts.listCalls += 1;
-            counts.rowsRead += events.length;
-            counts.widestRead = Math.max(counts.widestRead, events.length);
+            record(events.length);
+            return events;
+          },
+          listProjectionEvents: (query) => {
+            const events = transaction.listProjectionEvents(query);
+            record(events.length);
             return events;
           },
         };
@@ -283,30 +301,8 @@ describe("session-engine turn write-cost probe", () => {
       const measured = await Promise.all(
         HISTORY_SIZES.map(async (size) => ({ size, counts: await measureTurn(size) })),
       );
-      const [cold, warm] = measured;
-      if (!cold || !warm) throw new Error("Both history sizes must be measured");
-
-      // The ceiling. A turn's durable cost is a property of what the turn
-      // reported — one settled message, two activities, the boundaries — and
-      // NOTHING about it may grow with the Session's age. Per-chunk durability
-      // would put this past 40 immediately; a history-dependent write would make
-      // the two arms differ at all.
-      expect(cold.counts.appended).toBe(warm.counts.appended);
-      expect(cold.counts.appended).toBeLessThanOrEqual(DELTA_COUNT);
-
-      // The slope, and the finding. `SessionEngine.observe` folds a Session's
-      // whole event list for every durable fact, so what one identical turn
-      // costs to RECORD is set by how much history precedes it. Asserted as a
-      // strict inequality rather than a ratio: the exact multiple is a fixture
-      // detail, but that it grows at all is the defect.
-      expect(warm.counts.rowsRead).toBeGreaterThan(cold.counts.rowsRead);
-
-      // And it grows because ONE call reads everything, not because there are
-      // more calls. At 120 prior turns the widest single read is the whole
-      // Session; the arms make a comparable number of calls either way.
-      const priorEvents = HISTORY_SIZES[1] * cold.counts.appended;
-      expect(warm.counts.widestRead).toBeGreaterThanOrEqual(priorEvents);
-      expect(cold.counts.widestRead).toBeLessThan(priorEvents);
+      const [cold, warm, warmer] = measured;
+      if (!cold || !warm || !warmer) throw new Error("Every history size must be measured");
 
       const rows = measured.map(({ size, counts }) => ({
         priorTurns: size,
@@ -334,6 +330,38 @@ describe("session-engine turn write-cost probe", () => {
           "",
         ].join("\n"),
       );
+      // The ceiling. A turn's durable cost is a property of what the turn
+      // reported — one settled message, two activities, the boundaries — and
+      // NOTHING about it may grow with the Session's age. Per-chunk durability
+      // would put this past 40 immediately; a history-dependent write would make
+      // the two arms differ at all.
+      expect(cold.counts.appended).toBe(warm.counts.appended);
+      expect(warm.counts.appended).toBe(warmer.counts.appended);
+      expect(cold.counts.appended).toBeLessThanOrEqual(DELTA_COUNT);
+
+      // The finding this probe was written for, and what VC-356 changed.
+      // Recording one fact used to fold the Session's whole event list first,
+      // so an identical turn cost more the longer the Session had run: at 600
+      // prior events, 5 durable writes read 3,040 rows to land them.
+      //
+      // The cost is now bounded by how stale the derived checkpoint may get,
+      // never by the Session's age.
+      //
+      // The arms are compared against that BOUND rather than against each
+      // other, because they legitimately differ: where a Session sits inside
+      // the refresh window when the measured turn begins is a function of its
+      // total event count, so 600 and 1,200 prior events leave different
+      // residues to fold. That is phase, not growth. What must hold for every
+      // arm is the ceiling.
+      const perTurnEvents = cold.counts.appended;
+      const widestPermitted = CHECKPOINT_REFRESH_EVENTS + perTurnEvents;
+      for (const { size, counts } of measured) {
+        expect(counts.widestRead).toBeLessThanOrEqual(widestPermitted);
+        expect(counts.rowsRead).toBeLessThanOrEqual(counts.listCalls * widestPermitted);
+        // And the ceiling is worth having: at the larger arms it is a small
+        // fraction of the whole-log read this path used to make.
+        if (size > 0) expect(counts.rowsRead).toBeLessThan((size * perTurnEvents) / 2);
+      }
     },
     PROBE_TIMEOUT_MS,
   );
