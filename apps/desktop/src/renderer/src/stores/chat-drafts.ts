@@ -39,10 +39,12 @@ import {
   CHAT_DRAFTS_APP_STATE_KEY,
   isBlobLinkView,
   isPromptResource,
+  isProvisionalChatDraftPhase,
   parseSessionModel,
   type BlobLinkView,
   type ModelSelection,
   type PromptResource,
+  type ProvisionalChatDraftPhase,
 } from "@volli/shared";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
@@ -115,10 +117,12 @@ export interface ProvisionalChatDraft {
   title: string | null;
   model?: ModelSelection;
   /**
-   * The Session row exists, but Draft-owned Blob links have not all transferred
-   * yet. A retry replays create under the same operation/id and resumes there.
+   * How far this Draft has got towards being a Session. Its vocabulary lives
+   * in `@volli/shared` because main reads the same persisted envelope at boot
+   * and must recognise exactly the same set — see
+   * {@link ProvisionalChatDraftPhase}.
    */
-  phase: "draft" | "session-created";
+  phase: ProvisionalChatDraftPhase;
 }
 
 export interface ChatDraft {
@@ -364,7 +368,7 @@ function readProvisionalChatDraft(value: unknown): ProvisionalChatDraft | undefi
     typeof operationId !== "string" ||
     operationId.length === 0 ||
     (title !== null && typeof title !== "string") ||
-    (phase !== "draft" && phase !== "session-created")
+    !isProvisionalChatDraftPhase(phase)
   ) {
     return undefined;
   }
@@ -426,11 +430,30 @@ function readPersistedDrafts(value: unknown): Record<string, ChatDraft> {
  * time only — live state keeps a draft that's mid-edit-to-blank until it's
  * actually written out, so retyping over a just-cleared box doesn't fight the
  * store.
+ *
+ * A PROVISIONAL Draft is exempt from the cap (VC-358). The cap exists because
+ * a durable Session's unsent words are recoverable in the sense that matters:
+ * the Session is still there, still listed, still openable, and the box is
+ * merely empty. A provisional Draft is the only handle on its identity — and
+ * once it is `session-created`, the only handle on a durable Session row and
+ * the held first message that has not reached a queue. Dropping one to make
+ * room for a text draft would strand both. They are bounded by open tabs
+ * rather than by this number, which is why exempting them cannot grow the
+ * envelope without bound.
  */
 function sanitizeDrafts(drafts: Readonly<Record<string, ChatDraft>>): Record<string, ChatDraft> {
   const kept = Object.entries(drafts).filter(([, draft]) => !isEmptyChatDraft(draft));
   kept.sort(([, a], [, b]) => b.touchedAt - a.touchedAt);
-  return Object.fromEntries(kept.slice(0, MAX_DRAFTS));
+  const capped: [string, ChatDraft][] = [];
+  let durable = 0;
+  for (const entry of kept) {
+    if (entry[1].provisional !== undefined) capped.push(entry);
+    else if (durable < MAX_DRAFTS) {
+      durable += 1;
+      capped.push(entry);
+    }
+  }
+  return Object.fromEntries(capped);
 }
 
 /** The draft a session already has, or the empty one every action starts from. */

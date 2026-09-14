@@ -383,6 +383,29 @@ export function draftAttachmentHashes(value: unknown): string[] {
 }
 
 /**
+ * How far a provisional chat Draft has got towards being a Session (VC-358).
+ *
+ * `draft` — nothing durable exists. `session-created` — the Session row landed
+ * but its Draft-owned Blob links have not all transferred, so a retry resumes
+ * there rather than minting again.
+ *
+ * The vocabulary lives here, not in the renderer store that owns the state,
+ * for one reason: TWO processes read the same persisted envelope, and they
+ * must recognise exactly the same set. The renderer drops a Draft whose phase
+ * it does not know; if main kept that Draft's ownerless Blobs anyway, those
+ * bytes would be retained by a reader for an owner the other reader has
+ * already discarded — a leak with no path left to release it.
+ */
+export type ProvisionalChatDraftPhase = "draft" | "session-created";
+
+/** Whether a persisted value names a phase both readers of the envelope know. */
+export function isProvisionalChatDraftPhase(
+  value: unknown,
+): value is ProvisionalChatDraftPhase {
+  return value === "draft" || value === "session-created";
+}
+
+/**
  * Blob hashes retained by persisted provisional chat Drafts (VC-358).
  *
  * A provisional chat Draft can name files in its live composer strip and in
@@ -392,6 +415,9 @@ export function draftAttachmentHashes(value: unknown): string[] {
  * entries need no exception: their `blob_links` rows retain them normally.
  * Like {@link draftAttachmentHashes}, this treats malformed renderer state as
  * empty rather than letting a damaged preference row block startup.
+ *
+ * Retains only what the renderer itself would keep — see
+ * {@link isProvisionalChatDraftPhase} for why the two readers must not differ.
  */
 export function chatDraftAttachmentHashes(value: unknown): string[] {
   if (typeof value !== "string") return [];
@@ -426,6 +452,7 @@ export function chatDraftAttachmentHashes(value: unknown): string[] {
     if (typeof provisional !== "object" || provisional === null || Array.isArray(provisional)) {
       continue;
     }
+    if (!isProvisionalChatDraftPhase((provisional as Record<string, unknown>)["phase"])) continue;
     readAttachments(record["attachments"]);
     const held = record["held"];
     if (!Array.isArray(held)) continue;

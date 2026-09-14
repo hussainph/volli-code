@@ -761,6 +761,71 @@ describe("persistence", () => {
     for (let i = 5; i < MAX_DRAFTS + 5; i++) expect(keys).toContain(`s${i}`);
   });
 
+  it("never evicts a provisional Draft to make room for a text draft", () => {
+    vi.useFakeTimers();
+    const storage = createMemoryStorage();
+    const store = createChatDraftsStore(storage);
+
+    // The oldest thing in the store, and therefore the first the cap would
+    // reach for. It is also the ONLY handle on this identity: evicting it
+    // loses the words and the operation id a retry needs.
+    vi.setSystemTime(0);
+    store.getState().openProvisional("unpromoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-unpromoted",
+      title: null,
+    });
+    store.getState().setDraft("unpromoted", "typed but never sent");
+    // Worse: this one's Session row already exists, so evicting it would
+    // strand a durable Session AND a held first message with no retry surface.
+    vi.setSystemTime(1);
+    store.getState().openProvisional("half-promoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op-half",
+      title: null,
+    });
+    store.getState().setDraft("half-promoted", "sent, mid-promotion");
+    store.getState().markProvisionalSessionCreated("half-promoted");
+
+    for (let i = 0; i < MAX_DRAFTS + 5; i++) {
+      vi.setSystemTime(100 + i);
+      store.getState().setDraft(`s${i}`, `text ${i}`);
+    }
+
+    const keys = Object.keys(readPersisted(storage)!.state.drafts);
+    expect(keys).toContain("unpromoted");
+    expect(keys).toContain("half-promoted");
+    // The cap still binds the drafts it is for — a durable Session's unsent
+    // words are recoverable because the Session itself is still listed.
+    expect(keys.filter((key) => key.startsWith("s"))).toHaveLength(MAX_DRAFTS);
+    for (let i = 0; i < 5; i++) expect(keys).not.toContain(`s${i}`);
+  });
+
+  it("still evicts a promoted Draft, which is an ordinary Session draft again", () => {
+    vi.useFakeTimers();
+    const storage = createMemoryStorage();
+    const store = createChatDraftsStore(storage);
+
+    vi.setSystemTime(0);
+    store.getState().openProvisional("promoted", {
+      projectId: "p1",
+      ticketId: null,
+      operationId: "op",
+      title: null,
+    });
+    store.getState().setDraft("promoted", "words");
+    store.getState().completePromotion("promoted");
+
+    for (let i = 0; i < MAX_DRAFTS; i++) {
+      vi.setSystemTime(100 + i);
+      store.getState().setDraft(`s${i}`, `text ${i}`);
+    }
+
+    expect(Object.keys(readPersisted(storage)!.state.drafts)).not.toContain("promoted");
+  });
+
   it("rehydrates drafts from a seeded storage into a fresh store", async () => {
     const storage = createMemoryStorage();
     createChatDraftsStore(storage).getState().setDraft("s1", "hello");

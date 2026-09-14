@@ -18,6 +18,7 @@ import {
   isBlobLinkView,
   isImageMime,
   isInlinableImageMime,
+  isProvisionalChatDraftPhase,
   materializedBlobNames,
   parseBlobUrl,
   resolveAttachment,
@@ -425,12 +426,12 @@ describe("chatDraftAttachmentHashes", () => {
             attachments: [{ linkId: null, blobHash: OTHER_HASH }],
           },
           chatA: {
-            provisional: {},
+            provisional: { phase: "draft" },
             attachments: "not an array",
             held: [null, [], { attachments: [null, [], { linkId: null, blobHash: "bad" }] }],
           },
           chatB: {
-            provisional: {},
+            provisional: { phase: "session-created" },
             attachments: [
               { linkId: "already-linked", blobHash: OTHER_HASH },
               { linkId: null, blobHash: HASH },
@@ -440,6 +441,25 @@ describe("chatDraftAttachmentHashes", () => {
         }),
       ),
     ).toEqual([HASH]);
+  });
+
+  it("retains only phases the renderer also recognises", () => {
+    // The two readers of this envelope must agree. If main kept the Blobs of a
+    // Draft whose phase the renderer refuses — `readProvisionalChatDraft`
+    // drops the whole provisional record — those bytes would be held for an
+    // owner that no longer exists in the only process that could ever release
+    // them. Better to sweep them: the renderer has already given the Draft up.
+    const unknownPhase = chatEnvelope({
+      chatA: {
+        provisional: { projectId: "p1", operationId: "op", phase: "a-later-build-invented-this" },
+        attachments: [{ linkId: null, blobHash: HASH }],
+      },
+    });
+    expect(chatDraftAttachmentHashes(unknownPhase)).toEqual([]);
+    expect(isProvisionalChatDraftPhase("draft")).toBe(true);
+    expect(isProvisionalChatDraftPhase("session-created")).toBe(true);
+    expect(isProvisionalChatDraftPhase("a-later-build-invented-this")).toBe(false);
+    expect(isProvisionalChatDraftPhase(undefined)).toBe(false);
   });
 
   it("retains nothing rather than throwing on malformed envelopes", () => {
