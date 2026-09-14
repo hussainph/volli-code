@@ -39,7 +39,7 @@ const INTERACTIONS = Object.freeze([
   ["rpc_round_trip", "Session RPC projection round trip"],
 ]);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     preset: "real",
     seed: DEFAULT_SEED,
@@ -72,6 +72,7 @@ function parseArgs(argv) {
     else if (argument === "--skip-build") args.skipBuild = true;
     else if (argument === "--keep-fixture") args.keepFixture = true;
     else if (argument === "--stream-only") args.streamOnly = true;
+    else if (argument === "--interactions") args.interactions = argv[++index].split(",");
     else if (argument === "--help") args.help = true;
     else throw new Error(`Unknown benchmark argument ${argument}`);
   }
@@ -95,6 +96,13 @@ function parseArgs(argv) {
   if (!Number.isFinite(args.slowdownMs) || args.slowdownMs < 0) {
     throw new Error("--slowdown-ms must be a non-negative number");
   }
+  if (args.interactions !== undefined) {
+    const known = new Set(INTERACTIONS.map(([id]) => id));
+    const unknown = args.interactions.filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      throw new Error(`--interactions names no such interaction: ${unknown.join(", ")}`);
+    }
+  }
   return args;
 }
 
@@ -111,6 +119,7 @@ function usage() {
     "  --stream-token-rate N      scripted stream rate in tokens/s (default: 30)",
     "  --skip-build               use current built app and chat bench",
     "  --stream-only              run only the stream+scroll renderer bench",
+    `  --interactions a,b         measure only these (${INTERACTIONS.map(([id]) => id).join(", ")})`,
     "  --slowdown-ms N            opt-in renderer slow path for sensitivity proof",
     "  --keep-fixture             keep generated fixture and run profiles",
     "",
@@ -676,7 +685,15 @@ async function measureRpc(page, app, sessionId) {
   }
 }
 
-async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, manifest }) {
+/**
+ * One repetition of the full-app arm.
+ *
+ * `wanted` is the interaction filter (`--interactions`). A change that affects
+ * one interaction measures only that one instead of forking this harness;
+ * every skipped measurement returns `null`, and an interaction with no samples
+ * is left out of the report rather than reported as a zero.
+ */
+async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, manifest, wanted }) {
   const profile = join(runRoot, `${armName}-${String(index + 1).padStart(2, "0")}`);
   await cloneFixture(fixtureDirectory, profile);
   const errors = [];
@@ -717,35 +734,48 @@ async function fullAppIteration({ fixtureDirectory, runRoot, armName, index, man
       rendererRssMb: await rendererRssMb(app),
     };
 
+    /** Runs one measurement, or skips it when this run did not ask for it. */
+    const measure = async (id, label, run) => {
+      if (!wanted.has(id)) return null;
+      console.log(`  measuring ${label}`);
+      return run();
+    };
+
     await openTicket(page, manifest.longChat.displayId);
-    console.log("  measuring long chat");
-    const longChat = await measureLongChat(page, app, "VC-353 long chat benchmark");
-    console.log("  measuring new chat");
-    const newChat = await measureNewChat(page, app, manifest.longChat.displayId);
-    console.log("  measuring new terminal");
-    const terminal = await measureNewTerminal(page, app, join(profile, "terminal-ready.txt"));
-    console.log("  measuring sidebar");
-    const sidebar = await measureSidebar(page, app);
-    console.log("  preparing ticket switch");
-    await selectTicketFromPalette(page, "Benchmark ticket 0001", manifest.longChat.displayId);
-    await tabStrip(page, TICKET_TAB_STRIP)
-      .getByRole("tab", { name: manifest.longChat.displayId, exact: true })
-      .waitFor({ state: "visible", timeout: 30_000 });
-    console.log("  measuring ticket switch");
-    const switchDisplayId = `${manifest.projectPrefix}-2`;
-    const ticketSwitch = await measureTicketSwitch(
-      page,
-      app,
-      "Benchmark ticket 0002",
-      switchDisplayId,
+    const longChat = await measure("long_chat", "long chat", () =>
+      measureLongChat(page, app, "VC-353 long chat benchmark"),
     );
-    console.log("  measuring RPC");
-    const rpc = await measureRpc(page, app, manifest.longChat.sessionId);
-    console.log("  measuring board render");
-    const board = await measureBoardRender(page, app, manifest.counts.tickets);
+    const newChat = await measure("new_chat", "new chat", () =>
+      measureNewChat(page, app, manifest.longChat.displayId),
+    );
+    const terminal = await measure("new_terminal", "new terminal", () =>
+      measureNewTerminal(page, app, join(profile, "terminal-ready.txt")),
+    );
+    const sidebar = await measure("sidebar_toggle", "sidebar", () => measureSidebar(page, app));
+    let ticketSwitch = null;
+    if (wanted.has("ticket_switch")) {
+      console.log("  preparing ticket switch");
+      await selectTicketFromPalette(page, "Benchmark ticket 0001", manifest.longChat.displayId);
+      await tabStrip(page, TICKET_TAB_STRIP)
+        .getByRole("tab", { name: manifest.longChat.displayId, exact: true })
+        .waitFor({ state: "visible", timeout: 30_000 });
+      console.log("  measuring ticket switch");
+      ticketSwitch = await measureTicketSwitch(
+        page,
+        app,
+        "Benchmark ticket 0002",
+        `${manifest.projectPrefix}-2`,
+      );
+    }
+    const rpc = await measure("rpc_round_trip", "RPC", () =>
+      measureRpc(page, app, manifest.longChat.sessionId),
+    );
+    const board = await measure("board_render", "board render", () =>
+      measureBoardRender(page, app, manifest.counts.tickets),
+    );
     return {
       samples: {
-        cold_launch: cold,
+        cold_launch: wanted.has("cold_launch") ? cold : null,
         long_chat: longChat,
         new_chat: newChat,
         new_terminal: terminal,
@@ -807,10 +837,14 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
   const name = load?.name ?? "idle";
   console.log(`\n=== ${name} arm ===`);
   const byInteraction = Object.fromEntries(INTERACTIONS.map(([id]) => [id, []]));
+  const wanted = new Set(args.interactions ?? INTERACTIONS.map(([id]) => id));
   const rendererErrors = [];
   let armResult;
   try {
-    if (!args.streamOnly) {
+    // Still one launch per repetition even when a single interaction is
+    // wanted: cold launch is the state every other measurement starts from,
+    // and reusing a window would measure a different thing.
+    if (!args.streamOnly && INTERACTIONS.some(([id]) => id !== "stream_scroll" && wanted.has(id))) {
       for (let index = 0; index < args.repetitions; index += 1) {
         console.log(`full app sample ${index + 1}/${args.repetitions}`);
         const result = await fullAppIteration({
@@ -819,10 +853,27 @@ async function runArm({ args, fixtureDirectory, runRoot, manifest, loaded, chatB
           armName: name,
           index,
           manifest,
+          wanted,
         });
-        for (const [id, sample] of Object.entries(result.samples)) byInteraction[id].push(sample);
+        for (const [id, sample] of Object.entries(result.samples)) {
+          if (sample !== null) byInteraction[id].push(sample);
+        }
         rendererErrors.push(...result.rendererErrors);
       }
+    }
+    if (!wanted.has("stream_scroll")) {
+      armResult = {
+        name,
+        busyCores: load?.workers ?? 0,
+        slowdownMs: args.slowdownMs,
+        interactions: INTERACTIONS.flatMap(([id, label]) =>
+          byInteraction[id].length === 0
+            ? []
+            : [aggregateInteraction(id, label, byInteraction[id])],
+        ),
+        rendererErrors: rendererErrors.slice(0, 50),
+      };
+      return armResult;
     }
     console.log(`stream+scroll samples ${args.repetitions} × ${args.streamSteps} stream steps`);
     const chat = await runChatBench({
