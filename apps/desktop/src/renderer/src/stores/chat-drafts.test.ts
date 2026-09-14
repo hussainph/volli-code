@@ -91,6 +91,22 @@ describe("provisional chat", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("passes a clear through the quiet storage edge rather than swallowing it", async () => {
+    // The quiet edge exists to skip writes that say nothing new. A CLEAR says
+    // something, and zustand exposes one, so it must reach the backing store
+    // — otherwise a cleared key would silently rehydrate on the next launch.
+    const storage = createMemoryStorage();
+    const remove = vi.spyOn(storage, "removeItem");
+    const store = createChatDraftsStore(storage);
+    store.getState().setDraft("s1", "words");
+    expect(readPersisted(storage)).not.toBeNull();
+
+    await store.persist.clearStorage();
+
+    expect(remove).toHaveBeenCalledWith("volli:chat-drafts");
+    expect(readPersisted(storage)).toBeNull();
+  });
+
   it("keeps the Draft a person is already typing into when its surface re-opens it", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().openProvisional("draft-1", PROVISIONAL);
@@ -143,6 +159,47 @@ describe("provisional chat", () => {
       touchedAt: expect.any(Number) as number,
       provisional: { ...PROVISIONAL, phase: "draft" },
     });
+  });
+
+  it("survives a quit on either side of the mint, with the message retryable", async () => {
+    // The two crash windows the design named. Before the mint there is no
+    // Session at all, so the words come back as an ordinary unsent Draft.
+    const storage = createMemoryStorage();
+    const beforeMint = createChatDraftsStore(storage);
+    beforeMint.getState().openProvisional("draft-1", PROVISIONAL);
+    beforeMint.getState().setDraft("draft-1", "");
+    beforeMint.getState().holdMessage("draft-1", { id: "m1", text: "in flight" });
+    beforeMint.getState().markHeld("draft-1", "m1", "sending");
+
+    let reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "draft",
+      operationId: PROVISIONAL.operationId,
+    });
+    // `sending` describes a flight that no longer exists. A held message is
+    // rehydrated as `unsent` so there is something to press, not a spinner
+    // waiting on a promise that died with the process.
+    expect(reloaded.getState().drafts["draft-1"]?.held).toEqual([
+      { id: "m1", text: "in flight", state: "unsent" },
+    ]);
+
+    // After the mint a Session DOES exist, and the marker that says so is what
+    // stops a relaunch minting a second one. The operation id rides across
+    // too, so the replay is the same command.
+    const afterMint = createChatDraftsStore(storage);
+    await afterMint.persist.rehydrate();
+    afterMint.getState().markProvisionalSessionCreated("draft-1");
+
+    reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      phase: "session-created",
+      operationId: PROVISIONAL.operationId,
+    });
+    expect(reloaded.getState().drafts["draft-1"]?.held).toEqual([
+      { id: "m1", text: "in flight", state: "unsent" },
+    ]);
   });
 
   it("tracks post-create recovery, then promotes in place without changing the Draft key", () => {

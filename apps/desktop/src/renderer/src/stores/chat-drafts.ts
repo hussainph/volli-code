@@ -291,7 +291,9 @@ function quietDraftStorage(storage: StateStorage): StateStorage {
       if (current === null && serializedDraftsAreEmpty(value)) return;
       return storage.setItem(name, value);
     },
-    /* v8 ignore next -- required by `StateStorage`; nothing clears this key, which is why the quiet edge above only has to reason about writes. */
+    // Passed straight through. The quiet edge above is about WRITES that say
+    // nothing new; a clear says something, and zustand exposes one
+    // (`persist.clearStorage`), so this is reachable and must not be swallowed.
     removeItem: (name) => storage.removeItem(name),
   };
 }

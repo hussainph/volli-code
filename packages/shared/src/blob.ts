@@ -342,6 +342,62 @@ export const NEW_TICKET_DRAFT_APP_STATE_KEY = "volli:new-ticket-draft";
 export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
 
 /**
+ * The renderer state envelope in `app_state`, parsed, or `undefined`.
+ *
+ * Both retained-Blob readers below are main reading a row the RENDERER owns,
+ * at boot, before anything can be repaired. Malformed state must therefore
+ * retain nothing rather than throw: the worst case is bytes left on disk until
+ * the draft is fixed or cleared, never a boot that will not finish.
+ */
+function parsedAppState(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return asRecord(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A value as a record, or `undefined` — arrays and null are not records. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** One step down an envelope. */
+function childRecord(
+  parent: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  return parent === undefined ? undefined : asRecord(parent[key]);
+}
+
+/**
+ * The Blob hashes in one attachment strip that `keep` admits.
+ *
+ * `keep` is the only thing the two readers disagree about: a new-Ticket draft
+ * retains every hash it names, while a chat Draft retains only the ownerless
+ * ones — an entry with a `linkId` already has a `blob_links` row keeping it
+ * alive, so counting it here would say the same thing twice.
+ */
+function blobHashesIn(
+  attachments: unknown,
+  keep: (attachment: Record<string, unknown>) => boolean,
+): string[] {
+  if (!Array.isArray(attachments)) return [];
+  const hashes: string[] = [];
+  for (const entry of attachments) {
+    const attachment = asRecord(entry);
+    if (attachment === undefined) continue;
+    const hash = attachment["blobHash"];
+    if (keep(attachment) && typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
+  }
+  return hashes;
+}
+
+/**
  * The Blob hashes a stored new-Ticket draft still names, for boot-time
  * collection to retain (VC-137).
  *
@@ -358,25 +414,8 @@ export const CHAT_DRAFTS_APP_STATE_KEY = "volli:chat-drafts";
  * cleared), never crash a boot.
  */
 export function draftAttachmentHashes(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return [];
-  }
-  if (typeof parsed !== "object" || parsed === null) return [];
-  const draft = (parsed as Record<string, unknown>)["draft"];
-  if (typeof draft !== "object" || draft === null) return [];
-  const attachments = (draft as Record<string, unknown>)["attachments"];
-  if (!Array.isArray(attachments)) return [];
-  const hashes: string[] = [];
-  for (const entry of attachments) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const hash = (entry as Record<string, unknown>)["blobHash"];
-    if (typeof hash === "string" && isBlobHash(hash)) hashes.push(hash);
-  }
-  return hashes;
+  const draft = childRecord(parsedAppState(value), "draft");
+  return blobHashesIn(draft?.["attachments"], () => true);
 }
 
 /**
@@ -415,45 +454,20 @@ export function isProvisionalChatDraftPhase(value: unknown): value is Provisiona
  * {@link isProvisionalChatDraftPhase} for why the two readers must not differ.
  */
 export function chatDraftAttachmentHashes(value: unknown): string[] {
-  if (typeof value !== "string") return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return [];
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
-  const state = (parsed as Record<string, unknown>)["state"];
-  if (typeof state !== "object" || state === null || Array.isArray(state)) return [];
-  const drafts = (state as Record<string, unknown>)["drafts"];
-  if (typeof drafts !== "object" || drafts === null || Array.isArray(drafts)) return [];
-
+  const drafts = childRecord(childRecord(parsedAppState(value), "state"), "drafts");
+  if (drafts === undefined) return [];
+  const ownerless = (attachment: Record<string, unknown>) => attachment["linkId"] === null;
   const hashes: string[] = [];
-  const readAttachments = (attachments: unknown): void => {
-    if (!Array.isArray(attachments)) return;
-    for (const entry of attachments) {
-      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-      const attachment = entry as Record<string, unknown>;
-      const hash = attachment["blobHash"];
-      if (attachment["linkId"] === null && typeof hash === "string" && isBlobHash(hash)) {
-        hashes.push(hash);
-      }
-    }
-  };
-  for (const draft of Object.values(drafts)) {
-    if (typeof draft !== "object" || draft === null || Array.isArray(draft)) continue;
-    const record = draft as Record<string, unknown>;
-    const provisional = record["provisional"];
-    if (typeof provisional !== "object" || provisional === null || Array.isArray(provisional)) {
-      continue;
-    }
-    if (!isProvisionalChatDraftPhase((provisional as Record<string, unknown>)["phase"])) continue;
-    readAttachments(record["attachments"]);
-    const held = record["held"];
-    if (!Array.isArray(held)) continue;
-    for (const message of held) {
-      if (typeof message !== "object" || message === null || Array.isArray(message)) continue;
-      readAttachments((message as Record<string, unknown>)["attachments"]);
+  for (const entry of Object.values(drafts)) {
+    const draft = asRecord(entry);
+    if (draft === undefined) continue;
+    const phase = childRecord(draft, "provisional")?.["phase"];
+    if (!isProvisionalChatDraftPhase(phase)) continue;
+    hashes.push(...blobHashesIn(draft["attachments"], ownerless));
+    if (!Array.isArray(draft["held"])) continue;
+    for (const held of draft["held"]) {
+      const message = asRecord(held);
+      if (message !== undefined) hashes.push(...blobHashesIn(message["attachments"], ownerless));
     }
   }
   return hashes;

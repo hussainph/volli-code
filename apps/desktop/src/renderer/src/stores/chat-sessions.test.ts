@@ -753,6 +753,132 @@ describe("promoteChatSession", () => {
     ]);
   });
 
+  it("shares one flight when a second Send lands mid-promotion, and queues both in order", async () => {
+    // Two ⏎ in quick succession. The Draft mints once: a second create would
+    // either collide on the id or strand the first Session, and the ordered
+    // queue is what VC-16 built so typing before a runtime is live works.
+    const { attaches, state, store, ticketStarts } = fixture();
+    openDraft();
+    let finishCreate!: (created: { sessionId: string }) => void;
+    state.createAnswer = () => new Promise((resolve) => (finishCreate = resolve));
+
+    const first = store.getState().promoteChatSession(DRAFT_ID);
+    await vi.waitFor(() => expect(ticketStarts).toHaveLength(1));
+    const second = store.getState().promoteChatSession(DRAFT_ID);
+    finishCreate({ sessionId: DRAFT_ID });
+
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(ticketStarts).toEqual([
+      expect.objectContaining({ operationId: "promotion-op", requestedSessionId: DRAFT_ID }),
+    ]);
+    await vi.waitFor(() => expect(attaches).toHaveLength(1));
+
+    // Both messages reach the one Session, in the order they were pressed.
+    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first" });
+    store.getState().enqueue(DRAFT_ID, { id: "m2", text: "second" });
+    expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("hands the words back as unsent when the create fails for a reason Model Access cannot fix", async () => {
+    // The missing-default refusal has its own recovery (Model Access). Every
+    // other create failure has to leave the person exactly where they were:
+    // a Draft, still provisional, with the message retryable rather than
+    // stuck in `sending` with nothing to press.
+    const { attaches, state, store, ticketStarts } = fixture();
+    openDraft();
+    useChatDraftsStore.getState().holdMessage(DRAFT_ID, { id: "m1", text: "first message" });
+    useChatDraftsStore.getState().markHeld(DRAFT_ID, "m1", "sending");
+    state.createAnswer = () => Promise.reject(new Error("the edge is down"));
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(false);
+    useChatDraftsStore.getState().markHeld(DRAFT_ID, "m1", "unsent");
+
+    expect(vi.mocked(toast.error).mock.calls.at(-1)?.[0]).toContain("the edge is down");
+    expect(useUiStore.getState().settingsOpen).toBe(false);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.held).toEqual([
+      { id: "m1", text: "first message", state: "unsent" },
+    ]);
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe("draft");
+    expect(attaches).toEqual([]);
+    // The attempt carried the Draft's stable operation id, so the retry the
+    // person is now able to make is the SAME command replayed, never a second
+    // one that could leave two Sessions behind.
+    expect(ticketStarts).toEqual([
+      expect.objectContaining({ operationId: "promotion-op", requestedSessionId: DRAFT_ID }),
+    ]);
+  });
+
+  it("retries a quit-after-mint promotion under the same operation, making one Session", async () => {
+    // The app went away between the create landing and the Blob transfer
+    // finishing. `session-created` is the recovery marker that survived in
+    // app_state; replaying must restate the same command, not mint a second
+    // Session under a second id.
+    const { attaches, store, ticketStarts } = fixture();
+    openDraft(true);
+    useChatDraftsStore.getState().markProvisionalSessionCreated(DRAFT_ID);
+    vi.mocked(window.api.attachments.linkDrafts).mockImplementation(async ({ blobs }) => ({
+      ok: true as const,
+      blobs: blobs.map((blob, index) => ({
+        linkId: `linked-${index}`,
+        blobHash: blob.blobHash,
+        label: blob.label ?? "attachment",
+        originalName: blob.label ?? "attachment",
+        mime: "image/png",
+        sizeBytes: 2048,
+      })),
+    }));
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+
+    expect(ticketStarts).toEqual([
+      expect.objectContaining({ operationId: "promotion-op", requestedSessionId: DRAFT_ID }),
+    ]);
+    // A fresh attach operation, deliberately: replaying a rejected attach
+    // receipt would make recovery refuse the same work forever.
+    await vi.waitFor(() =>
+      expect(attaches).toEqual([{ operationId: "cmd-1", sessionId: DRAFT_ID }]),
+    );
+    expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.phase).toBe(
+      "session-created",
+    );
+  });
+
+  it("keeps a ticket Draft's first message queued when its worktree is unavailable at send", async () => {
+    // Deferring the worktree ensure to first send moves this discovery to a
+    // worse moment, which the design accepted on ONE condition: the words wait
+    // for a Retry rather than being lost. The Session is durable by then, so
+    // there is somewhere for them to wait and something for Retry to address.
+    const { attaches, state, store, ticketStarts } = fixture();
+    openDraft();
+    // What main answers when the Ticket's worktree cannot be materialized.
+    state.attachAnswer = () => ({ ...REFUSED, state: "needs-recovery", throughSequence: 2 });
+
+    await expect(store.getState().promoteChatSession(DRAFT_ID)).resolves.toBe(true);
+    await vi.waitFor(() => expect(attaches.length).toBeGreaterThanOrEqual(1));
+
+    // The create still landed: a refused ATTACH does not un-create a Session,
+    // and the no-delete rule means it never could.
+    expect(ticketStarts).toEqual([
+      expect.objectContaining({ operationId: "promotion-op", requestedSessionId: DRAFT_ID }),
+    ]);
+    expect(store.getState().sessions[DRAFT_ID]).toBeDefined();
+
+    store.getState().enqueue(DRAFT_ID, { id: "m1", text: "first message" });
+    expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
+      "first message",
+    ]);
+    // And it stays there. Nothing drops a queued message because an attach was
+    // refused — the queue is what a Retry releases once the worktree exists.
+    await vi.waitFor(() => expect(store.getState().sessions[DRAFT_ID]?.lifecycle).toBe("error"));
+    expect(store.getState().sessions[DRAFT_ID]?.queue.map(({ text }) => text)).toEqual([
+      "first message",
+    ]);
+  });
+
   it("refuses a Session the edge minted under an id the Draft did not ask for", async () => {
     const { attaches, state, store } = fixture();
     openDraft();

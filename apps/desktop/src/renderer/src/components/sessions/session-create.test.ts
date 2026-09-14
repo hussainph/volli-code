@@ -73,6 +73,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A v4 UUID, the ONLY shape a client may propose as a durable Session id.
+ *
+ * `docs/BOUNDARIES.md` rule 1 bars a machine-local ingredient, and a v1 UUID
+ * carries the minting machine's MAC; the RPC door refuses anything else
+ * (`z.uuidv4()`), so `expect.any(String)` here would let a change to the mint
+ * pass this file and fail at the edge instead.
+ */
+const UUID_V4 = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/;
+
 describe("bootChatSession", () => {
   it("opens a ticket Draft immediately without creating a Session", async () => {
     const create = vi.fn(async () => "durable-1");
@@ -81,16 +91,21 @@ describe("bootChatSession", () => {
 
     const sessionId = await bootChatSession(SCOPE, { land });
 
-    expect(sessionId).toEqual(expect.any(String));
+    expect(sessionId).toMatch(UUID_V4);
     expect(create).not.toHaveBeenCalled();
     expect(land).toHaveBeenCalledWith(sessionId, false);
-    expect(useChatDraftsStore.getState().drafts[sessionId!]?.provisional).toMatchObject({
+    const provisional = useChatDraftsStore.getState().drafts[sessionId!]?.provisional;
+    expect(provisional).toMatchObject({
       projectId: "p1",
       ticketId: "t1",
       title: null,
       phase: "draft",
-      operationId: expect.any(String),
     });
+    // Two ids, minted separately and never the same one: the Draft id becomes
+    // the Session's, while the operation id is the create command's key, so a
+    // retry replays one command rather than minting a second Session.
+    expect(provisional?.operationId).toMatch(UUID_V4);
+    expect(provisional?.operationId).not.toBe(sessionId);
     expect(useChatSessionsStore.getState().provisionalActive).toEqual({ t1: sessionId });
     expect(useChatSessionsStore.getState().starting).toEqual({});
   });
