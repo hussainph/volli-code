@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("sessionRpcBench", {
     const preloadOut = epochNow();
     return { ...response, preloadIn, preloadSend, preloadOut };
   },
+  startSqliteScan: (databasePath) => ipcRenderer.invoke("volli-bench:session-sqlite", databasePath),
   startPush: (options) => ipcRenderer.invoke("volli-bench:session-push", options),
   onPush: (listener) => {
     const handler = (_event, frame) => listener(frame);

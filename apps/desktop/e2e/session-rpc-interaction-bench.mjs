@@ -7,7 +7,11 @@
  *
  *   cd apps/desktop && vp run build
  *   node e2e/session-rpc-interaction-bench.mjs \
- *     --profile /tmp/volli-perf-real --ticket-query PERF-1
+ *     --label before --profile /tmp/volli-perf-real --ticket-query PERF-1
+ *
+ * Run once with `--label before` against the baseline build and once with
+ * `--label after` against the changed build. Each run emits the same stable
+ * sentinel artifact shape; the label identifies which dynamic run produced it.
  *
  * `ticket-query` must return both a ticket and a Session in the command
  * palette. The first result of each kind is used as the representative pair.
@@ -15,13 +19,14 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "playwright-core";
+import { argument } from "./bench/session-rpc/helpers.cjs";
 
-function argument(name) {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
-}
+const label = argument("label");
 const profile = argument("profile");
 const ticketQuery = argument("ticket-query");
+if (label !== "before" && label !== "after") {
+  throw new Error("--label must be before or after");
+}
 if (!profile || !ticketQuery) {
   throw new Error("--profile DISPOSABLE_PROFILE and --ticket-query QUERY are required");
 }
@@ -102,7 +107,10 @@ try {
   await page.waitForTimeout(1_500);
   results.openSidebar = summarize(await drain());
 
-  console.log(`__SESSION_RPC_INTERACTIONS__${JSON.stringify(results)}__SESSION_RPC_INTERACTIONS__`);
+  const artifact = { schemaVersion: 1, label, results };
+  console.log(
+    `__SESSION_RPC_INTERACTIONS__${JSON.stringify(artifact)}__SESSION_RPC_INTERACTIONS__`,
+  );
 } finally {
   await electronApp.close();
 }

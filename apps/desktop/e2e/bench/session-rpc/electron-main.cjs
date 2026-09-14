@@ -1,24 +1,50 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { monitorEventLoopDelay } = require("node:perf_hooks");
 const { join } = require("node:path");
+const Database = require("better-sqlite3");
+const { argument, parsePositiveInteger } = require("./helpers.cjs");
 
 const epochNow = () => performance.timeOrigin + performance.now();
+const databasePath = argument("database");
+const repetitions = parsePositiveInteger("repetitions", 300);
+const frameCount = parsePositiveInteger("frames", 20_000);
 
-function parseInteger(name, fallback) {
-  const index = process.argv.indexOf(`--${name}`);
-  const value = index === -1 ? fallback : Number(process.argv[index + 1]);
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`--${name} must be positive`);
-  return value;
+const fullLogSql = `SELECT e.id, e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+                           p.provenance, e.attachment_id, e.command_id, e.payload
+                      FROM session_events e
+                      LEFT JOIN session_provenances p ON p.id = e.provenance_id
+                     ORDER BY e.session_id, e.sequence`;
+
+function blockingSqliteScan(path) {
+  const database = new Database(path, { readonly: true, fileMustExist: true });
+  try {
+    const rows = database.prepare(fullLogSql).all();
+    let serializedBytes = 0;
+    for (const row of rows) {
+      serializedBytes += row.payload.length + row.provenance.length;
+      JSON.parse(row.provenance);
+      JSON.parse(row.payload);
+    }
+    return { rows: rows.length, serializedBytes };
+  } finally {
+    database.close();
+  }
 }
-
-const repetitions = parseInteger("repetitions", 300);
-const frameCount = parseInteger("frames", 20_000);
 
 ipcMain.handle("volli-bench:session-rpc", (_event, request) => {
   const mainIn = epochNow();
   const payload = request.payload;
   const mainOut = epochNow();
   return { payload, mainIn, mainOut };
+});
+
+ipcMain.handle("volli-bench:session-sqlite", (_event, path) => {
+  if (typeof path !== "string" || path.length === 0) {
+    throw new Error("A disposable SQLite database path is required");
+  }
+  const startedAt = performance.now();
+  const result = blockingSqliteScan(path);
+  return { ...result, elapsedMs: performance.now() - startedAt };
 });
 
 ipcMain.handle("volli-bench:session-push", (event, options) => {
@@ -121,6 +147,59 @@ async function runRenderer(options) {
     });
   }
 
+  const sqliteScan = options.databasePath
+    ? await new Promise((resolve, reject) => {
+        const animationFrameGaps = [];
+        let animationFrame = 0;
+        let previousAnimationFrame = 0;
+        const tick = (timestamp) => {
+          if (previousAnimationFrame > 0) {
+            animationFrameGaps.push(timestamp - previousAnimationFrame);
+          }
+          previousAnimationFrame = timestamp;
+          animationFrame = requestAnimationFrame(tick);
+        };
+        animationFrame = requestAnimationFrame(tick);
+        setTimeout(() => {
+          const rendererStartedAt = performance.now();
+          const scan = window.sessionRpcBench.startSqliteScan(options.databasePath);
+          // A single ordinary round trip, issued while main is inside the
+          // synchronous scan. Animation frames answer whether the RENDERER
+          // keeps painting; this answers what an interaction that needs main
+          // actually waits, which is the cost the architecture question is
+          // really about. It is issued after the scan invoke so it queues
+          // behind a main process that is already blocked.
+          const blockedStartedAt = performance.now();
+          const blockedRoundTrip = window.sessionRpcBench
+            .roundTrip("")
+            .then(() => performance.now() - blockedStartedAt);
+          void Promise.all([scan, blockedRoundTrip]).then(
+            ([result, blockedRoundTripMs]) => {
+              const rendererElapsedMs = performance.now() - rendererStartedAt;
+              cancelAnimationFrame(animationFrame);
+              const droppedAnimationFrames = animationFrameGaps.reduce(
+                (dropped, gap) => dropped + Math.max(0, Math.round(gap / (1_000 / 60)) - 1),
+                0,
+              );
+              resolve({
+                ...result,
+                rendererElapsedMs,
+                blockedRoundTripMs,
+                animationFrames: animationFrameGaps.length,
+                droppedAnimationFrames,
+                maxAnimationFrameGapMs: Math.max(0, ...animationFrameGaps),
+                animationFrameGapsMs: animationFrameGaps,
+              });
+            },
+            (error) => {
+              cancelAnimationFrame(animationFrame);
+              reject(error);
+            },
+          );
+        }, 100);
+      })
+    : null;
+
   const push = await new Promise((resolve, reject) => {
     const handlerTimes = [];
     const animationFrameGaps = [];
@@ -179,7 +258,7 @@ async function runRenderer(options) {
     }, 100);
   });
 
-  return { payloadCurve, push };
+  return { payloadCurve, sqliteScan, push };
 }
 
 app.whenReady().then(async () => {
@@ -195,7 +274,11 @@ app.whenReady().then(async () => {
   });
   await window.loadURL("data:text/html,<meta charset=utf-8><title>Session RPC bench</title>");
   const report = await window.webContents.executeJavaScript(
-    `(${runRenderer.toString()})(${JSON.stringify({ repetitions, frames: frameCount })})`,
+    `(${runRenderer.toString()})(${JSON.stringify({
+      repetitions,
+      frames: frameCount,
+      databasePath,
+    })})`,
     true,
   );
   process.stdout.write(`__SESSION_RPC_BENCH__${JSON.stringify(report)}__SESSION_RPC_BENCH__\n`);

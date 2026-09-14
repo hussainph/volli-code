@@ -15,6 +15,7 @@ import { createRequire } from "node:module";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { createServer } from "vite";
+import benchmarkHelpers from "./bench/session-rpc/helpers.cjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDirectory = resolve(here, "..");
@@ -22,27 +23,12 @@ const repository = resolve(appDirectory, "..", "..");
 const require = createRequire(join(appDirectory, "package.json"));
 const Database = require("better-sqlite3");
 
-function argument(name) {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
-}
-const databasePath = argument("database");
-const transcriptPath = argument("transcripts");
+const databasePath = benchmarkHelpers.argument("database");
+const transcriptPath = benchmarkHelpers.argument("transcripts");
 if (!databasePath) throw new Error("--database /path/to/volli.db is required");
 
 const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 const mb = (bytes) => bytes / 1024 / 1024;
-function percentile(values, fraction) {
-  const ordered = values.toSorted((left, right) => left - right);
-  return ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * fraction))];
-}
-function distribution(values) {
-  return {
-    p50: percentile(values, 0.5),
-    p95: percentile(values, 0.95),
-    mean: values.reduce((sum, value) => sum + value, 0) / values.length,
-  };
-}
 async function repeated(count, operation) {
   const values = [];
   for (let index = 0; index < count; index += 1) {
@@ -50,7 +36,7 @@ async function repeated(count, operation) {
     await operation();
     values.push(performance.now() - startedAt);
   }
-  return distribution(values);
+  return benchmarkHelpers.distribution(values);
 }
 async function blocking(operation) {
   global.gc?.();
@@ -211,9 +197,30 @@ try {
     )
     .get();
 
-  const makeRuntime = () =>
+  // The two event reads, back to back on the same Session: the audit read
+  // joins and decodes one interned provenance per row, the fold read does
+  // neither. Same rows, same order, same payload decode — the difference is
+  // exactly the work a projection does not need (VC-355).
+  const auditReadMs = await repeated(50, () =>
+    ledger.transaction((transaction) => transaction.listEvents({ sessionId: busiest.sessionId })),
+  );
+  const foldReadMs = await repeated(50, () =>
+    ledger.transaction((transaction) =>
+      transaction.listProjectionEvents({ sessionId: busiest.sessionId }),
+    ),
+  );
+
+  // The fold arms intentionally suppress the runtime's best-effort cache
+  // write. A full fold otherwise writes a checkpoint while a checkpoint hit
+  // does not, so their intervals would include different work. Persistence is
+  // measured as its own arm below.
+  const noCheckpointPersistenceEngine = {
+    ...engine,
+    saveProjectionCheckpoint: async () => undefined,
+  };
+  const makeRuntime = (runtimeEngine = engine) =>
     engineModule.createSessionRuntime({
-      engine,
+      engine: runtimeEngine,
       executor: {
         id: "bench",
         durableIdNamespace: "bench",
@@ -241,23 +248,35 @@ try {
   const coldFullFoldSamples = [];
   for (let index = 0; index < 15; index += 1) {
     checkpointDelete.run(busiest.sessionId);
-    runtime = makeRuntime();
+    runtime = makeRuntime(noCheckpointPersistenceEngine);
     const startedAt = performance.now();
     await runtime.projection({ sessionId: busiest.sessionId });
     coldFullFoldSamples.push(performance.now() - startedAt);
     await runtime.close();
   }
-  runtime = makeRuntime();
-  await runtime.projection({ sessionId: busiest.sessionId });
-  await runtime.close();
-  const coldCheckpointSamples = [];
+
+  // Re-seed the busiest Session after the full-fold arm deleted its cache row.
+  const busiestCheckpoint = await ledger.transaction((transaction) => {
+    const session = transaction.getSession(busiest.sessionId);
+    if (!session) throw new Error(`Busiest Session ${busiest.sessionId} was not found`);
+    return sharedModule.createSessionProjectionCheckpoint(
+      session,
+      transaction.listEvents({ sessionId: busiest.sessionId }),
+    );
+  });
+  await engine.saveProjectionCheckpoint(busiestCheckpoint);
+
+  const coldCheckpointHitSamples = [];
   for (let index = 0; index < 50; index += 1) {
-    runtime = makeRuntime();
+    runtime = makeRuntime(noCheckpointPersistenceEngine);
     const startedAt = performance.now();
     await runtime.projection({ sessionId: busiest.sessionId });
-    coldCheckpointSamples.push(performance.now() - startedAt);
+    coldCheckpointHitSamples.push(performance.now() - startedAt);
     await runtime.close();
   }
+  const checkpointPersistenceMs = await repeated(20, () =>
+    engine.saveProjectionCheckpoint(busiestCheckpoint),
+  );
 
   const handlerRuntime = makeRuntime();
   await handlerRuntime.projection({ sessionId: busiest.sessionId });
@@ -291,6 +310,8 @@ try {
       iteratedDecode: iterated,
       busiestSessionReadMs: busiestRead,
       latestSequenceMs: latestSequence,
+      busiestSessionAuditReadMs: auditReadMs,
+      busiestSessionFoldReadMs: foldReadMs,
     },
     projection: {
       allSessionListing: {
@@ -299,8 +320,9 @@ try {
         checkpointMs: listingCheckpointMs,
         storage: checkpointStorage,
       },
-      coldFullFoldMs: distribution(coldFullFoldSamples),
-      coldCheckpointMs: distribution(coldCheckpointSamples),
+      coldFullFoldMs: benchmarkHelpers.distribution(coldFullFoldSamples),
+      coldCheckpointHitMs: benchmarkHelpers.distribution(coldCheckpointHitSamples),
+      checkpointPersistenceMs,
       warmHandlerMs: handlerMs,
     },
     rpc: {

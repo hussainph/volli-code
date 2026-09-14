@@ -9,6 +9,7 @@
  *
  * Run:
  *   node apps/desktop/e2e/session-rpc-bench.mjs [--repetitions 300] [--frames 20000]
+ *   node apps/desktop/e2e/session-rpc-bench.mjs --database /path/to/disposable.db
  */
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -58,4 +59,12 @@ console.log(
     `renderer handler p50 ${report.push.rendererHandlerMs.p50.toFixed(4)} ms, ` +
     `main event-loop max ${report.push.main.eventLoopMaxMs.toFixed(3)} ms`,
 );
+if (report.sqliteScan) {
+  console.log(
+    `sqlite scan: ${report.sqliteScan.rows} rows, main ${report.sqliteScan.elapsedMs.toFixed(3)} ms, ` +
+      `renderer max animation gap ${report.sqliteScan.maxAnimationFrameGapMs.toFixed(3)} ms, ` +
+      `${report.sqliteScan.droppedAnimationFrames} dropped animation frames, ` +
+      `round trip during the scan ${report.sqliteScan.blockedRoundTripMs.toFixed(3)} ms`,
+  );
+}
 console.log(`\n__SESSION_RPC_BENCH__${JSON.stringify(report)}__SESSION_RPC_BENCH__`);
