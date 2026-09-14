@@ -299,6 +299,7 @@ export default function ComposerStatesScratch() {
               }}
               launch={{ kind: "kickoff" }}
               onLaunchChange={() => undefined}
+              onCreate={() => undefined}
               onSubmit={() => undefined}
               automationOffer={{ groups: [], ready: true, enabledIds: [] }}
               disabled={false}

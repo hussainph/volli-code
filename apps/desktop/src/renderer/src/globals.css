@@ -70,7 +70,10 @@
 /* Below 24rem, model and effort become one control: the separate effort pill
  * retires and its value joins the model face. The model name gives up its 56px
  * floor at that point because the model mark and the full accessible label
- * still identify it while the effort value must remain readable.
+ * still identify it while the effort value must remain readable. The floor is
+ * released on the name span itself as well as the run that holds it: the tier
+ * beside it carries a far larger shrink factor, so it still truncates away
+ * first and the model is the last text standing rather than the first to go.
  *
  * A live turn freezes both values. On the app's narrowest chat pane, repeating
  * that disabled fact still costs the whole second footer line, so the live
@@ -92,7 +95,8 @@
     display: inline !important;
   }
 
-  .composer-model-name {
+  .composer-model-name,
+  .composer-model-name > [data-testid="model-pill-name"] {
     min-width: 0;
   }
 }

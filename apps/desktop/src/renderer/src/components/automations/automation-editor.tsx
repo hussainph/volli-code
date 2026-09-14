@@ -866,11 +866,19 @@ export function AutomationEditorPanel({
  * prompt — the same `/` and `@` grammar, the same picker card over it — and it
  * was drawn as a bare form field with a browser resize grip in its corner, so
  * the two surfaces a person writes prompts into looked like two different
- * kinds of thing. Now it is `PROMPT_SURFACE` around the same textarea
- * insets, with the same control band under the text; the band holds the `+`
- * (Commands & skills and Mention a file — no attach row, because Instructions
- * take no files) plus the shared long-form editor. The runtime lives in the
- * aside on the editor and under the box on Run once, where it already was.
+ * kinds of thing. Now it is `PROMPT_SURFACE` around the same textarea insets,
+ * with the same `+` (Commands & skills and Mention a file — no attach row,
+ * because Instructions take no files). The runtime lives in the aside on the
+ * editor and under the box on Run once, where it already was.
+ *
+ * NO TINTED TRAY HERE, and that is the rule rather than an exception. The tray
+ * exists to separate writing from CONFIGURATION — in chat it carries model,
+ * effort and the send key; on a comment it carries the primary. This surface
+ * has neither: saving belongs to the editor around it, so the band was a
+ * full-width tint holding one 24px button at its far left and nothing else,
+ * which read as a container someone forgot to fill. The door rests on the
+ * writing sheet instead, aligned to the text's own inset. `new-command-dialog`
+ * already draws a trayless prompt surface on the same reasoning.
  *
  * `className` reaches the textarea, because the two call sites disagree on
  * how tall a resting box should be (a page's instructions, a dialog's) and
@@ -915,9 +923,9 @@ export function InstructionsTextarea({
           if (caret.handleKeyDown(event)) return;
         }}
       />
-      {/* The same tinted control tray as chat and ticket creation. Commands
-          and files stay behind the single `+` door. */}
-      <div className="prompt-toolbar flex items-center gap-1 px-2 py-2">
+      {/* On the sheet, not in a tray: `px-3` puts the button's edge on the
+          text's 16px column so it reads as placed rather than parked. */}
+      <div className="flex items-center gap-1 px-3 pb-3">
         <ComposerAddMenu />
       </div>
     </div>

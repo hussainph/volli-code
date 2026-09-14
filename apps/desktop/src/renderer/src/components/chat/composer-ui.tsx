@@ -1551,20 +1551,36 @@ function ModelPillFace({
           enough to tell `sonnet-4.5` from `gpt-5.6-luna`, which is the question
           this control answers most of the time. Below it the footer wraps
           instead (see `PromptInputTools` above), so the floor is what CHOOSES
-          that break rather than a width that overflows. */}
-      <span className="composer-model-name min-w-14 truncate">
+          that break rather than a width that overflows.
+
+          TIER AND MODEL TRUNCATE SEPARATELY, AND THE ORDER MATTERS. They read
+          as one run — "Fast · Claude Haiku 4.5" — but they were one *element*,
+          so the ellipsis ate from the right and the qualifier outlived the
+          thing it qualifies: at the narrowest pane the pill said
+          "Ticket Sess… · High" and never named the model at all. That inverts
+          the pill's whole reason to exist exactly where space is scarce. Two
+          spans in the same flex run fix the priority without changing the
+          reading: the tier carries a large shrink factor so it absorbs
+          essentially all of the squeeze and truncates to nothing first, while
+          the model keeps the 56px floor and only begins to give once the tier
+          has none left to give. */}
+      <span className="composer-model-name flex min-w-14 items-baseline overflow-hidden">
         {/* The tier leads the model where a start named one (VC-259): "Fast ·
             Claude Haiku 4.5". It is a qualifier in the muted ink, in the same
             "term · name" grammar the provider already uses for an ambiguous
-            name, and it lives inside the one truncating run so the pill stays
-            one fact wide. A model picked by hand after that start carries no
-            tier, because the projection clears it with the pick. */}
+            name. A model picked by hand after that start carries no tier,
+            because the projection clears it with the pick. */}
         {selectionTier !== null ? (
-          <span className="text-muted-foreground" data-testid="model-pill-tier">
+          <span
+            className="min-w-0 shrink-[999] truncate text-muted-foreground"
+            data-testid="model-pill-tier"
+          >
             {selectionTier} ·{" "}
           </span>
         ) : null}
-        {modelPillLabel(models, selection, selectionProviderLabel)}
+        <span className="min-w-14 truncate" data-testid="model-pill-name">
+          {modelPillLabel(models, selection, selectionProviderLabel)}
+        </span>
       </span>
       {compactEffortValue === undefined ? null : (
         // Container CSS reveals this value only after the separate effort pill

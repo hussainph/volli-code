@@ -57,11 +57,16 @@ vi.mock("./composer-footer", () => ({
   ComposerFooter: ({
     projectId,
     onLaunchChange,
+    onCreate,
     onSubmit,
     disabled,
   }: ComponentProps<typeof ComposerFooter>) => (
     <>
-      <button onClick={() => onLaunchChange({ kind: "create" })}>Plain</button>
+      {/* Plain creation is its own button on the real footer too — it is not a
+          launch mode the caret menu can select. */}
+      <button disabled={disabled} onClick={onCreate}>
+        Create
+      </button>
       <button onClick={() => onLaunchChange({ kind: "automation", projectId, automationId: "a1" })}>
         Saved
       </button>
@@ -143,24 +148,32 @@ async function chord(shiftKey = false, ctrlKey = false) {
   );
 }
 
-it("sends the default primary action through kickoff for both click and ⌘Enter", async () => {
+it("sends the default primary action through kickoff, by click and by ⇧⌘Enter", async () => {
   await click("Submit");
-  await chord();
+  await chord(true);
   expect(runKickoff).toHaveBeenCalledTimes(2);
   expect(runPlainCreate).not.toHaveBeenCalled();
 });
-it("choosing Create only changes both the click and Ctrl+Enter action without submitting", async () => {
-  await click("Plain");
-  expect(runPlainCreate).not.toHaveBeenCalled();
-  await click("Submit");
+it("gives plain creation its own button and the unmodified chord", async () => {
+  await click("Create");
+  await chord();
   await chord(false, true);
-  expect(runPlainCreate).toHaveBeenCalledTimes(2);
+  expect(runPlainCreate).toHaveBeenCalledTimes(3);
   expect(runKickoff).not.toHaveBeenCalled();
+});
+it("leaves the launch mode alone when plain creation runs", async () => {
+  await click("Saved");
+  await click("Create");
+  expect(runPlainCreate).toHaveBeenCalledOnce();
+  expect(runCreateWithAutomation).not.toHaveBeenCalled();
+  // The saved selection survives, so the primary still runs it afterwards.
+  await click("Submit");
+  expect(runCreateWithAutomation).toHaveBeenCalledOnce();
 });
 it("the saved mode passes the actual current Automation and preserves ticket fields", async () => {
   await click("Saved");
   expect(runCreateWithAutomation).not.toHaveBeenCalled();
-  await chord();
+  await chord(true);
   expect(runCreateWithAutomation).toHaveBeenCalledWith(
     expect.objectContaining({ status: "backlog", body: "Keep this prompt", projectId: "p1" }),
     expect.anything(),
@@ -168,16 +181,16 @@ it("the saved mode passes the actual current Automation and preserves ticket fie
   );
   expect(runKickoff).not.toHaveBeenCalled();
 });
-it("keeps Shift+⌘Enter as the explicit kickoff shortcut", async () => {
+it("points Shift+⌘Enter at whatever the caret menu selected, not always chat", async () => {
   await click("Saved");
   await chord(true);
-  expect(runKickoff).toHaveBeenCalledOnce();
-  expect(runCreateWithAutomation).not.toHaveBeenCalled();
+  expect(runCreateWithAutomation).toHaveBeenCalledOnce();
+  expect(runKickoff).not.toHaveBeenCalled();
 });
 it("retargeting cannot run the previous project's selected Automation", async () => {
   await click("Saved");
   await click("Retarget");
-  await chord();
+  await chord(true);
   expect(runKickoff).toHaveBeenCalledWith(
     expect.objectContaining({ projectId: "p2" }),
     expect.anything(),
@@ -188,23 +201,21 @@ it("retargeting cannot run the previous project's selected Automation", async ()
 it("blocks submission if the saved record vanishes after selection", async () => {
   await click("Saved");
   mocks.offer.groups = [];
-  await chord();
+  await chord(true);
   expect(runCreateWithAutomation).not.toHaveBeenCalled();
   expect(runKickoff).not.toHaveBeenCalled();
   expect(runPlainCreate).not.toHaveBeenCalled();
 });
 it.each([
-  ["plain-create", "Plain", runPlainCreate],
-  ["kickoff", null, runKickoff],
+  ["plain-create", "Create", runPlainCreate],
+  ["kickoff", "Submit", runKickoff],
 ] as const)(
   "re-enables the composer when the %s submission rejects",
-  async (_kind, mode, submit) => {
-    if (mode !== null) await click(mode);
+  async (_kind, press, submit) => {
     vi.mocked(submit).mockRejectedValueOnce(new Error("bridge unavailable"));
-    await click("Submit");
+    await click(press);
     expect(
-      [...host.querySelectorAll("button")].find((button) => button.textContent === "Submit")
-        ?.disabled,
+      [...host.querySelectorAll("button")].find((button) => button.textContent === press)?.disabled,
     ).toBe(false);
   },
 );
