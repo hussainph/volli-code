@@ -1032,14 +1032,25 @@ describe("promoteChatSession", () => {
     const { store } = fixture();
     openDraft();
 
-    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+    store
+      .getState()
+      .restoreProvisionalChatTabs(
+        useChatDraftsStore.getState().drafts,
+        new Set(["t1"]),
+        new Set(["p1"]),
+      );
 
     expect(store.getState().openTabs).toEqual({ t1: [DRAFT_ID] });
-    expect(store.getState().provisionalActive).toEqual({ t1: DRAFT_ID });
+    // Restoring makes a Draft REACHABLE; it does not decide what comes
+    // forward. `provisionalActive` is the overlay that lets an EMPTY Draft be
+    // focused without writing the workspace record, and an empty Draft is
+    // never persisted — so nothing restored here may claim it. Were it set,
+    // the commit effect would overwrite the tab the person actually left on.
+    expect(store.getState().provisionalActive).toEqual({});
     expect(store.getState().sessions).toEqual({});
   });
 
-  it("restores a ticketless Draft under its project, and focuses the most recently touched", () => {
+  it("restores a ticketless Draft under its project", () => {
     const { store } = fixture();
     vi.stubGlobal("window", {
       api: {
@@ -1066,14 +1077,16 @@ describe("promoteChatSession", () => {
     // tabs must step over it rather than open it as a Draft.
     drafts.setDraft("durable-1", "a Session's draft");
 
-    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+    store
+      .getState()
+      .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set(), new Set(["p1"]));
 
     expect(store.getState().openTabs).toEqual({ p1: ["older-draft", "newer-draft"] });
-    expect(store.getState().provisionalActive).toEqual({ p1: "newer-draft" });
+    expect(store.getState().provisionalActive).toEqual({});
     expect(store.getState().sessions).toEqual({});
   });
 
-  it("focuses the most recently touched Draft whatever order they are stored in", () => {
+  it("leaves the recorded active tab alone however recently a Draft was touched", () => {
     const { store } = fixture();
     vi.stubGlobal("window", {
       api: {
@@ -1101,15 +1114,22 @@ describe("promoteChatSession", () => {
       });
       drafts.setDraft("touched-earlier", "typed a while ago");
 
-      store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts);
+      store
+        .getState()
+        .restoreProvisionalChatTabs(
+          useChatDraftsStore.getState().drafts,
+          new Set(),
+          new Set(["p1"]),
+        );
     } finally {
       vi.useRealTimers();
     }
 
-    // Both are restored, but the one someone touched last is the one in front
-    // — insertion order in the persisted blob is not recency.
+    // Both are restored and reachable. Neither is forced in front: a Draft
+    // typed weeks ago must not take the surface from whatever tab the person
+    // was actually on when they quit.
     expect(store.getState().openTabs).toEqual({ p1: ["touched-later", "touched-earlier"] });
-    expect(store.getState().provisionalActive).toEqual({ p1: "touched-later" });
+    expect(store.getState().provisionalActive).toEqual({});
   });
 
   it("drops a restored Draft whose project no longer exists", () => {
@@ -1118,7 +1138,7 @@ describe("promoteChatSession", () => {
 
     store
       .getState()
-      .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, undefined, new Set());
+      .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set(), new Set());
 
     expect(store.getState().openTabs).toEqual({});
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]).toBeUndefined();
@@ -1129,10 +1149,12 @@ describe("promoteChatSession", () => {
     const { store } = fixture();
     openDraft();
 
-    store.getState().restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set());
+    store
+      .getState()
+      .restoreProvisionalChatTabs(useChatDraftsStore.getState().drafts, new Set(), new Set(["p1"]));
 
     expect(store.getState().openTabs).toEqual({ p1: [DRAFT_ID] });
-    expect(store.getState().provisionalActive).toEqual({ p1: DRAFT_ID });
+    expect(store.getState().provisionalActive).toEqual({});
     expect(store.getState().rehomedTicketBySession).toEqual({ [DRAFT_ID]: "t1" });
     expect(useChatDraftsStore.getState().drafts[DRAFT_ID]?.provisional?.ticketId).toBe("t1");
     expect(store.getState().sessions).toEqual({});

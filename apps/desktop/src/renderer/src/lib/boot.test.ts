@@ -477,6 +477,12 @@ describe("boot", () => {
       });
       expect(useChatSessionsStore.getState().openTabs).toEqual({ t1: [draftId] });
       expect(useChatSessionsStore.getState().sessions).toEqual({});
+      // Reachable, not forced in front. A typed Draft's `chat:<uuid>` is
+      // already in the persisted workspace layout, so claiming the
+      // renderer-only focus overlay here would make the surface's commit
+      // effect overwrite the tab the person actually quit on.
+      expect(useChatSessionsStore.getState().provisionalActive).toEqual({});
+      expect(useWorkspaceStore.getState().byProject.p1?.ticketTabs?.t1?.active).toBeUndefined();
     } finally {
       useChatDraftsStore.setState({ drafts: {} });
       useChatSessionsStore.setState({ sessions: {}, openTabs: {}, provisionalActive: {} });

@@ -144,11 +144,18 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * strip that empties) — the single-owner invariant `openTabs` documents.
    */
   openChatTab(ownerId: string, sessionId: string): void;
-  /** Reopens every persisted typed Draft after the app_state hydrate. */
+  /**
+   * Reopens every persisted typed Draft after the app_state hydrate.
+   *
+   * Both live-id sets are required: a Draft naming a project or Ticket the
+   * board no longer has is the whole reason this runs at boot rather than on
+   * first render, and an optional set would let a caller skip the check by
+   * omission rather than by decision.
+   */
   restoreProvisionalChatTabs(
     drafts: Readonly<Record<string, ChatDraft>>,
-    liveTicketIds?: ReadonlySet<string>,
-    liveProjectIds?: ReadonlySet<string>,
+    liveTicketIds: ReadonlySet<string>,
+    liveProjectIds: ReadonlySet<string>,
   ): void;
   /**
    * Drops the tab from `ownerId`'s strip and retires resident Session state.
@@ -590,14 +597,13 @@ export function createChatSessionsStore(
 
       restoreProvisionalChatTabs(drafts, liveTicketIds, liveProjectIds) {
         const rehomed: Record<string, string> = {};
-        const activeByOwner = new Map<string, { sessionId: string; touchedAt: number }>();
         for (const [sessionId, draft] of Object.entries(drafts)) {
           const provisional = draft.provisional;
           if (provisional === undefined) continue;
           // A removed project has no reachable surface and its durable removal
           // has already cascaded any partial Session row. Retire the stale Draft
           // rather than restoring an owner key no renderer can ever select.
-          if (liveProjectIds !== undefined && !liveProjectIds.has(provisional.projectId)) {
+          if (!liveProjectIds.has(provisional.projectId)) {
             useChatDraftsStore.getState().discardProvisional(sessionId);
             continue;
           }
@@ -606,30 +612,27 @@ export function createChatSessionsStore(
           // while retaining its ticket birth scope for promotion and for a
           // later board return.
           const ticketIsLive =
-            provisional.ticketId === null ||
-            liveTicketIds === undefined ||
-            liveTicketIds.has(provisional.ticketId);
+            provisional.ticketId === null || liveTicketIds.has(provisional.ticketId);
           const ownerId = ticketIsLive
             ? (provisional.ticketId ?? provisional.projectId)
             : provisional.projectId;
           if (!ticketIsLive && provisional.ticketId !== null) {
             rehomed[sessionId] = provisional.ticketId;
           }
-          const active = activeByOwner.get(ownerId);
-          if (active === undefined || draft.touchedAt >= active.touchedAt) {
-            activeByOwner.set(ownerId, { sessionId, touchedAt: draft.touchedAt });
-          }
           get().openChatTab(ownerId, sessionId);
         }
-        if (Object.keys(rehomed).length > 0 || activeByOwner.size > 0) {
+        // Deliberately no `provisionalActive` here. That overlay exists for ONE
+        // thing: letting an EMPTY Draft be focused without writing the
+        // workspace's active-tab record. Every Draft restored here has content
+        // — an empty one is filtered out of persistence — so its `chat:<uuid>`
+        // tab is already in the persisted layout, and forcing focus onto it
+        // would make the commit effect overwrite the tab the person actually
+        // left the app on. Restoring a Draft makes it reachable; it does not
+        // decide what comes forward. That is the recorded tab's job, as it was
+        // before this ticket.
+        if (Object.keys(rehomed).length > 0) {
           set((state) => ({
             rehomedTicketBySession: { ...state.rehomedTicketBySession, ...rehomed },
-            provisionalActive: {
-              ...state.provisionalActive,
-              ...Object.fromEntries(
-                [...activeByOwner].map(([ownerId, { sessionId }]) => [ownerId, sessionId]),
-              ),
-            },
           }));
         }
       },
