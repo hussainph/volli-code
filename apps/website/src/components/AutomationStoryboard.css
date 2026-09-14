@@ -13,7 +13,7 @@
   /* The gap is a shared value, not a coincidence: the connectors are sized
      from it so a line spans the gutter exactly and touches both panels. */
   --story-gap: 24px;
-  --story-panel-min: 300px;
+  --story-panel-min: 260px;
 }
 
 .story-frames {

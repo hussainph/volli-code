@@ -9,8 +9,8 @@
  * Shape: the whole product first, the release second.
  *  - hero → the interactive board demo (the same VolliDemo island as `/`) →
  *    what the workspace is made of → New in 0.2: Automations → trust → closing;
- *  - Automations is one section, not three: the storyboard (audit §6.3) and
- *    three ways to start, with the control facts (§1.4) folded into the cards;
+ *  - Automations is one ordinary section: the storyboard (audit §6.3) and the
+ *    three ways to start as three lines, with the control facts (§1.4) in them;
  *  - copy stays inside the audit's §9.2 safe-claims list and the app's own
  *    labels (§8.4); local-first, provider and open-source posture are said in
  *    one place (§3.5).
@@ -31,7 +31,7 @@ const docsUrl = "https://docs.volli.app";
 // only destination that exists, and a reviewer should not land on a 404.
 const automationsDocsUrl = docsUrl;
 const description =
-  "Plan coding work. Run it in parallel. Automate the repeatable parts. Volli is a local-first macOS workspace for people and coding agents.";
+  "The workspace for parallel coding agents. Coding agents work your tickets in parallel, each in its own worktree; you review every change. Local-first, on your Mac.";
 
 // What the workspace is made of. Items 1, 2, 5 and 6 carry the live page's
 // vetted claims (LifecycleAccordion); 3 and 4 add the agent's tool surface,
@@ -51,9 +51,9 @@ const workspace = [
     glyph: "parallel" as const,
   },
   {
-    title: "Give agents the tools they need",
+    title: "Real tools for agents",
     description:
-      "An agent can read, edit, and run commands in its worktree. It can use its tools and the volli CLI to read the board, comment, and move tickets.",
+      "An agent reads, edits, and runs commands in its worktree, and uses the volli CLI to read the board, comment, and move tickets.",
     glyph: "agents" as const,
   },
   {
@@ -87,14 +87,14 @@ const workspace = [
         search and out of the sitemap (see astro.config.mjs). */}
     <meta name="robots" content="noindex, nofollow" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Volli | Plan coding work. Run it in parallel. Automate the repeatable parts." />
+    <meta property="og:title" content="Volli | The workspace for parallel coding agents" />
     <meta property="og:description" content={description} />
     <meta property="og:image" content="https://volli.app/og.png" />
     <meta property="og:site_name" content="Volli" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli | Plan coding work. Run it in parallel. Automate the repeatable parts.</title>
+    <title>Volli 0.2 homepage proposal | The workspace for parallel coding agents</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -128,15 +128,13 @@ const workspace = [
         <span class="alpha-pill">Alpha · Apple silicon</span>
         {/* Each clause is masked so it can rise into place once on load; the
             text stays one node per clause and reads as one sentence. */}
-        <h1 class="hero-headline hero-headline--proposal">
-          <span class="hero-clause"><span>Plan coding work.</span></span>{" "}
-          <span class="hero-clause"><span>Run it in parallel.</span></span>{" "}
-          <span class="hero-clause"><span>Automate the repeatable parts.</span></span>
+        <h1 class="hero-headline">
+          <span class="hero-clause"><span>The workspace for</span></span>{" "}
+          <span class="hero-clause"><span>parallel coding agents.</span></span>
         </h1>
         <p class="hero-lede">
-          Volli is a local-first macOS workspace. Plan coding work as tickets on a board, then run
-          coding agents in separate worktrees. Review each change. In 0.2, save repeated setup as an
-          Automation.
+          Coding agents work your tickets in parallel, each in its own worktree. You review every
+          change. Local-first, on your Mac.
         </p>
 
         <div class="cta-row hero-cta">
@@ -165,7 +163,6 @@ const workspace = [
         </div>
 
         <p class="hero-alpha-note">
-          <span class="hero-category">The workspace for parallel coding agents</span>
           <a href={`${docsUrl}/start/quickstart/`}>Quickstart</a>
           <a href={`${docsUrl}/start/install/`}>Install guide</a>
           <a href={releasesUrl}>Release notes</a>
@@ -182,10 +179,9 @@ const workspace = [
           product; Automations, below, are one way to start it. */}
       <section class="workspace" id="product" aria-labelledby="workspace-title">
         <div class="section-head">
-          <h2 id="workspace-title">One board. A worktree per ticket. You decide what moves.</h2>
+          <h2 id="workspace-title">One board. A worktree per ticket.</h2>
           <p>
-            Each ticket has a brief, a chat you can come back to, and changes to review. The board
-            keeps work visible as you move it.
+            Each ticket has a brief, a chat you can come back to, and changes to review.
           </p>
         </div>
         <ol class="workspace-grid">
@@ -205,9 +201,10 @@ const workspace = [
       {/* New in 0.2. The version lives here and nowhere else, so the product
           does not read as a scheduler once 0.3 ships. One section: the
           storyboard (§6.3), the three ways a Run starts (§7.1 step 5), and the
-          control facts (§1.4) folded into the cards rather than listed twice. */}
+          control facts (§1.4) folded into those three lines rather than listed
+          twice. */}
       <section class="release" id="automations" aria-labelledby="release-title">
-        <div class="release-band" data-release-band>
+        <div class="section-head" data-release-head>
           <span class="release-version">
             <svg viewBox="0 0 256 256" width="14" height="14" aria-hidden="true">
               <path
@@ -219,54 +216,42 @@ const workspace = [
                 d="M96 240l16-80-64-24L160 16l-16 80 64 24z"
               />
             </svg>
-            New in Volli 0.2
+            New in 0.2
           </span>
-          <h2 class="release-title" id="release-title">Save how work starts.</h2>
-          <p class="release-lede">
-            An Automation saves the instructions, trigger, and runtime for repeated work. Run it by
-            hand, arm a board column, or put it on a schedule. Each run opens a fresh Session.
+          <h2 id="release-title">Save how work starts.</h2>
+          <p>
+            Save the instructions, trigger, and runtime once. Run it by hand, arm a board column, or
+            put it on a schedule. Each run opens a fresh Session.
           </p>
         </div>
 
         <AutomationStoryboard />
 
-        <div class="release-ways">
-          <h3 class="release-subhead">Three ways to start the same work</h3>
-          <div class="ways-grid">
-            <article class="way" data-spotlight>
-              <span class="way-index">By hand</span>
-              <h4>Run it when you want</h4>
-              <p>
-                From the Automations page, a ticket rail, a board card, or the command palette.
-                Running by hand doesn’t depend on the trigger. Need it once?{" "}
-                <strong>Run once</strong> makes an Unbound Run: one-time Instructions, nothing saved.
-              </p>
-            </article>
-            <article class="way" data-spotlight>
-              <span class="way-index">Ticket enters</span>
-              <h4>When a ticket lands in a column</h4>
-              <p>
-                Switch it to Enabled on this Mac and its trigger counts. Name columns in the trigger
-                and arm one automation per column. Only a deliberate move — a drag,
-                status change, or volli CLI move — fires it. Tickets already there and lifecycle moves
-                don’t start a run.
-              </p>
-            </article>
-            <article class="way" data-spotlight>
-              <span class="way-index">On a schedule</span>
-              <h4>Hourly, Every day, Mon–Fri, or Weekly</h4>
-              <p>
-                In the time zone you choose. Each occurrence opens a Session for the project only
-                while Volli is open. Scheduled skips record why they didn’t start. <strong>Run
-                now</strong> starts one by hand; skipped occurrences never replay themselves.
-              </p>
-            </article>
-          </div>
-          <p class="release-closer">
-            Automations remove repetitive setup, not the person. Automatic triggering is local to
-            this Mac. Every run starts a fresh Session, and the history shows what happened.
-          </p>
-        </div>
+        {/* The three ways a run starts, as three lines. Each carries the
+            control fact that matters for that trigger (§1.4). */}
+        <ul class="ways-list">
+          <li>
+            <b>By hand</b>
+            <span>
+              From the Automations page, a ticket, or the command palette. <strong>Run once</strong>
+              {" "}sends one-time Instructions without saving anything.
+            </span>
+          </li>
+          <li>
+            <b>Ticket enters</b>
+            <span>
+              Arm one automation per column, on this Mac. Only a deliberate move — a drag, a status
+              change, or a volli CLI move — fires it. Tickets already there are left alone.
+            </span>
+          </li>
+          <li>
+            <b>On a schedule</b>
+            <span>
+              Hourly, Every day, Mon–Fri, or Weekly, in your time zone, while Volli is open. Skips are
+              recorded with a reason, never replayed.
+            </span>
+          </li>
+        </ul>
       </section>
 
       {/* One place for the trust facts the download page and the docs
@@ -304,10 +289,9 @@ const workspace = [
 
       {/* The closing routes. */}
       <section class="closing" aria-labelledby="closing-title">
-        <h2 id="closing-title">Try the 0.2 alpha</h2>
+        <h2 id="closing-title">Try the alpha</h2>
         <p>
-          For Apple silicon Macs running macOS 12 or later. This is an alpha; report problems you
-          find.
+          Apple silicon, macOS 12 or later. Report the problems you find.
         </p>
         <div class="cta-row closing-cta">
           <a class="cta cta-primary" href="/download/">
@@ -364,33 +348,22 @@ const workspace = [
     </footer>
 
     <script>
-      // Two decorations, neither load-bearing. The beam runs once when the
-      // release band is on screen; the spotlight follows a fine pointer over
-      // the three cards. Both stay off under prefers-reduced-motion, and the
-      // page reads the same without them.
+      // One decoration, not load-bearing: the beam runs once when the release
+      // section's head is on screen. It stays off under prefers-reduced-motion,
+      // and the page reads the same without it.
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-      const band = document.querySelector<HTMLElement>("[data-release-band]");
-      if (band && !reducedMotion && "IntersectionObserver" in window) {
+      const releaseHead = document.querySelector<HTMLElement>("[data-release-head]");
+      if (releaseHead && !reducedMotion && "IntersectionObserver" in window) {
         const observer = new IntersectionObserver(
           (entries) => {
             if (!entries.some((entry) => entry.isIntersecting)) return;
-            band.classList.add("is-live");
+            releaseHead.classList.add("is-live");
             observer.disconnect();
           },
           { threshold: 0.6 },
         );
-        observer.observe(band);
-      }
-
-      if (!reducedMotion && window.matchMedia("(pointer: fine)").matches) {
-        document.querySelectorAll<HTMLElement>("[data-spotlight]").forEach((card) => {
-          card.addEventListener("pointermove", (event) => {
-            const rect = card.getBoundingClientRect();
-            card.style.setProperty("--mx", `${event.clientX - rect.left}px`);
-            card.style.setProperty("--my", `${event.clientY - rect.top}px`);
-          });
-        });
+        observer.observe(releaseHead);
       }
     </script>
   </body>
