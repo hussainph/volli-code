@@ -1268,12 +1268,18 @@ describe("ticket sessions", () => {
   // pins is that a spawned terminal actually receives it, and that a value the
   // user exported in their own shell survives untouched.
   it("injects the concurrency budget, and never over the user's own value", async () => {
-    const keys = ["MAKEFLAGS", "VITEST_MAX_WORKERS", "CARGO_BUILD_JOBS", "GOFLAGS"] as const;
-    const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    // This test asserts on BOTH halves of the no-clobber rule, so it has to own
+    // the ambient environment for the variables it names. Volli fills only the
+    // gaps, and a Session running this suite was itself started with a budget —
+    // so inside an agent Session the "filled" spellings arrive pre-set and the
+    // assertions below read the harness's own number instead of the fixture's.
+    // Clear the three this test expects Volli to write, and set the one it
+    // expects Volli to leave alone.
+    const cleared = ["VITEST_MAX_WORKERS", "CARGO_BUILD_JOBS", "GOFLAGS"] as const;
+    const priorEnv = new Map(cleared.map((name) => [name, process.env[name]]));
+    for (const name of cleared) delete process.env[name];
+    const priorMakeflags = process.env["MAKEFLAGS"];
     process.env["MAKEFLAGS"] = "-j16";
-    delete process.env["VITEST_MAX_WORKERS"];
-    delete process.env["CARGO_BUILD_JOBS"];
-    delete process.env["GOFLAGS"];
     try {
       await createTicketSession("tk1");
       const env = lastSpawnEnv();
@@ -1286,10 +1292,11 @@ describe("ticket sessions", () => {
       // flag-carrying variable it did not write.
       expect(env["MAKEFLAGS"]).toBe("-j16");
     } finally {
-      for (const key of keys) {
-        const value = prior[key];
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
+      if (priorMakeflags === undefined) delete process.env["MAKEFLAGS"];
+      else process.env["MAKEFLAGS"] = priorMakeflags;
+      for (const [name, value] of priorEnv) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
       }
     }
   });

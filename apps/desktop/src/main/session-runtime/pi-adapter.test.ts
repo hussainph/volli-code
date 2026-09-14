@@ -1487,6 +1487,70 @@ describe("Pi native adapter attach", () => {
 
     expect(binding.native).toEqual({ id: null, detail: null });
   });
+
+  /**
+   * VC-367. Boot recovery reconciles a Session whose turn was live at the
+   * crash, and reconciling rehydrates the binding — which resolves the whole
+   * tool surface, this port included. A host that is not up yet makes the
+   * resolver throw, and the throw comes out of `attach` rather than out of any
+   * browser tool: the Session never recovers, and the failure is recorded as
+   * `adapter_unrecoverable` with the resolver's own words. That is precisely
+   * what the shipped boot order produced for every such Session, on every
+   * crash, because the host was built several hundred lines AFTER the sweep.
+   */
+  const recoveringSpec = attachmentSpec({
+    continuity: "native_resume",
+    native: {
+      id: "pi-session-previous",
+      detail: {
+        runtime: "pi",
+        sessionId: "pi-session-previous",
+        sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
+      },
+    },
+  });
+
+  it("fails a recovery attach when the Browser host is not up yet", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => {
+        throw new Error("The Browser host is not ready; retry the attachment.");
+      },
+    });
+
+    const error: unknown = await adapter
+      .attach(recoveringSpec, new RecordingSink())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("The Browser host is not ready");
+    // Nothing was started, so there is no binding to reconcile: the Session's
+    // turn stays interrupted and boot recovery force-closes the attachment.
+    expect(runtime.specs).toHaveLength(0);
+  });
+
+  it("recovers the same Session once the Browser host exists", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => ({
+        tabs: async () => ({ tabs: [] }),
+        navigate: unusedPortMethod,
+        snapshot: unusedPortMethod,
+        act: unusedPortMethod,
+        screenshot: unusedPortMethod,
+        console: unusedPortMethod,
+        turnEnded: () => undefined,
+      }),
+    });
+
+    const binding = await adapter.attach(recoveringSpec, new RecordingSink());
+
+    // The whole difference is the ordering: same Session, same recovery
+    // reference, same adapter — a host that exists is all it ever needed. The
+    // prior process's sidecar reached the runtime, so there is a live binding
+    // for boot recovery to reconcile the interrupted turn through.
+    expect(runtime.specs).toHaveLength(1);
+    expect(runtime.spec.recovery).toMatchObject({ sessionId: "pi-session-previous" });
+    expect(binding.reconcile).toBeTypeOf("function");
+  });
 });
 
 describe("Pi native adapter dispatch", () => {

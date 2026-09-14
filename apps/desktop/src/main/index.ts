@@ -2109,6 +2109,70 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  //
+  // BEFORE boot recovery, and that ordering is load-bearing (VC-367). Recovery
+  // rehydrates a structured attachment, which resolves the Session's whole tool
+  // surface — including `resolveBrowserPort`, which reads `browserTabsRef`.
+  // Built after recovery, as it was, that read found null and threw, so EVERY
+  // Session with a live turn at crash time failed to reconcile and was force-
+  // closed instead: the reconcile path could not succeed at boot, on any crash,
+  // for any such Session. The host is inert until something drives a tab
+  // (`BrowserTabHost`'s constructor only stores its dependencies, and its stage
+  // window is a lazy callback), so nothing is started early by moving it here —
+  // only made available to the one caller at boot that needs it.
+  //
+  // The alternative was to move recovery down to the host instead. This way
+  // round on purpose: recovery must run before anything reads the ledger (see
+  // `session-runtime/boot-recovery.ts`), and that invariant is held by position
+  // — moving the sweep past several hundred lines of handler registration would
+  // have made it depend on none of them ever growing a read.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // The off-screen stage every tab waits in until a person shows it (VC-278).
+    // A tab nobody has revealed still needs a window to hold its compositor
+    // surface, or its clicks land nowhere and its screenshots never answer.
+    //
+    // A BaseWindow, deliberately: it holds views but has no webContents, so it
+    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
+    // picks the app window out of, and that `activate` counts before
+    // re-creating one. `show: false` is load-bearing and must stay: showing
+    // this would put an agent's page on screen with nothing in the UI claiming
+    // to have shown it.
+    createStageWindow: () =>
+      new BaseWindow({
+        show: false,
+        width: BROWSER_DEFAULT_BOUNDS.width,
+        height: BROWSER_DEFAULT_BOUNDS.height,
+        skipTaskbar: true,
+        focusable: false,
+      }),
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // The pictures a transcript card shows (VC-238): live captures bounded in
+    // memory, model-requested screenshots also on disk under userData — never
+    // the Blob store, whose Session links become the next turn's input.
+    pictures: new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    }),
+    // The holder's name for the pill and the cursor label (VC-239), from the
+    // Session's own projection. A launch with no runtime has no Sessions to
+    // hold a tab, so the placeholder is never what a person sees.
+    ...(sessionRuntime === null
+      ? {}
+      : {
+          sessionName: async (sessionId: string) =>
+            (await sessionRuntime.projection({ sessionId })).projection.session.title,
+        }),
+  });
+  browserTabsRef = browserTabs;
   // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
   // structured attachment stays reattachable, but a turn left active by the
   // prior process is reconciled now so `session list` cannot call it idle.
@@ -2787,53 +2851,6 @@ app.whenReady().then(async () => {
 
   const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
   ptyManagerRef = ptyManager;
-  // Remote pages live in main-owned WebContentsViews, never in the privileged
-  // app renderer. The host receives every Electron surface explicitly so its
-  // registry and security policy stay testable without Electron globals.
-  const browserTabs = new BrowserTabHost({
-    createId: randomUUID,
-    createView: (options) => new WebContentsView(options),
-    fromPartition: (partition) => session.fromPartition(partition),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
-    // The off-screen stage every tab waits in until a person shows it (VC-278).
-    // A tab nobody has revealed still needs a window to hold its compositor
-    // surface, or its clicks land nowhere and its screenshots never answer.
-    //
-    // A BaseWindow, deliberately: it holds views but has no webContents, so it
-    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
-    // picks the app window out of, and that `activate` counts before
-    // re-creating one. `show: false` is load-bearing and must stay: showing
-    // this would put an agent's page on screen with nothing in the UI claiming
-    // to have shown it.
-    createStageWindow: () =>
-      new BaseWindow({
-        show: false,
-        width: BROWSER_DEFAULT_BOUNDS.width,
-        height: BROWSER_DEFAULT_BOUNDS.height,
-        skipTaskbar: true,
-        focusable: false,
-      }),
-    publishState: (tab) => publishBrowserTabEvent({ tab }),
-    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
-    // The pictures a transcript card shows (VC-238): live captures bounded in
-    // memory, model-requested screenshots also on disk under userData — never
-    // the Blob store, whose Session links become the next turn's input.
-    pictures: new BrowserPictureStore({
-      createId: randomUUID,
-      now: Date.now,
-      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
-    }),
-    // The holder's name for the pill and the cursor label (VC-239), from the
-    // Session's own projection. A launch with no runtime has no Sessions to
-    // hold a tab, so the placeholder is never what a person sees.
-    ...(sessionRuntime === null
-      ? {}
-      : {
-          sessionName: async (sessionId: string) =>
-            (await sessionRuntime.projection({ sessionId })).projection.session.title,
-        }),
-  });
-  browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them
