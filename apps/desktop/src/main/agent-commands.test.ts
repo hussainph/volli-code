@@ -4470,7 +4470,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -4483,6 +4483,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
       // seam (C3) so this scenario isn't about that check.
       worktreeExists: () => true,
@@ -4534,13 +4535,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
     // the PHYSICAL cwd the CLI's `process.cwd()` reports — the exact macOS
@@ -4578,13 +4580,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4611,13 +4614,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     // A ticket that never entered Doing has no worktree.
     await service.execute({
@@ -4666,7 +4670,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -4679,6 +4683,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4737,7 +4742,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -4748,6 +4753,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4777,13 +4783,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4823,7 +4830,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     // No worktreeExists stub here — this exercises the REAL default (existsSync)
     // against a directory that genuinely never existed by the time it's checked.
     const service = createAgentCommandService({
@@ -4832,6 +4839,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
     const missingPath = join(scratchBase, "worktree");
@@ -4864,13 +4872,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);

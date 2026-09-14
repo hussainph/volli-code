@@ -195,6 +195,7 @@ import {
   readVenue,
   readWorktreeDiff,
   readWorktreeStatus,
+  resolveWorktreeTarget,
   getTrimSettings,
   remove as removeWorktree,
   runNet,
@@ -216,6 +217,16 @@ import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
 import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+
+/**
+ * How close together two rail reads of the same ticket count as one burst
+ * (VC-369). The Details rail mounts `ticket-repository-summary` and
+ * `ticket-changes-panel` in the same frame and each asks for `worktree.status`;
+ * an IPC round trip between them is a couple of milliseconds, so 50ms is
+ * generous for "the same mount" while staying far under the 250ms watch
+ * debounce that separates genuinely new filesystem events.
+ */
+const RAIL_READ_SHARE_WINDOW_MS = 50;
 
 /** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
 export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
@@ -455,6 +466,18 @@ export function registerDataIpcHandlers(
   const blobsRootPath = options.blobsRoot ?? "";
   const changeWatchManager = new WorktreeChangeWatchManager();
   const coalesceChangeSet = createCoalescer();
+  /**
+   * The rail's status and diff reads, coalesced per ticket the way the Change
+   * Set is — and with a share window, because the two rail surfaces
+   * (`ticket-repository-summary` and `ticket-changes-panel`, both mounted at
+   * once in split view) each fire `worktree.status` on mount for the same
+   * ticket. Without the window the second mount queued a second full five-child
+   * spawn set behind the first; with it, one read serves both. The window is far
+   * below the 250ms watch debounce, so a refresh reacting to a real filesystem
+   * change still gets its own fresh run (VC-369).
+   */
+  const coalesceStatus = createCoalescer({ shareWindowMs: RAIL_READ_SHARE_WINDOW_MS });
+  const coalesceDiff = createCoalescer({ shareWindowMs: RAIL_READ_SHARE_WINDOW_MS });
 
   /**
    * Trims a just-finished ticket's worktree (VC-340), beside the reply rather
@@ -1249,8 +1272,8 @@ export function registerDataIpcHandlers(
       return { ok: true, worktreePath };
     },
 
-    "volli:worktree-branches": (input: ProjectIdInput): WorktreeBranchesResult => {
-      const result = listBranches(worktreeDeps(db), input.projectId);
+    "volli:worktree-branches": async (input: ProjectIdInput): Promise<WorktreeBranchesResult> => {
+      const result = await listBranches(worktreeDeps(db), input.projectId);
       return result.ok ? { ok: true, ...result.value } : { ok: false, error: result.error };
     },
 
@@ -1485,13 +1508,18 @@ export function registerDataIpcHandlers(
     // read-only (no broadcast); `commit` records an event and `push-pr` writes
     // `pr_url`, so both broadcast to re-hydrate every board.
 
-    "volli:worktree-status": (input: TicketIdInput): WorktreeStatusResult => {
+    "volli:worktree-status": async (input: TicketIdInput): Promise<WorktreeStatusResult> => {
       // Thin adapter over the ticketId-in read verb (CONCEPT #42): it owns the
       // ticket→identity resolution, the no-worktree discrimination, AND the
       // stamped-but-deleted disk check the CLI door always did but this one
       // used to skip — which fed a deleted path into the errs-dirty status
       // read and lied `uncommitted: true` to the renderer.
-      const read = readWorktreeStatus(worktreeDeps(db), input.ticketId);
+      //
+      // Coalesced per ticket: the read is five git children, and both rail
+      // surfaces ask for it on mount (VC-369).
+      const read = await coalesceStatus(input.ticketId, () =>
+        readWorktreeStatus(worktreeDeps(db), input.ticketId),
+      );
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1504,8 +1532,13 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:worktree-diff": (input: WorktreeDiffInput): WorktreeDiffResult => {
-      const read = readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode);
+    "volli:worktree-diff": async (input: WorktreeDiffInput): Promise<WorktreeDiffResult> => {
+      // Keyed by mode as well as ticket: the two modes are different questions
+      // ("what would the PR contain" vs "what is uncommitted now"), so sharing
+      // one answer between them would return the wrong diff.
+      const read = await coalesceDiff(`${input.ticketId}:${input.mode}`, () =>
+        readWorktreeDiff(worktreeDeps(db), input.ticketId, input.mode),
+      );
       switch (read.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
@@ -1569,8 +1602,15 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-change-watch": async (input: TicketIdInput, sender): Promise<Result> => {
-      const status = readWorktreeStatus(worktreeDeps(db), input.ticketId);
-      switch (status.kind) {
+      // Only the PATH is wanted here, so this resolves the target rather than
+      // reading the status: the full read spawns five git children and this
+      // handler discarded every one of their answers. Both rail surfaces
+      // subscribe on mount, so that waste landed twice on the main process at
+      // exactly the moment a ticket workspace opens (VC-369). Same three
+      // failure arms — `resolveWorktreeTarget` is the verb's own resolution
+      // step, not a second copy of it.
+      const resolved = resolveWorktreeTarget(worktreeDeps(db), input.ticketId);
+      switch (resolved.kind) {
         case "missing-ticket":
           return { ok: false, error: "Unknown ticket" };
         case "no-worktree":
@@ -1578,7 +1618,7 @@ export function registerDataIpcHandlers(
         case "missing-on-disk":
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
-          return changeWatchManager.watch(sender, input.ticketId, status.worktreePath);
+          return changeWatchManager.watch(sender, input.ticketId, resolved.target.worktreePath);
       }
     },
 

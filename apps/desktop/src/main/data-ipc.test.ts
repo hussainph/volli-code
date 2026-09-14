@@ -27,7 +27,9 @@ import type {
   WorktreeOrphanDeleteResult,
   WorktreeRecreateResult,
   WorktreeOrphansResult,
+  WorktreeDiffResult,
   WorktreeRemoveResult,
+  WorktreeStatusResult,
   WorktreeTrimResult,
   WorktreeTrimScanResult,
   WorktreeTrimSettingsResult,
@@ -93,6 +95,11 @@ vi.mock("electron", () => ({
 vi.mock("./worktree", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
+  // The rail reads. Mocked so the coalescing/dedup assertions below can count
+  // calls on the seam itself; `worktree/read.test.ts` drives the real verbs.
+  readWorktreeStatus: vi.fn(),
+  readWorktreeDiff: vi.fn(),
+  resolveWorktreeTarget: vi.fn(),
   // The read-only scan and the confirmed cleanup are two verbs now (VC-284);
   // both are mocked here, and both have their own suites under worktree/.
   scanOrphans: vi.fn(),
@@ -160,6 +167,9 @@ import {
   ensure,
   getTrimSettings,
   listBranches,
+  readWorktreeDiff,
+  readWorktreeStatus,
+  resolveWorktreeTarget,
   remove as removeWorktree,
   scanOrphans,
   scanTrimTargets,
@@ -2310,9 +2320,161 @@ describe("volli:worktree-remove", () => {
   });
 });
 
+/**
+ * VC-369. The rail's status read is five git children on the Electron main
+ * process, and the Details rail asks for it from TWO surfaces that mount
+ * together (`ticket-repository-summary` and `ticket-changes-panel`, both live at
+ * once in split view) plus on every watch event. These assert the two defences
+ * by call count on the seam: coalescing per ticket, and a share window so one
+ * mount burst is one read.
+ */
+/** A promise the test releases by hand, so reads can be held mid-flight. */
+function deferredGate(): { gate: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+/** Holds `readWorktreeStatus` open until the returned `release` is called. */
+function deferredRead(): { release: () => void } {
+  const { gate, release } = deferredGate();
+  vi.mocked(readWorktreeStatus).mockImplementation(async () => {
+    await gate;
+    return { kind: "ok", status: { uncommitted: true } } as never;
+  });
+  return { release };
+}
+
+describe("volli:worktree-status coalescing (VC-369)", () => {
+  it("serves both rail surfaces from ONE read when they mount together", async () => {
+    const { release } = deferredRead();
+
+    // Both surfaces ask before the first read has finished — the mount burst.
+    const first = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", {
+      ticketId: "t1",
+    });
+    const second = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", {
+      ticketId: "t1",
+    });
+    release();
+
+    expect(await first).toEqual({ ok: true, status: { uncommitted: true } });
+    expect(await second).toEqual({ ok: true, status: { uncommitted: true } });
+    // Five git children, not ten.
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps tickets independent — one ticket's burst never answers another's", async () => {
+    const { release } = deferredRead();
+
+    const a = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t1" });
+    const b = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t2" });
+    release();
+    await Promise.all([a, b]);
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the discriminated failure arms identical through the coalescer", async () => {
+    vi.mocked(readWorktreeStatus).mockResolvedValue({ kind: "missing-ticket" } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+
+    vi.mocked(readWorktreeStatus).mockResolvedValue({
+      kind: "no-worktree",
+      displayId: "VC-1",
+      usesWorktree: true,
+    } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t2" }),
+    ).toEqual({ ok: false, error: "This ticket has no worktree." });
+
+    vi.mocked(readWorktreeStatus).mockResolvedValue({
+      kind: "missing-on-disk",
+      displayId: "VC-1",
+      worktreePath: "/gone",
+    } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t3" }),
+    ).toMatchObject({ ok: false });
+  });
+});
+
+describe("volli:worktree-diff coalescing (VC-369)", () => {
+  it("coalesces one ticket+mode, and never shares an answer across modes", async () => {
+    const { gate, release } = deferredGate();
+    vi.mocked(readWorktreeDiff).mockImplementation(async (_deps, _id, mode) => {
+      await gate;
+      return {
+        kind: "ok",
+        diff: { files: [], insertions: mode === "merge-base" ? 1 : 2 },
+      } as never;
+    });
+
+    const a = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "merge-base",
+    });
+    const sameAgain = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "merge-base",
+    });
+    const otherMode = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "working-tree",
+    });
+    release();
+
+    // The two modes are different questions; only the identical pair shares.
+    expect(await a).toMatchObject({ ok: true, diff: { insertions: 1 } });
+    expect(await sameAgain).toMatchObject({ ok: true, diff: { insertions: 1 } });
+    expect(await otherMode).toMatchObject({ ok: true, diff: { insertions: 2 } });
+    expect(vi.mocked(readWorktreeDiff)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("volli:worktree-change-watch (VC-369)", () => {
+  it("resolves the path without running the five-child status read", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: {
+        displayId: "VC-1",
+        worktreePath: "/wt/VC-1",
+        branch: "b",
+        baseBranch: "main",
+      },
+    } as never);
+
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toMatchObject({ ok: true });
+    // The whole saving: this handler only ever wanted the path.
+    expect(vi.mocked(readWorktreeStatus)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same failure arms it reported from the status read", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({ kind: "missing-ticket" } as never);
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "no-worktree",
+      displayId: "VC-1",
+      usesWorktree: true,
+    } as never);
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "This ticket has no worktree." });
+  });
+});
+
 describe("volli:worktree-branches", () => {
-  it("flattens the listing onto the result envelope", () => {
-    vi.mocked(listBranches).mockReturnValue({
+  it("flattens the listing onto the result envelope", async () => {
+    vi.mocked(listBranches).mockResolvedValue({
       ok: true,
       value: {
         branches: ["main", "dev"],
@@ -2322,7 +2484,7 @@ describe("volli:worktree-branches", () => {
       },
     });
 
-    const result = invoke<WorktreeBranchesResult>("volli:worktree-branches", {
+    const result = await invoke<Promise<WorktreeBranchesResult>>("volli:worktree-branches", {
       projectId: "project-1",
     });
 

@@ -19,7 +19,19 @@
  * The resolution itself ({@link resolveWorktreeTarget}) is exported, because
  * `sync.ts` — the one worktree verb that WRITES (VC-185) — has to make exactly
  * the same three discriminations before it merges anything, and a second copy
- * of them is how the two doors drifted apart the first time.
+ * of them is how the two doors drifted apart the first time. It is also what a
+ * caller that needs only the ticket's PATH should use: it touches the database
+ * and the disk and never spawns git (see `worktree-change-watch`, which used to
+ * run a whole five-child status read to learn one string).
+ *
+ * ## Every verb here is async (VC-369)
+ *
+ * `status` and `diff` were the last two on `execFileSync`, and they are the two
+ * the Details rail runs on every mount and every watch event — so the rail's
+ * refresh froze the Electron main process for the length of five serial git
+ * children. They now use the same injected `gitAsync` the Change Set reads use.
+ * Contracts are unchanged: the same discriminated arms, the same errs-dirty
+ * `uncommitted: true` on a failed read, the same nulls on a failed count.
  */
 import { existsSync } from "node:fs";
 
@@ -50,9 +62,15 @@ import type { RunGit, RunGitAsync } from "./types";
  */
 export interface WorktreeReadDeps {
   db: Database.Database;
-  git: RunGit;
   /**
-   * The non-blocking runner the Change Set verbs use. Defaults to the real
+   * The synchronous runner. No read verb in this module uses it any more
+   * (VC-369 moved the last two, status and diff, onto {@link gitAsync}); it
+   * stays on the bundle because callers pass their full `WorktreeDeps`, whose
+   * write paths still have it.
+   */
+  git?: RunGit;
+  /**
+   * The non-blocking runner EVERY read verb here uses. Defaults to the real
    * {@link runGitCapturingAsync} — never to a wrapper around `git`, which
    * would quietly put those reads back on the main thread.
    */
@@ -160,11 +178,14 @@ export function resolveWorktreeTarget(
  * a present worktree) runs `getWorktreeStatus`. A deleted worktree reports
  * `missing-on-disk`, never the errs-dirty `uncommitted: true`.
  */
-export function readWorktreeStatus(deps: WorktreeReadDeps, ticketId: string): WorktreeStatusRead {
+export async function readWorktreeStatus(
+  deps: WorktreeReadDeps,
+  ticketId: string,
+): Promise<WorktreeStatusRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
-  const status = getWorktreeStatus(deps.git, {
+  const status = await getWorktreeStatus(deps.gitAsync ?? runGitCapturingAsync, {
     worktreePath: target.worktreePath,
     branch: target.branch,
     baseBranch: target.baseBranch,
@@ -185,16 +206,16 @@ export function readWorktreeStatus(deps: WorktreeReadDeps, ticketId: string): Wo
  * runs `diffStat`. A `diffStat` failure (git error, or `merge-base` with no
  * known base) surfaces as `diff-error` carrying the real message.
  */
-export function readWorktreeDiff(
+export async function readWorktreeDiff(
   deps: WorktreeReadDeps,
   ticketId: string,
   mode: WorktreeDiffMode,
-): WorktreeDiffRead {
+): Promise<WorktreeDiffRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
   if (resolved.kind !== "ok") return resolved;
   const { target } = resolved;
-  const result = diffStat(
-    deps.git,
+  const result = await diffStat(
+    deps.gitAsync ?? runGitCapturingAsync,
     { worktreePath: target.worktreePath, baseBranch: target.baseBranch },
     mode,
   );
