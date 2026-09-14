@@ -1301,6 +1301,21 @@ describe("ticket sessions", () => {
     }
   });
 
+  it("leaves an exported budget variable exactly as the user set it", async () => {
+    // The other direction of the same rule, and the one the suite never had:
+    // a value already in the environment survives, rather than being replaced
+    // by Volli's arithmetic.
+    const prior = process.env["VITEST_MAX_WORKERS"];
+    process.env["VITEST_MAX_WORKERS"] = "1";
+    try {
+      await createTicketSession("tk1");
+      expect(lastSpawnEnv()["VITEST_MAX_WORKERS"]).toBe("1");
+    } finally {
+      if (prior === undefined) delete process.env["VITEST_MAX_WORKERS"];
+      else process.env["VITEST_MAX_WORKERS"] = prior;
+    }
+  });
+
   it("persists a ticket-scoped ledger projection and injects ticket env", async () => {
     const { result } = await createTicketSession("tk1");
     if (!result.ok) throw new Error(`expected session, got ${result.error}`);

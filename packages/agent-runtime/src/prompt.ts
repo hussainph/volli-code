@@ -61,6 +61,9 @@ function operatingLayer(hasResources: boolean): string {
   ].join("\n");
 }
 
+const OPERATING_LAYER_WITH_RESOURCES = operatingLayer(true);
+const OPERATING_LAYER_WITHOUT_RESOURCES = operatingLayer(false);
+
 /**
  * The compact coding workflow every Role shares (VC-332).
  *
@@ -252,6 +255,12 @@ const WORKSPACE_DOUBT: Record<RuntimeSessionRole, string> = {
   subagent: "say so in your answer rather than acting on a guess.",
 };
 
+const WORKSPACE_LAYER: Record<RuntimeSessionRole, string> = {
+  ticket: workspaceLayer("ticket"),
+  project: workspaceLayer("project"),
+  subagent: workspaceLayer("subagent"),
+};
+
 /**
  * Named where the tools are named, because how a command runs is a fact about
  * the tool the Session was actually handed. Stated only when `execute` is in
@@ -370,11 +379,15 @@ export interface SystemPromptSection {
 export function systemPromptSections(input: SystemPromptInput): readonly SystemPromptSection[] {
   const resources = input.promptResources ?? [];
   const sections: SystemPromptSection[] = [
-    { id: "operating", text: operatingLayer(resources.length > 0) },
+    {
+      id: "operating",
+      text:
+        resources.length > 0 ? OPERATING_LAYER_WITH_RESOURCES : OPERATING_LAYER_WITHOUT_RESOURCES,
+    },
     { id: "execution", text: EXECUTION_LAYER },
     { id: "role", text: roleLayer(input.role, input.tools) },
     { id: "authority", text: authorityLayer(input.role, input.tools) },
-    { id: "workspace", text: workspaceLayer(input.role) },
+    { id: "workspace", text: WORKSPACE_LAYER[input.role] },
   ];
   if (resources.length > 0) sections.push({ id: "resources-header", text: RESOURCES_LAYER });
   for (const resource of resources) {

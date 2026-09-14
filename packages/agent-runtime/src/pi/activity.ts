@@ -102,6 +102,11 @@ const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s
 const NAMED_SECRET =
   /\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
 const SENSITIVE_KEY = /(?:token|apikey|password|secret|authorization|credential)/i;
+// Every redaction pattern starts with one of these markers. Most tool output
+// has none, so one scan avoids four full-string replacement scans while
+// retaining the exact slow path for anything that might contain a secret.
+const SECRET_MARKER =
+  /(?:\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_]|\bbearer\s|\bauthorization\s*:|\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:))/i;
 const REDACTED_VALUE = "[redacted]";
 
 /**
@@ -439,14 +444,15 @@ function outcomeFor(
   const rawDetails = recordOf(readField(rawResult, "details")) ?? rawResult;
   const patch = cleanPayloadText(readField(details, "patch"));
   const completePatch = stringOf(readField(rawDetails, "patch"));
+  const diffLines = completePatch === null ? null : countDiffLines(completePatch);
   return {
     exitCode: finiteNumber(readField(details, "exitCode")),
     matchCount: finiteNumber(readField(details, "matchCount")),
     fileCount: finiteNumber(readField(details, "fileCount")),
     lineCount: finiteNumber(readField(details, "lineCount")),
     bytes: finiteNumber(readField(details, "bytes")),
-    addedLines: completePatch === null ? null : countDiffLines(completePatch, "+"),
-    removedLines: completePatch === null ? null : countDiffLines(completePatch, "-"),
+    addedLines: diffLines?.added ?? null,
+    removedLines: diffLines?.removed ?? null,
     diff: patch,
     summary: summaryFor(result),
     // One child per delegate call today; counted off the fact that a child
@@ -457,20 +463,23 @@ function outcomeFor(
   };
 }
 
-function countDiffLines(diff: string, prefix: "+" | "-"): number {
-  let count = 0;
+function countDiffLines(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
   let lineStart = 0;
   for (let index = 0; index <= diff.length; index += 1) {
     if (index !== diff.length && diff.charCodeAt(index) !== 10) continue;
+    const prefix = diff.charAt(lineStart);
     if (
-      diff.charAt(lineStart) === prefix &&
+      (prefix === "+" || prefix === "-") &&
       !(diff.charAt(lineStart + 1) === prefix && diff.charAt(lineStart + 2) === prefix)
     ) {
-      count += 1;
+      if (prefix === "+") added += 1;
+      else removed += 1;
     }
     lineStart = index + 1;
   }
-  return count;
+  return { added, removed };
 }
 
 function summaryFor(result: Record<string, RuntimeActivityValue> | null): string | null {
@@ -596,8 +605,11 @@ function normalizedNumber(value: number, state: { remaining: number }): number |
 
 function normalizedString(value: string, state: { remaining: number }): string | typeof OMITTED {
   const bounded = boundPayloadText(value);
-  if (JSON.stringify(bounded).length <= state.remaining) {
-    state.remaining -= JSON.stringify(bounded).length;
+  // V8's native serializer is faster than a JavaScript escape scan. Keep its
+  // first result instead of allocating and scanning the same string twice.
+  const encodedLength = JSON.stringify(bounded).length;
+  if (encodedLength <= state.remaining) {
+    state.remaining -= encodedLength;
     return bounded;
   }
   if (state.remaining < 3) return OMITTED;
@@ -610,8 +622,7 @@ function normalizedString(value: string, state: { remaining: number }): string |
     else high = middle - 1;
   }
   const truncated = `${bounded.slice(0, low)}…`;
-  const length = JSON.stringify(truncated).length;
-  state.remaining -= length;
+  state.remaining -= JSON.stringify(truncated).length;
   return truncated;
 }
 
@@ -640,6 +651,7 @@ function boundSummaryText(value: string): string {
 }
 
 function redactPayloadSecrets(value: string): string {
+  if (!SECRET_MARKER.test(value)) return value;
   return value
     .replace(PREFIXED_SECRET, "[redacted]")
     .replace(

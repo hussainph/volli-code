@@ -2,7 +2,6 @@ import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   observationPayload,
-  projectSession,
   reportSessionUsage,
   sameCommandReceipt,
   sameSessionCommand,
@@ -295,7 +294,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: request.sessionId,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(request.sessionId) + 1,
           occurredAt,
           recordedAt: ports.clock.now(),
           provenance: request.provenance,
@@ -310,7 +309,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
         if (!session) throw new SessionEngineNotFoundError(observation.sessionId);
-        const events = transaction.listEvents({ sessionId: session.id });
+        // No whole-log read here (VC-356). Recording one fact used to list every
+        // event of the Session first, which made a turn's durable cost a
+        // function of how long the Session had been alive rather than of what
+        // the turn reported — quadratic across a Session, on the path a person
+        // waits on. The three things that read wanted are each answerable
+        // without it: the projection resumes from its checkpoint, the next
+        // sequence is an index lookup, and the one question neither can answer
+        // asks for the audit read where it is actually needed.
+        //
         // SQLite persists omitted optional envelope ids as NULL. Canonicalize
         // before either receipt or fact handling so every durable event uses
         // the same replay identity.
@@ -326,7 +333,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
                 `Receipt ${observation.receipt.id} was already recorded differently`,
               );
             }
-            const event = receiptEventFor(events, existingReceipt.id);
+            // The replay path, and the only read here that still walks the
+            // log: no index answers "which event carries this receipt", and a
+            // re-delivered receipt is rare. Kept exact rather than narrowed to
+            // this observation's own id, because a receipt re-delivered under a
+            // new envelope id must still resolve to the event that recorded it.
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              existingReceipt.id,
+            );
             if (!event || event.sessionId !== session.id) {
               throw new SessionEngineConflictError(
                 `Receipt ${existingReceipt.id} has no Session event`,
@@ -347,9 +362,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             );
           }
 
-          const projection = projectSession(session, events);
-          assertReceiptObservation(transaction, session, projection, observation);
-          const sequence = nextSequence(events);
+          const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+          assertReceiptObservation(transaction, session, stored.checkpoint.projection, observation);
+          const sequence = transaction.latestEventSequence(session.id) + 1;
           const event = receiptRecordedEvent(
             observation.id,
             session.id,
@@ -361,6 +376,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           );
           transaction.appendReceipt(event.payload.receipt);
           transaction.appendEvent(event);
+          refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
           return event;
         }
 
@@ -395,13 +411,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return existingEvent;
         }
 
-        const projection = projectSession(session, events);
-        assertObservableFact(projection, observation);
-        assertPendingStartReservation(projection, observation);
+        const stored = storedSessionProjection(transaction, session, reportCheckpointFailure);
+        assertObservableFact(stored.checkpoint.projection, observation);
+        assertPendingStartReservation(stored.checkpoint.projection, observation);
         const event: SessionEvent = {
           id: observation.id,
           sessionId: session.id,
-          sequence: nextSequence(events),
+          sequence: transaction.latestEventSequence(session.id) + 1,
           occurredAt: observation.occurredAt,
           recordedAt: ports.clock.now(),
           provenance: observation.provenance,
@@ -410,6 +426,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           payload,
         };
         transaction.appendEvent(event);
+        refreshProjectionCheckpoint(transaction, session, stored, event, reportCheckpointFailure);
         return event;
       });
     },
@@ -426,8 +443,11 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const existing = transaction.getCommand(commandRequest.id);
         if (existing) return replaySubmit(transaction, session, commandRequest);
 
-        const events = transaction.listEvents({ sessionId: session.id });
-        const projection = projectSession(session, events);
+        // Accepting a Command is the other half of a turn's durable cost, and
+        // it reached for the same whole-log read `observe` did (VC-356). The
+        // replay branch above already returned, so nothing here needs the log
+        // itself — only the folded state and the next sequence.
+        const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
         const routeResolution = resolveCommandRoute(projection, request.intent);
         const command: SessionCommand = {
           ...commandRequest,
@@ -437,7 +457,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         const commandEvent = commandRecordedEvent(
           ports.ids.next("event"),
           session.id,
-          nextSequence(events),
+          transaction.latestEventSequence(session.id) + 1,
           command.createdAt,
           request.provenance,
           command,
@@ -587,7 +607,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           return { event, receipt: priorReceipt, receiptEvent };
         }
 
-        const sequence = nextSequence(events);
+        const sequence = transaction.latestEventSequence(session.id) + 1;
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: session.id,
@@ -684,11 +704,35 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   };
 }
 
-function projectStoredSession(
+/**
+ * How far the persisted checkpoint may fall behind the log before a write path
+ * refreshes it.
+ *
+ * A checkpoint that is only ever written when an attachment closes does not
+ * bound anything for the Session that is currently running: the tail grows for
+ * the whole attachment, which is exactly the span a long chat spends appending
+ * facts. Refreshing it costs one derived row; NOT refreshing it costs a fold
+ * over that row's worth of events on every durable fact, forever. So the
+ * cadence is a bound on both: at most this many events are ever re-folded, and
+ * at most one cache row is written per this many appends.
+ */
+export const CHECKPOINT_REFRESH_EVENTS = 64;
+
+interface StoredSessionProjection {
+  checkpoint: SessionProjectionCheckpoint;
+  /**
+   * Cursor of the checkpoint as PERSISTED, or null when none was usable.
+   * `checkpoint` has already been advanced past this, so only this value can
+   * say how stale the durable cache is.
+   */
+  persistedThrough: number | null;
+}
+
+function storedSessionProjection(
   transaction: SessionLedgerTransaction,
   session: Session,
   onCheckpointFailure: (error: unknown) => void,
-): SessionProjection {
+): StoredSessionProjection {
   try {
     const checkpoint = transaction.getProjectionCheckpoint(session.id);
     if (checkpoint) {
@@ -699,7 +743,10 @@ function projectStoredSession(
         sessionId: session.id,
         afterSequence: checkpoint.throughSequence,
       });
-      return advanceSessionProjection(checkpoint, tail, session).projection;
+      return {
+        checkpoint: advanceSessionProjection(checkpoint, tail, session),
+        persistedThrough: checkpoint.throughSequence,
+      };
     }
   } catch (error) {
     // A projection checkpoint is a rebuildable cache. Any unsupported,
@@ -708,10 +755,43 @@ function projectStoredSession(
     onCheckpointFailure(error);
   }
 
-  return createSessionProjectionCheckpoint(
-    session,
-    transaction.listProjectionEvents({ sessionId: session.id }),
-  ).projection;
+  return {
+    checkpoint: createSessionProjectionCheckpoint(
+      session,
+      transaction.listProjectionEvents({ sessionId: session.id }),
+    ),
+    persistedThrough: null,
+  };
+}
+
+function projectStoredSession(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  onCheckpointFailure: (error: unknown) => void,
+): SessionProjection {
+  return storedSessionProjection(transaction, session, onCheckpointFailure).checkpoint.projection;
+}
+
+/**
+ * Folds one just-appended fact into the derived cache when it has drifted far
+ * enough to be worth a write. Never throws: the checkpoint is rebuildable, so
+ * a failed refresh is slower, not wrong.
+ */
+function refreshProjectionCheckpoint(
+  transaction: SessionLedgerTransaction,
+  session: Session,
+  stored: StoredSessionProjection,
+  appended: SessionEvent,
+  onCheckpointFailure: (error: unknown) => void,
+): void {
+  if (appended.sequence - (stored.persistedThrough ?? 0) < CHECKPOINT_REFRESH_EVENTS) return;
+  try {
+    transaction.saveProjectionCheckpoint(
+      advanceSessionProjection(stored.checkpoint, [appended], session),
+    );
+  } catch (error) {
+    onCheckpointFailure(error);
+  }
 }
 
 /**
@@ -1080,10 +1160,6 @@ function resolveCommandRoute(
     case "session.stop":
       return { route: null, rejection: null };
   }
-}
-
-function nextSequence(events: readonly SessionEvent[]): number {
-  return (events.at(-1)?.sequence ?? 0) + 1;
 }
 
 function assertObservableFact(
