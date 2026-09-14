@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { ComposerForm } from "@renderer/components/board/new-ticket/composer-form";
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
@@ -41,7 +42,11 @@ export function NewTicketDialog() {
       <DialogContent
         data-testid="new-ticket-composer"
         showCloseButton={false}
-        className={cn("gap-0 overflow-hidden p-0", expanded ? "sm:max-w-3xl" : "sm:max-w-xl")}
+        className={cn(
+          PROMPT_SURFACE,
+          "gap-0 overflow-hidden p-0 shadow-overlay",
+          expanded ? "sm:max-w-3xl" : "sm:max-w-xl",
+        )}
       >
         {/* Radix requires a title for the dialog's accessible name; the visible
             "New ticket" crumb lives in the breadcrumb, so this is screen-reader-only. */}

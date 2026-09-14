@@ -54,11 +54,7 @@ import {
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
-import {
-  createOnlyTicket,
-  selectCreationAction,
-  setComposerCreateMore,
-} from "./lib/composer-actions.mjs";
+import { createOnlyTicket, setComposerCreateMore } from "./lib/composer-actions.mjs";
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("volli-composer-basics-smoke-");
 const { attempt, summarize } = createRunner();
@@ -188,7 +184,7 @@ async function main() {
         const createMore = await page.getByRole("switch", { name: "Create more" }).count();
         await page.keyboard.press("Escape");
         const actionPicker = await composer(page)
-          .getByRole("button", { name: "Choose creation action" })
+          .getByRole("button", { name: "Choose what starts" })
           .count();
         const createBtn = await composer(page)
           .getByRole("button", { name: "Create ticket", exact: true })
@@ -213,7 +209,8 @@ async function main() {
           baseChip === 1 &&
           destinationChip === 1 &&
           createMore === 1 &&
-          createBtn === 0 &&
+          // Plain Create is a visible peer of the primary again, not a menu row.
+          createBtn === 1 &&
           actionPicker === 1 &&
           kickoff === 1;
         return {
@@ -383,7 +380,7 @@ async function main() {
       }
       const title = "Cmd-Enter ticket";
       await titleInput(page).fill(title);
-      await selectCreationAction(page, "Create only");
+      // ⌘+Enter is plain Create again — no mode to select first.
       await titleInput(page).focus();
       await page.keyboard.press("Meta+Enter");
       const closed = await waitUntil(

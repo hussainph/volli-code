@@ -350,8 +350,15 @@ export function ComposerForm({
     else if (action.automation !== null) void handleCreateWithAutomation(action.automation);
   }, [launch, target.id, automationOffer, handleCreate, handleKickoff, handleCreateWithAutomation]);
 
-  // ⌘+Enter → the selected action, ⌘+Shift+Enter → Create & start. Captured on the composer
-  // root so the shortcut fires before Monaco or the title input can act on the
+  // ⌘+Enter → Create, ⌘+Shift+Enter → the selected start action (Create &
+  // start, or Create & run for a chosen Automation).
+  //
+  // THE CHORDS FOLLOW THE BUTTONS. While plain creation lived inside the caret
+  // menu, ⌘+Enter had to mean "whatever is selected", because there was only
+  // one commit. Create is a button again, so the pairing goes back to what it
+  // says on screen: the unmodified chord is the unmodified action, and Shift
+  // is the "and also start something" modifier — with the menu deciding what
+  // that something is. Captured on the composer
   // Enter — plain Enter is left alone (title moves focus to the body). React
   // dispatches capture-phase handlers from a native listener on the app root,
   // which is an ANCESTOR of Monaco's DOM, so `stopPropagation` here stops the
@@ -365,10 +372,10 @@ export function ComposerForm({
       if (!event.currentTarget.contains(event.target as Node)) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.shiftKey) void handleKickoff();
-      else handleSubmit();
+      if (event.shiftKey) handleSubmit();
+      else void handleCreate();
     },
-    [handleSubmit, handleKickoff],
+    [handleSubmit, handleCreate],
   );
 
   return (
@@ -386,6 +393,7 @@ export function ComposerForm({
     // content, which lets the host shrink, which is the resize Monaco's
     // `automaticLayout` observer was waiting for.
     <div
+      data-composer-container=""
       onKeyDownCapture={handleKeyDownCapture}
       // The whole composer is the drop target, not just the description box: a
       // file meant for this ticket is aimed at the dialog, and the title input,
@@ -393,7 +401,7 @@ export function ComposerForm({
       // because Monaco treats a dropped file as text to insert and would
       // otherwise write the path into the body instead of attaching it.
       {...fileAttachHandlers((picked) => void attachFiles(picked))}
-      className="flex min-w-0 flex-col"
+      className="@container/composer flex min-w-0 flex-col"
     >
       <div className="px-6 pt-4 pb-2">
         <ComposerBreadcrumb
@@ -472,13 +480,14 @@ export function ComposerForm({
         className="border-t border-border px-6 pt-2"
       />
 
-      <div className="border-t border-border bg-muted/10 px-6 py-4">
+      <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}
           onAttachFiles={(picked) => void attachFiles(picked)}
           run={run}
           launch={launch}
           onLaunchChange={setLaunch}
+          onCreate={() => void handleCreate()}
           onSubmit={handleSubmit}
           automationOffer={{
             groups: automationOffer.groups,

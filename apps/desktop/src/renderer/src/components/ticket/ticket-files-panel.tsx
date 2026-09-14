@@ -581,7 +581,10 @@ export function TicketFilesPanel({
               <NewFileRailAction onNewFile={() => controls.startDraft("file")} />
             )}
             {providedAttachments === undefined ? (
-              <ComposerAttachButton onFiles={(picked) => void attachFiles(picked)} />
+              <ComposerAttachButton
+                glyph="paperclip"
+                onFiles={(picked) => void attachFiles(picked)}
+              />
             ) : null}
           </>
         }

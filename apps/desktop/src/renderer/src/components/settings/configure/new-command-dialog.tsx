@@ -15,6 +15,8 @@ import * as React from "react";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { errorMessage, isWritablePromptTemplateName } from "@volli/shared";
 
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
+import { cn } from "@renderer/lib/utils";
 import { CONTROL_W } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -160,13 +162,16 @@ export function NewCommandDialog({
             <label htmlFor="cmd-body" className="text-ui">
               Prompt
             </label>
-            <Textarea
-              id="cmd-body"
-              value={body}
-              rows={6}
-              placeholder="Read the ticket, open a PR against main, and paste the ticket body as the description."
-              onChange={(event) => setBody(event.target.value)}
-            />
+            <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
+              <Textarea
+                id="cmd-body"
+                value={body}
+                rows={6}
+                className="min-h-32 max-h-96 resize-none rounded-none border-0 bg-transparent py-4 text-sm shadow-none dark:bg-transparent"
+                placeholder="Read the ticket, open a PR against main, and paste the ticket body as the description."
+                onChange={(event) => setBody(event.target.value)}
+              />
+            </div>
           </div>
 
           <div className="flex items-center justify-between gap-4">

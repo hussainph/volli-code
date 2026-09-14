@@ -95,11 +95,8 @@ the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 
-The Session composer and anything parked on it (ask-user questions; later, plans and subagent
-activity) share one shell: `rounded-container`, hairline `border-border`, `bg-card`,
-`shadow-raised` (`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the
-composer and never replace it — the input stays so a follow-up can be typed while a question or a
-run is live.
+Cards parked above the composer (questions, activity, picker suggestions) keep the quiet
+`COMPOSER_STACK_SHELL` in `@volli/session-presentation`. They never replace the input.
 
 ### New-ticket composer
 
@@ -108,12 +105,71 @@ with Status, Priority and Labels below. Working-copy setup and Create more live
 in **Options**, not beside every commit. Checkout and batch-entry selections
 remain visible on the closed Options trigger.
 
-The footer has **one primary split button**. Its menu selects Create only, Start
-chat, or a saved Automation; selection never submits. The primary label names the
-chosen action. Model and effort appear only for chat kickoff; an Automation uses
-its saved Runtime. `⌘/Ctrl+Enter` performs the selected action, while
-`⇧⌘/Ctrl+Enter` explicitly starts chat. Launch mode is per-open and resets when
-retargeting projects; the ticket draft itself still survives closing.
+The footer has **two commit buttons and a chooser**, welded into one pill.
+**Create** is its own press — filing a ticket without starting work is the other
+ordinary answer, not an advanced variant, and it is never hidden behind a caret.
+Beside it the **primary** starts something: Create & start by default, or
+Create & run for a saved Automation. Only the caret's menu is open-ended (chat,
+or any of the project's Automations), and selection never submits.
+
+`⌘/Ctrl+Enter` is plain Create — the unmodified chord for the unmodified action.
+`⇧⌘/Ctrl+Enter` fires the primary, whatever the menu has selected, so no chord
+badge is printed against a single menu row. Model and effort appear only for chat
+kickoff; an Automation uses its saved Runtime. Launch mode is per-open and resets
+when retargeting projects; the ticket draft itself still survives closing.
+
+### Prompt chrome — writing sheet and control tray (VC-335)
+
+The first pass unified controls but still looked like the old flat box. The follow-up makes
+prompt writing a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
+accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
+owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
+There is no backdrop blur, animated glow, or focus-triggered shell change.
+
+This treatment reaches Session chat, New ticket, Automation instructions (including Run once),
+command-prompt creation, and ticket comments. Questions retain their quieter stacked-card
+treatment.
+
+| Piece | Rung | Says |
+|---|---|---|
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem | facts about the turn |
+| Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
+| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
+| Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
+| Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
+| Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
+
+**The tray is earned, not automatic.** It exists to divide writing from
+configuration, so it appears only where there is configuration or a primary to
+carry: chat (model, effort, send), ticket creation, ticket comments. A surface
+whose only control is the `+` — Automation instructions, the command-prompt body
+— keeps the shared shell and the shared door but draws no tinted band, because a
+full-width tint holding one 24px button reads as a container someone forgot to
+fill.
+
+The send key is a deliberate exception to the action-pill silhouette: it shares the 12px control
+radius, while settings remain pills. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
+The chrome stays at one ink, so a resting composer never masquerades as disabled.
+
+**`+` is the one door.** A menu, not a paperclip: Attach files… · Commands & skills `/` ·
+Mention a file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary.
+The two picker rows write the trigger at the caret through the picker stack's own binding, so the
+list opens exactly as if typed. A surface that takes no files has no attach row; one with no picker
+has no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
+one-press attach. The ticket Files rail keeps a paperclip — it is about files, not prompts.
+
+**Chords live on hover.** Send says `⏎ · ⇧⏎`, Queue says `⏎ · ⌘⏎ steer`, in tooltips on the
+control the chord replaces; never as a hint line under the box.
+
+**Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
+separate effort pill folds into the model control, whose face and popover then expose both values.
+Within that control the tier truncates before the model does — a qualifier must not outlive the
+thing it qualifies, and the pill's one fact is the model this Session sends to.
+The rule is shared by Session chat, New-ticket kickoff, and one-off Automation runtime controls.
+The context pill also drops its percent while keeping the ring. During a live turn, model and effort
+are frozen, so that disabled combined control leaves the narrow tray entirely; the queued Steer
+action keeps its icon and accessible name but drops its printed word. Add stays outside the omitted
+group, and the context / Stop / Queue cluster never moves.
 
 ## Elevation — three tiers
 
