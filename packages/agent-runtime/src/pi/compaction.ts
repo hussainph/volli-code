@@ -389,6 +389,16 @@ export interface CompactionInput {
   model: Model<Api>;
   /** The executor's rule, already resolved from the configured policy. */
   settings: CompactionSettings;
+  /**
+   * Stable per-conversation OpenCode Go routing identity (VC-349 follow-up).
+   *
+   * The same opaque sidecar id the live turn sends as `x-opencode-session`.
+   * Pi's local summarizer calls `models.completeSimple` directly and never
+   * passes through the live turn's streamFn wrapper, so without this the
+   * summary request misses the header Go requires and compaction fails on
+   * opencode chats. Only sent when the compaction model is `opencode-go`.
+   */
+  sessionId?: string;
   systemPrompt?: string;
   tools?: readonly Tool[];
   /** Extra focus for the summary. Only an explicit request carries any. */
@@ -418,14 +428,71 @@ export interface CompactionInput {
  * original history. JSON round-tripping removes undefined optional fields
  * which Pi's durable storage does not accept.
  */
+/**
+ * OpenCode Go routing identity (VC-349 follow-up).
+ *
+ * Native compaction needs no equivalent: its support matrix is locked to the
+ * first-party providers and hosts, so no `opencode-go` model can resolve to
+ * a native-capable route and the local summary below is the only path that
+ * can carry a Go conversation.
+ */
+const OPENCODE_GO_PROVIDER = "opencode-go";
+const OPENCODE_SESSION_HEADER = "x-opencode-session";
+
+/**
+ * Wrap a Models collection so Pi's local summarizer carries Go's routing identity.
+ *
+ * Pi's `compact()` calls `models.completeSimple` directly, bypassing the live
+ * turn's streamFn wrapper from VC-349. The wrapper re-adds the same stable
+ * per-conversation `x-opencode-session` header for `opencode-go` models only;
+ * every other provider sees the exact options it was given. Unwrapped when no
+ * session id is supplied so callers without one keep the identical object.
+ */
+function withOpenCodeGoSession(models: Models, sessionId: string | undefined): Models {
+  if (!sessionId) return models;
+  const inject = (model: Model<Api>, options: Record<string, unknown> | undefined) => {
+    if (model.provider !== OPENCODE_GO_PROVIDER) return options;
+    const existing = options?.["headers"] as Record<string, string> | undefined;
+    return {
+      ...options,
+      headers: { ...existing, [OPENCODE_SESSION_HEADER]: sessionId },
+    };
+  };
+  // `Models` is a class instance: preserve its prototype and own state, then
+  // override the one request entry point Pi's summarizer reaches.
+  // `compact()` summarizes exclusively through `completeSimple` (via Pi's
+  // own `completeSimpleWithRetries`), so the other three entry points are
+  // deliberately left alone: overriding them would be uncoverable code under
+  // this repo's 100% coverage gate, and a future Pi that summarizes another
+  // way should fail visibly here rather than silently miss the header.
+  const wrapped: Models = Object.create(
+    Object.getPrototypeOf(models),
+    Object.getOwnPropertyDescriptors(models),
+  );
+  const completeSimple = models.completeSimple.bind(models);
+  wrapped.completeSimple = ((model: Model<Api>, context: unknown, options?: unknown) =>
+    completeSimple(
+      model,
+      context as Parameters<Models["completeSimple"]>[1],
+      inject(model, options as Record<string, unknown> | undefined) as Parameters<
+        Models["completeSimple"]
+      >[2],
+    )) as Models["completeSimple"];
+  return wrapped;
+}
+
 export async function compactSession(input: CompactionInput): Promise<CompactionOutcome> {
+  // The summarizer's transport: the same stable Go identity the live turn
+  // sends, or the untouched collection when the caller has none (tests, older
+  // callers). Native availability reads through it so both paths agree.
+  const sessionModels = withOpenCodeGoSession(input.models, input.sessionId);
   // The route decides whether an existing checkpoint is replayable at all; a
   // checkpoint this credential cannot replay is expanded back into the original
   // history before anything is summarized.
   const { path } = compactionPathForModel(
     input.path,
     input.model,
-    await nativeCompactionAvailable(input.model, input.models, input.signal),
+    await nativeCompactionAvailable(input.model, sessionModels, input.signal),
   );
   let prepared = prepareModelCompaction(path, input.settings, input.model);
   if (prepared === undefined) return { kind: "skipped" };
@@ -454,7 +521,7 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
       ? { kind: "unsupported" as const }
       : await compactProviderNative({
           model: input.model,
-          models: input.models,
+          models: sessionModels,
           messages: prefix,
           enabled: true,
           systemPrompt: input.systemPrompt,
@@ -500,9 +567,11 @@ export async function compactSession(input: CompactionInput): Promise<Compaction
   // No reasoning level and no retry policy: the two `undefined`s Pi 0.85.0 moved
   // ahead of the context are the same two defaults 0.84.3 applied when the
   // arguments were optional, spelled out because they no longer are.
+  // `sessionModels` carries the Go header; `compact()` reaches it through
+  // `completeSimple`, the one seam Pi's summarizer uses.
   const result = await compact(
     prepared,
-    input.models,
+    sessionModels,
     input.model,
     input.customInstructions,
     undefined,
