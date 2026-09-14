@@ -368,8 +368,16 @@ export function ChatPlane({
   // render re-renders the whole box once per streamed frame.
   const focusComposer = React.useCallback(() => textareaRef.current?.focus(), []);
 
-  const { messages, durableMessages, queue, working, deliverable, projection, liveCompaction } =
-    session;
+  const {
+    messages,
+    durableMessages,
+    queue,
+    working,
+    turnActive,
+    deliverable,
+    projection,
+    liveCompaction,
+  } = session;
   const modelSelection = projection?.modelSelection ?? null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   // The tier the model resolved from (VC-259), as the Settings row names it;
@@ -1077,8 +1085,10 @@ export function ChatPlane({
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
-  // saying so.
-  const liveTurn = working ? (turns.at(-1) ?? null) : null;
+  // saying so. Stream-owned `turnActive`, rather than the wider Session
+  // lifecycle, keeps a transient error from treating incomplete content as
+  // settled and an optimistic submit from reopening the previous Turn.
+  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
 
   /**
    * The other place a question draws (round 5). A gated tool call's question
@@ -1635,6 +1645,13 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * reveal path still finds its row with `querySelector`, and the jsdom tests that
  * mount this plane still see a transcript, which under a virtualizer measuring
  * zero-height rows they would not.
+ *
+ * RE-EXAMINED 2026-09-13 (VC-357). TanStack's chat mode and Orbit's measured-row
+ * cache now answer variable heights better, but they do not answer this plane's
+ * scroller ownership or disclosure-driven height changes. With the document
+ * already bounded to 60 rows, their observers, estimates and correction state
+ * cost more than they save. The sourced verdict and the conditions that would
+ * reopen it are in `docs/research/perf/react-zustand-streaming.md` §3.
  *
  * WHAT THE READER SEES. At rest, the last {@link TRANSCRIPT_TAIL_ROWS} rows.
  * Above them, "Show earlier" — and the same sentinel the button sits on pages

@@ -129,7 +129,11 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "main",
           environment: "node",
-          include: ["src/main/**/*.test.ts"],
+          // The performance matrix's own unit tests ride in this project
+          // rather than the renderer one: they are plain Node, they assert the
+          // fixture generator's determinism, and they need neither jsdom nor
+          // the @renderer alias.
+          include: ["src/main/**/*.test.ts", "e2e/bench/performance/*.test.mjs"],
           // Drains the data-change coalescer after every test. Module state
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes
