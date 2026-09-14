@@ -567,6 +567,29 @@ async function tailProbe(sessionId: string, index: number): Promise<unknown> {
   };
 }
 
+/**
+ * Uncaught errors, with their stacks.
+ *
+ * The runner only sees Chromium's console text, and "Cannot convert object to
+ * primitive value" with no frame behind it costs more to chase than the bug
+ * itself. The harness fails a run on any renderer error, so the run that fails
+ * should also say where.
+ */
+const uncaught: { message: string; stack: string | null }[] = [];
+window.addEventListener("error", (event) => {
+  uncaught.push({
+    message: event.message,
+    stack: event.error instanceof Error ? (event.error.stack ?? null) : null,
+  });
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const reason: unknown = event.reason;
+  uncaught.push({
+    message: `unhandled rejection: ${reason instanceof Error ? reason.message : "non-Error reason"}`,
+    stack: reason instanceof Error ? (reason.stack ?? null) : null,
+  });
+});
+
 interface ChatBench {
   seed(sessions: number, turns: number): Promise<{ ids: string[]; nodes: number }>;
   show(count: number): Promise<{ mounted: number; nodes: number }>;
@@ -576,6 +599,7 @@ interface ChatBench {
   tailProbe(index: number): Promise<unknown>;
   streamAndScroll(index: number, steps: number, tokenRate: number): Promise<unknown>;
   collect(): void;
+  uncaught(): { message: string; stack: string | null }[];
 }
 
 let sessionIds: string[] = [];
@@ -615,6 +639,9 @@ const bench: ChatBench = {
     // number sampled before the garbage of the previous step is collected is a
     // number about the garbage.
     (globalThis as { gc?: () => void }).gc?.();
+  },
+  uncaught() {
+    return uncaught;
   },
 };
 

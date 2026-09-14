@@ -170,6 +170,14 @@ app.whenReady().then(async () => {
     report.failure = String(error && error.stack ? error.stack : error);
   }
 
+  // Console text alone names the error and not its origin. The harness fails a
+  // run on any renderer error, so carry the stacks out with the report.
+  try {
+    report.errorDetails = await run("window.chatBench.uncaught()");
+  } catch {
+    report.errorDetails = [];
+  }
+
   process.stdout.write(`\n__BENCH__${JSON.stringify(report)}__BENCH__\n`);
   server.close();
   app.exit(report.failure === undefined ? 0 : 1);

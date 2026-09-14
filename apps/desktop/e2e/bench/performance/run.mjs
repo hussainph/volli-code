@@ -856,7 +856,18 @@ export function validateChatBenchReport(
     throw new Error("ChatPlane bench report is missing its console error list");
   }
   if (report.errors.length > 0) {
-    throw new Error(`ChatPlane bench reported console errors: ${report.errors.join(" | ")}`);
+    // The bench page records uncaught errors with their stacks. Console text
+    // alone names an error without saying where it came from, and this gate
+    // fails whole runs, so whoever reads the failure gets the frames too.
+    const stacks = Array.isArray(report.errorDetails)
+      ? report.errorDetails
+          .filter((detail) => isRecord(detail) && typeof detail.stack === "string")
+          .map((detail) => `\n---\n${detail.stack}`)
+          .join("")
+      : "";
+    throw new Error(
+      `ChatPlane bench reported console errors: ${report.errors.join(" | ")}${stacks}`,
+    );
   }
   if (!isRecord(report.checks)) {
     throw new Error("ChatPlane bench report is missing health checks");
