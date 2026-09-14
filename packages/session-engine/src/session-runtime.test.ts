@@ -191,6 +191,7 @@ function composition(
     /** One clock for engine and runtime, as the composition root supplies. */
     clock?: { now: () => number };
     onSubscriberFailure?: (error: unknown) => void;
+    onProjectionCheckpointFailure?: (error: unknown) => void;
   } = {},
 ): { runtime: HostedSessionRuntime; engine: SessionEngine; adapter: FakeAdapter } {
   let now = 100;
@@ -214,6 +215,9 @@ function composition(
       clock,
       ids: runtimeIds(options.runtimeIdPrefix),
       ...(options.onSubscriberFailure ? { onSubscriberFailure: options.onSubscriberFailure } : {}),
+      ...(options.onProjectionCheckpointFailure
+        ? { onProjectionCheckpointFailure: options.onProjectionCheckpointFailure }
+        : {}),
     }),
   };
 }
@@ -3648,6 +3652,83 @@ describe("SessionRuntime native adapter contract", () => {
     expect(after.projection.signal).toMatchObject({ signal: "done", reason: "Tail applied" });
     expect(after.throughSequence).toBe(before.throughSequence + 3);
     expect(cursors).toEqual([before.throughSequence]);
+  });
+
+  it("reports a checkpoint write it could not perform, and still answers the read", async () => {
+    const base = composition();
+    const failure = new Error("checkpoint table is read-only");
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    // The projection is correct whether or not its cache could be written:
+    // that is what makes the write failure invisible without this report.
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await runtime.close();
+
+    expect(reported.length).toBeGreaterThan(0);
+    expect(new Set(reported)).toEqual(new Set([failure]));
+  });
+
+  it("reports an unreadable checkpoint and falls back to the whole-log fold", async () => {
+    const base = composition();
+    const sessionId = await createAndAttach(base.runtime);
+    const before = await base.runtime.projection({ sessionId });
+    await base.runtime.close();
+
+    const failure = new Error("checkpoint row could not be decoded");
+    const failingReads: SessionEngine = {
+      ...base.engine,
+      getProjectionCheckpoint: async () => {
+        throw failure;
+      },
+    };
+    const reported: unknown[] = [];
+    const { runtime } = composition({
+      engine: failingReads,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+
+    const after = await runtime.projection({ sessionId });
+
+    expect(after.throughSequence).toBe(before.throughSequence);
+    expect(reported).toEqual([failure]);
+  });
+
+  it("keeps working when the host's checkpoint failure reporter itself throws", async () => {
+    const base = composition();
+    const failingWrites: SessionEngine = {
+      ...base.engine,
+      saveProjectionCheckpoint: async () => {
+        throw new Error("checkpoint table is read-only");
+      },
+    };
+    const { runtime } = composition({
+      engine: failingWrites,
+      adapter: base.adapter,
+      onProjectionCheckpointFailure: () => {
+        throw new Error("diagnostics sink is broken");
+      },
+    });
+
+    const sessionId = await createAndAttach(runtime);
+    await expect(runtime.projection({ sessionId })).resolves.toMatchObject({
+      projection: { status: "open" },
+    });
+    await expect(runtime.close()).resolves.toBeUndefined();
   });
 
   it("bounds how many folded histories it keeps", async () => {
