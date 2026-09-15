@@ -57,6 +57,7 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
+import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
 
 type PhosphorIcon = typeof ChatCircleIcon;
@@ -369,12 +370,14 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
  * typeset blocks), and hosts the composer. Every comment mutation refetches
  * both so the feed stays authoritative; optimistic appends keep it responsive
  * in between.
+ *
+ * The landed read lives in `stores/ticket-activity.ts`, not in component state:
+ * the feed unmounts on every Doc → file/chat → Doc flip, and a remount paints
+ * from the cache when the planning version it was read at still holds (VC-373).
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
-  const [events, setEvents] = React.useState<TicketEvent[]>([]);
-  const [comments, setComments] = React.useState<TicketComment[]>([]);
-  const [loaded, setLoaded] = React.useState(false);
+  const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
 
   // Shared stale-guard for both reads below: a fast ticket switch (or a newer
   // refresh) supersedes an in-flight fetch, so its late resolve drops itself
@@ -397,9 +400,13 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         toastError(`Couldn't load activity: ${cm.error}`);
         return;
       }
-      setEvents(ev.events);
-      setComments(cm.comments);
-      setLoaded(true);
+      useTicketActivityStore.getState().apply(ticketId, {
+        events: ev.events,
+        comments: cm.comments,
+        // Read at write time, not mount time: the version this list is true
+        // under is the one the app is on when main answers.
+        version: useBoardStore.getState().lastPlanningChange.version,
+      });
     } catch (error) {
       if (activityFetch.isCurrent(token))
         toastError(`Couldn't load activity: ${errorMessage(error)}`);
@@ -419,7 +426,12 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         toastError(`Couldn't load activity: ${cm.error}`);
         return;
       }
-      setComments(cm.comments);
+      const current = useTicketActivityStore.getState().byTicket[ticketId];
+      useTicketActivityStore.getState().apply(ticketId, {
+        events: current?.events ?? [],
+        comments: cm.comments,
+        version: useBoardStore.getState().lastPlanningChange.version,
+      });
     } catch (error) {
       if (activityFetch.isCurrent(token))
         toastError(`Couldn't load activity: ${errorMessage(error)}`);
@@ -427,22 +439,34 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   }, [ticketId, activityFetch]);
 
   // Initial load, and reload when the open ticket switches (refetch's identity
-  // tracks ticketId).
+  // tracks ticketId). A cached read that is still under the planning version
+  // the app is on needs no fetch at all — that is the Doc-tab return.
   React.useEffect(() => {
+    const cached = useTicketActivityStore.getState().byTicket[ticketId];
+    if (
+      cached !== undefined &&
+      cached.version === useBoardStore.getState().lastPlanningChange.version
+    )
+      return;
     void refetch();
-  }, [refetch]);
+  }, [ticketId, refetch]);
 
   // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
   // refreshes the planning stores and publishes the change's scope. Refetch only
   // when it's untargeted or targets THIS ticket — a change for another ticket
-  // can't affect this feed. The seen-version ref skips the mount duplicate the
-  // effect above already covered.
+  // can't affect this feed — and advance the cached entry's version for one it
+  // provably does not, so returning to the Doc tab later still paints from
+  // cache. The seen-version ref skips the mount duplicate the effect above
+  // already covered.
   const planningChange = useBoardStore((state) => state.lastPlanningChange);
   const seenPlanningVersion = React.useRef(planningChange.version);
   React.useEffect(() => {
     if (planningChange.version === seenPlanningVersion.current) return;
     seenPlanningVersion.current = planningChange.version;
-    if (!planningChangeAffects(planningChange, ticketId)) return;
+    if (!planningChangeAffects(planningChange, ticketId)) {
+      useTicketActivityStore.getState().noteVersion(ticketId, planningChange.version);
+      return;
+    }
     void refetch();
   }, [planningChange, ticketId, refetch]);
 
@@ -452,29 +476,44 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   async function postComment(body: string): Promise<boolean> {
     const tempId = `temp-${crypto.randomUUID()}`;
     const now = Date.now();
-    setComments((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        ticketId,
-        sessionId: null,
-        actor: USER_ACTOR,
-        body,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]);
+    const before = useTicketActivityStore.getState().byTicket[ticketId];
+    // The temp row is cached too, so a tab flip mid-post cannot lose it: the
+    // optimistic list is what the feed would have painted locally.
+    useTicketActivityStore.getState().apply(ticketId, {
+      events: before?.events ?? [],
+      comments: [
+        ...(before?.comments ?? []),
+        {
+          id: tempId,
+          ticketId,
+          sessionId: null,
+          actor: USER_ACTOR,
+          body,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      version: useBoardStore.getState().lastPlanningChange.version,
+    });
     const result = await writeThrough("post comment", () =>
       window.api.comments.create({ ticketId, body }),
     );
     if (!result) {
-      setComments((prev) => prev.filter((comment) => comment.id !== tempId));
+      const rolledBack = useTicketActivityStore.getState().byTicket[ticketId];
+      useTicketActivityStore.getState().apply(ticketId, {
+        events: rolledBack?.events ?? [],
+        comments: (rolledBack?.comments ?? []).filter((comment) => comment.id !== tempId),
+        version: useBoardStore.getState().lastPlanningChange.version,
+      });
       return false;
     }
     await refetch();
     return true;
   }
 
+  const events = entry?.events ?? [];
+  const comments = entry?.comments ?? [];
+  const loaded = entry !== undefined;
   const feed = buildActivityFeed(events, comments);
 
   return (

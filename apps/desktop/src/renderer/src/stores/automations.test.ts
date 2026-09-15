@@ -21,6 +21,7 @@ import {
   selectAutomations,
   selectColumnOrders,
   selectColumnRank,
+  selectRailFresh,
   selectTicketRuns,
   type OfferedListSlices,
 } from "./automations";
@@ -1165,5 +1166,153 @@ describe("refreshTicketRuns", () => {
     // The same reference, so a rail subscribing to it does not re-render on
     // every unrelated store update while the cache is cold.
     expect(selectTicketRuns(store.getState(), "t2")).toBe(first);
+  });
+});
+
+/**
+ * The Ticket rail's arrival (VC-373): read only what the planning clock has
+ * moved past, so a ticket switch inside one project — or any other remount —
+ * spends nothing on a cache that already answers for the version the app is on.
+ */
+describe("refreshRail", () => {
+  it("fills all four caches at the arrival's version and reports them fresh", async () => {
+    stubApi({
+      list: () => Promise.resolve({ ok: true, automations: [automation()] }),
+      armings: () => Promise.resolve({ ok: true, armings: [ARMING] }),
+      enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-1"] }),
+      columnOrders: () => Promise.resolve({ ok: true, orders: [ORDER] }),
+    });
+    const store = createAutomationsStore();
+
+    await expect(store.getState().refreshRail("p1", 3)).resolves.toBe(true);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+    expect(selectRailFresh(store.getState(), "p1", 3)).toBe(true);
+  });
+
+  it("reads nothing when every cache already answers for that version", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({
+      railReadAt: {
+        "list:p1": 3,
+        "arming:p1": 3,
+        "order:p1": 3,
+        enablement: 3,
+      },
+    });
+
+    // A ticket switch inside one project arrives here: same planning version,
+    // same project-scoped caches, same machine-local switch set.
+    await expect(store.getState().refreshRail("p1", 3)).resolves.toBe(true);
+
+    expect(window.api.automations.list).not.toHaveBeenCalled();
+    expect(window.api.automations.armings).not.toHaveBeenCalled();
+    expect(window.api.automations.columnOrders).not.toHaveBeenCalled();
+    expect(window.api.automations.enablement).not.toHaveBeenCalled();
+  });
+
+  it("re-reads everything the planning clock has moved past", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({
+      railReadAt: { "list:p1": 3, "arming:p1": 3, "order:p1": 3, enablement: 3 },
+    });
+
+    await expect(store.getState().refreshRail("p1", 4)).resolves.toBe(true);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks only what landed, so a failed read is retried rather than trusted", async () => {
+    stubApi({ armings: () => Promise.resolve({ ok: false, error: "locked" }) });
+    const store = createAutomationsStore();
+
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+    // The three that landed keep the answer; the refused arming did not.
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(2);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries the list alone when only that read was refused", async () => {
+    stubApi({ list: () => Promise.resolve({ ok: false, error: "locked" }) });
+    const store = createAutomationsStore();
+
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+
+    // The three that landed are not asked again ...
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(1);
+    // ... and the one that did not, is.
+    expect(window.api.automations.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only the failed slice, wherever it sits in the four", async () => {
+    stubApi({
+      columnOrders: () => Promise.resolve({ ok: false, error: "locked" }),
+      enablement: () => Promise.resolve({ ok: false, error: "locked" }),
+    });
+    const store = createAutomationsStore();
+
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+
+    // The one unread arm of the read chain is only decided after the earlier
+    // three landed, so both failures have to be seen to be retried.
+    await expect(store.getState().refreshRail("p1", 5)).resolves.toBe(false);
+
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(2);
+    expect(window.api.automations.enablement).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one project's marks out of another's", async () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    store.setState({
+      railReadAt: { "list:p1": 3, "arming:p1": 3, "order:p1": 3, enablement: 3 },
+    });
+
+    await expect(store.getState().refreshRail("p2", 3)).resolves.toBe(true);
+
+    // Enablement is machine-local and already current; the three project
+    // caches p2 has never read are not.
+    expect(window.api.automations.list).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.armings).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.columnOrders).toHaveBeenCalledTimes(1);
+    expect(window.api.automations.enablement).not.toHaveBeenCalled();
+  });
+});
+
+describe("selectRailFresh", () => {
+  it("is false for a cold cache, and true only when all four marks hold", () => {
+    stubApi({});
+    const store = createAutomationsStore();
+    const cold = store.getState();
+    expect(selectRailFresh(cold, "p1", 3)).toBe(false);
+
+    store.setState({ railReadAt: { "list:p1": 3 } });
+    expect(selectRailFresh(store.getState(), "p1", 3)).toBe(false);
+
+    store.setState({
+      railReadAt: { "list:p1": 3, "arming:p1": 3, "order:p1": 3, enablement: 3 },
+    });
+    const warm = store.getState();
+    expect(selectRailFresh(warm, "p1", 3)).toBe(true);
+    expect(selectRailFresh(warm, "p1", 4)).toBe(false);
+    // Another project reading at the same version does not answer for p1.
+    expect(selectRailFresh(warm, "p2", 3)).toBe(false);
   });
 });

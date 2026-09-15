@@ -92,6 +92,7 @@ import { formatFileSize } from "@renderer/components/attachments/attachment-mode
 import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { toastError } from "@renderer/lib/toast";
+import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
@@ -138,19 +139,20 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
 
   React.useEffect(() => {
     let cancelled = false;
-    void window.api.retention
-      .getTtlDays()
+    // The app-wide read (stores/retention-ttl.ts): one `getTtlDays` serves this
+    // pane and every ticket's repository card, and the write below adopts the
+    // value main clamps to, which is what invalidates it (VC-373). `ensure`
+    // folds a rejected bridge call onto the same failure result, so there is
+    // no second catch to write here.
+    void useRetentionTtlStore
+      .getState()
+      .ensure()
       .then((result) => {
         if (cancelled) return;
         if (result.ok) {
           setDays(String(result.days));
           onDays(result.days);
         } else toastError(`Couldn't load the retention setting: ${result.error}`);
-        setLoaded(true);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        toastError(`Couldn't load the retention setting: ${errorMessage(error)}`);
         setLoaded(true);
       });
     return () => {
@@ -196,7 +198,10 @@ function RetentionSection({ onDays }: { onDays: (days: number) => void }) {
             try {
               const result = await window.api.retention.setTtlDays(parsed);
               if (!result.ok) return { ok: false, error: result.error };
-              // Adopt what main clamped it to, not what was typed.
+              // Adopt what main clamped it to, not what was typed — and adopt
+              // it app-wide (stores/retention-ttl.ts), which is the one
+              // invalidation every reader of the setting gets.
+              useRetentionTtlStore.getState().adopt(result.days);
               setDays(String(result.days));
               // And tell the orphan list, whose every date was measured against
               // the window this just replaced.

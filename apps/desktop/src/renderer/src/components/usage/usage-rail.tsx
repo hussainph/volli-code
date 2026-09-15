@@ -59,18 +59,12 @@ function useSettleSignal(): string {
 /**
  * One rollup, kept fresh across settles AND across remounts.
  *
- * ALWAYS `refresh`, never `ensure`. A rail is unmounted whenever the reader
- * changes page, collapses it or switches Session — and work goes on settling
- * while it is gone. `ensure` returns immediately for any cached answer and
- * nothing in production invalidates the cache, so a rail that came back would
- * show whatever the figure was when it left, indefinitely, with no signal that
- * it was stale. That is worse than a slow number: it is a wrong one that looks
- * settled.
- *
- * Refreshing costs nothing visible, because `refresh` keeps the cached entry on
- * screen and only announces `loading` when there is nothing to show yet. So a
- * remount paints the old figure immediately and replaces it when the read
- * lands — no flicker, and no lie.
+ * `refresh` carries the settle signal, which is what makes a remount cheap
+ * (VC-373): a ready entry read under the signal still on screen is the answer
+ * — usage only moves when a turn settles, and a settle moves the signal — so
+ * a rail coming back repaints the same figure without a second indexed read.
+ * A signal that HAS moved re-reads, exactly as before, and `refresh` keeps
+ * the cached entry on screen while it does so: no flicker, and no lie.
  *
  * `null` IS A QUERY. Home's card reports the Session in front, and there is
  * routinely no Session in front — the Board tab, a file tab, a terminal. A
@@ -85,7 +79,7 @@ function useUsageReport(query: UsageQuery | null): SessionUsageReport | null {
 
   React.useEffect(() => {
     if (query === null) return;
-    void useUsageStore.getState().refresh(query);
+    void useUsageStore.getState().refresh(query, settleSignal);
     // `key` stands for the whole query — it is derived from every field of it,
     // so depending on the object as well would re-read on each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
