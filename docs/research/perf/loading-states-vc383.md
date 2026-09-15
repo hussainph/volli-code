@@ -113,6 +113,54 @@ the surface's own geometry, carries no words, and is shown only where the
 surface can say the read is *pending* — never over a failure (the failure is
 what shows), never over a Draft (its null projection is the truth).
 
+## What the review pass changed
+
+A four-axis review of the above found that the rule in the paragraph before
+this one was **stated but not held**, and that the branch's headline claim was
+untested. Five commits answer it.
+
+1. **"Never over a failure" was true of one surface in five.** The Chat plane
+   gated on `sessionError`; nothing else could see a failure at all. The ticket
+   roster and the Activity feed inferred *pending* from a MISSING cache entry,
+   and neither store wrote one when the read was refused — so a failed read
+   left the skeleton pulsing forever, a worse hang than the freeze it replaced.
+   The sidebar bands and the Home Sessions page had the opposite fault: the
+   project store has recorded `failed` since the push channel landed and
+   neither surface read it, so a refused listing fell through to "No active
+   sessions" — the false empty this whole note is about.
+
+   The fix is the shape the project store already had: the baseline's outcome
+   is DATA beside the rows (`loading | loaded | failed`, with the detail), not
+   an inference each component redoes in JSX. That also answers the review's
+   architecture finding — four private request-state protocols in desktop JSX
+   are four things a future non-Electron client would have to reinvent. The
+   Activity feed's baseline read moved into its store with it, being the last
+   of the five still living in a component.
+
+2. **The move off `execFileSync` was unprovable.** `scripted-git.ts` recorded
+   both runners into one call list and `WorktreeDeps.gitAsync` was optional
+   with a fallback to the real runner, so reverting `remove.ts` to the sync
+   seam passed 70 of 71 tests and reverting `scan.ts` passed 25 of 25. The
+   seam is required now, the fixture records each runner separately, and the
+   same mutations fail six tests.
+
+3. **`remove()` ran unleased.** The window pre-dates this branch — `remove`
+   already awaited `releaseAgentSites` between the dirty gate and the delete —
+   but item 1 of "What changed" widened it from one yield to nine, and the
+   retention reclaim drives it from a 60 s poll and every window focus. It
+   takes the deletion lease before its first await now.
+
+4. **The snapshot pool did not stop on failure**, and its ordering test could
+   not fail: every fake read awaited the same microtask, so completion order
+   always matched issue order and a `push`-based implementation passed. Both
+   fixed.
+
+5. **Four off-ladder spacing values were spent without being recorded**, and
+   the Monaco placeholder hand-rolled the skeleton primitive's fill, radius and
+   motion gate in raw CSS — a third copy of a recipe that existed because the
+   first two drifted. One `--skeleton-*` recipe now; the four values are in
+   `docs/DESIGN.md`'s exception table, which goes from six entries to nine.
+
 ## Deferred — with the reason, and the shape of the fix
 
 These were found, judged out of this ticket's scope, and are left here so a
@@ -120,10 +168,10 @@ follow-up can pick one up without re-auditing.
 
 | # | Finding | Why deferred | Fix shape |
 |---|---|---|---|
-| D1 | `data.bootstrap` on every `data-changed`, bodies included | A contract change on the renderer's recovery guarantee (`refreshPlanningData` is "always wholesale" by design) and on `useBoardStore.hydrate`'s identity semantics; needs its own measurement under a dozen agents | Scope the re-read to `change.projectId` when it is known; drop `body` from the roster and read it per open ticket; or carry the changed row on the broadcast so the renderer patches |
+| D1 → **VC-387** | `data.bootstrap` on every `data-changed`, bodies included | A contract change on the renderer's recovery guarantee (`refreshPlanningData` is "always wholesale" by design) and on `useBoardStore.hydrate`'s identity semantics; needs its own measurement under a dozen agents | Scope the re-read to `change.projectId` when it is known; drop `body` from the roster and read it per open ticket; or carry the changed row on the broadcast so the renderer patches |
 | D2 | `session.snapshot` replays the whole history per fresh open | The renderer already windows the DOM (`transcript-window.ts`); the wire and the fold do not. Pagination is a `session-rpc` procedure change with `session-presentation` on the other end | `session.projection` first, then a windowed frame read from the tail (`#readEvents` already takes `afterSequence`/`limit`) |
-| D3 | `listSessions` folds N Sessions in one transaction | Per-session cost is bounded by the checkpoint; the block is per first visit. Splitting the transaction changes the ledger's serialization story | Per-session transactions with a yield between, or cache listing rows per `(sessionId, throughSequence)` and re-fold only the ones whose `MAX(sequence)` moved |
-| D4 | `PROJECTION_CACHE_LIMIT = 8` | Needs a measurement with dozens of open tabs before choosing a number or an eviction key | Key eviction to "has an open tab" rather than pure LRU |
+| D3 → **VC-388** (with D4) | `listSessions` folds N Sessions in one transaction | Per-session cost is bounded by the checkpoint; the block is per first visit. Splitting the transaction changes the ledger's serialization story | Per-session transactions with a yield between, or cache listing rows per `(sessionId, throughSequence)` and re-fold only the ones whose `MAX(sequence)` moved |
+| D4 → **VC-388** | `PROJECTION_CACHE_LIMIT = 8` | Needs a measurement with dozens of open tabs before choosing a number or an eviction key | Key eviction to "has an open tab" rather than pure LRU |
 | D5 | `cleanup.ts` sync probes on the confirmed cleanup | Deliberate: the no-await gate between last look and delete is the lease's guarantee. User-confirmed and rare | A worker thread for the gate, or a modal progress surface that owns the freeze honestly |
 | D6 | `volli:project-create` base-branch detect (2 sync spawns) | A rare click; the handler is invoked synchronously by dozens of fixtures | Swap to `detectProjectBaseBranchAsync` and make the handler async |
 | D7 | `sessions.starts` unscoped scan; `usage-report` `scope: "all"`; provenance's `json_extract` filter | Settings / usage surfaces, not transition paths | `sessions(created_at)` index; bounded default window + keyset paging; materialize the session→ticket link on write |
@@ -132,17 +180,29 @@ follow-up can pick one up without re-auditing.
 | D10 | `useMaterializedAttachments` — inline images unresolved while the strip loads | Cosmetic, shared across chat/body/comments | A sized placeholder per image while `links === NONE` |
 | D11 | Backup bundle build reads every blob and transcript synchronously and `gzipSync -9`s the archive | Rare; trigger wiring not found from the audit | Stream the bundle; async `readCanonicalBytes` already exists |
 
+One finding from the review is NOT deferred-with-a-ticket and belongs here
+instead: the sync runner was also implicit admission control. It serialized
+every main-process git caller by construction, and the async runner has no
+aggregate bound — dozens of Session starts, a launch scan and a reclaim can now
+each hold a child at once. Tracked as **VC-389**.
+
 ## Verification
 
-- `apps/desktop` main suites for `worktree/{scan,remove,retention,trim-sweep,
-  cleanup,dirty,publish,commit,sequencer}` and `harness-workspace`: 163 tests,
-  green, with the scripted runner recording both seams into one call list so
-  every call-count assertion held unchanged.
-- `packages/session-engine`: 283 tests at the package's 100% coverage gate,
-  including the bounded-window test that holds both edges of the bound.
-- Renderer suites for the chat plane (4 files), the ticket Sessions panel (3),
-  the sidebar, Home rail, Activity feed and both editors: green, each new
-  loading state proven pending-then-settled against a read held open and then
-  answered.
-- `vp check` clean; `pnpm typecheck` clean; `generate-theme-css.mjs --check`
-  up to date.
+- Whole repository: `pnpm test` — **9,965 desktop tests green**, plus every
+  package's own suite; `pnpm run typecheck` clean; `vp check` clean;
+  `check-design-tokens.mjs` clean.
+- Coverage gates: `apps/desktop` and `packages/session-engine` both at **100%**
+  statements, branches, functions and lines.
+- The claims above are held by MUTATION, not by a green suite. Each was proved
+  by breaking the production code and watching the right test fail, then
+  restoring it:
+  - dropping each surface's failure arm fails exactly that surface's test and
+    nothing else (four surfaces, four failures);
+  - reverting `remove.ts` and `scan.ts` to the sync seam fails six tests, where
+    before the review it failed one;
+  - replacing the snapshot pool's positional slot write with `push` fails the
+    ordering test, where before it passed.
+- The earlier draft of this section claimed each loading state was "proven
+  pending-then-settled against a read held open and then answered". That was
+  true of the Chat plane and not of the Home rail or either editor. It is true
+  of every surface now.
