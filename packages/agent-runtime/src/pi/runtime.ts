@@ -477,6 +477,14 @@ async function runUtilityCompletion(
       // default-level request. Every other level passes through verbatim.
       ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      // OpenCode Go requires one opaque routing identity on every physical
+      // provider request. A utility completion has no attachment or sidecar
+      // whose id can supply it, and it makes exactly one request, so mint one
+      // identity for this standalone conversation. Keep unrelated providers'
+      // options byte-for-byte unchanged.
+      ...(model.provider === OPENCODE_GO_PROVIDER
+        ? { headers: { [OPENCODE_SESSION_HEADER]: randomUUID() } }
+        : {}),
     },
   );
   // Read BEFORE either refusal below. The provider billed for the prompt it
