@@ -68,22 +68,46 @@ export interface ModelAccessContextValue extends ModelAccessClient {
 const ModelAccessContext = React.createContext<ModelAccessContextValue | null>(null);
 
 /**
- * The promise already held for one question, or a fresh answer this call
- * starts and holds.
+ * The answer this call starts, shared with every ask that arrives while it is
+ * still out — and dropped by the first settlement, success or failure, so a
+ * later caller reads afresh.
  *
- * Every mount that asks before the next credential change joins the held
- * promise instead of starting its own read — two composers opening in the same
- * frame ask once, not twice.
+ * The two cheap preference reads use this: their next reader may be a mount
+ * after a write the renderer never made (the e2e harness seeds a default
+ * through the RPC; main repairs visibility as a refresh applies its lists),
+ * and nothing about one in-flight read makes a fresh SQLite read expensive.
  */
-function shareRead<T>(slot: { current: Promise<T> | null }, start: () => Promise<T>): Promise<T> {
+function coalesceRead<T>(
+  slot: { current: Promise<T> | null },
+  start: () => Promise<T>,
+): Promise<T> {
+  const inFlight = slot.current;
+  if (inFlight !== null) return inFlight;
+  const read = start();
+  slot.current = read;
+  const forget = (): void => {
+    if (slot.current === read) slot.current = null;
+  };
+  void read.then(forget, forget);
+  return read;
+}
+
+/**
+ * The answer already held for one question, or a fresh one this call starts
+ * and holds until an invalidation drops it.
+ *
+ * The expensive question uses this: the provider sweep costs ~40 probes and
+ * as many credential reads, and every mount that asks before the next
+ * credential change joins the held promise instead of paying for it again —
+ * two composers opening in the same frame ask once, not twice, and a remount
+ * asks not at all. A rejection is forgotten rather than held, so a failed
+ * read is a read the next mount may retry.
+ */
+function holdRead<T>(slot: { current: Promise<T> | null }, start: () => Promise<T>): Promise<T> {
   const held = slot.current;
   if (held !== null) return held;
   const read = start();
   slot.current = read;
-  // Only a rejection is forgotten, and only while this read is still the one
-  // held: a failed read is not an answer, so the next ask must be able to try
-  // again — but one that was already invalidated away must not clear the read
-  // that replaced it.
   void read.catch(() => {
     if (slot.current === read) slot.current = null;
   });
@@ -96,10 +120,10 @@ export function ModelAccessProvider({
 }: React.PropsWithChildren<{ client: ModelAccessClient }>) {
   const [revision, setRevision] = React.useState(0);
   // What this revision already knows. The chat plane, the rail's run control
-  // and every composer ask the same three questions, and their hosts remount
-  // on every ticket switch and chat tab switch — without a held answer each of
-  // those mounts pays for the whole provider sweep again. The `client` is
-  // stable for the life of the provider (`DesktopModelAccessProvider`
+  // and every composer ask the same questions, and their hosts remount on
+  // every ticket switch and chat tab switch — without the held sweep each of
+  // those mounts pays for the whole provider inspection again. The `client`
+  // is stable for the life of the provider (`DesktopModelAccessProvider`
   // memoizes it once), so these refs never name another store's answers.
   const inspectRead = React.useRef<Promise<ModelAccessSnapshot> | null>(null);
   const defaultsRead = React.useRef<Promise<ModelAccessDefaults> | null>(null);
@@ -121,7 +145,7 @@ export function ModelAccessProvider({
     return {
       inspect: (input) => {
         if (input.refresh !== true) {
-          return shareRead(inspectRead, () => client.inspect({ refresh: false }));
+          return holdRead(inspectRead, () => client.inspect({ refresh: false }));
         }
         // A person pressed Refresh: go to the providers regardless of what is
         // held, and let the answer replace it. The revision bump is what
@@ -141,8 +165,8 @@ export function ModelAccessProvider({
           return snapshot;
         });
       },
-      defaults: () => shareRead(defaultsRead, () => client.defaults()),
-      hiddenModels: () => shareRead(hiddenRead, () => client.hiddenModels()),
+      defaults: () => coalesceRead(defaultsRead, () => client.defaults()),
+      hiddenModels: () => coalesceRead(hiddenRead, () => client.hiddenModels()),
       compactionPolicy: () => client.compactionPolicy(),
       // A completed sign-in changes what every open composer may offer, so the
       // shared revision — what their catalogs re-read on — bumps here too, not

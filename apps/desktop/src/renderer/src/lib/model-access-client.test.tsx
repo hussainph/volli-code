@@ -199,7 +199,7 @@ async function remount(children: React.ReactNode): Promise<void> {
 }
 
 describe("the shared Model Access reads", () => {
-  it("serves a remount from the answer already held, with no second sweep", async () => {
+  it("serves a remount from the sweep already held, with no second inspection", async () => {
     const t = testClient();
     const reads: ModelAccessSnapshot[] = [];
     await mount(<Harness client={t.client} onRead={(read) => reads.push(read)} />);
@@ -211,9 +211,11 @@ describe("the shared Model Access reads", () => {
     await remount(<Harness client={t.client} probes={2} onRead={(read) => reads.push(read)} />);
 
     expect(reads).toEqual([SNAPSHOT, SNAPSHOT]);
+    // The sweep is held; the two cheap preference reads are asked again, so a
+    // write the renderer never made is still seen by the next mount.
     expect(t.inspect).toHaveBeenCalledTimes(1);
-    expect(t.hiddenModels).toHaveBeenCalledTimes(1);
-    expect(t.defaults).toHaveBeenCalledTimes(1);
+    expect(t.hiddenModels).toHaveBeenCalledTimes(2);
+    expect(t.defaults).toHaveBeenCalledTimes(2);
   });
 
   it("shares one inspection between two composers mounting in the same frame", async () => {
@@ -223,6 +225,8 @@ describe("the shared Model Access reads", () => {
     await mount(<Harness client={t.client} probes={2} onRead={(read) => reads.push(read)} />);
 
     expect(t.inspect).toHaveBeenCalledTimes(1);
+    expect(t.hiddenModels).toHaveBeenCalledTimes(1);
+    expect(t.defaults).toHaveBeenCalledTimes(1);
     expect(reads).toEqual([]);
 
     await act(async () => {
