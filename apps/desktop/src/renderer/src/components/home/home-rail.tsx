@@ -61,6 +61,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -502,12 +503,10 @@ function SessionsPage({ projectId }: { projectId: string }) {
       {rows.length === 0 && pending ? (
         <div
           className="flex flex-col"
-          role="status"
-          aria-label="Loading sessions"
-          aria-busy="true"
+          {...loadingRegionProps("sessions")}
           data-testid="home-sessions-loading"
         >
-          {["w-3/5", "w-2/5"].map((width) => (
+          {(["w-3/5", "w-2/5"] as const).map((width) => (
             <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-10" />
           ))}
         </div>

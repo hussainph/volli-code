@@ -47,6 +47,15 @@ import { cn } from "@renderer/lib/utils";
 
 export type ListRowDensity = "row" | "two-line";
 
+/**
+ * The fixed Tailwind widths every VC-383 loading row deliberately draws.
+ *
+ * Width is placeholder geometry, not a styling escape hatch: allowing a bare
+ * string here would let a caller add a new visual rhythm without documenting
+ * it alongside the skeleton it changes.
+ */
+export type LoadingBarWidth = "w-1/2" | "w-2/5" | "w-3/5" | "w-2/3" | "w-3/4" | "w-10" | "w-12";
+
 const DENSITY: Record<ListRowDensity, string> = {
   row: "py-2",
   "two-line": "min-h-13 py-1.5",
@@ -200,6 +209,10 @@ export function ListRow({
  * Inert by construction. A skeleton has nothing to activate, so it is the
  * `<div>` branch above with no hover fill and no ring — a pulsing bar that
  * tints under the pointer would be the same lie an inert row telling hover.
+ *
+ * Its `gap-1.5` is the VC-383 recorded 6px exception: the 16px and 14px
+ * bars keep the two-line placeholder's measured vertical footprint until the
+ * real labels replace them. The ladder's 8px gap changes that first paint.
  */
 export function ListRowSkeleton({
   primaryWidth,
@@ -209,10 +222,10 @@ export function ListRowSkeleton({
   className,
   ...rest
 }: React.HTMLAttributes<HTMLElement> & {
-  /** A width utility for the name's bar, e.g. `w-3/5`. */
-  primaryWidth: string;
-  /** A width utility for the figure at the end, or none. */
-  trailingWidth?: string;
+  /** The fixed width utility for the name's bar. */
+  primaryWidth: LoadingBarWidth;
+  /** The fixed width utility for the figure at the end, or none. */
+  trailingWidth?: LoadingBarWidth;
   /** Whether the row will carry a leading mark — a dot or a glyph. */
   mark?: boolean;
   density?: ListRowDensity;

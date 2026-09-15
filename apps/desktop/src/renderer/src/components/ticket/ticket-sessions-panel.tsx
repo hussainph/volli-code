@@ -30,6 +30,7 @@ import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -247,12 +248,10 @@ function SessionListSkeleton() {
   return (
     <div
       className="flex flex-col gap-1"
-      role="status"
-      aria-label="Loading sessions"
-      aria-busy="true"
+      {...loadingRegionProps("sessions")}
       data-testid="ticket-sessions-loading"
     >
-      {["w-3/5", "w-2/5"].map((width) => (
+      {(["w-3/5", "w-2/5"] as const).map((width) => (
         <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
       ))}
     </div>

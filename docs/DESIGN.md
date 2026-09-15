@@ -54,18 +54,21 @@ plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) �
 the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Six recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
-that is measured rather than chosen. They are commented at their site; do not re-collapse them
-without looking at the surface:
+**Nine recorded exceptions**, each because the ladder's fixed rungs cannot express a
+measured piece of geometry rather than a value chosen locally. They are commented at their site;
+do not re-collapse them without looking at the surface:
 
 | Site | Value | Why |
 |---|---|---|
 | `ui/button.tsx` size variants | `px-2.5` · `px-3` · `px-3.5` | A control's inset is a function of its own height, and this is a four-rung height ladder (20/24/28/32) with only two rungs in range |
 | `rail-panel-parts.tsx` `RAIL_PANEL_INSET` | `px-3` at narrow | The narrow step must be *smaller* than 16 and still an inset; 8 halves the edge. Collapsed, the variant became a silent no-op |
-| `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` | Optical alignment to the title's cap height, and the 2px that binds a title to its meta line |
+| `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` · `gap-1.5` · `pt-0.5` | The first pair keeps the dot on the title cap height and binds the real title to its meta line. VC-383's shorter 14px/12px skeleton bars need the 2px top nudge and 6px join to occupy that measured two-line row before labels replace them |
 | `board/ticket-card.tsx` | `px-3` | A dense card trades air for content: at `px-4` real titles truncate a word earlier |
 | `browser/session-cursor.css` | chip `gap: 5px` · `padding: 0 7px` · `height: 20px` · action `height: 15px` | The Session cursor's label is a drawing at pointer scale, measured against a 16px arrow, not a control on the layout grid: at the ladder's next step the chip reads as a button beside the arrow rather than a name riding it. Its type and corners still take the `--text-label` and `--radius-sm` rungs |
+| `globals.css` Monaco loading skeleton | `height: 14px` · `top: 12px` · `top: 36px` | The pseudo-elements meet Monaco's 12px source inset and its measured two-line placeholder drawing; 8/16/24px rungs move a bar before the host is replaced |
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
+| `ui/list-row.tsx` `ListRowSkeleton` | `gap-1.5` | Its 16px/14px bars need the 6px join to preserve the measured two-line placeholder footprint; `gap-2` changes that first paint before the labels replace it |
+| `chat/transcript-skeleton.tsx` | `gap-1.5` | Its 14px assistant bars sit on a 20px top-to-top placeholder rhythm (14 + 6); `gap-2` makes the transcript's loading drawing taller before prose replaces it |
 
 **Responsiveness is the whitespace, not breakpoints:** `<ContentColumn>` is
 `mx-auto w-full max-w-content px-gutter` — on wide windows the side margins grow; as the window

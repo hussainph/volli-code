@@ -1895,7 +1895,7 @@ const SEGMENT_GAP = "space-y-4";
  * speakers is what gives the feed its paragraph structure: a turn holds
  * together, and the hand-off to the other voice reads as a break.
  */
-const MESSAGE_GAP = "flex flex-col gap-6";
+export const MESSAGE_GAP = "flex flex-col gap-6";
 
 export interface TurnContext {
   onOpenFile(path: string): void;

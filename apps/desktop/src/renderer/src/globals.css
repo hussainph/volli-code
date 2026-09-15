@@ -67,6 +67,40 @@
   }
 }
 
+/* THE SKELETON RECIPE (VC-383).
+ *
+ * `Skeleton` and Monaco's pseudo-elements cannot share a React child, but they
+ * must share the same material. These properties are the one recipe: every bar
+ * reads its fill, corner, and animation from them. The reduced-motion query
+ * changes that recipe rather than making a second gate at each consumer, so a
+ * primitive change cannot leave Monaco moving differently.
+ *
+ * The selector pair is intentional. `data-slot="skeleton"` is the React
+ * primitive's stable hook; Monaco's loading host is the one non-React shape
+ * that inherits the recipe into its pseudo-elements.
+ */
+[data-slot="skeleton"],
+[data-monaco-status="loading"] {
+  --skeleton-fill: color-mix(in oklab, var(--accent) 70%, transparent);
+  --skeleton-radius: var(--radius-md);
+  --skeleton-animation: var(--animate-pulse);
+}
+
+@layer components {
+  [data-slot="skeleton"] {
+    border-radius: var(--skeleton-radius);
+    background-color: var(--skeleton-fill);
+    animation: var(--skeleton-animation);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="skeleton"],
+  [data-monaco-status="loading"] {
+    --skeleton-animation: none;
+  }
+}
+
 /* Below 24rem, model and effort become one control: the separate effort pill
  * retires and its value joins the model face. The model name gives up its 56px
  * floor at that point because the model mark and the full accessible label
@@ -739,8 +773,14 @@
  * same fill, the same radius, the same pulse — as two text lines at the
  * editor's own top padding, so the first paint of the document lands where
  * the bars were. They leave with the attribute: the editor sets `ready` on
- * mount, `failed` on the fallback. Reduced motion stills the pulse, as the
- * primitive does; the bars stay, because a still bar is still a placeholder. */
+ * mount, `failed` on the fallback. The shared `--skeleton-*` recipe supplies
+ * the fill, radius, pulse, and reduced-motion gate; the bars stay when motion
+ * stops, because a still bar is still a placeholder.
+ *
+ * `height: 14px`, `top: 12px`, and `top: 36px` are the recorded VC-383
+ * measurements: a 14px glyph surrogate at Monaco's 12px source inset, then a
+ * second measured line position. Replacing them with ladder rungs moves this
+ * first paint before Monaco replaces the host. */
 [data-monaco-status="loading"] {
   position: relative;
 }
@@ -751,10 +791,10 @@
   position: absolute;
   left: 0;
   height: 14px;
-  border-radius: var(--radius-md);
-  background: color-mix(in oklab, var(--accent) 70%, transparent);
+  border-radius: var(--skeleton-radius);
+  background: var(--skeleton-fill);
   pointer-events: none;
-  animation: var(--animate-pulse);
+  animation: var(--skeleton-animation);
 }
 
 [data-monaco-status="loading"]::before {
@@ -765,13 +805,6 @@
 [data-monaco-status="loading"]::after {
   top: 36px;
   width: 85%;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-monaco-status="loading"]::before,
-  [data-monaco-status="loading"]::after {
-    animation: none;
-  }
 }
 
 /* The transcript's own sweep — the sidebar's effect, paid for differently.

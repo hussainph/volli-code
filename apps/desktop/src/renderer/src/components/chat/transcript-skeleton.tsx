@@ -21,20 +21,17 @@
  * been minted, so its null projection is the truth, and the empty state is
  * right for it). The moment the snapshot lands, `messages` decides as before.
  */
+import { MESSAGE_GAP } from "@renderer/components/chat/chat-plane";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { Skeleton } from "@renderer/components/ui/skeleton";
-
-/** The transcript's own inter-row rhythm (`MESSAGE_GAP` in chat-plane.tsx). */
-const ROW_GAP = "flex flex-col gap-6";
 
 export function TranscriptSkeleton() {
   return (
     <ContentColumn
-      className={ROW_GAP}
-      role="status"
-      aria-label="Loading conversation"
-      aria-busy="true"
+      className={MESSAGE_GAP}
+      {...loadingRegionProps("conversation")}
       data-testid="chat-transcript-loading"
     >
       <UserRow width="w-2/5" />
@@ -56,7 +53,14 @@ function UserRow({ width }: { width: string }) {
   );
 }
 
-/** An assistant reply: prose lines at `text-sm`'s 20px rhythm, left-aligned. */
+/**
+ * An assistant reply: prose lines at `text-sm`'s 20px rhythm, left-aligned.
+ *
+ * VC-383's `gap-1.5` is the recorded 6px bar-to-bar measure: the 14px bars
+ * keep their 20px top-to-top placeholder rhythm (14 + 6) until transcript
+ * prose replaces them. The ladder's 8px gap makes that first-paint drawing
+ * taller.
+ */
 function AssistantRow({ widths }: { widths: readonly string[] }) {
   return (
     <Message from="assistant" className="max-w-full">

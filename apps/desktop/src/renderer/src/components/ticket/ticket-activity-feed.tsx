@@ -45,6 +45,7 @@ import {
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
@@ -524,9 +525,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         // own line: a glyph's slot and a sentence, at `text-ui`.
         <ul
           className="flex flex-col gap-2"
-          role="status"
-          aria-label="Loading activity"
-          aria-busy="true"
+          {...loadingRegionProps("activity")}
           data-testid="ticket-activity-loading"
         >
           {["w-3/5", "w-2/5"].map((width) => (

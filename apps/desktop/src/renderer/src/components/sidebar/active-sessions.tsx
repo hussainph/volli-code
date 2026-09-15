@@ -8,6 +8,7 @@ import {
 } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import {
   SidebarGroup,
   SidebarMenu,
@@ -920,9 +921,9 @@ export function ActiveSessions({
         // The rows' box, held while the listing is read. Live tabs this window
         // already holds are rows regardless (they come from the sessions store,
         // not the listing), so this only ever stands where nothing is known.
-        <SidebarMenu role="status" aria-label="Loading sessions" aria-busy="true">
-          <SessionBandRowSkeleton titleWidth="w-3/4" />
-          <SessionBandRowSkeleton titleWidth="w-1/2" />
+        <SidebarMenu {...loadingRegionProps("sessions")}>
+          <SessionBandRowSkeleton primaryWidth="w-3/4" />
+          <SessionBandRowSkeleton primaryWidth="w-1/2" />
         </SidebarMenu>
       ) : activeRows.length === 0 && listingFailed ? (
         // A failed baseline cannot establish that the Project is quiet. Keep
@@ -957,8 +958,8 @@ export function ActiveSessions({
         <SessionBandFilterMenu filter={filter} onChange={setFilter} />
       </SessionBandHeader>
       {previousEntries.length === 0 && listingPending ? (
-        <SidebarMenu role="status" aria-label="Loading sessions" aria-busy="true">
-          <SessionBandRowSkeleton titleWidth="w-2/3" />
+        <SidebarMenu {...loadingRegionProps("sessions")}>
+          <SessionBandRowSkeleton primaryWidth="w-2/3" />
         </SidebarMenu>
       ) : previousEntries.length === 0 && listingFailed ? (
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
