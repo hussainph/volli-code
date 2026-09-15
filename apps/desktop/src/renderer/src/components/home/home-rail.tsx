@@ -60,7 +60,8 @@ import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow } from "@renderer/components/ui/list-row";
+import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
@@ -77,7 +78,11 @@ import {
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { listableChats, useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import {
+  listableChats,
+  projectSessionListingPending,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
@@ -458,6 +463,14 @@ function SessionsPage({ projectId }: { projectId: string }) {
   React.useEffect(() => {
     void ensure(projectId);
   }, [projectId, ensure]);
+  // Whether the project's listing has ever answered (VC-383). Before it has,
+  // the rows below are empty because nothing has been READ, not because there
+  // is nothing — and "No sessions yet" about a project mid-turn is a false
+  // sentence for the length of the read. The store already keeps this bit;
+  // this page is one of the surfaces that used to leave it unread.
+  const listingState = useProjectSessionsStore((state) => state.listingState[projectId]);
+  const pending = projectSessionListingPending(listingState);
+  const failed = listingState === "failed";
 
   // `listableChats` rather than `.chat`: this page draws rows, so it takes the
   // narrowed read at the door — see the store's own comment for which
@@ -487,7 +500,22 @@ function SessionsPage({ projectId }: { projectId: string }) {
   return (
     <div className={SECTION}>
       <SectionHeading as="h3">Board sessions</SectionHeading>
-      {rows.length === 0 ? (
+      {rows.length === 0 && pending ? (
+        <div
+          className="flex flex-col"
+          {...loadingRegionProps("sessions")}
+          data-testid="home-sessions-loading"
+        >
+          {(["w-3/5", "w-2/5"] as const).map((width) => (
+            <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-10" />
+          ))}
+        </div>
+      ) : rows.length === 0 && failed ? (
+        // A refused baseline knows nothing about this Project's durable
+        // Sessions. The toast has the bridge detail; this concise line keeps
+        // the rail from claiming that a failed read proved the list empty.
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
+      ) : rows.length === 0 ? (
         <p className={EMPTY_INLINE}>No sessions yet</p>
       ) : (
         <div className="flex flex-col">

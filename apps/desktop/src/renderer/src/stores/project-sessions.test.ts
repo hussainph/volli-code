@@ -12,6 +12,7 @@ import {
   childSessionIds,
   createProjectSessionsStore,
   listableChats,
+  projectSessionListingPending,
   sessionTitleOf,
   subscribeProjectSessionActivity,
   useProjectSessionsStore,
@@ -436,6 +437,15 @@ describe("project-sessions store", () => {
     store.getState().setActiveHarness("p1", "unknown-session", "codex");
     expect(store.getState().byProject.p1).toBe(patched);
     expect(before).not.toBe(patched);
+  });
+});
+
+describe("projectSessionListingPending", () => {
+  it("holds only an unread or in-flight baseline", () => {
+    expect(projectSessionListingPending(undefined)).toBe(true);
+    expect(projectSessionListingPending("loading")).toBe(true);
+    expect(projectSessionListingPending("loaded")).toBe(false);
+    expect(projectSessionListingPending("failed")).toBe(false);
   });
 });
 

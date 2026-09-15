@@ -33,9 +33,37 @@ function rowSessionId(row: SessionListingRow): string {
   return row.kind === "terminal" ? row.record.id : row.record.sessionId;
 }
 
-interface TicketSessionRecordsState {
+/** Whether one ticket's baseline roster is still on its way, usable, or unavailable. */
+export type TicketSessionListingState = "loading" | "loaded" | "failed";
+
+/**
+ * The request state a ticket-roster reader needs alongside its rows.
+ *
+ * A few callers can seed rows directly while restoring an already-known
+ * Session, so an array without a recorded state is still a landed answer rather
+ * than permission to paint a skeleton over it. Every read this store owns
+ * writes both facts together; this fallback only keeps that handoff honest.
+ */
+export function ticketSessionListingStateOf(
+  state: {
+    byTicket: Readonly<Record<string, readonly SessionListingRow[]>>;
+    listingState?: Readonly<Record<string, TicketSessionListingState>>;
+  },
+  ticketId: string,
+): TicketSessionListingState {
+  return (
+    state.listingState?.[ticketId] ??
+    (state.byTicket[ticketId] === undefined ? "loading" : "loaded")
+  );
+}
+
+export interface TicketSessionRecordsState {
   /** ticketId → its Session listing rows, newest-first (mirrors `listTicketSessions`). */
   byTicket: Record<string, SessionListingRow[]>;
+  /** The baseline outcome per ticket; absent means no read has been requested. */
+  listingState: Readonly<Record<string, TicketSessionListingState>>;
+  /** The latest failed baseline's detail, cleared when a read starts or lands. */
+  listingError: Readonly<Record<string, string | null>>;
   /** Re-fetches `ticketId`'s rows from main and replaces the cached list. Toasts on failure. */
   refresh(ticketId: string): Promise<void>;
   /**
@@ -97,20 +125,44 @@ export function createTicketSessionRecordsStore() {
 
   return create<TicketSessionRecordsState>()((set, get) => ({
     byTicket: {},
+    listingState: {},
+    listingError: {},
 
     refresh(ticketId) {
       const existing = inFlight.get(ticketId);
       if (existing !== undefined) return existing;
+      // VC-383's roster has four facts, not one convenient `undefined` test:
+      // no entry has never been read, `loading` owns the skeleton, `loaded`
+      // earns an empty sentence, and `failed` must stand the skeleton down.
+      // Keeping this beside the rows makes the distinction reusable by another
+      // client instead of re-derived by every JSX consumer.
+      set((state) => ({
+        listingState: { ...state.listingState, [ticketId]: "loading" },
+        listingError: { ...state.listingError, [ticketId]: null },
+      }));
       const pending = (async () => {
         try {
           const result = await window.api.sessions.listForTicket({ ticketId });
           if (!result.ok) {
             toastError(`Couldn't load sessions: ${result.error}`);
+            set((state) => ({
+              listingState: { ...state.listingState, [ticketId]: "failed" },
+              listingError: { ...state.listingError, [ticketId]: result.error },
+            }));
             return;
           }
-          set((state) => ({ byTicket: { ...state.byTicket, [ticketId]: result.sessions } }));
+          set((state) => ({
+            byTicket: { ...state.byTicket, [ticketId]: result.sessions },
+            listingState: { ...state.listingState, [ticketId]: "loaded" },
+            listingError: { ...state.listingError, [ticketId]: null },
+          }));
         } catch (error) {
-          toastError(`Couldn't load sessions: ${errorMessage(error)}`);
+          const message = errorMessage(error);
+          toastError(`Couldn't load sessions: ${message}`);
+          set((state) => ({
+            listingState: { ...state.listingState, [ticketId]: "failed" },
+            listingError: { ...state.listingError, [ticketId]: message },
+          }));
         }
       })().finally(() => inFlight.delete(ticketId));
       inFlight.set(ticketId, pending);
@@ -118,11 +170,10 @@ export function createTicketSessionRecordsStore() {
     },
 
     ensure(ticketId) {
-      // A landed entry is the whole answer, however it landed (a baseline read
-      // or a push); the channel carries it from here. `refresh` itself shares
-      // any read already in flight, so a cold `ensure` racing another asker is
-      // one read.
-      if (get().byTicket[ticketId] !== undefined) return Promise.resolve();
+      // Only a successful baseline is warm. A failed read deliberately remains
+      // retryable on the next caller; `inFlight` still shares callers that all
+      // arrive on that frame, without a timer or an automatic retry loop.
+      if (ticketSessionListingStateOf(get(), ticketId) === "loaded") return Promise.resolve();
       return get().refresh(ticketId);
     },
 

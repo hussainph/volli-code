@@ -58,13 +58,24 @@ function seedTicket(overrides: { prUrl?: string | null } = {}): {
   return { db: harness.db, ticketId: ticket.id };
 }
 
-/** A git runner that answers only what the commit path needs (sequencer probe + status/add/commit). */
-function commitGit(status: string): WorktreeDeps["git"] {
-  return scriptedGit((args) => {
+/**
+ * A git runner that answers only what the commit path needs (sequencer probe +
+ * status/add/commit). Both required seams are supplied because the commit probes
+ * run on the async runner (VC-383), not on the host repository by accident.
+ */
+function commitGit(status: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
+  const scripted = scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return "/repo/.worktrees/VC-1/.git";
     if (args[0] === "status") return status;
     return "";
-  }).git;
+  });
+  return { git: scripted.git, gitAsync: scripted.gitAsync };
+}
+
+/** A git that answers every probe with nothing, on both seams. */
+function emptyGit(): Pick<WorktreeDeps, "git" | "gitAsync"> {
+  const scripted = scriptedGit(() => "");
+  return { git: scripted.git, gitAsync: scripted.gitAsync };
 }
 
 function events(db: TestDb["db"], ticketId: string): TicketEvent[] {
@@ -91,7 +102,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: async () => [
         {
@@ -127,7 +138,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -155,7 +166,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -180,7 +191,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -210,7 +221,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -235,7 +246,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -262,7 +273,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -299,7 +310,7 @@ describe("publishTicketBranch", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -321,7 +332,7 @@ describe("publishTicketBranch", () => {
     const { run, calls } = scriptedNet(() => ({}));
     const deps: PublishDeps = {
       db: harness.db,
-      git: scriptedGit(() => "").git,
+      ...emptyGit(),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -340,7 +351,7 @@ describe("commitTicketRemaining", () => {
     const { run, calls } = scriptedNet(() => ({}));
     const deps: PublishDeps = {
       db,
-      git: commitGit(" M src/a.ts\n"),
+      ...commitGit(" M src/a.ts\n"),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -371,7 +382,7 @@ describe("commitTicketRemaining", () => {
     const { run, calls } = scriptedNet(() => ({}));
     const deps: PublishDeps = {
       db,
-      git: commitGit("M  src/a.ts\n"),
+      ...commitGit("M  src/a.ts\n"),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -400,7 +411,7 @@ describe("commitTicketRemaining", () => {
     const { run, calls } = scriptedNet(() => ({}));
     const deps: PublishDeps = {
       db,
-      git: commitGit(""),
+      ...commitGit(""),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",
@@ -423,7 +434,7 @@ describe("commitTicketRemaining", () => {
     });
     const deps: PublishDeps = {
       db,
-      git: commitGit(" M src/a.ts\n"),
+      ...commitGit(" M src/a.ts\n"),
       net: run,
       explainCredentialHelpers: NO_HELPERS,
       blobsRoot: "unused",

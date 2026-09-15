@@ -181,7 +181,7 @@ function fixture(
 
   const removed: string[] = [];
   const pruned: string[] = [];
-  const { git, calls } = scriptedGit((rawArgs, cwd) => {
+  const { git, gitAsync, calls } = scriptedGit((rawArgs, cwd) => {
     const args = verb(rawArgs);
     const scripted = opts.script?.(args, cwd);
     if (scripted !== undefined) return scripted;
@@ -215,7 +215,7 @@ function fixture(
     return "";
   });
 
-  const deps: WorktreeDeps = { db: ctx.db, git, home, now, blobsRoot: "unused" };
+  const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" };
   return { projectPath, home, container, paths, stale, deps, removed, pruned, calls };
 }
 
@@ -1069,13 +1069,14 @@ describe("cleanupOrphans", () => {
       runRepoGit(projectPath, ["push", "-q", "origin", "volli/VC-5-finished"]);
 
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-      const { git } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
+      const { git, gitAsync } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
 
       const { run } = await cleanupOrphans(
         {
           worktree: {
             db: ctx.db,
             git,
+            gitAsync,
             home,
             // Past the window measured from the fixture's own fresh commit.
             now: () => Date.now() + 400 * DAY_MS,

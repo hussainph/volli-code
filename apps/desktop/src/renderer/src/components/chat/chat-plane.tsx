@@ -158,6 +158,7 @@ import {
 } from "@renderer/components/chat/transcript-window";
 import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
+import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -430,6 +431,19 @@ export function ChatPlane({
           modelPurposeForRole(roleImpliedByTicket(provisional.ticketId)),
         ));
   const modelSelection = projection?.modelSelection ?? provisionalModel;
+  /**
+   * Whether the transcript is still to come (VC-383). The client sets the
+   * projection only once `session.snapshot` lands (`client.ts` `#open`), and a
+   * Draft has no projection because it has never been minted — so "null and
+   * not a Draft" is exactly "the history read is in flight". A read that FAILED
+   * settles into `sessionError` instead, and that notice is the honest surface
+   * then: a skeleton over a transport that is gone would wait forever for a
+   * paint that is not coming. Read here, beside the other projection-derived
+   * facts, and consulted once, at the branch that used to draw the empty
+   * state for both.
+   */
+  const historyPending =
+    projection === null && provisional === undefined && session.sessionError === null;
   const selection: ComposerModelSelection = modelSelection ?? EMPTY_MODEL_SELECTION;
   // A durable model is not enough to type: the row that says this Session is
   // pinned to something nobody can run waits on the catalog, and until the
@@ -1469,7 +1483,13 @@ export function ChatPlane({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
               <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                {messages.length === 0 ? (
+                {messages.length === 0 && historyPending ? (
+                  // History is on its way (VC-383). A null projection with no
+                  // Draft behind it means the snapshot has not landed, and the
+                  // empty state below would say "nothing was ever said here"
+                  // about a Session that may hold a thousand turns.
+                  <TranscriptSkeleton />
+                ) : messages.length === 0 ? (
                   // Where this Session runs, drawn (VC-55). It replaces the bare
                   // mark that stood here — see `empty/chat-empty-state.tsx` for why
                   // that reversal is deliberate. What blocks TYPING still sits on
@@ -1875,7 +1895,7 @@ const SEGMENT_GAP = "space-y-4";
  * speakers is what gives the feed its paragraph structure: a turn holds
  * together, and the hand-off to the other voice reads as a break.
  */
-const MESSAGE_GAP = "flex flex-col gap-6";
+export const MESSAGE_GAP = "flex flex-col gap-6";
 
 export interface TurnContext {
   onOpenFile(path: string): void;

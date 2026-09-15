@@ -507,5 +507,18 @@ export const MonacoDocumentEditor = React.forwardRef<
   // `fitToContent` lays the editor into) to read as the clamped box. React only
   // ever writes the keys it sees here, so the imperative `height` that
   // `fitToContent` sets is left alone across re-renders.
-  return <div ref={hostRef} className={cn(DOCUMENT_MODE_CLASS, className)} style={style} />;
+  //
+  // `data-monaco-status="loading"` from the FIRST frame, not only from the
+  // mount effect that re-stamps it: the effect runs after paint, and the
+  // placeholder `globals.css` keys on the attribute would otherwise miss a
+  // frame. React never rewrites a prop that did not change, so the effect's
+  // later `ready`/`failed` stamps stand (VC-383).
+  return (
+    <div
+      ref={hostRef}
+      data-monaco-status="loading"
+      className={cn(DOCUMENT_MODE_CLASS, className)}
+      style={style}
+    />
+  );
 });

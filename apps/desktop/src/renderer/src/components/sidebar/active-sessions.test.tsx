@@ -82,7 +82,18 @@ const LAUNCH: SessionLaunch = {
 };
 
 const statusEntries = vi.fn(async () => ({ ok: true as const, entries: [] }));
-const listSessions = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+/**
+ * The project listing door. Its return type is taken FROM the bridge rather
+ * than written out here, because this mock has to answer the refusal arm too
+ * (VC-383): a listing that fails must not read as a listing that is empty, and
+ * a hand-mirrored success-only shape would not let a test say so.
+ */
+const listSessions = vi.fn(
+  async (): Promise<Awaited<ReturnType<typeof window.api.sessions.list>>> => ({
+    ok: true as const,
+    sessions: [],
+  }),
+);
 const latestSignals = vi.fn(async () => ({ ok: true as const, signals: [] }));
 /**
  * The board's move door. Answers with the slice as the store holds it AFTER the
@@ -238,5 +249,55 @@ describe("ActiveSessions ticket history (VC-374)", () => {
     });
 
     expect(statusEntries).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ActiveSessions bands while the listing is read (VC-383)", () => {
+  const loading = () => container?.querySelectorAll('[aria-label="Loading sessions"]') ?? [];
+  const bandText = (band: string) =>
+    container?.querySelector(`[data-session-band="${band}"]`)?.textContent ?? "";
+
+  it("holds the rows' box in both bands until the project's listing answers", async () => {
+    // A listing that never answers: the bands must not claim the project is
+    // empty for as long as the baseline read is in flight.
+    let answer: (() => void) | null = null;
+    listSessions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ok: true as const, sessions: [] });
+        }),
+    );
+    await mount();
+
+    expect(loading().length).toBe(2);
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+
+    await act(async () => {
+      answer?.();
+    });
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).toContain("No active sessions");
+    expect(bandText("previous")).toContain("Nothing yet");
+  });
+
+  it("says the bands are empty only once the listing has said so", async () => {
+    await mount();
+
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).toContain("No active sessions");
+    expect(bandText("previous")).toContain("Nothing yet");
+  });
+
+  it("stands both skeletons down when the project listing fails, without either false empty", async () => {
+    listSessions.mockResolvedValueOnce({ ok: false as const, error: "db locked" });
+
+    await mount();
+
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+    expect(bandText("active")).toContain("Couldn't load sessions.");
+    expect(bandText("previous")).toContain("Couldn't load sessions.");
   });
 });
