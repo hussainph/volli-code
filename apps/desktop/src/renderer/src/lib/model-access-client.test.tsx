@@ -313,6 +313,52 @@ describe("the shared Model Access reads", () => {
     expect(reads).toEqual([SNAPSHOT, snapshotAt(2), snapshotAt(2)]);
   });
 
+  it("drops the answer of a Refresh a credential change overtook", async () => {
+    const refreshing = deferred<ModelAccessSnapshot>();
+    const afterSignOut = deferred<ModelAccessSnapshot>();
+    const t = testClient();
+    t.inspect
+      .mockResolvedValueOnce(SNAPSHOT)
+      .mockImplementationOnce(() => refreshing.promise)
+      .mockImplementationOnce(() => afterSignOut.promise);
+    const reads: ModelAccessSnapshot[] = [];
+    await mount(<Harness client={t.client} onRead={(read) => reads.push(read)} />);
+    expect(reads).toEqual([SNAPSHOT]);
+
+    // A person presses Refresh, and signs a provider out before it answers.
+    let refreshAnswer: Promise<ModelAccessSnapshot> | undefined;
+    await act(async () => {
+      refreshAnswer = handle!.inspect({ refresh: true });
+    });
+    await act(async () => {
+      await handle!.signOut("acme");
+    });
+    expect(t.inspect).toHaveBeenCalledTimes(3);
+
+    // The Refresh now lands. Its catalog was read BEFORE the sign-out, so
+    // publishing it would put the signed-out provider back on every open
+    // surface. The caller that pressed Refresh is still told what it did.
+    await act(async () => {
+      refreshing.resolve({ ...snapshotAt(2), refresh: REFRESH_REPORT });
+      await refreshAnswer;
+    });
+    await expect(refreshAnswer!).resolves.toMatchObject({ refresh: REFRESH_REPORT });
+
+    // What the surfaces read is the sign-out's own sweep, and no fourth sweep
+    // was started to get it.
+    await act(async () => {
+      afterSignOut.resolve(snapshotAt(3));
+      await afterSignOut.promise;
+    });
+    expect(reads).toEqual([SNAPSHOT, snapshotAt(3)]);
+    expect(t.inspect).toHaveBeenCalledTimes(3);
+
+    // And a mount arriving now joins the sign-out's answer, not the Refresh's.
+    await remount(<Harness client={t.client} probes={2} onRead={(read) => reads.push(read)} />);
+    expect(reads).toEqual([SNAPSHOT, snapshotAt(3), snapshotAt(3)]);
+    expect(t.inspect).toHaveBeenCalledTimes(3);
+  });
+
   it("retries a read that failed rather than replaying the failure", async () => {
     const pending = deferred<ModelAccessSnapshot>();
     const t = testClient();

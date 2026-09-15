@@ -198,6 +198,12 @@ export interface PiModelAccess {
  * process (the `pi` CLI itself) refreshed in the meantime is carried forward
  * instead of clobbered.
  *
+ * A write is the one thing that can make a read's answer the past, so a write
+ * ends every hold it overtakes: the parse, the shared pass still out, and the
+ * right of that pass to fill the parse when it lands. What a reader already
+ * joined still resolves — it asked before the write — but no reader arriving
+ * after the write is served from anything that read the file before it.
+ *
  * `AuthOperationOptions.signal` is not accepted: every operation here is a
  * local file read or an atomic rename, and there is nothing worth cancelling
  * between them.
@@ -209,17 +215,27 @@ export class PiFileCredentialStore implements CredentialStore {
   #cached: { mtimeMs: number; stored: Record<string, Credential> } | null = null;
   /** The one pass every reader asking right now is waiting on together. */
   #loading: Promise<Record<string, Credential>> | null = null;
+  /**
+   * Bumped by every write pass. A read that opened the file before a write
+   * landed still resolves, and its bytes are still a true answer to when it
+   * asked — but they are not what the NEXT reader should be served, and the
+   * mtime alone cannot always say so (a filesystem coarse enough to give the
+   * new file the old file's timestamp would let that read's parse be served as
+   * if it were current). Comparing this across a pass is what keeps a pass
+   * that a write overtook from filling the hold behind the write's back.
+   */
+  #writes = 0;
 
   constructor(path: string) {
     this.#path = path;
   }
 
   async read(providerId: string): Promise<Credential | undefined> {
-    return (await this.#load())[providerId];
+    return (await this.#sharedPass())[providerId];
   }
 
   async list(): Promise<readonly CredentialInfo[]> {
-    const stored = await this.#load();
+    const stored = await this.#sharedPass();
     return Object.entries(stored).map(([providerId, credential]) => ({
       providerId,
       type: credential.type,
@@ -235,7 +251,7 @@ export class PiFileCredentialStore implements CredentialStore {
         // Its own pass, never a shared one: a read this write would wait on
         // may have begun before the lock, and a credential Pi wrote while we
         // waited must be what this refresh carries forward.
-        const stored = await this.#read();
+        const stored = await this.#pass();
         const current = stored[providerId];
         const next = await fn(current);
         // Undefined means "leave the entry alone", which is not the same as
@@ -251,7 +267,7 @@ export class PiFileCredentialStore implements CredentialStore {
   delete(providerId: string): Promise<void> {
     return this.#serialize(() =>
       this.#withPiLock(async () => {
-        const stored = await this.#read();
+        const stored = await this.#pass();
         if (stored[providerId] === undefined) return;
         const { [providerId]: _removed, ...rest } = stored;
         await this.#save(rest);
@@ -299,6 +315,13 @@ export class PiFileCredentialStore implements CredentialStore {
       // never what a later read should serve — whatever the filesystem's
       // mtime resolution says.
       this.#cached = null;
+      // And neither is a pass still out, which opened the file before this
+      // write and can only answer with what the file said then. Dropping the
+      // slot does not cancel it — the readers already joined asked before the
+      // write and are owed that answer — but a reader arriving now starts a
+      // pass of its own rather than joining one this write has overtaken.
+      this.#loading = null;
+      this.#writes += 1;
       // Pi likewise ignores an unlock failure after a compromised lock. The
       // original write/read error is more useful and cannot include file data.
       await release?.().catch(() => undefined);
@@ -330,7 +353,7 @@ export class PiFileCredentialStore implements CredentialStore {
   }
 
   /**
-   * The file, read once per burst of callers.
+   * The file, read once per burst of callers — what every ordinary reader asks.
    *
    * pi-ai's `checkAuth` and `getAvailable` each read per provider, so one
    * inspection asks this store for the same document about eighty times at
@@ -338,16 +361,22 @@ export class PiFileCredentialStore implements CredentialStore {
    * not shared past the callers already waiting on it: the slot empties with
    * the pass, and the next ask reads again.
    */
-  #load(): Promise<Record<string, Credential>> {
+  #sharedPass(): Promise<Record<string, Credential>> {
     const inFlight = this.#loading;
     if (inFlight !== null) return inFlight;
-    const run = this.#read().then(
+    // Only ever empties the slot it filled. A write that landed mid-pass has
+    // already dropped this one and a later reader may have started another;
+    // clearing unconditionally would empty that reader's slot instead.
+    const forget = (): void => {
+      if (this.#loading === run) this.#loading = null;
+    };
+    const run = this.#pass().then(
       (stored) => {
-        this.#loading = null;
+        forget();
         return stored;
       },
       (failure: unknown) => {
-        this.#loading = null;
+        forget();
         throw failure;
       },
     );
@@ -356,19 +385,28 @@ export class PiFileCredentialStore implements CredentialStore {
   }
 
   /**
-   * One pass over `auth.json`: open it once, and parse the bytes the handle
-   * reads unless the mtime on that same handle is one the hold already names.
+   * One pass over `auth.json`, shared with nobody: open it once, and parse the
+   * bytes the handle reads unless the mtime on that same handle is one the
+   * hold already names. A write takes this rather than {@link #sharedPass}, so
+   * what it carries forward is the file as it is under the lock.
    *
-   * The cache is keyed on `mtimeMs` alone, and both this store's own writes
-   * and every external one (the `pi` CLI rotating a token) move the mtime, so
-   * a hit can only be bytes the file still has. There is no TTL: a credential
-   * revoked out of band is picked up by the next read after the write that
-   * revoked it, and the surface's Refresh is what makes that read happen now.
+   * The hold is keyed on `mtimeMs`, and both this store's own writes and every
+   * external one (the `pi` CLI rotating a token) move the mtime, so a hit is
+   * normally bytes the file still has. A filesystem whose timestamps are too
+   * coarse to move on a rewrite would break that on its own, which is why a
+   * write also ends the hold outright rather than trusting the mtime to say
+   * so. There is no TTL: a credential revoked out of band is picked up by the
+   * next read after the write that revoked it, and the surface's Refresh is
+   * what makes that read happen now.
    *
    * A pass that fails drops the hold rather than keeping it, so an unreadable
    * moment is retried rather than remembered.
    */
-  async #read(): Promise<Record<string, Credential>> {
+  async #pass(): Promise<Record<string, Credential>> {
+    // Read before the file is opened, and compared before the parse is held:
+    // a write that lands in between makes this pass's bytes history, and
+    // history is not what the next reader should be handed.
+    const asOf = this.#writes;
     let text: string;
     // The mtime the content below is cached under, read from the same open
     // handle as the content itself: a writer landing alongside can then only
@@ -399,7 +437,10 @@ export class PiFileCredentialStore implements CredentialStore {
       this.#cached = null;
       throw new Error(`Pi credentials at ${this.#path} are unreadable.`);
     }
-    this.#cached = { mtimeMs, stored };
+    // The caller still gets what it read — it asked before the write, and this
+    // is the honest answer to when it asked. Only the HOLD is withheld, so the
+    // next reader goes to the file rather than being served the past.
+    if (this.#writes === asOf) this.#cached = { mtimeMs, stored };
     return stored;
   }
 

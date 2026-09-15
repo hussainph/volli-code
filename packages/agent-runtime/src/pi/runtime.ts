@@ -98,6 +98,7 @@ import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import {
   inspectPiModelAccess,
+  type InspectPiModelAccessInput,
   type PiModelAccessSource,
   type UsageLimitsSource,
 } from "./model-access";
@@ -368,17 +369,34 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           },
         }),
   };
+  const inspectionSource = (): PiModelAccessSource => ({
+    models: host.models,
+    credentials: host.credentials,
+    catalogReady: host.catalogReady,
+    catalogs: host.catalogs,
+    usageLimits: host.usageLimits,
+  });
   /**
-   * The inspection already in flight, per kind of answer, shared by every
-   * caller that asks while it runs.
+   * The UNBOUNDED inspection already in flight, per kind of answer, shared by
+   * every caller that asks while it runs.
    *
-   * A Session start, the CLI's `model list` and a renderer mount can all land
-   * in the same tick, and each would otherwise run the whole provider sweep
-   * beside the others. A joiner inherits the first caller's bound — its
-   * signal, when it had one — exactly as {@link UsageProbeSchedule.coalesce}
-   * lets a second usage read join the read already out. A refresh never rides
-   * an ordinary inspection: a person pressed Refresh, and the answer must be
-   * the providers' now, not one already going.
+   * A Session start, an automation's model list and several renderer mounts can
+   * all land in the same tick, and each would otherwise run the whole provider
+   * sweep beside the others — the same saving {@link UsageProbeSchedule.coalesce}
+   * makes for one usage read. A refresh never rides an ordinary inspection: a
+   * person pressed Refresh, and the answer must be the providers' now, not one
+   * already going.
+   *
+   * Only a caller that passed NO signal shares, and a caller that passed one
+   * neither joins a shared sweep nor becomes one. A signal here is a deadline
+   * its owner chose — the CLI's `model list` bounds its read, the auto-titler
+   * bounds its background call — and the callers have no deadline in common:
+   * sharing would either reject everyone the moment the first one gave up, or
+   * leave the others' cancellation with nothing to cancel. The hot path this
+   * exists for is the signal-less one (every renderer mount and Session start
+   * asks without a bound), and cancellation keeps reaching the probes exactly
+   * as it did before, because a bounded caller still runs an inspection of its
+   * own.
    *
    * Nothing holds a settled answer. The slot empties with the promise, so the
    * next inspection asks the providers afresh — which is what an external
@@ -386,24 +404,16 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
    * both require.
    */
   const inspections = new Map<"ordinary" | "refresh", Promise<ModelAccessSnapshot>>();
-  const inspectModelAccess = (input?: {
-    refresh?: boolean;
-    signal?: AbortSignal;
-  }): Promise<ModelAccessSnapshot> => {
-    const kind = input?.refresh === true ? "refresh" : "ordinary";
+  const inspectModelAccess = (
+    input: InspectPiModelAccessInput = {},
+  ): Promise<ModelAccessSnapshot> => {
+    if (input.signal !== undefined) {
+      return inspectPiModelAccess(inspectionSource(), host.now, input);
+    }
+    const kind = input.refresh === true ? "refresh" : "ordinary";
     const inFlight = inspections.get(kind);
     if (inFlight !== undefined) return inFlight;
-    const run = inspectPiModelAccess(
-      {
-        models: host.models,
-        credentials: host.credentials,
-        catalogReady: host.catalogReady,
-        catalogs: host.catalogs,
-        usageLimits: host.usageLimits,
-      },
-      host.now,
-      input,
-    ).then(
+    const run = inspectPiModelAccess(inspectionSource(), host.now, input).then(
       (snapshot) => {
         inspections.delete(kind);
         return snapshot;
