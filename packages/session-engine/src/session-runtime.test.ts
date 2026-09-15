@@ -18,6 +18,7 @@ import {
   NativeAttachmentError,
   SessionRuntimeConflictError,
   SessionRuntimeNotFoundError,
+  SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
   type HarnessCommand,
   type HostedSessionRuntime,
@@ -1236,6 +1237,55 @@ describe("SessionRuntime native adapter contract", () => {
     expect((await runtime.snapshot({ sessionId })).transcript).toMatchObject([
       { message: { parts: [{ text: "Hi" }] } },
     ]);
+  });
+
+  it("reads a snapshot's transcript artifacts through a bounded window, in event order", async () => {
+    // VC-383: one artifact read per transcript event, awaited serially, made a
+    // long Session's chat wait a thousand disk round trips before its first
+    // paint. The reads now overlap up to a fixed window — and the window is
+    // the whole claim, so hold both edges: more than one read in flight, never
+    // more than the bound, and the frames land in event order regardless of
+    // which read finished first.
+    const memory = createInMemoryTranscriptArtifactStore();
+    let inFlight = 0;
+    let peak = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: async (reference) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        // Every read yields once, so the pool's reads genuinely overlap; a
+        // store that resolved synchronously would show a peak of one and
+        // prove nothing about the bound.
+        await settleMicrotasks();
+        inFlight -= 1;
+        return memory.read(reference);
+      },
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    const turns = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 3;
+    for (let index = 0; index < turns; index += 1) {
+      await adapter.emit({
+        kind: "message-settled",
+        turnId: `turn-${index}`,
+        occurredAt: 300 + index,
+        message: { entryId: `assistant-${index}`, role: "assistant", text: `Reply ${index}` },
+      });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(snapshot.frames.map(({ sequence }) => sequence)).toEqual(
+      snapshot.frames.map((_, index) => index + 1),
+    );
+    expect(snapshot.transcript).toMatchObject(
+      Array.from({ length: turns }, (_, index) => ({
+        message: { parts: [{ text: `Reply ${index}` }] },
+      })),
+    );
   });
 
   it("does not append or publish a transcript reference when the artifact write fails", async () => {

@@ -646,6 +646,20 @@ interface ProjectedHistory {
 
 const EVENT_PAGE_SIZE = 500;
 /**
+ * How many transcript artifacts a snapshot reads at once (VC-383).
+ *
+ * A snapshot materializes one frame per event, and a frame with a transcript
+ * reference is one artifact read — an lstat, a file read, a gunzip and a
+ * digest, on disk. Awaited one at a time, a Session with a thousand turns paid
+ * a thousand serial round trips to the filesystem before its chat could paint
+ * a single message; the disk was idle for most of that wall time. A bounded
+ * window keeps the reads overlapped without turning a chat open into a burst
+ * of every file at once on a machine that is already running a dozen agents.
+ * Order is preserved: the frame list is positional, so the window only
+ * changes WHEN each artifact is read, never where it lands.
+ */
+export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
+/**
  * How many Sessions keep a folded history. A Session's events are held for as
  * long as its entry lives, so this is the bound on that memory; the desktop
  * reads one or two Sessions at a time and an evicted entry costs one re-read.
@@ -1860,11 +1874,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     const events = history.completeEvents
       ? history.events
       : await this.#listEventsPaged({ sessionId: input.sessionId });
-    const frames: SessionStreamFrame[] = [];
+    const frames = await this.#frames(events);
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const event of events) {
-      const frame = await this.#frame(event);
-      frames.push(frame);
+    for (const frame of frames) {
       if (frame.transcript) transcript.push(frame.transcript);
     }
     return {
@@ -2913,6 +2925,36 @@ class DefaultSessionRuntime implements SessionRuntime {
     const reference = transcriptReferenceFor(event);
     const transcript = reference ? await this.ports.artifacts.read(reference) : null;
     return { sessionId: event.sessionId, sequence: event.sequence, event, transcript };
+  }
+
+  /**
+   * Every event's frame, in event order, with at most
+   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} artifact reads in flight.
+   *
+   * A worker pool over a shared cursor rather than `Promise.all` over the whole
+   * list: the list is the Session's entire history, and one read per event all
+   * at once is the wrong shape for a long Session on a loaded machine. Each
+   * worker takes the next index, reads it, and writes the frame into that
+   * index's slot, so the result is positional regardless of which read
+   * finished first. A rejected read rejects the whole snapshot, exactly as the
+   * serial loop did — a transcript the store cannot verify is not a frame to
+   * silently skip.
+   */
+  async #frames(events: readonly SessionEvent[]): Promise<SessionStreamFrame[]> {
+    const frames: SessionStreamFrame[] = [];
+    frames.length = events.length;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const index = next++;
+        const event = events[index];
+        if (event === undefined) return;
+        frames[index] = await this.#frame(event);
+      }
+    };
+    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, events.length);
+    await Promise.all(Array.from({ length: workers }, worker));
+    return frames;
   }
 
   async #result(
