@@ -29,7 +29,7 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow } from "@renderer/components/ui/list-row";
+import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -231,6 +231,28 @@ function SessionRow({
         </ContextMenuContent>
       </ContextMenu>
     </li>
+  );
+}
+
+/**
+ * Two rows' worth of the roster's own geometry, while the baseline read is in
+ * flight: the list's gap, a `ListRow`'s inset and height, a title at the left
+ * and the status phrase at the right. No words — the rows that replace this
+ * carry the words.
+ */
+function SessionListSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-1"
+      role="status"
+      aria-label="Loading sessions"
+      aria-busy="true"
+      data-testid="ticket-sessions-loading"
+    >
+      {["w-3/5", "w-2/5"].map((width) => (
+        <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
+      ))}
+    </div>
   );
 }
 
@@ -459,7 +481,14 @@ export function TicketSessionsPanel({
   // and SessionsLayer's exit handler refreshes it directly so a just-ended
   // session's `endedAt`/resumability lands here without this panel needing to
   // be the one to notice the exit.
-  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_ROWS);
+  //
+  // `undefined` until the baseline read lands, and that distinction is drawn
+  // (VC-383): a ticket opened for the first time this run used to paint "No
+  // active sessions" for the length of the read, about a ticket that may have
+  // an agent mid-turn. Not hydrated yet must never read as empty.
+  const listing = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
+  const loaded = listing !== undefined;
+  const rows = listing ?? NO_ROWS;
   const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
   // Narrowed to the stamps THIS ticket's rows can name — see `ticketOutputStamps`.
@@ -638,7 +667,12 @@ export function TicketSessionsPanel({
             onNewTerminal={onNewSession}
           />
         </RailSectionHeadingRow>
-        {current.length === 0 ? (
+        {!loaded ? (
+          // The baseline read is in flight. The heading and its "+" stay live
+          // above — a pending list blocks nothing about starting a Session —
+          // and the rows hold their box below.
+          <SessionListSkeleton />
+        ) : current.length === 0 ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.

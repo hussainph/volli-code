@@ -165,6 +165,69 @@ describe("the rail roster on the push path", () => {
     expect(text()).toContain("Root shell");
   });
 
+  it("holds the rows' box while the baseline read is in flight, never claiming the roster is empty", async () => {
+    // VC-383: a ticket opened for the first time this run paints before its
+    // listing lands. That window used to say "No active sessions" about a
+    // ticket whose agent may be mid-turn.
+    await act(async () => {
+      root?.unmount();
+    });
+    let answer: (() => void) | null = null;
+    const listForTicket = vi.fn(
+      () =>
+        new Promise<{ ok: true; sessions: SessionListingRow[] }>((resolve) => {
+          answer = () => resolve({ ok: true, sessions: [terminalRow()] });
+        }),
+    );
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { sessions: { listForTicket } },
+    });
+    useTicketSessionRecordsStore.setState({ byTicket: {} });
+    root = createRoot(container!);
+    await act(async () => {
+      root?.render(
+        <TicketSessionsPanel
+          projectId="p1"
+          ticketId="t1"
+          creating={false}
+          onNewSession={() => {}}
+          onNewChat={() => {}}
+          onActivateSession={() => {}}
+          onActivateChat={() => {}}
+        />,
+      );
+    });
+
+    const loading = () => container?.querySelector('[data-testid="ticket-sessions-loading"]');
+    expect(loading()).not.toBeNull();
+    expect(currentSectionText()).not.toContain("No active sessions");
+    // The heading's own control stays live: a pending list blocks nothing
+    // about starting a Session.
+    expect(container?.querySelector("section button")).not.toBeNull();
+
+    await act(async () => {
+      answer?.();
+    });
+    expect(loading()).toBeNull();
+    expect(text()).toContain("Root shell");
+  });
+
+  it("says what is missing, once, only after the listing has answered with nothing", async () => {
+    // An empty roster is one sentence in a dashed frame: the heading's own
+    // control sits 20px above it, so a second copy inside the frame would be
+    // the same offer twice in one glance. "Empty" is a listing that has
+    // ANSWERED with no rows — an unread one holds its box instead.
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
+    await act(async () => {
+      useTicketSessionRecordsStore.setState({ byTicket: { t1: [] } });
+    });
+
+    expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
+    expect(currentSectionText()).toContain("No active sessions");
+    expect(container?.querySelectorAll('[aria-label="New chat"]').length).toBe(1);
+  });
+
   it("shows a Sessions row a create's push announces", async () => {
     await act(async () => {
       useSessionsStore.getState().addSession(SCOPE, "created", {

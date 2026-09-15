@@ -37,6 +37,7 @@ import {
 import {
   ActiveBandRow,
   PreviousBandRow,
+  SessionBandRowSkeleton,
   sessionGroupPanelId,
   TicketGroupRow,
 } from "@renderer/components/sidebar/session-band-row";
@@ -309,6 +310,13 @@ export function ActiveSessions({
   // knows a project has come on screen.
   const projectRows =
     useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  // Whether that baseline has ever answered for THIS project (VC-383). The
+  // store has kept this bit since the push channel arrived and no band read
+  // it: a project switched to for the first time this run painted "No active
+  // sessions" for the length of the read, about a project that may have three
+  // agents mid-turn. Not hydrated yet must never read as empty.
+  const listingState = useProjectSessionsStore((state) => state.listingState[project.id]);
+  const listingPending = listingState === undefined || listingState === "loading";
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
   const projectChatSessionIds = React.useMemo(
@@ -906,7 +914,15 @@ export function ActiveSessions({
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
       <SessionBandHeader label="Active" count={activeRows.length} />
-      {activeRows.length === 0 ? (
+      {activeRows.length === 0 && listingPending ? (
+        // The rows' box, held while the listing is read. Live tabs this window
+        // already holds are rows regardless (they come from the sessions store,
+        // not the listing), so this only ever stands where nothing is known.
+        <SidebarMenu role="status" aria-label="Loading sessions" aria-busy="true">
+          <SessionBandRowSkeleton titleWidth="w-3/4" />
+          <SessionBandRowSkeleton titleWidth="w-1/2" />
+        </SidebarMenu>
+      ) : activeRows.length === 0 ? (
         <p className={EMPTY_INLINE}>No active sessions</p>
       ) : (
         <SidebarMenu>
@@ -933,7 +949,11 @@ export function ActiveSessions({
       <SessionBandHeader label="Previous" count={listing.previous.length}>
         <SessionBandFilterMenu filter={filter} onChange={setFilter} />
       </SessionBandHeader>
-      {previousEntries.length === 0 ? (
+      {previousEntries.length === 0 && listingPending ? (
+        <SidebarMenu role="status" aria-label="Loading sessions" aria-busy="true">
+          <SessionBandRowSkeleton titleWidth="w-2/3" />
+        </SidebarMenu>
+      ) : previousEntries.length === 0 ? (
         <p className={EMPTY_INLINE}>Nothing yet</p>
       ) : (
         <SidebarMenu>

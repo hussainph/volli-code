@@ -43,6 +43,7 @@ import { SessionProvenanceMark } from "@renderer/components/sessions/session-pro
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   SESSION_ACTIVITY_LABEL,
   sessionActivityDotState,
@@ -562,3 +563,28 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
     </SidebarMenuButton>
   );
 });
+
+/**
+ * The box a band row will take, while the project's listing is being read
+ * (VC-383).
+ *
+ * The same two-line shape at the same `min-h-9` and the same half-step
+ * alignments the row above records — the dot on the cap height, the meta line
+ * bound to its title — so the rows that replace this land where it stood.
+ * Widths are per row and fixed: the band is waiting, and a placeholder that
+ * redraws itself on every mount adds motion to a surface that has none to
+ * give. Inert, with no hover fill: there is nothing under it to activate.
+ */
+export function SessionBandRowSkeleton({ titleWidth }: { titleWidth: string }) {
+  return (
+    <SidebarMenuItem aria-hidden>
+      <div className="flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-1">
+        <Skeleton className="mt-1.5 size-2 shrink-0 rounded-full" />
+        <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
+          <Skeleton className={cn("h-3.5", titleWidth)} />
+          <Skeleton className="h-3 w-1/3" />
+        </span>
+      </div>
+    </SidebarMenuItem>
+  );
+}

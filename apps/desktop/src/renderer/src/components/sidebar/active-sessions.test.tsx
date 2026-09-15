@@ -240,3 +240,41 @@ describe("ActiveSessions ticket history (VC-374)", () => {
     expect(statusEntries).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("ActiveSessions bands while the listing is read (VC-383)", () => {
+  const loading = () => container?.querySelectorAll('[aria-label="Loading sessions"]') ?? [];
+  const bandText = (band: string) =>
+    container?.querySelector(`[data-session-band="${band}"]`)?.textContent ?? "";
+
+  it("holds the rows' box in both bands until the project's listing answers", async () => {
+    // A listing that never answers: the bands must not claim the project is
+    // empty for as long as the baseline read is in flight.
+    let answer: (() => void) | null = null;
+    listSessions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ok: true as const, sessions: [] });
+        }),
+    );
+    await mount();
+
+    expect(loading().length).toBe(2);
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+
+    await act(async () => {
+      answer?.();
+    });
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).toContain("No active sessions");
+    expect(bandText("previous")).toContain("Nothing yet");
+  });
+
+  it("says the bands are empty only once the listing has said so", async () => {
+    await mount();
+
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).toContain("No active sessions");
+    expect(bandText("previous")).toContain("Nothing yet");
+  });
+});
