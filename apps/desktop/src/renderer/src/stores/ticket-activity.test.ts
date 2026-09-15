@@ -129,6 +129,76 @@ describe("baseline reads", () => {
     expect(eventsDoor).toHaveBeenCalledTimes(2);
     expect(store.getState().listingState.t1).toBe("loaded");
   });
+
+  it("fails the baseline when the COMMENTS door refuses, though the events door answered", async () => {
+    // The feed is both reads. A half-answer is not a feed the cache may claim
+    // landed: an events list with no comments beside it would draw as a
+    // complete activity feed that is quietly missing every comment.
+    stubActivity(
+      () => Promise.resolve({ ok: true, events: EVENTS }),
+      () => Promise.resolve({ ok: false, error: "comments table locked" }),
+    );
+    const store = createTicketActivityStore();
+
+    await store.getState().refresh("t1", 4);
+
+    expect(store.getState().byTicket.t1).toBeUndefined();
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().listingError.t1).toBe("comments table locked");
+  });
+
+  it("drops a superseded read's late answer rather than letting it replace the newer one", async () => {
+    // IPC cannot retract a request. A planning change that starts a second read
+    // must therefore win on ARRIVAL as well as on order, or the older answer
+    // lands last and the feed shows a moment the ticket has already left.
+    const resolvers: ((result: unknown) => void)[] = [];
+    stubActivity(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const store = createTicketActivityStore();
+
+    const stale = store.getState().refresh("t1", 4);
+    const fresh = store.getState().refresh("t1", 5);
+
+    // The NEWER read answers first, then the one it superseded.
+    resolvers[1]?.({ ok: true, events: [] });
+    await fresh;
+    resolvers[0]?.({ ok: true, events: EVENTS });
+    await stale;
+
+    // The stale answer carried EVENTS and version 4; neither may be here.
+    expect(store.getState().byTicket.t1).toEqual({ events: [], comments: COMMENTS, version: 5 });
+  });
+
+  it("lets the read that owns the ticket finish cleanly after a superseded one settles", async () => {
+    // The in-flight slot belongs to the newest read. A superseded read clearing
+    // it on its way out would leave the live read unshared, so the next caller
+    // would start a THIRD read against a ticket already being read.
+    const resolvers: ((result: unknown) => void)[] = [];
+    const { eventsDoor } = stubActivity(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const store = createTicketActivityStore();
+
+    const stale = store.getState().refresh("t1", 4);
+    store.getState().refresh("t1", 5);
+
+    // The superseded read settles FIRST, while the newer one is still open.
+    resolvers[0]?.({ ok: true, events: EVENTS });
+    await stale;
+
+    // The live read is still the shared one: asking again joins it.
+    void store.getState().refresh("t1", 5);
+    expect(eventsDoor).toHaveBeenCalledTimes(2);
+
+    resolvers[1]?.({ ok: true, events: [] });
+  });
 });
 
 /**
