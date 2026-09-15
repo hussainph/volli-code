@@ -490,19 +490,18 @@ export const Board = React.memo(function Board({
   // changes only through this app's own doors, and a drop must be able to
   // consult the answer WITHOUT an await — a move that had to wait on IPC to
   // learn it was armed would either delay every drop or race the countdown.
+  //
+  // The same four caches the Ticket rail decides from, through the same
+  // landed-version gate (VC-373) — what this project offers, what its columns
+  // arm (VC-128), in what ORDER (VC-132) and which are switched on here
+  // (VC-127). The board remounts on every return from a Ticket, and none of
+  // these four can have moved just because it did; a planning refresh the
+  // board missed while a Ticket was in front still re-reads, because it moved
+  // the version these caches are marked at.
   React.useEffect(() => {
-    const store = useAutomationsStore.getState();
-    void store.refresh(projectId);
-    void store.refreshArming(projectId);
-    // And in what ORDER this project's columns offer them (VC-132): the digit
-    // a drag answers is composed from the same four reads, so the rank belongs
-    // beside the arming rather than a frame behind it.
-    void store.refreshOrder(projectId);
-    // And which of them are switched on HERE (VC-127): the drag picker pins
-    // only the effective armed Automation, so its renderer model needs this
-    // beside the other reads. Main independently classifies the committed
-    // arrival from its durable projections; these caches never own the timer.
-    void store.refreshEnablement();
+    void useAutomationsStore
+      .getState()
+      .refreshRail(projectId, useBoardStore.getState().lastPlanningChange.version);
   }, [projectId]);
 
   React.useEffect(() => {

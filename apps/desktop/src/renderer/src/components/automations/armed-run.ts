@@ -16,7 +16,6 @@ import { runAutomationAction } from "./run-automation-model";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -109,7 +108,9 @@ export function announcePendingArmedRunSettlement(notice: PendingArmedRunSettled
     case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
-      void useTicketSessionRecordsStore.getState().refresh(pending.ticketId);
+      // The Run's Session is a durable fact main already announced on
+      // `volli:session-activity`; the rail's roster cache folds its row in
+      // without this arriving surface asking for the listing again (VC-373).
       // VC-234's universal Run landing: the toast action is the only door into
       // the fresh Session, exactly as before main owned the timer.
       toast.success(

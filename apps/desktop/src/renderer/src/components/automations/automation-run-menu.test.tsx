@@ -171,6 +171,9 @@ beforeEach(() => {
     armingByProject: {},
     enabledIds: [],
     enablementRead: false,
+    // A landed rail version from an earlier mount would let this case answer
+    // from a cache the `beforeEach` above just cleared (VC-373).
+    railReadAt: {},
   });
 });
 

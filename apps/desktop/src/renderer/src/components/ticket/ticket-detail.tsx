@@ -137,10 +137,15 @@ const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; stat
  * fetch that fills it. `undefined` means the listing has never answered — which
  * is a different fact from a ticket that has no chats, and the only one a
  * relaunch may not act on.
+ *
+ * The read is the BASELINE only (VC-373): a ticket's rows are fetched once and
+ * `volli:session-activity` carries them after that, so returning to a ticket
+ * this window has already opened paints from the same cache the rail reads
+ * without re-asking main.
  */
 function useChatSessionRecordIds(ticketId: string): readonly string[] | undefined {
   React.useEffect(() => {
-    void useTicketSessionRecordsStore.getState().refresh(ticketId);
+    void useTicketSessionRecordsStore.getState().ensure(ticketId);
   }, [ticketId]);
   return useTicketSessionRecordsStore(
     useShallow((state) =>
@@ -350,10 +355,22 @@ export function TicketDetail({
     onError: (message) => toastError(message),
   });
   const resetAttachments = ticketAttachments.reset;
+  // Whether the strip's own read has landed. Until it has, the strip is
+  // UNKNOWN rather than empty: the materialized read below reads it through a
+  // revision, and a read issued against the not-yet-loaded "" would be paid a
+  // second time the moment the real strip arrives — two reads for a ticket
+  // with attachments, which is exactly the duplicate VC-373 removes.
+  const [attachmentsLoaded, setAttachmentsLoaded] = React.useState(false);
   React.useEffect(() => {
     let cancelled = false;
+    setAttachmentsLoaded(false);
     void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
-      if (!cancelled && result.ok) resetAttachments(result.blobs);
+      if (cancelled) return;
+      if (result.ok) resetAttachments(result.blobs);
+      // Settled either way: a failed read leaves the strip empty, which IS the
+      // strip as far as this view can know, and the materialized read is then
+      // the one read it costs.
+      setAttachmentsLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -365,11 +382,12 @@ export function TicketDetail({
    * Fetched ONCE here and shared with both surfaces below — the body editor
    * through a prop, the comment feed through context — so a picture cannot
    * render in one and fail in the other. Re-fetched when the strip changes, so
-   * a file dropped on the Body is resolvable without a remount.
+   * a file dropped on the Body is resolvable without a remount. `null` until
+   * the strip has landed (VC-373) — see {@link useMaterializedAttachments}.
    */
   const materializedAttachments = useMaterializedAttachments(
     { ticketId: ticket.id },
-    attachmentsRevision(ticketAttachments.attachments),
+    attachmentsLoaded ? attachmentsRevision(ticketAttachments.attachments) : null,
   );
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,

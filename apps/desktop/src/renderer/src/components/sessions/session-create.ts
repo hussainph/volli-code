@@ -27,7 +27,6 @@ import {
   type SessionScope,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
@@ -495,9 +494,12 @@ export async function startTicketChat(
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
       if (isSession) {
         useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
-        // So the rail's row for an immediate kickoff appears without waiting on
-        // a terminal event. Draft promotion performs the same refresh later.
-        void useTicketSessionRecordsStore.getState().refresh(ticketId);
+        // The rail's row for this Session needs no read here (VC-373): the
+        // chat was minted through the Session Engine, so `volli:session-activity`
+        // announces its listing row and the rail's cache folds it in — without
+        // the create racing the push with a `listForTicket`. A provisional
+        // draft (VC-358) has no durable row to show yet, and its promotion is
+        // announced on the same channel.
       }
       return true;
     },

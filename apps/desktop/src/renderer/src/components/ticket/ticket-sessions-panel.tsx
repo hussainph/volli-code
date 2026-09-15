@@ -57,12 +57,7 @@ import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
-import {
-  launchAdapter,
-  sessionPanes,
-  ticketScope,
-  useSessionsStore,
-} from "@renderer/stores/sessions";
+import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
@@ -485,25 +480,23 @@ export function TicketSessionsPanel({
   const [historyQuery, setHistoryQuery] = React.useState("");
 
   const tabs = liveTabs ?? [];
-  // Signature of every currently-open PANE (not just tab roots) — refetch the
-  // durable list on any change (create, split, or close), since each split pane
-  // has its own durable record that must appear/fold alongside the tab roots.
-  const liveSignature = tabs
-    .map((tab) =>
-      sessionPanes(tab.layout)
-        .map((pane) => pane.sessionId)
-        .join("/"),
-    )
-    .join(",");
 
   const refresh = React.useCallback(
-    () => useTicketSessionRecordsStore.getState().refresh(ticketId),
+    () => useTicketSessionRecordsStore.getState().ensure(ticketId),
     [ticketId],
   );
 
+  // The BASELINE read, and only that. A window that has just opened has missed
+  // every push that came before it, so a ticket's rows are read once and
+  // `volli:session-activity` carries the list from there — which is why this no
+  // longer re-fires on the set of open panes (`liveSignature`). A split, a
+  // create and a close are all durable Session facts the push announces; a
+  // refetch on the same trigger would just race the push to say the same
+  // thing. `ensure` no-ops on a warm ticket, so a rail page flip or a ticket
+  // re-open paints from cache without re-asking main.
   React.useEffect(() => {
     void refresh();
-  }, [refresh, liveSignature]);
+  }, [refresh]);
 
   // Renaming the root pane of a live tab goes through the shared optimistic-
   // persist path (so its tab strip updates too); a non-root live pane or an

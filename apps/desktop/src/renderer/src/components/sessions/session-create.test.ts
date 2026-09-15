@@ -13,7 +13,6 @@ import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { projectScope, ticketScope } from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
@@ -220,7 +219,6 @@ describe("startTicketChat", () => {
     const enqueue = vi.fn();
     useChatSessionsStore.setState({ enqueue, openChatTab: vi.fn() });
     useWorkspaceStore.setState({ setTicketActiveTab: vi.fn() });
-    useTicketSessionRecordsStore.setState({ refresh: vi.fn(async () => {}) });
     return { enqueue };
   }
 

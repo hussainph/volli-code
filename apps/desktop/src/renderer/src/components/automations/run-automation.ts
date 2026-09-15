@@ -21,7 +21,6 @@ import { runAutomationAction, type RunAutomationAction } from "./run-automation-
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -190,10 +189,12 @@ export async function runAutomationOnTicket(input: TicketRunRequest): Promise<vo
     case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
-      // Keep the Ticket's rail current while the person remains on the surface
-      // that started the Run. Opening the toast action must not be required for
-      // the fresh history row to exist.
-      void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
+      // No listing refetch here (VC-373). A Run's Session is minted through
+      // the Session Engine, so main has already announced its row on
+      // `volli:session-activity` — the rail's roster cache folds it in within a
+      // frame or two, wherever the person happens to be looking. This surface
+      // opening the Session does not change that, and a read here would only
+      // race the push to say the same thing.
       toast.success(
         `${action.automationName ?? input.automationName} started on ${input.ticketDisplayId}`,
         {
@@ -244,6 +245,8 @@ export function openRunSession(input: {
   useWorkspaceStore.getState().openTicketWorkspace(input.projectId, input.ticketId, {
     tabId: chatTabId(input.sessionId),
   });
-  // So the rail's row appears without waiting on an unrelated refresh.
-  void useTicketSessionRecordsStore.getState().refresh(input.ticketId);
+  // The rail's row for this Session is already on its way — the Run created
+  // it through the Session Engine, and `volli:session-activity` carries the
+  // row (VC-373). Opening the Ticket mounts the rail against the shared cache,
+  // so nothing here needs to re-read the listing.
 }
