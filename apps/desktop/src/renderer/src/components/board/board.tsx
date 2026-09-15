@@ -418,6 +418,15 @@ export const Board = React.memo(function Board({
     (status: TicketStatus): boolean => isPickerOpen(picker) && !isPickerColumn(picker, status),
     [picker],
   );
+  // Which column the frozen preview currently resolves the release into. A
+  // callback keyed on the STATUS rather than on `drag`, so the memoized rail
+  // below sees the same function across every drag-over that did not move the
+  // target — an inline lambda here re-rendered every pill on every board render.
+  const aimedStatus = drag?.drop?.toStatus ?? null;
+  const aimedFor = React.useCallback(
+    (status: TicketStatus): boolean => aimedStatus === status,
+    [aimedStatus],
+  );
 
   // Live only while a card is in the air. ⌥ is read from TWO sources for the
   // reason the Lab rig documents: the key events alone miss a drag that STARTED
@@ -896,7 +905,7 @@ export const Board = React.memo(function Board({
                 emptyDropStatuses={emptyDropStatuses}
                 boardEmpty={boardEmpty}
                 dragActive={drag !== null}
-                aimedStatus={drag?.drop?.toStatus ?? null}
+                aimedStatus={aimedStatus}
                 selectedIds={selectedIds}
                 draggingIds={draggingIds}
                 groupDragIds={groupDragIds}
@@ -930,7 +939,7 @@ export const Board = React.memo(function Board({
                     // panel the rail's pills draw, from the same builder.
                     offered={offeredPanelFor(status)}
                     dimmed={dimmedFor(status)}
-                    aimed={drag?.drop?.toStatus === status}
+                    aimed={aimedStatus === status}
                     // Display order is sort-driven: `sortedGroups` reorders each
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
@@ -959,7 +968,7 @@ export const Board = React.memo(function Board({
                     animateEnter={boardMounted.current}
                     offeredFor={offeredPanelFor}
                     dimmedFor={dimmedFor}
-                    aimedFor={(status) => drag?.drop?.toStatus === status}
+                    aimedFor={aimedFor}
                   />
                 )}
               </div>
