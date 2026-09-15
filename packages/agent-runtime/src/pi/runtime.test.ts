@@ -1623,6 +1623,138 @@ describe("model access", () => {
     expect(access.providers[0]?.recovery).toEqual({ kind: "sign-in" });
     expect(JSON.stringify(access)).not.toContain("oauth-refresh-secret");
   });
+
+  it("shares one provider sweep between concurrent inspections", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    // A Session start, the CLI's `model list` and a renderer mount can land in
+    // the same tick; every ask after the first joins the sweep already out.
+    const [first, second] = await Promise.all([
+      runtime.inspectModelAccess(),
+      runtime.inspectModelAccess(),
+    ]);
+
+    expect(second).toBe(first);
+    expect(checkAuth).toHaveBeenCalledTimes(1);
+    expect(getAvailable).toHaveBeenCalledTimes(1);
+    expect(first.observedAt).toBe(7);
+  });
+
+  it("never shares a sweep with a caller that brought its own deadline", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    // The sweep is held open, so anything that could share one certainly would.
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi
+      .spyOn(models, "getAvailable")
+      .mockImplementation(async () => (await release.promise, faux.models));
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    // The CLI's `model list` asks with the bound its door imposes, and two
+    // renderer mounts ask with none. The mounts share; the bounded caller
+    // neither joins their sweep nor becomes the one they join, because its
+    // deadline is its own and a sweep several callers wait on cannot answer to
+    // it — and because a sweep it did become would have to carry its signal,
+    // which is the one thing the others never agreed to.
+    const bounded = new AbortController();
+    const cli = runtime.inspectModelAccess({ signal: bounded.signal });
+    const mount = runtime.inspectModelAccess();
+    const secondMount = runtime.inspectModelAccess();
+    expect(secondMount).toBe(mount);
+    expect(cli).not.toBe(mount);
+    // Two sweeps, not three and not one: the mounts' shared one, and the
+    // bounded caller's own. Both have to reach the catalog and the credential
+    // list before they touch a provider, so this waits for them to get there.
+    await vi.waitFor(() => expect(getAvailable).toHaveBeenCalledTimes(2));
+
+    release.resolve();
+    const access = await mount;
+    expect(access.observedAt).toBe(7);
+    expect(access.models.map((model) => model.modelId)).toContain("acme-model");
+    // The joiner got the identical answer, and the bounded caller its own.
+    await expect(secondMount).resolves.toBe(access);
+    await expect(cli).resolves.not.toBe(access);
+    expect(getAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a caller whose deadline is already spent", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    // It must not be served the shared sweep's answer just because one was
+    // going, and it must not start one either.
+    await runtime.inspectModelAccess();
+    getAvailable.mockClear();
+    const spent = AbortSignal.abort(new Error("already gone"));
+    await expect(runtime.inspectModelAccess({ signal: spent })).rejects.toThrow(/already gone/);
+    expect(getAvailable).not.toHaveBeenCalled();
+  });
+
+  it("never lets a refresh ride an ordinary inspection, or hold a settled answer", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    const refresh = vi
+      .spyOn(models, "refresh")
+      .mockResolvedValue({ aborted: false, errors: new Map() });
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    const ordinary = runtime.inspectModelAccess();
+    const refreshed = runtime.inspectModelAccess({ refresh: true });
+    await Promise.all([ordinary, refreshed]);
+
+    // One sweep per ask: Refresh reached the providers itself, and the
+    // ordinary read did not ride it.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(checkAuth).toHaveBeenCalledTimes(2);
+    expect(getAvailable).toHaveBeenCalledTimes(2);
+
+    // And nothing settled is held: the next ask reads the providers again,
+    // which is what lets a credential revoked out of band show up without
+    // any TTL deciding when.
+    await runtime.inspectModelAccess();
+    expect(checkAuth).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("tool mapping", () => {

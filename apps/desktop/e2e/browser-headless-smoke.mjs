@@ -73,6 +73,19 @@ async function startFixtureServer() {
 // Page-wide, on purpose: under a split each pane draws its own strip, and the
 // question every check asks is about the surface as a whole.
 const browserStripTabs = (page) => page.getByTestId("home-browser-tab");
+/**
+ * The focused pane's chat tab, found by structure rather than by name.
+ *
+ * A chat tab is born with the fallback label "Chat" and is renamed from its
+ * Session's first message moments later, so its name is not a handle to hold
+ * across a few checks — it is a tab, and the tab is what the strip draws. The
+ * browser tabs in the same pane carry their own test id; everything else in
+ * that strip is the chat.
+ */
+const chatStripTab = (page) =>
+  page
+    .locator('[data-slot="split-view-pane"][data-focused="true"] [role="tab"]')
+    .filter({ hasNot: page.getByTestId("home-browser-tab") });
 const island = (page) => page.locator("[data-activity-island]");
 const tabsCluster = (page) => page.locator('[data-island-cluster="tabs"]');
 const tabsCount = (page) => tabsCluster(page).locator("[data-island-count]");
@@ -225,15 +238,13 @@ async function main() {
     const chat = result.ok ? result.sessions.find((row) => row.kind === "chat") : undefined;
     return chat?.record.sessionId ?? null;
   });
-  const chatTabLabel = await waitUntil("the chat tab", async () => {
-    const label = await page
-      .locator(
-        '[data-slot="split-view-pane"][data-focused="true"] [role="tab"][aria-selected="true"]',
-      )
-      .getAttribute("aria-label")
-      .catch(() => null);
-    return label === null || label === "" ? null : label;
-  });
+  // The chat tab is up once the focused pane's strip holds one. Its name is
+  // deliberately not captured: the Session is named from its first message
+  // moments from now, so a label read here can still be the fallback "Chat"
+  // by the time the tab is clicked below.
+  await waitUntil("the chat tab", async () =>
+    (await chatStripTab(page).count()) > 0 ? true : null,
+  );
 
   let agentTabId = null;
   await must(
@@ -344,7 +355,7 @@ async function main() {
         ),
       );
       // The promoted tab took the chat's pane; bring the chat back to reach its island.
-      await page.locator(`[role="tab"][aria-label="${chatTabLabel}"]`).first().click();
+      await chatStripTab(page).first().click();
       await waitUntil("the island again", async () =>
         (await island(page).count()) === 1 ? true : null,
       );
