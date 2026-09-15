@@ -70,9 +70,14 @@ function gitFailure(caught: unknown, args: readonly string[], timeoutMs: number)
 }
 
 /**
- * Default synchronous worktree git runner. It remains for small legacy reads,
- * but every child has the same deadline as the async runner: a malformed local
- * hook must never freeze Electron indefinitely.
+ * Default synchronous worktree git runner. Since VC-383 it has ONE deliberate
+ * consumer on a user path: the confirmed orphan cleanup's gate (`cleanup.ts`),
+ * which may not yield between its last look and the delete. Everything else a
+ * person or a timer reaches — the scan, remove, trim, commit, the harness
+ * workspace, every rail read — runs on {@link runGitCapturingAsync}, because a
+ * sync child on Electron main is the beachball. Reaching for this one for a new
+ * read is the wrong default; every child still has the same deadline as the
+ * async runner, so a malformed local hook cannot freeze Electron indefinitely.
  */
 export const runGitCapturing: RunGit = (args, cwd) => {
   try {
