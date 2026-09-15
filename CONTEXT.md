@@ -79,8 +79,43 @@ Each Session has a Role and model policy, and each of its attachments is
 governed by an Authority Snapshot frozen when that attachment opens. Reconnect,
 restart, and recovery may replace its live executor attachment without changing
 that identity. A model change is an explicit recorded action, never a silent
-fallback.
-_Avoid_: pane session, split session, harness process, terminal pane, UI tab
+fallback. A Session begins at its first message, not at the gesture that opened
+the composer — see **Chat Draft**.
+_Avoid_: pane session, split session, harness process, terminal pane, UI tab,
+chat draft, provisional session, empty session
+
+**Chat Draft**:
+A chat someone has opened but not yet sent a first message in. It is NOT a
+Session: it has no durable row, no Session Attachment, no worktree, no Agent
+Runtime and no history, and abandoning one leaves nothing behind. It holds the
+words, the staged files, the model choice and the scope it will be created
+under, and it carries the UUID its Session will take, so the tab, the split
+pane, the keyboard chord and the sidebar row all name the same thing before and
+after. It lives in renderer state, persisted so that unsent words survive a
+relaunch.
+A Chat Draft is invisible until it has content: pressing `+ Chat` shows only a
+composer, and the first typed character or staged file is what earns the tab a
+place in the workspace layout and a row in the sidebar. That row says `Draft`,
+because nothing is running.
+_Avoid_: empty session, unsaved session, pending session, draft session, ghost
+session
+
+**Promotion**:
+The first message turning a Chat Draft into a Session. It mints the durable row
+under the id the Draft already carried — there is no id swap, because there is
+no second id — transfers the Draft's staged Blobs to it, and only then ensures
+the worktree and attaches the Agent Runtime. It is idempotent: a retry replays
+one create command, so two rapid sends produce one Session.
+Promotion has two phases. `draft` means nothing durable exists yet and
+abandoning costs nothing. `session-created` means the row has landed but its
+Blobs have not all transferred, so a retry resumes there rather than creating a
+second Session. A Session that exists cannot be un-created: there is no delete
+channel, by design.
+Every non-interactive creator — a kickoff chat from the new-Ticket composer,
+`session_start`, `session_delegate`, an Automation Run, Automation authoring —
+skips the Chat Draft entirely and creates a Session immediately, because each
+of them already holds the opening message.
+_Avoid_: saving a session, committing a draft, upgrading a draft, materialising
 
 **Session Role**:
 The product scope a Session acts within: `project`, `ticket`, or `subagent`.

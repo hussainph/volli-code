@@ -359,14 +359,16 @@ export interface BlobLinkIdInput {
 }
 
 /**
- * Attaches Blobs imported before their Ticket existed. The new-Ticket composer
+ * Attaches Blobs imported before their owner existed. The new-Ticket composer
  * imports eagerly (so size is refused and previews drawn while the file is
- * still in hand) and calls this once `ticket.create` has returned an id.
+ * still in hand) and calls this once `ticket.create` has returned an id; a
+ * promoted chat Draft (VC-358) imports the same way and calls this once its
+ * `session.create` has returned the id its staged blobs were waiting beside.
+ * Exactly one owner — the `blob_links` CHECK enforces the same thing durably.
  */
-export interface BlobLinkDraftsInput {
-  ticketId: string;
+export type BlobLinkDraftsInput = {
   blobs: { blobHash: string; label?: string }[];
-}
+} & ({ ticketId: string; sessionId?: undefined } | { sessionId: string; ticketId?: undefined });
 
 /** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
 export interface SessionRenameInput {

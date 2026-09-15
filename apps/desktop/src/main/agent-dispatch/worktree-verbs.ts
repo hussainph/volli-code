@@ -27,6 +27,7 @@ import {
   syncTicketWorktree,
 } from "../worktree";
 import { isInside } from "../worktree/paths";
+import { getWorktreeSnapshots } from "../worktree/snapshot";
 import { failure } from "./context";
 import type { AgentCommandContext, EnvSessionIdentity } from "./context";
 import { dryRunResponse } from "./preview";
@@ -177,9 +178,11 @@ export async function worktreeStatusVerb(
   // `gitAsync` for the same reason the IPC door uses it: this socket handler
   // also runs on the Electron main process, so a synchronous status read froze
   // the app's windows for as long as `volli worktree status` took (VC-369).
-  const read = await readWorktreeStatus(
-    { db: options.db, git, gitAsync, worktreeExists },
-    resolved.ticket.id,
+  // And it reads through the same last-known snapshot the rail does (VC-372):
+  // an agent asking about a ticket whose rail is open gets the answer main
+  // already holds instead of spawning the five-child read again.
+  const read = await getWorktreeSnapshots().readStatus(resolved.ticket.id, () =>
+    readWorktreeStatus({ db: options.db, git, gitAsync, worktreeExists }, resolved.ticket.id),
   );
   switch (read.kind) {
     case "missing-ticket":
@@ -340,6 +343,12 @@ export async function worktreeSyncVerb(
   }
 
   const read = await syncTicketWorktree(deps, resolved.ticket.id, mode);
+  if (read.kind === "ok") {
+    // The merge moved the branch (and the working tree, on conflicts): the rail
+    // may be holding a last-known status/Change Set pair that this socket call
+    // just made stale (VC-372).
+    getWorktreeSnapshots().invalidate(resolved.ticket.id);
+  }
   switch (read.kind) {
     case "missing-ticket":
       return failure("TICKET_NOT_FOUND", "The resolved ticket no longer exists.");

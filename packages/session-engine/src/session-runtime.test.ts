@@ -243,6 +243,41 @@ async function createAndAttach(runtime: SessionRuntime) {
 }
 
 describe("SessionRuntime native adapter contract", () => {
+  it("honors a client-requested Session id on create, and the ledger derivation absent one (VC-358)", async () => {
+    const { runtime } = composition();
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+
+    const minted = await runtime.command({
+      commandId: "command-create-minted",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Ledger-minted",
+      },
+    });
+    const promoted = await runtime.command({
+      commandId: "command-create-promoted",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Client-minted",
+        requestedSessionId: requested,
+      },
+    });
+
+    expect(minted.sessionId).toBe("session-1");
+    expect(promoted.sessionId).toBe(requested);
+    await expect(runtime.projection({ sessionId: requested })).resolves.toMatchObject({
+      projection: { session: { id: requested, title: "Client-minted" } },
+    });
+  });
+
   it("records product model selection without an adapter command", async () => {
     const { runtime } = composition();
     const created = await runtime.command({

@@ -14,6 +14,7 @@ import { errorMessage, type HarnessId, type ModelSelection, type Project } from 
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import {
@@ -303,10 +304,26 @@ export interface ChatBoot {
    */
   model?: ModelSelection;
   /**
-   * Registers the tab against FRESH store state, returning whether it landed —
-   * false ⇒ the owner vanished mid-flight, so this surface lets the Session go.
+   * Skips the Chat Draft and creates a Session immediately (VC-358).
+   *
+   * True for every NON-INTERACTIVE creator — a kickoff from the new-Ticket
+   * composer, Automation authoring — because each already holds the opening
+   * message, so there is no human about to type and nothing to defer the mint
+   * for. False (the default) opens a Chat Draft, which becomes a Session when
+   * someone sends a first message.
    */
-  land(sessionId: string): boolean;
+  createsSessionNow?: boolean;
+  /**
+   * Registers the tab against FRESH store state, returning whether it landed —
+   * false ⇒ the owner vanished mid-flight, so this surface lets the identity go.
+   *
+   * `isSession` says which of the two things just landed: a durable Session
+   * (so the workspace may record its tab and the Ticket rail may refresh), or
+   * a Chat Draft, whose tab stays renderer-local until it has content. It is
+   * the same distinction {@link createsSessionNow} asked for, read back at the
+   * one place that has to act differently.
+   */
+  land(sessionId: string, isSession: boolean): boolean;
 }
 
 /**
@@ -381,9 +398,9 @@ export async function startProjectChat(
 ): Promise<void> {
   await bootChatSession(projectScope(projectId), {
     skills,
-    land: (sessionId) => {
+    land: (sessionId, isSession) => {
       useChatSessionsStore.getState().openChatTab(projectId, sessionId);
-      useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
+      if (isSession) useWorkspaceStore.getState().setHomeActiveTab(projectId, chatTabId(sessionId));
       return true;
     },
   });
@@ -466,18 +483,24 @@ export async function startTicketChat(
     skills,
     title,
     model,
-    land: (booted) => {
+    // A kickoff carries its opening message, so it is a Session from the start.
+    createsSessionNow: message !== undefined,
+    land: (booted, isSession) => {
       // The ticket itself may have been deleted while the create was in flight;
       // a tab on a card that no longer exists is unreachable, so let the Session
       // go (its durable row stands — see {@link bootChatSession}).
       const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
       if (!tickets.some((candidate) => candidate.id === ticketId)) return false;
       useChatSessionsStore.getState().openChatTab(ticketId, booted);
-      useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
-      // The rail's row for this Session needs no read here (VC-373): the chat
-      // was minted through the Session Engine, so `volli:session-activity`
-      // announces its listing row and the rail's cache folds it in — without
-      // the create racing the push with a `listForTicket`.
+      if (isSession) {
+        useWorkspaceStore.getState().setTicketActiveTab(projectId, ticketId, chatTabId(booted));
+        // The rail's row for this Session needs no read here (VC-373): the
+        // chat was minted through the Session Engine, so `volli:session-activity`
+        // announces its listing row and the rail's cache folds it in — without
+        // the create racing the push with a `listForTicket`. A provisional
+        // draft (VC-358) has no durable row to show yet, and its promotion is
+        // announced on the same channel.
+      }
       return true;
     },
   });
@@ -501,10 +524,34 @@ function newMessageId(): string {
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, title, model, land }: ChatBoot,
+  { skills, title, model, land, createsSessionNow = false }: ChatBoot,
 ): Promise<string | null> {
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
+      if (!createsSessionNow) {
+        // A Draft is deliberately not a Session. Both UUIDs are minted in the
+        // browser: `sessionId` remains the tab/draft/durable identity through
+        // promotion, while `operationId` makes every create retry one command.
+        // This path performs no IPC and writes no workspace state.
+        const sessionId = crypto.randomUUID();
+        useChatDraftsStore.getState().openProvisional(sessionId, {
+          projectId: scope.projectId,
+          ticketId: scope.kind === "ticket" ? scope.ticketId : null,
+          operationId: crypto.randomUUID(),
+          title: title ?? null,
+          ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
+          ...(model === undefined ? {} : { model }),
+        });
+        if (trackedProject(scope.projectId) === undefined || !land(sessionId, false)) {
+          useChatDraftsStore.getState().discardProvisional(sessionId);
+          return null;
+        }
+        useChatSessionsStore.getState().setProvisionalActive(ownerKey(scope), sessionId);
+        return sessionId;
+      }
+
+      // Kickoff already has a first message, so it keeps the explicit
+      // create/attach route used by every other non-interactive creator.
       const sessionId = await useChatSessionsStore.getState().createChatSession({
         projectId: scope.projectId,
         ticketId: scope.kind === "ticket" ? scope.ticketId : null,
@@ -516,7 +563,7 @@ export async function bootChatSession(
       // The owner may have been removed while `session.create` was in flight;
       // `land` re-checks its own owner (a ticket must still be on the board) the
       // way a split re-checks its source pane.
-      if (trackedProject(scope.projectId) === undefined || !land(sessionId)) {
+      if (trackedProject(scope.projectId) === undefined || !land(sessionId, true)) {
         abandonChat(sessionId);
         return null;
       }

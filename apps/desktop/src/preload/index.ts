@@ -608,7 +608,7 @@ const api = {
       invoke("volli:blob-materialized", input),
     /** Detaches one attachment; the bytes stay until collection. */
     remove: (input: BlobLinkIdInput): Promise<Result> => invoke("volli:blob-remove", input),
-    /** Attaches Blobs imported before their ticket existed, once it has an id. */
+    /** Attaches Blobs imported before their owner existed, once it has an id. */
     linkDrafts: (input: BlobLinkDraftsInput): Promise<BlobLinksResult> =>
       invoke("volli:blob-link-drafts", input),
     /**

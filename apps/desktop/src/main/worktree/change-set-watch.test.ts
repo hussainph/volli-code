@@ -8,6 +8,7 @@ import { WORKTREE_MISSING_ON_DISK } from "@volli/shared";
 import {
   WATCH_DEBOUNCE_MS,
   WATCH_MAX_WAIT_MS,
+  WATCH_REWATCH_GRACE_MS,
   WorktreeChangeWatchManager,
   type WorktreeChangeWatchOptions,
   type WorktreeWatchFn,
@@ -296,7 +297,120 @@ describe("WorktreeChangeWatchManager", () => {
     expect(windowB.send).toHaveBeenCalledTimes(1);
 
     manager.unwatch(windowB as never, "t1");
+    // The last subscriber released, but the root stays armed for the rewatch
+    // grace so a panel swap can reuse it (VC-372) — it closes only once the
+    // grace expires with no replacement.
+    expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
     expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a released root armed for the replacement subscriber, reusing the handle", async () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    expect(watchCalls).toHaveLength(1);
+
+    // The rail page flip: one panel releases and the other subscribes in the
+    // same commit. The unwatch must not close the handle the rewatch will use —
+    // and it must not re-arm (a `git ls-files`) either.
+    manager.unwatch(webContents as never, "t1");
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    expect(watchCalls).toHaveLength(1);
+    expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
+
+    // Still live: the same handle the first subscription opened delivers the
+    // debounced broadcast to the replacement subscriber.
+    webContents.send.mockClear();
+    watchCalls[0]!.cb("change", "src/swapped.ts");
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+    expect(webContents.send).toHaveBeenCalledWith("volli:worktree-changed", { ticketId: "t1" });
+  });
+
+  it("tells the observer when a worktree's coverage begins and ends", async () => {
+    vi.useFakeTimers();
+    const coverage: Array<{ ticketId: string; covered: boolean }> = [];
+    manager = makeManager({
+      onCoverageChange: (ticketId, covered) => coverage.push({ ticketId, covered }),
+    });
+    const webContents = makeWebContents();
+
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    expect(coverage).toEqual([{ ticketId: "t1", covered: true }]);
+
+    // A renderer release only drops the subscriber: the linger keeps the
+    // worktree covered, so the last-known answer stays trustworthy (VC-372).
+    manager.unwatch(webContents as never, "t1");
+    expect(coverage).toHaveLength(1);
+
+    // Grace expiry really ends coverage.
+    vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
+    expect(coverage).toEqual([
+      { ticketId: "t1", covered: true },
+      { ticketId: "t1", covered: false },
+    ]);
+  });
+
+  it("reports every relevant change to the observer eagerly, even from a lingering root", async () => {
+    vi.useFakeTimers();
+    const changes: string[][] = [];
+    manager = makeManager({ onRelevantChange: (ticketIds) => changes.push([...ticketIds]) });
+    const webContents = makeWebContents();
+
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    manager.unwatch(webContents as never, "t1");
+
+    // No subscriber is left to broadcast to, but the replacement subscriber of
+    // the panel swap is about to read a last-known answer — this change is
+    // what tells main that answer is stale.
+    watchCalls[0]!.cb("change", "src/during-swap.ts");
+    expect(changes).toEqual([["t1"]]);
+  });
+
+  it("ends coverage on a background pause and restores it on resume", async () => {
+    vi.useFakeTimers();
+    const coverage: Array<{ ticketId: string; covered: boolean }> = [];
+    manager = makeManager({
+      onCoverageChange: (ticketId, covered) => coverage.push({ ticketId, covered }),
+    });
+    const webContents = makeWebContents();
+
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    expect(manager.pause(webContents as never, "t1")).toEqual({ ok: true });
+    // Disarmed while backgrounded: nothing observes changes, so nothing may
+    // keep serving the last-known answer.
+    expect(coverage).toEqual([
+      { ticketId: "t1", covered: true },
+      { ticketId: "t1", covered: false },
+    ]);
+
+    expect(await manager.resume(webContents as never, "t1")).toEqual({ ok: true });
+    expect(coverage).toEqual([
+      { ticketId: "t1", covered: true },
+      { ticketId: "t1", covered: false },
+      { ticketId: "t1", covered: true },
+    ]);
+  });
+
+  it("closes a released root after the grace, and a later watch starts a fresh one", async () => {
+    vi.useFakeTimers();
+    manager = makeManager();
+    const webContents = makeWebContents();
+
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    manager.unwatch(webContents as never, "t1");
+    vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS - 1);
+    expect(watchCalls[0]!.watcher.close).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(watchCalls[0]!.watcher.close).toHaveBeenCalledTimes(1);
+
+    // Past the grace the root is gone, so the next subscriber arms anew.
+    await manager.watch(webContents as never, "t1", "/wt/t1");
+    expect(watchCalls).toHaveLength(2);
+    expect(watchCalls[1]?.path).toBe("/wt/t1");
   });
 
   it("pauses background subscribers and re-arms once on foreground resume", async () => {
@@ -474,6 +588,8 @@ describe("WorktreeChangeWatchManager", () => {
     await manager.watch(webContents as never, "t1", "/wt/t1");
     const first = watchCalls[0]!;
     manager.unwatch(webContents as never, "t1");
+    // Held for the rewatch grace (VC-372), then released.
+    vi.advanceTimersByTime(WATCH_REWATCH_GRACE_MS);
     expect(first.watcher.close).toHaveBeenCalled();
 
     first.cb("change", "late.ts");
