@@ -9,57 +9,59 @@
  * without taking its layout, because Apple has three facts of three different
  * kinds and we have up to six of exactly one kind.
  *
- * THE FOUR QUESTIONS THIS SCRATCH EXISTS TO SETTLE, in the order they decide
- * whether the redesign is worth building at all:
+ * THIS IS A PICKER, NOT A CONTACT SHEET. An earlier pass drew every candidate
+ * against every state at once, which is the right material and the wrong
+ * instrument: nine shapes times fourteen states is a hundred and twenty-six
+ * drawings, and a page that shows all of them at once is a page on which no
+ * single decision is easier to make. So the controls at the top hold one
+ * combination and the stage below shows only that, at the size that ships.
+ * Each view answers ONE question:
  *
- *  1. DOES THE NUMBER FIT? The proposal puts the remaining percentage in the
- *     middle of the ring. The glyph box is 14px and the ring's inner diameter
- *     is about ten device pixels, so two digits are being asked to live in a
- *     space smaller than the `⌘K` keycap's letter. "The band at real size" is
- *     the panel that answers this, and it is the only panel that can — every
- *     magnified view on this page flatters the number.
+ *   • Shapes   — at this state, which drawing wins?
+ *   • States   — this drawing, does it survive everything the button can be in?
+ *   • Motion   — does it get BETWEEN those states without flickering?
+ *   • Pinning  — with six accounts and one arc, who chooses what it reports?
  *
- *     Note what the centre costs and what it buys, because the reference gets
- *     this trade the other way round. Apple's figure sits in a GAP AT THE TOP
- *     of the ring, which it can afford because its middle already holds the
- *     Wi-Fi fan — and that gap, with the one at the bottom for the dots,
- *     leaves its arc only 180° to say 0–100 in. Our middle is empty, so
- *     putting the figure there closes the ring over the top and hands the arc
- *     290° back. `Apple, transposed` is kept on the page purely so that
- *     difference can be seen rather than asserted.
+ * WHAT IS BEING JUDGED, in the order it decides whether this is worth building:
+ *
+ *  1. DOES THE NUMBER FIT? The glyph box is 14px and the ring's inner diameter
+ *     is about ten device pixels, so two digits live in less space than the
+ *     `⌘K` keycap's letter. Only the band strip can answer this; every loupe
+ *     on this page flatters the figure. The Type controls exist because that
+ *     answer is a judgement about size and weight, not a yes or no.
+ *
+ *     Note what the centre costs and buys, because the reference goes the
+ *     other way. Apple's figure sits in a gap at the TOP of its ring — it must,
+ *     because its middle holds the Wi-Fi fan — and that gap, with the one at
+ *     the bottom for the dots, leaves its arc only 180° to say 0–100 in. Our
+ *     middle is empty, so the figure goes there, the ring closes over the top,
+ *     and the arc gets 290° back. `Apple, transposed` stays on the Shapes view
+ *     so that difference can be seen rather than asserted.
  *
  *  2. WHAT HAPPENS BETWEEN ONE AND THREE WINDOWS? Codex meters a session and a
- *     week, Copilot only a month, OpenCode Go three spans at once, Claude Code
- *     two that we read and a third we do not. A glyph that is beautiful with
- *     two arcs and broken with one has not survived contact. "The walk" moves
- *     between those counts under its own animation rather than between page
- *     loads, which is where a variant that only works in still frames fails.
+ *     week, Copilot only a month, OpenCode Go three spans at once. A glyph
+ *     that is beautiful with two arcs and broken with one has not survived
+ *     contact. Motion crosses those counts under animation rather than between
+ *     page loads, which is where a still-frame-only design fails.
  *
- *  3. WHAT HAPPENS WITH SIX ACCOUNTS AT ONCE? The dots cap at three and the
- *     nested arcs cap at three, so both are lossy by construction. The
- *     question is not whether they lose facts — it is whether what survives
- *     still answers "am I about to hit a wall".
+ *  3. WHAT HAPPENS WITH SIX ACCOUNTS? Dots cap and nested arcs cap, so both
+ *     are lossy by construction. The question is whether what survives still
+ *     answers "am I about to hit a wall".
  *
- *  4. AND WHEN EVERYTHING IS CRITICAL? This is Apple's own recorded failure:
- *     when all the readings are low at once the combined icon turns into a
- *     smudge and you have to look twice. `all-critical` reproduces it with six
- *     accounts under a tenth. Look at that state hardest; it is the one that
- *     decides between "the ring reports one account" and "the ring reports
- *     them all".
+ *  4. AND WHEN EVERYTHING IS CRITICAL? Apple's own recorded failure: all the
+ *     readings low at once and the icon becomes a smudge. `Everything
+ *     critical` reproduces it with six accounts under a tenth.
  *
  * WHAT THIS SCRATCH DELIBERATELY DOES NOT DO is fetch anything. Where fresh
- * numbers come from is the ticket's open question and its own decision (re-read
- * at launch/focus/turn-end is the recommendation); the drawing has to be
- * settled first, because an icon nobody would want is not worth plumbing. Every
- * fixture here is a fixed snapshot at a fixed `now`, and the states that stand
- * in for staleness — `unread`, `failed` — are drawn, not simulated.
+ * numbers come from is the ticket's open question and its own decision; the
+ * drawing has to be settled first, because an icon nobody would want is not
+ * worth plumbing. Every fixture is a fixed snapshot at a fixed `now`, and the
+ * states that stand in for staleness — `unread`, `failed` — are drawn, not
+ * simulated.
  *
  * THE POPOVER IS NOT REDESIGNED HERE. It stays the full breakdown, the way the
- * phone shows three separate icons once it is unfolded. The one thing the last
- * panel proposes adding to it is a PIN, because the glyph has to choose one
- * window out of as many as fourteen and "nearest to running out" is the right
- * choice roughly always and the wrong one exactly when someone is nursing a
- * particular window through a long Session.
+ * phone shows three separate icons once unfolded. The only thing the Pinning
+ * view proposes adding to it is a pin at the end of each window row.
  */
 
 import { GaugeIcon } from "@phosphor-icons/react/dist/csr/Gauge";
@@ -70,189 +72,208 @@ import { PushPinSlashIcon } from "@phosphor-icons/react/dist/csr/PushPinSlash";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { PauseIcon } from "@phosphor-icons/react/dist/csr/Pause";
 import * as React from "react";
-import type { UsageTone } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
 
 import { NOW, STATES, STATE_BY_ID, WALK, type IconState } from "../usage-icon/fixtures";
 import { iconLabel, iconReading, type IconReading, type PinnedWindow } from "../usage-icon/reading";
-import { AppleRing, CANDIDATES, type Candidate } from "../usage-icon/variants";
+import {
+  CANDIDATES,
+  DEFAULT_NUMBER,
+  type Candidate,
+  type NumberStyle,
+} from "../usage-icon/variants";
 
 export const title = "Usage limits icon (VC-376)";
-export const note =
-  "Arc for the amount, figure in the middle, beads below — at 14px, across every state the always-mounted button has to survive";
+export const note = "Pick a shape, a state and a type size — the band above shows it at 14px";
 
 /** The real glyph size in the chrome band: `size-3.5` inside a `size-6` button. */
 const REAL = 14;
-/** Big enough to judge the drawing's geometry, and honest about being a lie. */
+/** Big enough to judge geometry. Never big enough to judge legibility. */
 const LOUPE = 44;
 
-/**
- * The variant the pin panel demonstrates with — looked up by id rather than by
- * position, so reordering the registry cannot silently change which drawing
- * that panel is arguing about.
- */
-const PIN_CANDIDATE = CANDIDATES.find((candidate) => candidate.id === "centre-windows");
+type View = "shapes" | "states" | "motion" | "pinning";
+
+const VIEWS: readonly { id: View; label: string; asks: string }[] = [
+  { id: "shapes", label: "Shapes", asks: "At this state, which drawing wins?" },
+  { id: "states", label: "States", asks: "This drawing, across everything the button can be in." },
+  { id: "motion", label: "Motion", asks: "Does it get between those states without flickering?" },
+  { id: "pinning", label: "Pinning", asks: "Six accounts, one arc — who chooses what it reports?" },
+];
 
 export default function UsageLimitsIconScratch() {
+  const [shapeId, setShapeId] = React.useState("centre-windows");
+  const [stateId, setStateId] = React.useState("six-accounts");
+  const [view, setView] = React.useState<View>("shapes");
+  const [numberStyle, setNumberStyle] = React.useState<NumberStyle>(DEFAULT_NUMBER);
+
+  const shape = CANDIDATES.find((candidate) => candidate.id === shapeId) ?? CANDIDATES[0];
+  const state = STATE_BY_ID.get(stateId) ?? STATES[0];
+  if (shape === undefined || state === undefined) return null;
+  const reading = iconReading(state.kind, state.accounts, NOW);
+  const glyph: GlyphArgs = { reading, numberStyle };
+
   return (
-    <div className="flex flex-col gap-6 pb-12">
-      <FidelityPanel />
-      <BandPanel />
-      <WalkPanel />
-      <MatrixPanel />
-      <PinPanel />
+    <div className="flex flex-col gap-4 pb-12">
+      <Controls
+        shape={shape}
+        onShape={setShapeId}
+        state={state}
+        onState={setStateId}
+        numberStyle={numberStyle}
+        onNumberStyle={setNumberStyle}
+      />
+
+      {/* The stage is the same in every view, and it is the only place a
+          decision may be made: one shape, one state, in a real 24px button,
+          beside a real ⌘K pill. Everything below it is supporting evidence. */}
+      <Stage shape={shape} state={state} glyph={glyph} />
+
+      <ViewSwitcher value={view} onChange={setView} />
+
+      {view === "shapes" ? <ShapesView glyph={glyph} active={shape} onPick={setShapeId} /> : null}
+      {view === "states" ? (
+        <StatesView shape={shape} numberStyle={numberStyle} onPick={setStateId} />
+      ) : null}
+      {view === "motion" ? <MotionView shape={shape} numberStyle={numberStyle} /> : null}
+      {view === "pinning" ? <PinningView shape={shape} numberStyle={numberStyle} /> : null}
     </div>
   );
 }
 
-/* ------------------------------------------------------- 0. against the source */
+/** What every panel needs to draw the current combination. */
+interface GlyphArgs {
+  reading: IconReading;
+  numberStyle: NumberStyle;
+}
 
-/**
- * The transposed geometry beside the numbers the reference itself shows.
- *
- * Apple's own screenshot gives two data points, and both are checkable rather
- * than a matter of taste: at **50** the left arc is exactly full and the right
- * exactly empty, and at **16** the ink is a short stub at the BOTTOM of the
- * left arc. If our 50 does not land on the nine-o'clock-to-twelve half, the
- * fill is being distributed across the two arcs wrongly; if our 16 appears
- * anywhere but just above the bottom-left arc end, the fill is running the
- * wrong way round the circle.
- *
- * Drawn at 96px, which is the one place on this page where a magnified view is
- * the right tool: this panel is about whether the drawing is CORRECT, not
- * about whether it can be read.
- */
-function FidelityPanel() {
+function draw(shape: Candidate, args: GlyphArgs, size: number, animate = false) {
+  const label = iconLabel(args.reading);
+  return shape.render({
+    reading: args.reading,
+    size,
+    label,
+    animate,
+    numberStyle: args.numberStyle,
+  });
+}
+
+/* ------------------------------------------------------------------ controls */
+
+function Controls({
+  shape,
+  onShape,
+  state,
+  onState,
+  numberStyle,
+  onNumberStyle,
+}: {
+  shape: Candidate;
+  onShape(id: string): void;
+  state: IconState;
+  onState(id: string): void;
+  numberStyle: NumberStyle;
+  onNumberStyle(next: NumberStyle): void;
+}) {
   return (
-    <Panel
-      label="Against the reference"
-      hint="Apple's own two frames, redrawn with our tokens. 50 should fill exactly the left arc; 16 should be a stub at its bottom end."
-    >
-      <div className="flex flex-wrap items-end gap-8">
-        {[
-          { remaining: 50, tone: "normal" as const, dots: 4 },
-          { remaining: 16, tone: "critical" as const, dots: 4 },
-          { remaining: 88, tone: "normal" as const, dots: 2 },
-          { remaining: 4, tone: "critical" as const, dots: 0 },
-        ].map((sample) => (
-          <figure key={sample.remaining} className="flex flex-col items-center gap-2">
-            <AppleRing
-              reading={syntheticReading(sample.remaining, sample.tone, sample.dots)}
-              size={96}
-              label={`${sample.remaining}% left`}
-            />
-            <figcaption className="text-label text-muted-foreground">
-              {sample.remaining}% left · {sample.dots} other accounts
-            </figcaption>
-          </figure>
-        ))}
-      </div>
-    </Panel>
+    <section className="flex flex-wrap items-start gap-x-8 gap-y-4 rounded-lg border border-border bg-card p-4 shadow-raised">
+      <Field label="Shape">
+        <Select
+          name="Shape"
+          value={shape.id}
+          onChange={onShape}
+          options={CANDIDATES.map((candidate) => ({ value: candidate.id, label: candidate.name }))}
+        />
+      </Field>
+      <Field label="State">
+        <Select
+          name="State"
+          value={state.id}
+          onChange={onState}
+          options={STATES.map((entry) => ({ value: entry.id, label: entry.name }))}
+        />
+      </Field>
+      {/* Type is two controls rather than a preset list because the two
+          trade against each other: a smaller figure wants more weight to hold
+          its stems together, and a heavier one wants less size to stop
+          shouting. A preset would hide exactly that exchange. */}
+      <Field label="Figure size">
+        <Choice
+          name="Figure size"
+          value={numberStyle.size}
+          onChange={(size) => onNumberStyle({ ...numberStyle, size })}
+          options={[10, 11, 12, 13, 14].map((size) => ({ value: size, label: String(size) }))}
+        />
+      </Field>
+      <Field label="Figure weight">
+        <Choice
+          name="Figure weight"
+          value={numberStyle.weight}
+          onChange={(weight) => onNumberStyle({ ...numberStyle, weight })}
+          options={[
+            { value: 400, label: "Regular" },
+            { value: 500, label: "Medium" },
+            { value: 600, label: "Semibold" },
+            { value: 700, label: "Bold" },
+          ]}
+        />
+      </Field>
+      <Field label="">
+        <button
+          type="button"
+          onClick={() => onNumberStyle(DEFAULT_NUMBER)}
+          className="rounded-full border border-border px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Reset type
+        </button>
+      </Field>
+    </section>
   );
 }
 
-/**
- * A reading built by hand rather than from a fixture.
- *
- * Only the fidelity panel uses this, and only because it needs the reference's
- * exact figures rather than a plausible account. Everywhere else on this page
- * the reading comes from real provider rows through the app's own
- * `usageLimitAccounts`, which is what keeps the glyph and the popover honest
- * about each other.
- */
-function syntheticReading(remaining: number, tone: UsageTone, others: number): IconReading {
-  const window = { id: "w", kind: "session" as const, label: "Session", remaining, tone };
-  const account = {
-    providerId: "sample",
-    label: "Sample",
-    windows: [window],
-    binding: window,
-  };
-  return {
-    kind: "read",
-    lead: account,
-    reported: window,
-    pinned: false,
-    others: Array.from({ length: others }, (_, index) => ({
-      providerId: `other-${index}`,
-      label: `Other ${index}`,
-      windows: [],
-      binding: null,
-    })),
-    othersTone: null,
-  };
-}
+/* --------------------------------------------------------------------- stage */
 
-/* ------------------------------------------------- 1. the band, at real size */
-
-/**
- * The only panel that decides anything.
- *
- * Every candidate sits in a real `size-6` ghost button, in a mock of the
- * chrome band's command cluster, beside a real ⌘K pill and the Gauge it would
- * replace. The neighbours are here so the comparison is the one that matters —
- * not "is this ring nice" but "does this ring belong in this row", which is a
- * question about optical weight and height, not about the drawing.
- */
-function BandPanel() {
-  const [stateId, setStateId] = React.useState("six-accounts");
-  const active = STATE_BY_ID.get(stateId) ?? STATES[0];
-  if (active === undefined) return null;
-  const reading = iconReading(active.kind, active.accounts, NOW);
-
+function Stage({ shape, state, glyph }: { shape: Candidate; state: IconState; glyph: GlyphArgs }) {
   return (
-    <Panel
-      label="The band, at real size"
-      hint="24px button, 14px glyph — the same box every other control in this row gets. If a variant only works below, it does not work."
-    >
-      <StatePicker value={stateId} onChange={setStateId} />
-      <p className="text-ui text-muted-foreground">{active.note}</p>
-
+    <section className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-raised">
       {/* A stand-in for `CommandCluster`: same gap-1, same 22px pill, same
-          ghost icon buttons, on a band-coloured strip. */}
+          ghost icon button, on a band-coloured strip. The old Gauge sits
+          beside it so the replacement is judged against what it replaces. */}
       <div
         data-testid="band-strip"
         className="flex h-[38px] items-center justify-center gap-1 rounded-md border border-border/50 bg-background"
       >
         <MockCommandPill />
-        <BandButton label="Usage limits (today)">
-          <GaugeIcon className="size-3.5" />
-        </BandButton>
-        <span className="mx-1 h-4 w-px bg-border" />
-        {/* Tightly wrapped so a screenshot can crop to just the glyphs: a clip
-            of the whole band is mostly ⌘K pill, and shrinks the one thing
-            worth looking at to nothing. */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Usage limits (today)"
+          title="Today's Gauge"
+        >
+          <GaugeIcon />
+        </Button>
         <span data-testid="real-size-row" className="flex items-center gap-1">
-          {CANDIDATES.map((candidate) => (
-            <InBand key={candidate.id} candidate={candidate} reading={reading} />
-          ))}
+          <InBand shape={shape} glyph={glyph} />
         </span>
       </div>
 
-      {/* The same seven, at 44px. Everything here is a flattering lie about
-          legibility and an honest account of geometry — use it to see what a
-          shape IS, never to decide whether it can be read. */}
-      <div data-testid="band-loupe" className="flex flex-wrap gap-4">
-        {CANDIDATES.map((candidate) => (
-          <figure key={candidate.id} className="flex w-44 flex-col gap-2">
-            <div className="flex h-14 items-center justify-center rounded-md border border-border bg-background">
-              {candidate.render({ reading, size: LOUPE, label: iconLabel(reading) })}
-            </div>
-            <figcaption className="flex flex-col gap-1">
-              <span className="text-ui font-medium">{candidate.name}</span>
-              <span className="text-label leading-snug text-muted-foreground">{candidate.bet}</span>
-            </figcaption>
-          </figure>
-        ))}
+      <div className="flex flex-wrap items-center gap-6">
+        <div className="flex size-16 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+          {draw(shape, glyph, LOUPE)}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="text-ui font-medium">{shape.name}</p>
+          <p className="text-label leading-snug text-muted-foreground">{shape.bet}</p>
+          <p className="pt-1 text-label leading-snug text-muted-foreground">
+            <span className="text-foreground">{state.name}.</span> {state.note}
+          </p>
+          <p className="pt-1 text-label text-muted-foreground">
+            Accessible name: <code className="text-foreground">{iconLabel(glyph.reading)}</code>
+          </p>
+        </div>
       </div>
-
-      <p className="text-label text-muted-foreground">
-        Accessible name for this state:{" "}
-        <code className="text-foreground">{iconLabel(reading)}</code>
-      </p>
-    </Panel>
+    </section>
   );
 }
 
@@ -269,15 +290,6 @@ function MockCommandPill() {
   );
 }
 
-/** The real `Button` in the real size the chrome band gives it. */
-function BandButton({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Button variant="ghost" size="icon-sm" aria-label={label} title={label}>
-      {children}
-    </Button>
-  );
-}
-
 /**
  * One candidate as the band would actually mount it.
  *
@@ -286,36 +298,147 @@ function BandButton({ label, children }: { label: string; children: React.ReactN
  * exact thing it is here to show. It gets a ghost button sized to its content
  * instead, which is what adopting it would really mean.
  */
-function InBand({ candidate, reading }: { candidate: Candidate; reading: IconReading }) {
-  const label = iconLabel(reading);
-  const glyph = candidate.render({ reading, size: REAL, label });
-  if (candidate.chrome === "pill") {
+function InBand({ shape, glyph }: { shape: Candidate; glyph: GlyphArgs }) {
+  const label = iconLabel(glyph.reading);
+  if (shape.chrome === "pill") {
     return (
       <Button variant="ghost" size="sm" className="h-6 px-0.5" aria-label={label} title={label}>
-        {glyph}
+        {draw(shape, glyph, REAL)}
       </Button>
     );
   }
-  return <BandButton label={label}>{glyph}</BandButton>;
+  return (
+    <Button variant="ghost" size="icon-sm" aria-label={label} title={label}>
+      {draw(shape, glyph, REAL)}
+    </Button>
+  );
 }
 
-/* --------------------------------------------------------------- 2. the walk */
+/* --------------------------------------------------------------------- views */
+
+function ViewSwitcher({ value, onChange }: { value: View; onChange(next: View): void }) {
+  const active = VIEWS.find((entry) => entry.id === value);
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="flex items-center gap-1 rounded-full border border-border p-0.5">
+        {VIEWS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => onChange(entry.id)}
+            aria-pressed={entry.id === value}
+            className="rounded-full px-3 py-1 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-label text-muted-foreground">{active?.asks}</p>
+    </div>
+  );
+}
+
+/** Every shape at the chosen state — the comparison, one row, click to adopt. */
+function ShapesView({
+  glyph,
+  active,
+  onPick,
+}: {
+  glyph: GlyphArgs;
+  active: Candidate;
+  onPick(id: string): void;
+}) {
+  return (
+    <Panel>
+      <div data-testid="shapes" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {CANDIDATES.map((candidate) => (
+          <button
+            key={candidate.id}
+            type="button"
+            onClick={() => onPick(candidate.id)}
+            aria-pressed={candidate.id === active.id}
+            className="flex items-center gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong aria-pressed:border-ring"
+          >
+            <span className="flex size-10 shrink-0 items-center justify-center">
+              {draw(candidate, glyph, 30)}
+            </span>
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-border/70">
+              {draw(candidate, glyph, REAL)}
+            </span>
+            <span className="min-w-0 flex-1 text-ui">{candidate.name}</span>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * One shape, every state.
+ *
+ * The two rows to read before any other sit next to each other on purpose:
+ * `Nothing read yet` against `Spent`. A thin ring means "not measured", a fat
+ * empty track means "nothing left", and if those two are hard to tell apart
+ * the notation is broken at its root — a cold launch would be indistinguishable
+ * from a quota that has run out.
+ */
+function StatesView({
+  shape,
+  numberStyle,
+  onPick,
+}: {
+  shape: Candidate;
+  numberStyle: NumberStyle;
+  onPick(id: string): void;
+}) {
+  return (
+    <Panel>
+      <div data-testid="states" className="grid gap-2 sm:grid-cols-2">
+        {STATES.map((entry) => {
+          const args: GlyphArgs = {
+            reading: iconReading(entry.kind, entry.accounts, NOW),
+            numberStyle,
+          };
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              onClick={() => onPick(entry.id)}
+              className="flex items-start gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong"
+            >
+              <span className="flex size-10 shrink-0 items-center justify-center">
+                {draw(shape, args, 30)}
+              </span>
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-border/70">
+                {draw(shape, args, REAL)}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-ui">{entry.name}</span>
+                <span className="text-label leading-snug text-muted-foreground">{entry.note}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
 
 /**
  * The states, in motion.
  *
- * Question 2 from the header: a glyph does not only have to look right in each
- * state, it has to get between them without flickering — a window appearing,
- * an account signing out, an arc crossing from primary through amber to red.
- * The walk crosses every one of those boundaries on a timer so the transitions
- * are watched rather than imagined.
+ * A glyph does not only have to look right in each state, it has to get
+ * between them without flickering — a window appearing, an account signing
+ * out, an arc crossing from primary through amber to red. The walk crosses
+ * every one of those boundaries on a timer so the transitions are watched
+ * rather than imagined.
  *
- * The movement is 300ms of ease-out on the arc's own length, which is about as
- * much as window chrome may ask for, and it is off under `prefers-reduced-
- * motion` like the rest of the app. Toggle Reduce Motion in the OS and the
- * numbers still change; only the tweening stops.
+ * The movement is 300ms of ease-out on the arc's own length, about as much as
+ * window chrome may ask for, and it is off under `prefers-reduced-motion` like
+ * the rest of the app. Toggle Reduce Motion in the OS and the numbers still
+ * change; only the tweening stops.
  */
-function WalkPanel() {
+function MotionView({ shape, numberStyle }: { shape: Candidate; numberStyle: NumberStyle }) {
   const [index, setIndex] = React.useState(0);
   const [playing, setPlaying] = React.useState(true);
 
@@ -325,22 +448,18 @@ function WalkPanel() {
     return () => clearInterval(timer);
   }, [playing]);
 
-  const stateId = WALK[index] ?? WALK[0] ?? "";
-  const active = STATE_BY_ID.get(stateId);
-  if (active === undefined) return null;
-  const reading = iconReading(active.kind, active.accounts, NOW);
+  const entry = STATE_BY_ID.get(WALK[index] ?? "");
+  if (entry === undefined) return null;
+  const args: GlyphArgs = { reading: iconReading(entry.kind, entry.accounts, NOW), numberStyle };
 
   return (
-    <Panel
-      label="The walk"
-      hint="Nothing → one window → two → three → six accounts → down to spent → back to nothing. Watch the segment count change under its own animation."
-    >
-      <div className="flex items-center gap-2">
+    <Panel>
+      <div className="flex flex-wrap items-center gap-3">
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label={playing ? "Pause" : "Play"}
-          onClick={() => setPlaying((p) => !p)}
+          onClick={() => setPlaying((current) => !current)}
         >
           {playing ? <PauseIcon /> : <PlayIcon />}
         </Button>
@@ -361,95 +480,16 @@ function WalkPanel() {
           ))}
         </div>
       </div>
-
-      <div className="flex flex-wrap gap-4">
-        {CANDIDATES.map((candidate) => (
-          <figure key={candidate.id} className="flex w-32 flex-col items-center gap-2">
-            <div className="flex h-12 w-full items-center justify-center rounded-md border border-border bg-background">
-              {candidate.render({ reading, size: 36, label: iconLabel(reading), animate: true })}
-            </div>
-            {/* And the same frame at the size it will actually ship at, so the
-                motion is judged where it will be seen and not only where it is
-                comfortable to look at. */}
-            <div className="flex h-8 w-full items-center justify-center rounded-md border border-border bg-background">
-              {candidate.render({ reading, size: REAL, label: iconLabel(reading), animate: true })}
-            </div>
-            <figcaption className="text-label text-muted-foreground">{candidate.name}</figcaption>
-          </figure>
-        ))}
+      <div className="flex items-center gap-6 rounded-md border border-border bg-background p-4">
+        {draw(shape, args, 72, true)}
+        <span className="flex size-6 items-center justify-center rounded-md border border-dashed border-border/70">
+          {draw(shape, args, REAL, true)}
+        </span>
+        <span className="text-ui text-muted-foreground">{entry.name}</span>
       </div>
     </Panel>
   );
 }
-
-/* ------------------------------------------------------------- 3. the matrix */
-
-/**
- * Every candidate against every state, at the size that ships.
- *
- * The three rows to read before any other: `unread` and `spent` next to each
- * other (a thin ring means "not measured", a fat empty track means "nothing
- * left" — if those two are hard to tell apart the notation is broken at its
- * root), and `all-critical`, which is Apple's smudge.
- */
-function MatrixPanel() {
-  return (
-    <Panel
-      label="Every state"
-      hint="Real size in a real button, and a loupe beside it. Compare `Nothing read yet` against `Spent`, then look at `Everything critical`."
-    >
-      <div data-testid="matrix" className="overflow-x-auto">
-        <table className="w-full border-collapse text-left">
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-10 bg-card p-2 text-label font-normal uppercase text-muted-foreground">
-                State
-              </th>
-              {CANDIDATES.map((candidate) => (
-                <th
-                  key={candidate.id}
-                  className="p-2 text-label font-normal uppercase text-muted-foreground"
-                >
-                  {candidate.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {STATES.map((entry) => (
-              <MatrixRow key={entry.id} state={entry} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
-  );
-}
-
-function MatrixRow({ state }: { state: IconState }) {
-  const reading = iconReading(state.kind, state.accounts, NOW);
-  const label = iconLabel(reading);
-  return (
-    <tr className="border-t border-border/60 align-top">
-      <th scope="row" className="sticky left-0 z-10 w-56 bg-card p-2 font-normal">
-        <span className="block text-ui font-medium">{state.name}</span>
-        <span className="block text-label leading-snug text-muted-foreground">{state.note}</span>
-      </th>
-      {CANDIDATES.map((candidate) => (
-        <td key={candidate.id} className="p-2">
-          <div className="flex items-center gap-2">
-            <span className="flex size-6 items-center justify-center rounded-md border border-dashed border-border/70">
-              {candidate.render({ reading, size: REAL, label })}
-            </span>
-            {candidate.render({ reading, size: 30, label })}
-          </div>
-        </td>
-      ))}
-    </tr>
-  );
-}
-
-/* ---------------------------------------------------------------- 4. the pin */
 
 /**
  * WHICH WINDOW THE GLYPH REPORTS, AND HOW TO OVERRULE IT.
@@ -472,40 +512,26 @@ function MatrixRow({ state }: { state: IconState }) {
  * the default silently rather than blanking the glyph, because the pin is a
  * preference about a drawing and not a promise the provider made.
  *
- * The rows below are a stand-in for the popover's own, not a redesign of it —
- * the popover is explicitly out of scope, and the only thing this panel
- * proposes adding to it is the pin button at the end of each window row.
+ * The rows below stand in for the popover's own and are not a redesign of it —
+ * the popover is explicitly out of scope, and the only thing this proposes
+ * adding is the pin button at the end of each window row.
  */
-function PinPanel() {
+function PinningView({ shape, numberStyle }: { shape: Candidate; numberStyle: NumberStyle }) {
   const state = STATE_BY_ID.get("six-accounts");
   const [pin, setPin] = React.useState<PinnedWindow | null>(null);
   if (state === undefined) return null;
   const reading = iconReading(state.kind, state.accounts, NOW, pin);
+  const args: GlyphArgs = { reading, numberStyle };
 
   return (
-    <Panel
-      label="Which window the arc reports — and pinning one"
-      hint="Six accounts, fourteen numbers, one arc. Unpinned it follows whatever is nearest to running out; a pin overrules it until you take the pin off."
-    >
+    <Panel>
       <div className="flex flex-wrap items-start gap-6">
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex h-[38px] items-center gap-1 rounded-md border border-border/50 bg-background px-2">
-            <BandButton label={iconLabel(reading)}>
-              {PIN_CANDIDATE?.render({
-                reading,
-                size: REAL,
-                label: iconLabel(reading),
-                animate: true,
-              })}
-            </BandButton>
+        <div className="flex w-44 flex-col items-center gap-3">
+          <div className="flex h-[38px] items-center rounded-md border border-border/50 bg-background px-2">
+            <InBand shape={shape} glyph={args} />
           </div>
-          {PIN_CANDIDATE?.render({
-            reading,
-            size: LOUPE,
-            label: iconLabel(reading),
-            animate: true,
-          })}
-          <p className="max-w-40 text-center text-label text-muted-foreground">
+          {draw(shape, args, LOUPE, true)}
+          <p className="text-center text-label text-muted-foreground">
             {reading.pinned ? "Pinned" : "Nearest to running out"}
             {reading.reported === null ? "" : ` · ${reading.lead?.label} ${reading.reported.label}`}
           </p>
@@ -571,40 +597,86 @@ function PinPanel() {
 
 /* ------------------------------------------------------------------ plumbing */
 
-function StatePicker({ value, onChange }: { value: string; onChange(next: string): void }) {
+function Panel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap gap-1">
-      {STATES.map((entry) => (
-        <button
-          key={entry.id}
-          type="button"
-          onClick={() => onChange(entry.id)}
-          aria-pressed={entry.id === value}
-          className="rounded-full px-2.5 py-0.5 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
-        >
-          {entry.name}
-        </button>
-      ))}
+    <section className="flex min-w-0 flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-raised">
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A control group. A `div` and not a `label`, which is not a detail: a `label`
+ * wrapping a set of buttons donates its own text to every button inside it, so
+ * four segmented options all end up accessibly named "Figure weight" and
+ * neither a screen reader nor a test can tell Regular from Bold. Each control
+ * below carries its own name instead.
+ */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="font-mono text-label uppercase text-muted-foreground">{label}</span>
+      {children}
     </div>
   );
 }
 
-function Panel({
-  label,
-  hint,
-  children,
+function Select<T extends string>({
+  name,
+  value,
+  onChange,
+  options,
 }: {
-  label: string;
-  hint: string;
-  children: React.ReactNode;
+  name: string;
+  value: T;
+  onChange(next: T): void;
+  options: readonly { value: T; label: string }[];
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-4 rounded-lg border border-border bg-card p-4 shadow-raised">
-      <header className="flex flex-col gap-1">
-        <h2 className="font-mono text-label uppercase text-muted-foreground">{label}</h2>
-        <p className="text-ui text-muted-foreground">{hint}</p>
-      </header>
-      {children}
-    </section>
+    <select
+      aria-label={name}
+      value={value}
+      onChange={(event) => onChange(event.target.value as T)}
+      className="h-6 rounded-md border border-border bg-background px-2 text-ui text-foreground"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Choice<T extends number | string>({
+  name,
+  value,
+  onChange,
+  options,
+}: {
+  name: string;
+  value: T;
+  onChange(next: T): void;
+  options: readonly { value: T; label: string }[];
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={name}
+      className="flex h-6 items-center gap-0.5 rounded-md border border-border p-0.5"
+    >
+      {options.map((option) => (
+        <button
+          key={String(option.value)}
+          type="button"
+          onClick={() => onChange(option.value)}
+          aria-label={`${name} ${option.label}`}
+          aria-pressed={option.value === value}
+          className="rounded-sm px-2 text-label text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }

@@ -244,6 +244,74 @@ export interface GlyphProps {
   size: number;
   label: string;
   animate?: boolean;
+  /** How the figure in the middle is set. See {@link NumberStyle}. */
+  numberStyle?: NumberStyle;
+}
+
+/**
+ * How the figure is set, in the glyph's own 24-unit coordinates.
+ *
+ * WHY THIS IS A DIAL AND NOT A CONSTANT. A number inside a 14px glyph is not
+ * body copy and cannot be set like it: at the size that fits, a digit is about
+ * seven device pixels tall, and at the app's text weights its stems land under
+ * one physical pixel and grey out into the ring behind them. So it wants more
+ * weight than anything else in the app — and "more" is exactly the judgement
+ * that should be made by eye at real size rather than picked once by whoever
+ * drew it first.
+ *
+ * The first pass here was 13/700, which is a shout. It reads, but it reads as
+ * a badge rather than as chrome, and next to the ⌘K pill's `text-label` it is
+ * the loudest thing in the band. 12/600 is the default now; the picker moves
+ * both so the floor can be found rather than argued about.
+ */
+export interface NumberStyle {
+  /** Font size in the 24-unit box. 14px glyph ⇒ device px ≈ size × 0.58. */
+  size: number;
+  weight: number;
+}
+
+export const DEFAULT_NUMBER: NumberStyle = { size: 12, weight: 600 };
+
+/**
+ * The figure, wherever a variant puts it.
+ *
+ * At 100% it draws nothing: three digits will not fit, and a ring drawn full
+ * already says the only thing "100" would add.
+ */
+function GlyphNumber({
+  value,
+  tone,
+  x = MID,
+  y = MID,
+  style = DEFAULT_NUMBER,
+}: {
+  value: number;
+  tone: UsageTone;
+  x?: number;
+  y?: number;
+  style?: NumberStyle;
+}) {
+  if (value >= 100) return null;
+  return (
+    <text
+      x={x}
+      y={y}
+      textAnchor="middle"
+      dominantBaseline="central"
+      fontSize={style.size}
+      fontWeight={style.weight}
+      // Tabular figures so the glyph does not change width between 8 and 11,
+      // which at this size reads as the icon twitching. The app's sans rather
+      // than the mono face: its digits are narrower, and narrow is the whole
+      // budget here.
+      className={cn(
+        "fill-current tabular-nums",
+        tone === "normal" ? "text-foreground" : TONE_STROKE[tone],
+      )}
+    >
+      {value}
+    </text>
+  );
 }
 
 /** The share of a window still available, as an arc fraction. */
@@ -414,6 +482,7 @@ export function RingCentre({
   size,
   label,
   animate,
+  numberStyle,
   dots = "none",
 }: GlyphProps & { dots?: "none" | "accounts" | "windows" }) {
   const reported = reading.reported;
@@ -461,26 +530,12 @@ export function RingCentre({
               />
             );
           })}
-          {reported.remaining >= 100 ? null : (
-            <text
-              x={MID}
-              y={MID + 0.2}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={13}
-              fontWeight={700}
-              // Tabular figures so the glyph does not change width between 8
-              // and 11, which at this size reads as the icon twitching. The
-              // app's sans rather than the mono face: its digits are narrower,
-              // and narrower is the entire budget here.
-              className={cn(
-                "fill-current tabular-nums",
-                reported.tone === "normal" ? "text-foreground" : TONE_STROKE[reported.tone],
-              )}
-            >
-              {reported.remaining}
-            </text>
-          )}
+          <GlyphNumber
+            value={reported.remaining}
+            tone={reported.tone}
+            y={MID + 0.2}
+            style={numberStyle}
+          />
         </>
       )}
     </Glyph>
@@ -615,6 +670,7 @@ export function RingNumberDots({
   size,
   label,
   animate,
+  numberStyle,
   dotsMean = "windows",
 }: GlyphProps & { dotsMean?: "accounts" | "windows" }) {
   const reported = reading.reported;
@@ -633,22 +689,7 @@ export function RingNumberDots({
             animate={animate}
             className={cn("stroke-current", TONE_STROKE[reported.tone])}
           />
-          {reported.remaining >= 100 ? null : (
-            <text
-              x={MID}
-              y={MID}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={11}
-              fontWeight={600}
-              className={cn(
-                "fill-current font-mono tabular-nums",
-                reported.tone === "normal" ? "text-foreground" : TONE_STROKE[reported.tone],
-              )}
-            >
-              {reported.remaining}
-            </text>
-          )}
+          <GlyphNumber value={reported.remaining} tone={reported.tone} style={numberStyle} />
           <DotRow dots={dots} y={27.5} radius={1.2} pitch={3.4} animate={animate} />
         </>
       )}
@@ -819,6 +860,7 @@ export function AppleRing({
   size,
   label,
   animate,
+  numberStyle,
   dotsMean = "accounts",
   showNumber = true,
 }: GlyphProps & { dotsMean?: "accounts" | "windows"; showNumber?: boolean }) {
@@ -883,25 +925,22 @@ export function AppleRing({
               />
             );
           })}
-          {showNumber && reported.remaining < 100 ? (
+          {showNumber ? (
             // Sat so its cap height starts just below the glyph box's top edge
             // and its baseline lands a shade into the ring's top gap, which is
             // the overlap the reference has. Higher and it draws outside the
-            // box; lower and it collides with the two arc ends.
-            <text
-              x={MID}
+            // box; lower and it collides with the two arc ends. Two units
+            // smaller than the centred variants', because the top gap is
+            // narrower than the ring's inside.
+            <GlyphNumber
+              value={reported.remaining}
+              tone={tone}
               y={4.7}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fontSize={9.8}
-              fontWeight={700}
-              className={cn(
-                "fill-current tabular-nums",
-                tone === "normal" ? "text-foreground" : TONE_STROKE[tone],
-              )}
-            >
-              {reported.remaining}
-            </text>
+              style={{
+                size: (numberStyle ?? DEFAULT_NUMBER).size - 2.2,
+                weight: (numberStyle ?? DEFAULT_NUMBER).weight,
+              }}
+            />
           ) : null}
         </>
       )}
