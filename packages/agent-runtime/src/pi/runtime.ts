@@ -52,6 +52,7 @@ import {
   type CompactionWorkReason,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type ModelAccessSnapshot,
   type ObservabilitySink,
   type PromptResource,
   type ProviderReasoningDroppedObservation,
@@ -367,19 +368,56 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
           },
         }),
   };
+  /**
+   * The inspection already in flight, per kind of answer, shared by every
+   * caller that asks while it runs.
+   *
+   * A Session start, the CLI's `model list` and a renderer mount can all land
+   * in the same tick, and each would otherwise run the whole provider sweep
+   * beside the others. A joiner inherits the first caller's bound — its
+   * signal, when it had one — exactly as {@link UsageProbeSchedule.coalesce}
+   * lets a second usage read join the read already out. A refresh never rides
+   * an ordinary inspection: a person pressed Refresh, and the answer must be
+   * the providers' now, not one already going.
+   *
+   * Nothing holds a settled answer. The slot empties with the promise, so the
+   * next inspection asks the providers afresh — which is what an external
+   * credential change (no TTL can notice one) and the surface's own Refresh
+   * both require.
+   */
+  const inspections = new Map<"ordinary" | "refresh", Promise<ModelAccessSnapshot>>();
+  const inspectModelAccess = (input?: {
+    refresh?: boolean;
+    signal?: AbortSignal;
+  }): Promise<ModelAccessSnapshot> => {
+    const kind = input?.refresh === true ? "refresh" : "ordinary";
+    const inFlight = inspections.get(kind);
+    if (inFlight !== undefined) return inFlight;
+    const run = inspectPiModelAccess(
+      {
+        models: host.models,
+        credentials: host.credentials,
+        catalogReady: host.catalogReady,
+        catalogs: host.catalogs,
+        usageLimits: host.usageLimits,
+      },
+      host.now,
+      input,
+    ).then(
+      (snapshot) => {
+        inspections.delete(kind);
+        return snapshot;
+      },
+      (failure: unknown) => {
+        inspections.delete(kind);
+        throw failure;
+      },
+    );
+    inspections.set(kind, run);
+    return run;
+  };
   return {
-    inspectModelAccess: (input) =>
-      inspectPiModelAccess(
-        {
-          models: host.models,
-          credentials: host.credentials,
-          catalogReady: host.catalogReady,
-          catalogs: host.catalogs,
-          usageLimits: host.usageLimits,
-        },
-        host.now,
-        input,
-      ),
+    inspectModelAccess,
     startSession: async (spec) => {
       await host.catalogReady;
       return attachSession(host, spec);

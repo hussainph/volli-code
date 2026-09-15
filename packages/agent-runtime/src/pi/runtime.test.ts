@@ -1623,6 +1623,69 @@ describe("model access", () => {
     expect(access.providers[0]?.recovery).toEqual({ kind: "sign-in" });
     expect(JSON.stringify(access)).not.toContain("oauth-refresh-secret");
   });
+
+  it("shares one provider sweep between concurrent inspections", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    // A Session start, the CLI's `model list` and a renderer mount can land in
+    // the same tick; every ask after the first joins the sweep already out.
+    const [first, second] = await Promise.all([
+      runtime.inspectModelAccess(),
+      runtime.inspectModelAccess(),
+    ]);
+
+    expect(second).toBe(first);
+    expect(checkAuth).toHaveBeenCalledTimes(1);
+    expect(getAvailable).toHaveBeenCalledTimes(1);
+    expect(first.observedAt).toBe(7);
+  });
+
+  it("never lets a refresh ride an ordinary inspection, or hold a settled answer", async () => {
+    const faux = fauxProvider({
+      provider: "acme",
+      models: [{ id: "acme-model", name: "Acme Model", reasoning: true }],
+    });
+    const models = createModels({ credentials: new InMemoryCredentialStore() });
+    models.setProvider(faux.provider);
+    const refresh = vi
+      .spyOn(models, "refresh")
+      .mockResolvedValue({ aborted: false, errors: new Map() });
+    const checkAuth = vi.spyOn(models, "checkAuth").mockResolvedValue(undefined);
+    const getAvailable = vi.spyOn(models, "getAvailable").mockResolvedValue(faux.models);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: "/runtime-owned/sessions",
+      models,
+      now: () => 7,
+    });
+
+    const ordinary = runtime.inspectModelAccess();
+    const refreshed = runtime.inspectModelAccess({ refresh: true });
+    await Promise.all([ordinary, refreshed]);
+
+    // One sweep per ask: Refresh reached the providers itself, and the
+    // ordinary read did not ride it.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(checkAuth).toHaveBeenCalledTimes(2);
+    expect(getAvailable).toHaveBeenCalledTimes(2);
+
+    // And nothing settled is held: the next ask reads the providers again,
+    // which is what lets a credential revoked out of band show up without
+    // any TTL deciding when.
+    await runtime.inspectModelAccess();
+    expect(checkAuth).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("tool mapping", () => {

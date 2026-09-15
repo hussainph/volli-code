@@ -179,6 +179,14 @@ export function ModelAccessSettings({
         // the stale value until the pane is reopened. An ordinary open has no
         // repair to wait for, so it still asks for everything at once.
         const access = refresh ? await client.inspect({ refresh: true }) : undefined;
+        // Said the moment the refresh answered, not after the reads below.
+        // The shared revision's bump wakes this pane too, and the pass it
+        // wakes sees the refreshed catalog with no report of its own — so a
+        // pass that only re-reads says nothing, and this is the one that
+        // pressed Refresh and says what it did.
+        if (access !== undefined && access.refresh !== undefined) {
+          announceRefresh(refreshOutcome(access.refresh));
+        }
         const [opened, configured, curated, policy] = await Promise.all([
           access ?? client.inspect({ refresh: false }),
           client.defaults(),
@@ -191,7 +199,6 @@ export function ModelAccessSettings({
         setDefaults(configured);
         setHidden(curated);
         setCompaction(policy);
-        if (opened.refresh !== undefined) announceRefresh(refreshOutcome(opened.refresh));
       } catch (error) {
         if (generation === loadGeneration.current) {
           toastError(`Couldn't load models: ${errorMessage(error)}`);
