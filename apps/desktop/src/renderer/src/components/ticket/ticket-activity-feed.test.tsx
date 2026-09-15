@@ -143,3 +143,27 @@ describe("the Doc tab's activity cache", () => {
     expect(doors.comments).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("the feed while its first read is in flight (VC-383)", () => {
+  const loading = () => container?.querySelector('[data-testid="ticket-activity-loading"]') ?? null;
+
+  it("holds the rows' box, then says empty only once the read has answered so", async () => {
+    let answer: (() => void) | null = null;
+    doors.events.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ok: true as const, events: [] });
+        }),
+    );
+    await mount();
+
+    expect(loading()).not.toBeNull();
+    expect(container?.textContent).not.toContain("No activity yet.");
+
+    await act(async () => {
+      answer?.();
+    });
+    expect(loading()).toBeNull();
+    expect(container?.textContent).toContain("No activity yet.");
+  });
+});

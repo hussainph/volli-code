@@ -46,6 +46,7 @@ import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { Skeleton } from "@renderer/components/ui/skeleton";
 import {
   buildActivityFeed,
   commentAuthorLabel,
@@ -520,7 +521,28 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
     <section className="flex flex-col gap-4 border-t border-border pt-6">
       <SectionHeading as="h3">Activity</SectionHeading>
 
-      {loaded && feed.length === 0 ? (
+      {!loaded ? (
+        // The cache has no entry for this ticket yet: the first open of the
+        // run, before its events and comments land (VC-383). This used to be
+        // an empty list — not the empty sentence, not a placeholder, nothing
+        // between the heading and the composer — so the feed read as absent
+        // rather than as on its way. Two bunch rows' worth of the feed's own
+        // line: a glyph's slot and a sentence, at `text-ui`.
+        <ul
+          className="flex flex-col gap-2"
+          role="status"
+          aria-label="Loading activity"
+          aria-busy="true"
+          data-testid="ticket-activity-loading"
+        >
+          {["w-3/5", "w-2/5"].map((width) => (
+            <li key={width} className="flex items-center gap-2 px-1">
+              <Skeleton className="size-3.5 shrink-0 rounded-sm" />
+              <Skeleton className={cn("h-3.5", width)} />
+            </li>
+          ))}
+        </ul>
+      ) : feed.length === 0 ? (
         <p className={EMPTY_INLINE}>No activity yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">

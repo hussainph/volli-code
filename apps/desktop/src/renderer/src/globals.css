@@ -727,6 +727,53 @@
   }
 }
 
+/* An editor host while Monaco's runtime chunk is on its way (VC-383).
+ *
+ * The first ticket Body or File tab of an app run pays the runtime's lazy
+ * import — the editor module, its workers and the Shiki bootstrap — and until
+ * it lands the host is a bare box: `components/editor/monaco-*-editor.tsx`
+ * stamp `data-monaco-status="loading"` on it and then hand the SAME node to
+ * Monaco to mount into. That is why this is CSS and not children: React-owned
+ * nodes inside Monaco's mount point would be reconciled against DOM the editor
+ * manages. Two pseudo-elements draw the shape `ui/skeleton.tsx` draws — the
+ * same fill, the same radius, the same pulse — as two text lines at the
+ * editor's own top padding, so the first paint of the document lands where
+ * the bars were. They leave with the attribute: the editor sets `ready` on
+ * mount, `failed` on the fallback. Reduced motion stills the pulse, as the
+ * primitive does; the bars stay, because a still bar is still a placeholder. */
+[data-monaco-status="loading"] {
+  position: relative;
+}
+
+[data-monaco-status="loading"]::before,
+[data-monaco-status="loading"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  height: 14px;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--accent) 70%, transparent);
+  pointer-events: none;
+  animation: var(--animate-pulse);
+}
+
+[data-monaco-status="loading"]::before {
+  top: 12px;
+  width: 60%;
+}
+
+[data-monaco-status="loading"]::after {
+  top: 36px;
+  width: 85%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-monaco-status="loading"]::before,
+  [data-monaco-status="loading"]::after {
+    animation: none;
+  }
+}
+
 /* The transcript's own sweep — the sidebar's effect, paid for differently.
  *
  * The row above animates `mask-position`, which is a repaint of the glyphs on
