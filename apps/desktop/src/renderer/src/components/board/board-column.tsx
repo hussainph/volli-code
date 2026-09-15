@@ -49,8 +49,19 @@ interface BoardColumnProps {
   aimed?: boolean;
 }
 
-/** A single status column: header, its own vertically-scrolling ticket list, and an add-card composer. */
-export function BoardColumn({
+/**
+ * A single status column: header, its own vertically-scrolling ticket list, and an add-card composer.
+ *
+ * Memoized so a board render is not, by itself, a render of every column. The
+ * board re-renders for things that are about ONE column or none of them — the
+ * ⌥ picker's hover, a drop target moving, a selection click — and every prop
+ * here is either a primitive, a board-held memo (`tickets`, `selectedIds`,
+ * `draggingIds`, `groupDragIds`) or a stable id-taking callback, so the memo
+ * holds for every column the change did not name. `offered` is the one prop
+ * built fresh per board render, and only for the column it is about, which is
+ * exactly the column that has to redraw.
+ */
+export const BoardColumn = React.memo(function BoardColumn({
   status,
   tickets,
   projectId,
@@ -228,4 +239,4 @@ export function BoardColumn({
       )}
     </div>
   );
-}
+});

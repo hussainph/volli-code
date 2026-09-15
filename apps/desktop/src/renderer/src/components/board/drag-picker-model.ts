@@ -161,8 +161,45 @@ function closed(state: DragPickerState): DragPickerState {
   return { ...state, picker: null, selection: state.picker };
 }
 
-/** One event, one state. No timers, no side effects, no dwell. */
+function sameLanding(a: DragPickerLanding | null, b: DragPickerLanding | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.status === b.status && a.index === b.index;
+}
+
+/** Whether two states would draw and release identically. */
+function sameState(a: DragPickerState, b: DragPickerState): boolean {
+  return (
+    a.dragging === b.dragging &&
+    a.modifierHeld === b.modifierHeld &&
+    a.hovered === b.hovered &&
+    sameLanding(a.picker, b.picker) &&
+    sameLanding(a.selection, b.selection)
+  );
+}
+
+/**
+ * One event, one state. No timers, no side effects, no dwell.
+ *
+ * An event that changes nothing returns `state` ITSELF, by identity. The board
+ * feeds every pointer move of a drag through here — sixty a second, nearly all
+ * of them landing on the column the pointer was already over with ⌥ exactly
+ * where it was — and its `applyPicker` bails on reference equality before
+ * touching React state. A fresh object for an unchanged state was a full board
+ * render per mouse move: every column, and under `DndContext` every card's
+ * sortable shell, linearly in ticket count. Holding identity here is
+ * what keeps a no-op move at zero renders, so it is asserted at the one exit
+ * rather than remembered in each branch.
+ */
 export function dragPickerReducer(
+  state: DragPickerState,
+  event: DragPickerEvent,
+  columns: DragPickerColumns,
+): DragPickerState {
+  const next = transition(state, event, columns);
+  return next !== state && sameState(state, next) ? state : next;
+}
+
+function transition(
   state: DragPickerState,
   event: DragPickerEvent,
   columns: DragPickerColumns,
