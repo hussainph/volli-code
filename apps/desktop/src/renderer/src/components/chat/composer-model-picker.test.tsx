@@ -233,13 +233,15 @@ async function renderPill(input: {
   onChange?: (next: ComposerModelSelection) => void;
   compactEffort?: { onChange(level: string): void };
   composerWidth?: number;
+  /** The marked container's kind — a commit tray folds at 40rem, not 24rem. */
+  containerKind?: string;
 }): Promise<ReturnType<typeof labClient>> {
   const client = labClient(input.view, input.defaults);
   const models = offerableModels(MODELS, PROVIDERS, []);
   const tiers = composerTierRows(input.defaults, MODELS, PROVIDERS, []);
   container = document.createElement("div");
   if (input.compactEffort !== undefined) {
-    container.dataset.composerContainer = "";
+    container.dataset.composerContainer = input.containerKind ?? "";
     Object.defineProperty(container, "clientWidth", {
       configurable: true,
       value: input.composerWidth ?? 320,
@@ -380,6 +382,53 @@ describe("the compact model and effort control", () => {
       slider?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
     });
     expect(effortChanges).toEqual(["high"]);
+  });
+
+  /**
+   * The portalled half of VC-382. The New-ticket tray folds its two pills
+   * together at 40rem rather than 24rem, and CSS can only reach the trigger
+   * face: a popover that kept the wide layout would leave the merged control
+   * naming an effort with nothing behind it to change.
+   */
+  it("follows a commit tray's own 40rem fold into the portalled popover", async () => {
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      composerWidth: 576,
+      containerKind: "commit-tray",
+      compactEffort: { onChange: () => undefined },
+    });
+
+    expect(document.querySelector('[data-testid="model-pill"]')?.getAttribute("aria-label")).toBe(
+      "Model and effort: Claude Sonnet · Anthropic · Medium",
+    );
+    expect(document.querySelector('[data-testid="combined-model-effort"]')).not.toBeNull();
+  });
+
+  it("leaves a chat composer of the same width alone", async () => {
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      composerWidth: 576,
+      compactEffort: { onChange: () => undefined },
+    });
+
+    expect(document.querySelector('[data-testid="model-pill"]')?.getAttribute("aria-label")).toBe(
+      "Model: Claude Sonnet · Anthropic",
+    );
+    expect(document.querySelector('[data-testid="combined-model-effort"]')).toBeNull();
+  });
+
+  it("still expands a commit tray that is wider than its own threshold", async () => {
+    await renderPill({
+      view: "all",
+      defaults: EMPTY_MODEL_ACCESS_DEFAULTS,
+      composerWidth: 768,
+      containerKind: "commit-tray",
+      compactEffort: { onChange: () => undefined },
+    });
+
+    expect(document.querySelector('[data-testid="combined-model-effort"]')).toBeNull();
   });
 });
 
