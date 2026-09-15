@@ -952,7 +952,75 @@ describe("product-owned attach", () => {
 
     await expect(client.retryAttach()).resolves.toBe(false);
     expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toBe("Could not start Session: attachment needs recovery");
+    expect(slice()!.sessionError).toBe("Could not start Session: Runtime recovery is required.");
+  });
+});
+
+describe("startAttach", () => {
+  it("opens the stream and attaches in one gesture, with no projection to wait for", async () => {
+    // The first attach of a Session this surface just brought into residence:
+    // a create, or a Chat Draft promoted by its first message (VC-358). Unlike
+    // `retryAttach` there is no projection yet to gate on — this is what
+    // produces one.
+    const { client, rpc, sessionId, slice } = await adopted();
+
+    await expect(client.startAttach()).resolves.toBe(true);
+
+    expect(rpc.attaches).toEqual([{ operationId: expect.any(String), sessionId }]);
+    expect(rpc.streams).toHaveLength(2);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("keeps a refusal off the slice when it is already reported elsewhere", async () => {
+    // A Ticket Session's attach: a worktree that cannot be materialized is
+    // recorded as Ticket Attention, which is the surface a person acts on.
+    // Saying it here too would be one problem with two dismissals.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: null,
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("waits for nothing when the surface dropped the Session mid-attach", async () => {
+    // A close landing while the attach is in flight. There is no slice left to
+    // hold the wait against, and nothing left to read it — the Session is
+    // durable and reopening it adopts fresh, so the flight settles into
+    // nothing rather than parking a wait on a client that is already gone.
+    let releaseAttach!: () => void;
+    const attaching = new Promise<void>((resolve) => (releaseAttach = resolve));
+    const { client, close, slice } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await attaching;
+        return { sessionId: SESSION.id, state: "ready", receipt: null, throughSequence: 1 };
+      };
+    });
+
+    const attach = client.startAttach();
+    close();
+    releaseAttach();
+
+    await expect(attach).resolves.toBe(true);
+    expect(slice()).toBeUndefined();
+  });
+
+  it("always settles a THROWN attach onto the slice, whatever the Role", async () => {
+    // Nothing reached the host, so there is no receipt and no Attention
+    // anywhere — the slice is the only surface that can carry it.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => {
+        throw new Error("socket hang up");
+      };
+    });
+
+    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
   });
 });
 

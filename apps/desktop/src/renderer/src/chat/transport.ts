@@ -26,6 +26,9 @@ export function browserChatTransport(): ChatSessionTransport {
         projectId: input.projectId,
         ticketId: input.ticketId,
         title: input.title,
+        ...(input.requestedSessionId === undefined
+          ? {}
+          : { requestedSessionId: input.requestedSessionId }),
         ...(input.skills === undefined ? {} : { skills: [...input.skills] }),
         // A picked model reaches the wire as the OVERRIDE it is: the server
         // merges it onto the app default for the Role and refuses one Model

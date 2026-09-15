@@ -801,7 +801,13 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:blob-link-drafts"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input) || typeof input["ticketId"] !== "string") return false;
+      if (!isRecord(input)) return false;
+      // Exactly one owner — the `blob_links` CHECK again: the Ticket the
+      // new-Ticket composer just created, or the Session a promoted Draft
+      // just minted (VC-358). Never both, never neither.
+      const hasTicket = typeof input["ticketId"] === "string";
+      const hasSession = typeof input["sessionId"] === "string";
+      if (hasTicket === hasSession) return false;
       const blobs = input["blobs"];
       return (
         Array.isArray(blobs) &&

@@ -9,6 +9,7 @@ import type {
   ProjectMutationResult,
   ProjectUpdateResult,
   Result,
+  RetentionArchiveCleanResult,
   RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
@@ -22,9 +23,12 @@ import type {
   TicketsResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeBaseReadResult,
+  WorktreeChangeSetResult,
   WorktreeCommitResult,
   WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
+  WorktreePushPrResult,
   WorktreeRecreateResult,
   WorktreeOrphansResult,
   WorktreeDiffResult,
@@ -50,12 +54,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog } = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: never[]) => unknown>(),
-  dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
-  showItemInFolder: vi.fn(),
-  showSaveDialog: vi.fn(),
-}));
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch } = vi.hoisted(
+  () => ({
+    handlers: new Map<string, (...args: never[]) => unknown>(),
+    dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
+    showItemInFolder: vi.fn(),
+    showSaveDialog: vi.fn(),
+    /**
+     * The VC-372 observer hooks of the most recently constructed watch manager.
+     * The stand-in below carries them so the snapshot cache sees the same
+     * coverage and change reports the real manager sends.
+     */
+    worktreeWatch: {
+      options: undefined as
+        | {
+            onCoverageChange?: (ticketId: string, covered: boolean) => void;
+            onRelevantChange?: (ticketIds: readonly string[]) => void;
+          }
+        | undefined,
+    },
+  }),
+);
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -99,7 +118,16 @@ vi.mock("./worktree", async () => ({
   // calls on the seam itself; `worktree/read.test.ts` drives the real verbs.
   readWorktreeStatus: vi.fn(),
   readWorktreeDiff: vi.fn(),
+  readWorktreeChangeSet: vi.fn(),
+  readWorktreeBaseFile: vi.fn(),
   resolveWorktreeTarget: vi.fn(),
+  // The two Done-flow writes the rail's own doors drive (VC-372's invalidation
+  // assertions call them); mocked so no real git runs here.
+  commitTicketRemaining: vi.fn(),
+  publishTicketBranch: vi.fn(),
+  // The retention archive-and-clean path — the other door that deletes a
+  // checkout the snapshot cache may be holding an answer for.
+  archiveAndClean: vi.fn(),
   // The read-only scan and the confirmed cleanup are two verbs now (VC-284);
   // both are mocked here, and both have their own suites under worktree/.
   scanOrphans: vi.fn(),
@@ -126,10 +154,12 @@ vi.mock("./worktree", async () => ({
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
-  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` — needs a
-  // stub export so that value import doesn't throw under strict ESM mocking.
+  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` and by the
+  // commit/push handlers' deps — needs a stub export so that value import
+  // doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
+  runNet: vi.fn(),
   // The trim-on-finish door (VC-340): fired beside the reply on a Done move and
   // on an archive. Mocked because it walks a real filesystem; the composition
   // itself is covered by `worktree/retention.test.ts`.
@@ -142,13 +172,25 @@ vi.mock("./worktree", async () => ({
   getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
-  // a no-op stand-in keeps real `fs.watch` handles out of the suite.
+  // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
+  // carry the VC-372 observer contract, and its timing matches the real
+  // manager's: a subscription reports coverage, an UNWATCH only releases the
+  // subscriber (the real root lingers for the rewatch grace), and a ticket-wide
+  // teardown reports that coverage ended.
   WorktreeChangeWatchManager: class {
-    watch = vi.fn(() => ({ ok: true as const }));
+    constructor(options: (typeof worktreeWatch)["options"] = undefined) {
+      worktreeWatch.options = options;
+    }
+    watch = vi.fn((_sender: unknown, ticketId: string) => {
+      worktreeWatch.options?.onCoverageChange?.(ticketId, true);
+      return { ok: true as const };
+    });
     pause = vi.fn(() => ({ ok: true as const }));
     resume = vi.fn(() => ({ ok: true as const }));
     unwatch = vi.fn();
-    unwatchTicket = vi.fn();
+    unwatchTicket = vi.fn((ticketId: string) => {
+      worktreeWatch.options?.onCoverageChange?.(ticketId, false);
+    });
   },
 }));
 
@@ -164,12 +206,17 @@ import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import {
+  archiveAndClean,
   cleanupOrphans,
+  commitTicketRemaining,
   ensure,
   getTrimSettings,
   listBranches,
+  readWorktreeBaseFile,
+  readWorktreeChangeSet,
   readWorktreeDiff,
   readWorktreeStatus,
+  publishTicketBranch,
   resolveWorktreeTarget,
   remove as removeWorktree,
   scanOrphans,
@@ -178,6 +225,7 @@ import {
   trimAllWorktrees,
   trimFinishedWorktree,
 } from "./worktree";
+import { resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { orphanCleanupEngine } from "./worktree-runtime";
 import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
 import { updateTicketFieldsCommand } from "./ticket-commands";
@@ -237,6 +285,10 @@ beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
+  // The rail's last-known snapshot is process-wide (VC-372): each test starts
+  // from a clean launch, and from no prior test's watch manager hooks.
+  resetWorktreeSnapshotsForTest();
+  worktreeWatch.options = undefined;
   // The orphan sweep is cached once per launch (module state) — drop it so each
   // test starts from a clean launch and its own mocked sweep runs.
   resetOrphanScanForTest();
@@ -2521,6 +2573,264 @@ describe("volli:worktree-change-watch (VC-369)", () => {
   });
 });
 
+/**
+ * VC-372. Now↔Diffs unmounts one rail panel and mounts the other — both asking
+ * for the same status + Change Set pair — and a diff tab asks for the Change Set
+ * a third time just to find its own row. These assert the last-known snapshot by
+ * call count on the read seam: served while a watch covers the ticket, retired
+ * by a watcher change, by a mutating verb, or by the loss of coverage.
+ */
+describe("the rail's last-known worktree snapshot (VC-372)", () => {
+  const okStatus = {
+    kind: "ok",
+    displayId: "VC-1",
+    worktreePath: "/wt/VC-1",
+    branch: "b",
+    baseBranch: "main",
+    status: {
+      uncommitted: false,
+      sequencerActive: false,
+      aheadOfBase: 0,
+      behindBase: 0,
+      unpushed: null,
+    },
+  };
+  const okChangeSet = {
+    kind: "ok",
+    displayId: "VC-1",
+    changeSet: {
+      baseRevision: "base",
+      headRevision: "head",
+      files: [],
+      insertions: 0,
+      deletions: 0,
+      revision: "rev",
+      truncated: false,
+      totalCount: 0,
+    },
+  };
+
+  /** Both rail surfaces read the same pair; stub it as an ok answer. */
+  function stubReads(): void {
+    vi.mocked(readWorktreeStatus).mockResolvedValue(okStatus as never);
+    vi.mocked(readWorktreeChangeSet).mockResolvedValue(okChangeSet as never);
+  }
+
+  async function readPair(ticketId = "t1"): Promise<void> {
+    await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId });
+    await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", { ticketId });
+  }
+
+  async function subscribe(ticketId = "t1"): Promise<void> {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId });
+  }
+
+  /** Everything one panel's mount does: read the pair, then subscribe. */
+  async function mountPanel(ticketId = "t1"): Promise<void> {
+    await readPair(ticketId);
+    await subscribe(ticketId);
+  }
+
+  /** The unwatch → read → watch beat of a rail page flip. */
+  async function flipPanel(ticketId = "t1"): Promise<void> {
+    invoke<Result>("volli:worktree-change-unwatch", { ticketId });
+    await readPair(ticketId);
+    await subscribe(ticketId);
+  }
+
+  /** The watcher's eager change report, as the real manager sends it. */
+  function fireWorktreeChange(...ticketIds: string[]): void {
+    worktreeWatch.options?.onRelevantChange?.(ticketIds);
+  }
+
+  /**
+   * The real manager reports this once a released root's rewatch grace expires
+   * (or its handle faults). The read-level suite drives the real timing; here it
+   * is the door into the same observer call.
+   */
+  function endCoverage(ticketId: string): void {
+    worktreeWatch.options?.onCoverageChange?.(ticketId, false);
+  }
+
+  it("serves the Now↔Diffs↔Now flips from the panel's first read", async () => {
+    stubReads();
+    await mountPanel();
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+
+    await flipPanel();
+    await flipPanel();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads exactly one status and one Change Set when the watcher reports a change", async () => {
+    stubReads();
+    await mountPanel();
+
+    fireWorktreeChange("t1");
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps tickets independent — one ticket's change never answers another's", async () => {
+    stubReads();
+    await mountPanel("t1");
+    await mountPanel("t2");
+
+    fireWorktreeChange("t1");
+    await readPair("t2");
+
+    // t2's answer was not invalidated; t1's was.
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends coverage when the watch really tears down, so the next mount reads fresh", async () => {
+    stubReads();
+    await mountPanel();
+
+    endCoverage("t1");
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer on a rail commit", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(commitTicketRemaining).mockResolvedValue({
+      ok: true,
+      value: { committed: true, message: "feat: x" },
+    } as never);
+
+    await invoke<Promise<WorktreeCommitResult>>("volli:worktree-commit", {
+      ticketId: "t1",
+      message: "feat: x",
+      includeUnstaged: false,
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer on a rail push-pr", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(publishTicketBranch).mockResolvedValue({
+      ok: true,
+      value: { url: "https://example.test/pr/1", existing: false },
+    } as never);
+
+    await invoke<Promise<WorktreePushPrResult>>("volli:worktree-push-pr", { ticketId: "t1" });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when the worktree is removed", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined } as never);
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: "t1",
+      force: false,
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when the worktree is recreated", async () => {
+    stubReads();
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    await mountPanel(ticket.id);
+    vi.mocked(ensure).mockResolvedValue({
+      ok: true,
+      value: { identity: { worktreePath: "/wt/VC-1" } },
+    } as never);
+
+    await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: ticket.id,
+    });
+    await readPair(ticket.id);
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when retention archives and cleans the checkout", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(archiveAndClean).mockResolvedValue({ ok: true, value: undefined } as never);
+
+    await invoke<Promise<RetentionArchiveCleanResult>>("volli:retention-archive-clean", {
+      ticketId: "t1",
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires every ticket's answer on an untargeted trim sweep", async () => {
+    stubReads();
+    await mountPanel("t1");
+    await mountPanel("t2");
+    vi.mocked(trimAllWorktrees).mockResolvedValue({
+      dryRun: false,
+      removedCount: 1,
+    } as never);
+
+    await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
+    await readPair("t1");
+    await readPair("t2");
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(4);
+  });
+
+  it("asks only for the base read when a diff tab opens over the Diffs page's snapshot", async () => {
+    stubReads();
+    await mountPanel();
+    // The Diffs page holds this pair; opening one of its rows asks for the
+    // Change Set again only to find the row and its `baseRevision`.
+    vi.mocked(readWorktreeBaseFile).mockResolvedValue({
+      kind: "ok",
+      displayId: "VC-1",
+      baseRevision: "base",
+      file: { content: "hello\n", truncated: false },
+    } as never);
+
+    await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", {
+      ticketId: "t1",
+    });
+    const base = await invoke<Promise<WorktreeBaseReadResult>>("volli:worktree-base-read", {
+      ticketId: "t1",
+      path: "src/a.ts",
+      baseRevision: "base",
+    });
+
+    expect(base).toMatchObject({ ok: true, content: "hello\n" });
+    // The Change Set was served, not re-read; the base read is the only worktree
+    // read this tab needed.
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeBaseFile)).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("volli:worktree-branches", () => {
   it("flattens the listing onto the result envelope", async () => {
     vi.mocked(listBranches).mockResolvedValue({
@@ -3686,6 +3996,123 @@ describe("attachments (VC-50)", () => {
     expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
       blobs: [],
     });
+  });
+
+  it("links a promoted Draft's staged blobs to its new session (VC-358)", async () => {
+    // The durable Session a promotion minted — its id was fixed before the
+    // staged blobs ever had an owner to hang off.
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    expect(draft.blob.linkId).toBeNull();
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash, label: "Staged" }],
+    });
+    if (!linked.ok) throw new Error(linked.error);
+    expect(linked.blobs).toHaveLength(1);
+    expect(linked.blobs[0]).toMatchObject({ label: "Staged", originalName: "staged.png" });
+
+    // The Session's own list reads them back; the Ticket's does not, and the
+    // adoption left no ticket event — a session link is recorded by the
+    // transcript turn that carries the file, never by the ledger here.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "Staged" }],
+    });
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+    if (!events.ok) throw new Error(events.error);
+    expect(events.events.filter((one) => one.payload.kind === "attachment_added")).toHaveLength(0);
+  });
+
+  it("re-links a promoted Draft idempotently — a retry after a lost reply adds nothing", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    const first = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!first.ok) throw new Error(first.error);
+
+    // Promotion replays its one command after a lost reply; the same blobs
+    // against the same Session are the SAME links, in the same order.
+    const retry = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!retry.ok) throw new Error(retry.error);
+    expect(retry.blobs).toEqual(first.blobs);
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "staged.png" }],
+    });
+  });
+
+  it("refuses a promoted Draft whose staged images exceed what one chat can carry (VC-358)", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    // Nothing here was refusable at import: a Draft has no Session, so the
+    // cumulative check had nothing to measure against. Promotion is where
+    // these bytes would become a conversation's, and so where the ceiling
+    // finally applies.
+    const blobs: { blobHash: string }[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      const staged = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+        fileName: `shot-${i}.png`,
+        bytes: image,
+        owner: { unowned: true },
+      });
+      if (!staged.ok || !staged.blob) throw new Error("expected a staged blob");
+      blobs.push({ blobHash: staged.blob.blobHash });
+    }
+    const overflow = new Uint8Array(1024);
+    overflow[0] = 99;
+    const last = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "one-more.png",
+      bytes: overflow,
+      owner: { unowned: true },
+    });
+    if (!last.ok || !last.blob) throw new Error("expected a staged blob");
+    blobs.push({ blobHash: last.blob.blobHash });
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs,
+    });
+    expect(linked).toMatchObject({ ok: false });
+    if (linked.ok) throw new Error("expected refusal");
+    expect(linked.error).toMatch(/Remove one and send again/);
+    // All or nothing, as with an unknown hash: a chat holding four of five
+    // images nobody chose to drop would be worse than an honest refusal.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [],
+    });
+  });
+
+  it("refuses a draft link that names no owner or both owners", () => {
+    expect(invoke<BlobLinksResult>("volli:blob-link-drafts", { blobs: [] })).toEqual({
+      ok: false,
+      error: "Invalid attachment drafts",
+    });
+    expect(
+      invoke<BlobLinksResult>("volli:blob-link-drafts", {
+        ticketId: ticket.id,
+        sessionId: "promoted-1",
+        blobs: [],
+      }),
+    ).toEqual({ ok: false, error: "Invalid attachment drafts" });
   });
 
   it("refuses a list that names no owner", async () => {

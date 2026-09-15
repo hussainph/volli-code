@@ -74,6 +74,16 @@ describe("browserChatTransport", () => {
       title: "Work on VC-1",
       model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     });
+    // A promoted Draft names the id it has carried since `+ Chat` (VC-358);
+    // every other create leaves the ledger's own mint alone, which is why the
+    // key is absent rather than null above.
+    await transport.createSession({
+      operationId: "promotion-create",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+      requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
+    });
     await transport.attachSession({
       operationId: "project-retry",
       sessionId: "session-1",
@@ -85,6 +95,7 @@ describe("browserChatTransport", () => {
     // One procedure per verb, whatever the Role: the nullable ticketId rides
     // the create input, and the attach carries no Role at all.
     expect(procedures).toEqual([
+      "sessions.create",
       "sessions.create",
       "sessions.create",
       "sessions.create",
@@ -110,6 +121,10 @@ describe("browserChatTransport", () => {
     // a model and a level, and a `model` key holding a reasoning level too
     // would be a second spelling of the same policy.
     expect(inputs[4]).not.toHaveProperty("model");
+    expect(inputs[0]).not.toHaveProperty("requestedSessionId");
+    expect(inputs[5]).toMatchObject({
+      requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
+    });
     vi.unstubAllGlobals();
   });
 });
