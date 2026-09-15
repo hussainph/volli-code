@@ -32,6 +32,8 @@ import { TicketSessionsPanel } from "./ticket-sessions-panel";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
+
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 
@@ -118,7 +120,7 @@ beforeEach(async () => {
     configurable: true,
     value: { sessions: { listForTicket } },
   });
-  useTicketSessionRecordsStore.setState({ byTicket: {} });
+  useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
   // The rail is looking at a ticket with one live root shell, as a fresh open
   // would leave it: baseline read, live tab mounted.
@@ -157,6 +159,7 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
   vi.unstubAllGlobals();
 });
 
@@ -183,7 +186,7 @@ describe("the rail roster on the push path", () => {
       configurable: true,
       value: { sessions: { listForTicket } },
     });
-    useTicketSessionRecordsStore.setState({ byTicket: {} });
+    useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
     root = createRoot(container!);
     await act(async () => {
       root?.render(
@@ -218,14 +221,52 @@ describe("the rail roster on the push path", () => {
     // control sits 20px above it, so a second copy inside the frame would be
     // the same offer twice in one glance. "Empty" is a listing that has
     // ANSWERED with no rows — an unread one holds its box instead.
-    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
     await act(async () => {
-      useTicketSessionRecordsStore.setState({ byTicket: { t1: [] } });
+      useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
+      useTicketSessionRecordsStore.setState({
+        byTicket: { t1: [] },
+        listingState: { t1: "loaded" },
+        listingError: { t1: null },
+      });
     });
 
     expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
     expect(currentSectionText()).toContain("No active sessions");
     expect(container?.querySelectorAll('[aria-label="New chat"]').length).toBe(1);
+  });
+
+  it("stands the skeleton down after a failed baseline without calling the roster empty", async () => {
+    await act(async () => {
+      root?.unmount();
+    });
+    useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: {
+        sessions: {
+          listForTicket: vi.fn(async () => ({ ok: false as const, error: "db locked" })),
+        },
+      },
+    });
+    useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
+    root = createRoot(container!);
+    await act(async () => {
+      root?.render(
+        <TicketSessionsPanel
+          projectId="p1"
+          ticketId="t1"
+          creating={false}
+          onNewSession={() => {}}
+          onNewChat={() => {}}
+          onActivateSession={() => {}}
+          onActivateChat={() => {}}
+        />,
+      );
+    });
+
+    expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
+    expect(currentSectionText()).not.toContain("No active sessions");
+    expect(currentSectionText()).toContain("Couldn't load sessions.");
   });
 
   it("shows a Sessions row a create's push announces", async () => {

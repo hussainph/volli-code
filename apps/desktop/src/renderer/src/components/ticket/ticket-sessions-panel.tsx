@@ -58,7 +58,10 @@ import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import {
+  ticketSessionListingStateOf,
+  useTicketSessionRecordsStore,
+} from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -482,12 +485,19 @@ export function TicketSessionsPanel({
   // session's `endedAt`/resumability lands here without this panel needing to
   // be the one to notice the exit.
   //
-  // `undefined` until the baseline read lands, and that distinction is drawn
-  // (VC-383): a ticket opened for the first time this run used to paint "No
-  // active sessions" for the length of the read, about a ticket that may have
-  // an agent mid-turn. Not hydrated yet must never read as empty.
+  // VC-383 records the baseline's answer as data in the shared store: an
+  // unread/loading roster holds its rows' box, only `loaded` earns the empty
+  // sentence, and `failed` replaces either lie with the brief failure line.
+  // A component must not infer that lifecycle from whether its row array exists.
   const listing = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
-  const loaded = listing !== undefined;
+  const listingState = useTicketSessionRecordsStore((state) =>
+    ticketSessionListingStateOf(state, ticketId),
+  );
+  const listingError = useTicketSessionRecordsStore(
+    (state) => state.listingError?.[ticketId] ?? null,
+  );
+  const pending = listingState === "loading";
+  const failed = listingState === "failed";
   const rows = listing ?? NO_ROWS;
   const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
@@ -667,11 +677,17 @@ export function TicketSessionsPanel({
             onNewTerminal={onNewSession}
           />
         </RailSectionHeadingRow>
-        {!loaded ? (
+        {pending ? (
           // The baseline read is in flight. The heading and its "+" stay live
           // above — a pending list blocks nothing about starting a Session —
           // and the rows hold their box below.
           <SessionListSkeleton />
+        ) : failed ? (
+          // The toast carries the bridge detail. This short line is the on-page
+          // truth: a failed roster must not keep pulsing or claim no Sessions.
+          <p className={SESSION_SECTION_EMPTY} title={listingError ?? undefined}>
+            Couldn&apos;t load sessions.
+          </p>
         ) : current.length === 0 ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act

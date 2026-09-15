@@ -77,7 +77,11 @@ import {
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
-import { listableChats, useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import {
+  listableChats,
+  projectSessionListingPending,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
@@ -464,7 +468,8 @@ function SessionsPage({ projectId }: { projectId: string }) {
   // sentence for the length of the read. The store already keeps this bit;
   // this page is one of the surfaces that used to leave it unread.
   const listingState = useProjectSessionsStore((state) => state.listingState[projectId]);
-  const pending = listingState === undefined || listingState === "loading";
+  const pending = projectSessionListingPending(listingState);
+  const failed = listingState === "failed";
 
   // `listableChats` rather than `.chat`: this page draws rows, so it takes the
   // narrowed read at the door — see the store's own comment for which
@@ -506,6 +511,11 @@ function SessionsPage({ projectId }: { projectId: string }) {
             <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-10" />
           ))}
         </div>
+      ) : rows.length === 0 && failed ? (
+        // A refused baseline knows nothing about this Project's durable
+        // Sessions. The toast has the bridge detail; this concise line keeps
+        // the rail from claiming that a failed read proved the list empty.
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : rows.length === 0 ? (
         <p className={EMPTY_INLINE}>No sessions yet</p>
       ) : (

@@ -1,10 +1,34 @@
 import type { TicketComment, TicketEvent } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { toast } from "sonner";
 
 import { createTicketActivityStore } from "./ticket-activity";
 
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
 const EVENTS: TicketEvent[] = [{ id: "e1" } as unknown as TicketEvent];
 const COMMENTS: TicketComment[] = [{ id: "c1" } as unknown as TicketComment];
+
+/** Installs the two IPC doors a full activity baseline needs. */
+function stubActivity(
+  events: () => Promise<unknown>,
+  comments: () => Promise<unknown> = () => Promise.resolve({ ok: true, comments: COMMENTS }),
+) {
+  const eventsDoor = vi.fn(events);
+  const commentsDoor = vi.fn(comments);
+  vi.stubGlobal("window", {
+    api: { tickets: { events: eventsDoor }, comments: { list: commentsDoor } },
+  });
+  return { eventsDoor, commentsDoor };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("apply", () => {
   it("records what main answered with, under the planning version it was read at", () => {
@@ -17,6 +41,8 @@ describe("apply", () => {
       comments: COMMENTS,
       version: 4,
     });
+    expect(store.getState().listingState.t1).toBe("loaded");
+    expect(store.getState().listingError.t1).toBeNull();
   });
 
   it("replaces the ticket's earlier entry whole", () => {
@@ -26,6 +52,82 @@ describe("apply", () => {
     store.getState().apply("t1", { events: [], comments: [], version: 9 });
 
     expect(store.getState().byTicket["t1"]).toEqual({ events: [], comments: [], version: 9 });
+  });
+});
+
+describe("baseline reads", () => {
+  it("records loading while the events and comments baseline is in flight", async () => {
+    let resolveEvents!: (result: unknown) => void;
+    const { eventsDoor, commentsDoor } = stubActivity(
+      () =>
+        new Promise((resolve) => {
+          resolveEvents = resolve;
+        }),
+    );
+    const store = createTicketActivityStore();
+
+    const first = store.getState().refresh("t1", 4);
+    const second = store.getState().ensure("t1", 4);
+    expect(store.getState().listingState.t1).toBe("loading");
+    expect(store.getState().listingError.t1).toBeNull();
+    expect(eventsDoor).toHaveBeenCalledTimes(1);
+    expect(commentsDoor).toHaveBeenCalledTimes(1);
+
+    resolveEvents({ ok: true, events: EVENTS });
+    await Promise.all([first, second]);
+    expect(store.getState().byTicket.t1).toEqual({
+      events: EVENTS,
+      comments: COMMENTS,
+      version: 4,
+    });
+    expect(store.getState().listingState.t1).toBe("loaded");
+  });
+
+  it("keeps a refused baseline out of the empty state and records its detail", async () => {
+    stubActivity(() => Promise.resolve({ ok: false, error: "db locked" }));
+    const store = createTicketActivityStore();
+
+    await store.getState().refresh("t1", 4);
+
+    expect(store.getState().byTicket.t1).toBeUndefined();
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().listingError.t1).toBe("db locked");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load activity: db locked",
+      expect.anything(),
+    );
+  });
+
+  it("records a thrown bridge error as the same failed state", async () => {
+    stubActivity(() => Promise.reject(new Error("ipc gone")));
+    const store = createTicketActivityStore();
+
+    await store.getState().refresh("t1", 4);
+
+    expect(store.getState().byTicket.t1).toBeUndefined();
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().listingError.t1).toBe("ipc gone");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't load activity: ipc gone", expect.anything());
+  });
+
+  it("retries a failed baseline only when a later ensure asks for it", async () => {
+    let attempt = 0;
+    const { eventsDoor } = stubActivity(() => {
+      attempt += 1;
+      return Promise.resolve(
+        attempt === 1
+          ? { ok: false as const, error: "db locked" }
+          : { ok: true as const, events: EVENTS },
+      );
+    });
+    const store = createTicketActivityStore();
+
+    await store.getState().ensure("t1", 4);
+    expect(store.getState().listingState.t1).toBe("failed");
+
+    await store.getState().ensure("t1", 4);
+    expect(eventsDoor).toHaveBeenCalledTimes(2);
+    expect(store.getState().listingState.t1).toBe("loaded");
   });
 });
 

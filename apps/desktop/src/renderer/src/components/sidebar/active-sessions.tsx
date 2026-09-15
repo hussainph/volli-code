@@ -56,6 +56,7 @@ import {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
+  projectSessionListingPending,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
@@ -316,7 +317,8 @@ export function ActiveSessions({
   // sessions" for the length of the read, about a project that may have three
   // agents mid-turn. Not hydrated yet must never read as empty.
   const listingState = useProjectSessionsStore((state) => state.listingState[project.id]);
-  const listingPending = listingState === undefined || listingState === "loading";
+  const listingPending = projectSessionListingPending(listingState);
+  const listingFailed = listingState === "failed";
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
   const projectChatSessionIds = React.useMemo(
@@ -922,6 +924,11 @@ export function ActiveSessions({
           <SessionBandRowSkeleton titleWidth="w-3/4" />
           <SessionBandRowSkeleton titleWidth="w-1/2" />
         </SidebarMenu>
+      ) : activeRows.length === 0 && listingFailed ? (
+        // A failed baseline cannot establish that the Project is quiet. Keep
+        // this terse — the toast owns the bridge detail — but never let an
+        // unread roster become the false empty VC-383 removed.
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : activeRows.length === 0 ? (
         <p className={EMPTY_INLINE}>No active sessions</p>
       ) : (
@@ -953,6 +960,8 @@ export function ActiveSessions({
         <SidebarMenu role="status" aria-label="Loading sessions" aria-busy="true">
           <SessionBandRowSkeleton titleWidth="w-2/3" />
         </SidebarMenu>
+      ) : previousEntries.length === 0 && listingFailed ? (
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : previousEntries.length === 0 ? (
         <p className={EMPTY_INLINE}>Nothing yet</p>
       ) : (

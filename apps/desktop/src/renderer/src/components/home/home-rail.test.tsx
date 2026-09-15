@@ -232,4 +232,14 @@ describe("HomeRail", () => {
     expect(markup).not.toContain('data-testid="home-sessions-loading"');
     expect(markup).toContain("No sessions yet");
   });
+
+  it("stands the skeleton down after a failed listing without calling the Project empty", () => {
+    useUiStore.getInitialState().homeRailMode = "sessions";
+    useProjectSessionsStore.getInitialState().listingState = { p1: "failed" };
+    const markup = draw(HOME_BOARD_TAB_ID);
+
+    expect(markup).not.toContain('data-testid="home-sessions-loading"');
+    expect(markup).not.toContain("No sessions yet");
+    expect(markup).toContain("Couldn&#x27;t load sessions.");
+  });
 });

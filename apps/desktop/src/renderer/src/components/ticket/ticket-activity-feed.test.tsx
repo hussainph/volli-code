@@ -19,6 +19,8 @@ import { TicketActivityFeed } from "./ticket-activity-feed";
 import { useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 
+vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
+
 let root: Root | null = null;
 let container: HTMLElement | null = null;
 
@@ -39,9 +41,21 @@ const TICKET = {
   updatedAt: 1,
 } as unknown as Ticket;
 
+/**
+ * The feed's two read doors. Both return types are taken FROM the bridge rather
+ * than written out here, because these mocks have to answer the refusal arm too
+ * (VC-383): a read that fails must not read as a feed that is empty, and a
+ * hand-mirrored success-only shape would not let a test say so.
+ */
 const doors = {
-  events: vi.fn(async () => ({ ok: true as const, events: [] })),
-  comments: vi.fn(async () => ({ ok: true as const, comments: [] })),
+  events: vi.fn(async (): Promise<Awaited<ReturnType<typeof window.api.tickets.events>>> => ({
+    ok: true as const,
+    events: [],
+  })),
+  comments: vi.fn(async (): Promise<Awaited<ReturnType<typeof window.api.comments.list>>> => ({
+    ok: true as const,
+    comments: [],
+  })),
 };
 
 async function mount(): Promise<void> {
@@ -78,7 +92,7 @@ beforeEach(() => {
     value: { tickets: { events: doors.events }, comments: { list: doors.comments } },
   });
   useBoardStore.setState({ lastPlanningChange: { version: 1, ticketId: null, projectId: null } });
-  useTicketActivityStore.setState({ byTicket: {} });
+  useTicketActivityStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
 });
 
 afterEach(async () => {
@@ -159,11 +173,22 @@ describe("the feed while its first read is in flight (VC-383)", () => {
 
     expect(loading()).not.toBeNull();
     expect(container?.textContent).not.toContain("No activity yet.");
+    expect(loading()?.querySelectorAll("li[aria-hidden]")).toHaveLength(2);
 
     await act(async () => {
       answer?.();
     });
     expect(loading()).toBeNull();
     expect(container?.textContent).toContain("No activity yet.");
+  });
+
+  it("stands the skeleton down for a failed baseline without calling the feed empty", async () => {
+    doors.events.mockResolvedValueOnce({ ok: false as const, error: "db locked" });
+
+    await mount();
+
+    expect(loading()).toBeNull();
+    expect(container?.textContent).not.toContain("No activity yet.");
+    expect(container?.textContent).toContain("Couldn't load activity.");
   });
 });

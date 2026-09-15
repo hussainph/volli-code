@@ -82,7 +82,18 @@ const LAUNCH: SessionLaunch = {
 };
 
 const statusEntries = vi.fn(async () => ({ ok: true as const, entries: [] }));
-const listSessions = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+/**
+ * The project listing door. Its return type is taken FROM the bridge rather
+ * than written out here, because this mock has to answer the refusal arm too
+ * (VC-383): a listing that fails must not read as a listing that is empty, and
+ * a hand-mirrored success-only shape would not let a test say so.
+ */
+const listSessions = vi.fn(
+  async (): Promise<Awaited<ReturnType<typeof window.api.sessions.list>>> => ({
+    ok: true as const,
+    sessions: [],
+  }),
+);
 const latestSignals = vi.fn(async () => ({ ok: true as const, signals: [] }));
 /**
  * The board's move door. Answers with the slice as the store holds it AFTER the
@@ -276,5 +287,17 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(loading().length).toBe(0);
     expect(bandText("active")).toContain("No active sessions");
     expect(bandText("previous")).toContain("Nothing yet");
+  });
+
+  it("stands both skeletons down when the project listing fails, without either false empty", async () => {
+    listSessions.mockResolvedValueOnce({ ok: false as const, error: "db locked" });
+
+    await mount();
+
+    expect(loading().length).toBe(0);
+    expect(bandText("active")).not.toContain("No active sessions");
+    expect(bandText("previous")).not.toContain("Nothing yet");
+    expect(bandText("active")).toContain("Couldn't load sessions.");
+    expect(bandText("previous")).toContain("Couldn't load sessions.");
   });
 });

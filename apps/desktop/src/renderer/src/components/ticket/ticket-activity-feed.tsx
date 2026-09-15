@@ -379,40 +379,34 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
   const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
+  const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
+  const listingError = useTicketActivityStore((state) => state.listingError[ticketId] ?? null);
+  const ensureActivity = useTicketActivityStore((state) => state.ensure);
+  const refreshActivity = useTicketActivityStore((state) => state.refresh);
 
-  // Shared stale-guard for both reads below: a fast ticket switch (or a newer
-  // refresh) supersedes an in-flight fetch, so its late resolve drops itself
-  // rather than painting the wrong ticket's activity.
+  // Comment-only re-reads still share this local guard. The full baseline now
+  // lives in the store, where its state and per-ticket in-flight dedupe belong;
+  // an edit's small comments read must merely avoid applying after a newer full
+  // refresh has replaced it.
   const activityFetch = useLatestAsync();
 
-  const refetch = React.useCallback(async () => {
-    const token = activityFetch.claim();
-    try {
-      const [ev, cm] = await Promise.all([
-        window.api.tickets.events({ ticketId }),
-        window.api.comments.list({ ticketId }),
-      ]);
-      if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
-      if (!ev.ok) {
-        toastError(`Couldn't load activity: ${ev.error}`);
-        return;
-      }
-      if (!cm.ok) {
-        toastError(`Couldn't load activity: ${cm.error}`);
-        return;
-      }
-      useTicketActivityStore.getState().apply(ticketId, {
-        events: ev.events,
-        comments: cm.comments,
-        // Read at write time, not mount time: the version this list is true
-        // under is the one the app is on when main answers.
-        version: useBoardStore.getState().lastPlanningChange.version,
-      });
-    } catch (error) {
-      if (activityFetch.isCurrent(token))
-        toastError(`Couldn't load activity: ${errorMessage(error)}`);
-    }
-  }, [ticketId, activityFetch]);
+  const refetch = React.useCallback(
+    (force = false) => {
+      // A full read is newer than a comments-only edit read. The store rejects
+      // stale full baselines by revision; this invalidates the component-local
+      // partial read on the same boundary.
+      activityFetch.claim();
+      return refreshActivity(
+        ticketId,
+        // Read at request time, not at render time: a planning refresh can
+        // arrive between the callback being built and the user posting a
+        // comment, and the cache must be stamped under the version it reads.
+        useBoardStore.getState().lastPlanningChange.version,
+        force,
+      );
+    },
+    [activityFetch, refreshActivity, ticketId],
+  );
 
   // Comment edits and deletes record no ticket_event (per the comments-repo
   // contract), so they only need the comments re-read — not the whole event log
@@ -439,18 +433,12 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
     }
   }, [ticketId, activityFetch]);
 
-  // Initial load, and reload when the open ticket switches (refetch's identity
-  // tracks ticketId). A cached read that is still under the planning version
-  // the app is on needs no fetch at all — that is the Doc-tab return.
+  // Initial load, and reload when the open ticket switches. `ensure` owns the
+  // complete state question: a cache entry current for this planning version is
+  // warm; an unread or failed entry starts one shared baseline read instead.
   React.useEffect(() => {
-    const cached = useTicketActivityStore.getState().byTicket[ticketId];
-    if (
-      cached !== undefined &&
-      cached.version === useBoardStore.getState().lastPlanningChange.version
-    )
-      return;
-    void refetch();
-  }, [ticketId, refetch]);
+    void ensureActivity(ticketId, useBoardStore.getState().lastPlanningChange.version);
+  }, [ensureActivity, ticketId]);
 
   // A socket-originated mutation (e.g. an agent's `volli ticket comment`)
   // refreshes the planning stores and publishes the change's scope. Refetch only
@@ -469,7 +457,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       return;
     }
     void refetch();
-  }, [planningChange, ticketId, refetch]);
+  }, [planningChange, refetch, ticketId]);
 
   // Post a comment: append an optimistic row immediately, then either refetch
   // the authoritative feed (success — the temp row is replaced) or roll the
@@ -508,26 +496,32 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       });
       return false;
     }
-    await refetch();
+    // The optimistic row proves the write was requested, not that main's
+    // listing contains it. Force a new baseline rather than sharing one that
+    // may have started before the write landed.
+    await refetch(true);
     return true;
   }
 
   const events = entry?.events ?? [];
   const comments = entry?.comments ?? [];
-  const loaded = entry !== undefined;
+  // VC-383's distinction is data from the store, never an inference from a
+  // missing list: the same empty arrays mean either a successful empty read or
+  // a failed one, and only the former earns the empty sentence.
+  const pending = listingState === undefined || listingState === "loading";
+  const failed = listingState === "failed";
   const feed = buildActivityFeed(events, comments);
 
   return (
     <section className="flex flex-col gap-4 border-t border-border pt-6">
       <SectionHeading as="h3">Activity</SectionHeading>
 
-      {!loaded ? (
-        // The cache has no entry for this ticket yet: the first open of the
-        // run, before its events and comments land (VC-383). This used to be
-        // an empty list — not the empty sentence, not a placeholder, nothing
-        // between the heading and the composer — so the feed read as absent
-        // rather than as on its way. Two bunch rows' worth of the feed's own
-        // line: a glyph's slot and a sentence, at `text-ui`.
+      {pending ? (
+        // The cache has no landed baseline for this ticket yet (VC-383). This
+        // used to be an empty list — not the empty sentence, not a placeholder,
+        // nothing between the heading and the composer — so the feed read as
+        // absent rather than as on its way. Two bunch rows' worth of the feed's
+        // own line: a glyph's slot and a sentence, at `text-ui`.
         <ul
           className="flex flex-col gap-2"
           role="status"
@@ -536,12 +530,18 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
           data-testid="ticket-activity-loading"
         >
           {["w-3/5", "w-2/5"].map((width) => (
-            <li key={width} className="flex items-center gap-2 px-1">
+            <li key={width} aria-hidden className="flex items-center gap-2 px-1">
               <Skeleton className="size-3.5 shrink-0 rounded-sm" />
               <Skeleton className={cn("h-3.5", width)} />
             </li>
           ))}
         </ul>
+      ) : failed ? (
+        // The toast owns the detail. This line only replaces the skeleton with
+        // the concise truth that the activity baseline did not arrive.
+        <p className={EMPTY_INLINE} title={listingError ?? undefined}>
+          Couldn&apos;t load activity.
+        </p>
       ) : feed.length === 0 ? (
         <p className={EMPTY_INLINE}>No activity yet.</p>
       ) : (
