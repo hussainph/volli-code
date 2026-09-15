@@ -8,6 +8,13 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { archiveTicket, getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { projectContainerName } from "./containers";
+import {
+  acquireDeletionLease,
+  acquireWorktreeStartLease,
+  isUnderDeletion,
+  resetDeletionLeasesForTest,
+  UNDER_DELETION_REFUSAL,
+} from "./deletion-lease";
 import { getPhase, resetPhasesForTest, setPhase } from "./phase";
 import { remove } from "./remove";
 import { scriptedGit } from "./scripted-git";
@@ -18,9 +25,11 @@ let tempDirs: string[] = [];
 beforeEach(() => {
   ctx = openTestDb();
   resetPhasesForTest();
+  resetDeletionLeasesForTest();
 });
 
 afterEach(() => {
+  resetDeletionLeasesForTest();
   ctx.cleanup();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
@@ -75,7 +84,7 @@ describe("remove", () => {
     const gitDir = tempDir("gitdir");
     seed(wt);
     setPhase("ticket-1", "ready");
-    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls, syncCalls } = statusGit(wt, gitDir, false);
 
     const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
@@ -85,6 +94,9 @@ describe("remove", () => {
     // Plain remove — never --force for a clean worktree.
     const removeCall = calls.find((c) => c.args[1] === "remove");
     expect(removeCall?.args).toEqual(["worktree", "remove", wt]);
+    // VC-383's guarantee is the seam, not only the eventual command list: a
+    // sync `deps.git` regression must fail even when it returns the same text.
+    expect(syncCalls).toHaveLength(0);
 
     const row = getTicketRow(ctx.db, "ticket-1")!;
     expect(row.worktree_path).toBeNull();
@@ -260,6 +272,132 @@ describe("remove", () => {
     expect(result.ok).toBe(true);
     expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
     expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBeNull();
+  });
+});
+
+describe("remove — deletion lease", () => {
+  it("holds the lease across the destructive step and refuses a contending remove", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
+    let signalDelete!: () => void;
+    const deleteStarted = new Promise<void>((resolve) => {
+      signalDelete = () => resolve();
+    });
+    let releaseDelete!: () => void;
+    const deleteMayFinish = new Promise<void>((resolve) => {
+      releaseDelete = () => resolve();
+    });
+    const tracedGit = async (args: readonly string[], cwd: string): Promise<string> => {
+      if (args[0] === "worktree" && args[1] === "remove") {
+        signalDelete();
+        await deleteMayFinish;
+      }
+      return gitAsync(args, cwd);
+    };
+    const worktree = { db: ctx.db, git, gitAsync: tracedGit, blobsRoot: "unused" };
+
+    const first = remove(worktree, "ticket-1", { force: false });
+    await deleteStarted;
+
+    // The git call has begun but cannot return. Both a nested start and another
+    // remover must lose the same non-waiting overlap contest during that span.
+    expect(isUnderDeletion(wt)).toBe(true);
+    expect(acquireWorktreeStartLease(join(wt, "nested-terminal"))).toBeNull();
+    await expect(remove(worktree, "ticket-1", { force: false })).resolves.toEqual({
+      ok: false,
+      error: UNDER_DELETION_REFUSAL,
+    });
+
+    releaseDelete();
+    await expect(first).resolves.toEqual({ ok: true, value: undefined });
+    const next = acquireDeletionLease(wt);
+    expect(next).not.toBeNull();
+    next?.release();
+  });
+
+  it("releases the lease after a dirty refusal", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync } = statusGit(wt, gitDir, true);
+    let heldDuringDirtyProbe = false;
+    const tracedGit = async (args: readonly string[], cwd: string): Promise<string> => {
+      if (args[0] === "status") heldDuringDirtyProbe = isUnderDeletion(wt);
+      return gitAsync(args, cwd);
+    };
+
+    const result = await remove(
+      { db: ctx.db, git, gitAsync: tracedGit, blobsRoot: "unused" },
+      "ticket-1",
+      { force: false },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(heldDuringDirtyProbe).toBe(true);
+    expect(isUnderDeletion(wt)).toBe(false);
+    const next = acquireDeletionLease(wt);
+    expect(next).not.toBeNull();
+    next?.release();
+  });
+
+  it("releases the lease after an unverifiable refusal", async () => {
+    const home = tempDir("home");
+    const wt = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName("/repo", "proj-1"),
+      "VC-1-stranded",
+    );
+    mkdirSync(wt, { recursive: true });
+    seed(wt);
+    const { git, gitAsync } = forgottenGit(wt);
+    let heldDuringListing = false;
+    const tracedGit = async (args: readonly string[], cwd: string): Promise<string> => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        heldDuringListing = isUnderDeletion(wt);
+      }
+      return gitAsync(args, cwd);
+    };
+
+    const result = await remove(
+      { db: ctx.db, git, gitAsync: tracedGit, home, blobsRoot: "unused" },
+      "ticket-1",
+      { force: false },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(heldDuringListing).toBe(true);
+    expect(isUnderDeletion(wt)).toBe(false);
+    const next = acquireDeletionLease(wt);
+    expect(next).not.toBeNull();
+    next?.release();
+  });
+
+  it("releases the lease when a bound-site release throws", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
+    let heldDuringThrow = false;
+
+    await expect(
+      remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
+        force: false,
+        releaseAgentSites: async () => {
+          heldDuringThrow = isUnderDeletion(wt);
+          throw new Error("release failed");
+        },
+      }),
+    ).rejects.toThrow("release failed");
+
+    expect(heldDuringThrow).toBe(true);
+    expect(isUnderDeletion(wt)).toBe(false);
+    const next = acquireDeletionLease(wt);
+    expect(next).not.toBeNull();
+    next?.release();
   });
 });
 

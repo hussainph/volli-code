@@ -29,7 +29,6 @@ import { getProjectById } from "../db/projects-repo";
 import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
 import { commitRemaining, type CommitChoices, type CommitOutcome } from "./commit";
-import { runGitCapturingAsync } from "./git";
 import {
   fetchBase,
   ghCreateDraftPr,
@@ -107,7 +106,7 @@ async function loadIdentity(
   const baseBranch =
     ticket.base_branch ??
     (
-      await resolveBaseBranch(deps.gitAsync ?? runGitCapturingAsync, {
+      await resolveBaseBranch(deps.gitAsync, {
         projectPath: project.path,
         ticketBaseBranch: ticket.base_branch,
         projectBaseBranch: project.baseBranch ?? null,
@@ -298,7 +297,7 @@ export async function commitTicketRemaining(
     return err("This ticket has no worktree yet, so there is nothing to commit.");
   }
   const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
-  const result = await commitRemaining(deps.gitAsync ?? runGitCapturingAsync, deps.net, {
+  const result = await commitRemaining(deps.gitAsync, deps.net, {
     worktreePath: ticket.worktree_path,
     displayId,
     ...choices,

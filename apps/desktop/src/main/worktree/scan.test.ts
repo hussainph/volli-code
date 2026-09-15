@@ -143,7 +143,7 @@ describe("scanOrphans is read-only", () => {
 
       const adminDir = join(projectPath, ".git", "worktrees");
       const before = { admin: fingerprint(adminDir), container: fingerprint(container) };
-      const { git, gitAsync, calls } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
+      const { git, gitAsync, calls, syncCalls } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
 
       const report = await scanOrphans({
         db: ctx.db,
@@ -171,6 +171,9 @@ describe("scanOrphans is read-only", () => {
       expect(issued.every((line) => line.startsWith("--no-optional-locks "))).toBe(true);
       expect(issued.some((line) => line.includes("worktree remove"))).toBe(false);
       expect(issued.some((line) => line.includes("worktree prune"))).toBe(false);
+      // A shared call list cannot say which seam got these reads. VC-383 needs
+      // the stronger proof: this whole scan made zero synchronous git calls.
+      expect(syncCalls).toHaveLength(0);
 
       // …and it wrote no cleanup history either: a scan is not an act.
       expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM worktree_cleanup_commands").get()).toEqual({

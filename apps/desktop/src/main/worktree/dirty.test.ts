@@ -169,7 +169,6 @@ describe("isWorktreeDirty", () => {
 const input = (wt: string) => ({ worktreePath: wt, branch: "b", baseBranch: "main" });
 
 describe("isWorktreeDirtyAsync", () => {
-
   it("is clean when every rule passes, and runs the probes in the sync driver's order", async () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");

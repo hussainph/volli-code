@@ -60,8 +60,8 @@ function seedTicket(overrides: { prUrl?: string | null } = {}): {
 
 /**
  * A git runner that answers only what the commit path needs (sequencer probe +
- * status/add/commit). Both seams, because the commit probes run on the async
- * runner (VC-383) and a deps bundle without one falls through to real git.
+ * status/add/commit). Both required seams are supplied because the commit probes
+ * run on the async runner (VC-383), not on the host repository by accident.
  */
 function commitGit(status: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
   const scripted = scriptedGit((args) => {

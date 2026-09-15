@@ -47,9 +47,9 @@ afterEach(() => {
 
 /** A git that reports the worktree clean, so `remove` proceeds to delete it. */
 /**
- * A git that reads the worktree as clean, on BOTH seams: the reclaim's remove
- * runs its probes on the async runner (VC-383), and a bundle carrying only the
- * sync one would fall through to real git on the temp dir.
+ * A git that reads the worktree as clean, on BOTH required seams: the reclaim's
+ * remove runs its probes on the async runner (VC-383), so this fixture must
+ * supply that seam rather than accidentally exercising the host repository.
  */
 function cleanGit(wt: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
   const git = (args: readonly string[]): string => {

@@ -39,7 +39,7 @@ import { buildLaunchConfig, mergeWorkspaceFile } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, HarnessWorkspaceFile } from "@volli/shared";
 
 import { writeGeneratedFile } from "./harness-runtime";
-import type { RunGitAsync } from "./worktree/types";
+import type { RunGitAsync } from "./worktree";
 import { isInside } from "./worktree/paths";
 
 /** Opens and closes the fenced block in `.git/info/exclude`. */

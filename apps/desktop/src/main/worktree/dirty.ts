@@ -154,6 +154,69 @@ function submodulesProbe(cwd: string): GitProbe {
   };
 }
 
+/** One ordered §7 rule, named by the only execution each driver may vary. */
+type DirtyRule =
+  | { kind: "probe"; probe: GitProbe }
+  | { kind: "sequencer"; worktreePath: string }
+  | { kind: "lock"; entries: readonly WorktreeListEntry[]; worktreePath: string };
+
+/**
+ * The ordered rule list, stated ONCE. In particular, the caller-provided
+ * worktree listing occupies rule 4 in exactly the same place as a spawned
+ * listing; neither driver gets a private opportunity to add, omit, or reorder
+ * a dirty definition (VC-383).
+ */
+function orderedDirtyRules(input: DirtyInput): readonly DirtyRule[] {
+  return [
+    { kind: "probe", probe: statusProbe(input.worktreePath) },
+    { kind: "sequencer", worktreePath: input.worktreePath },
+    { kind: "probe", probe: unreachableCommitsProbe(input) },
+    input.worktreeEntries === undefined
+      ? { kind: "probe", probe: lockProbe(input) }
+      : { kind: "lock", entries: input.worktreeEntries, worktreePath: input.worktreePath },
+    { kind: "probe", probe: submodulesProbe(input.worktreePath) },
+  ];
+}
+
+/** What differs between the two drivers: how one already-ordered rule runs. */
+interface DirtyRuleDriver<Output> {
+  probe(probe: GitProbe): Output;
+  sequencer(worktreePath: string): Output;
+  lock(entries: readonly WorktreeListEntry[], worktreePath: string): Output;
+}
+
+/** Dispatches one shared rule through either driver's implementation. */
+function runOrderedDirtyRule<Output>(rule: DirtyRule, driver: DirtyRuleDriver<Output>): Output {
+  switch (rule.kind) {
+    case "probe":
+      return driver.probe(rule.probe);
+    case "sequencer":
+      return driver.sequencer(rule.worktreePath);
+    case "lock":
+      return driver.lock(rule.entries, rule.worktreePath);
+  }
+}
+
+function runProbe(git: RunGit, probe: GitProbe): DirtyResult {
+  let out: string;
+  try {
+    out = git(probe.args, probe.cwd);
+  } catch {
+    return probe.onFailure;
+  }
+  return probe.onOutput(out);
+}
+
+async function runProbeAsync(git: RunGitAsync, probe: GitProbe): Promise<DirtyResult> {
+  let out: string;
+  try {
+    out = await git(probe.args, probe.cwd);
+  } catch {
+    return probe.onFailure;
+  }
+  return probe.onOutput(out);
+}
+
 /**
  * Runs every §7 rule in order, returning the first that fires (errs dirty on
  * any ambiguity). SYNCHRONOUS — for the one caller whose gate may not yield
@@ -161,28 +224,13 @@ function submodulesProbe(cwd: string): GitProbe {
  * {@link isWorktreeDirtyAsync}.
  */
 export function isWorktreeDirty(git: RunGit, input: DirtyInput): DirtyResult {
-  const run = (probe: GitProbe): DirtyResult => {
-    let out: string;
-    try {
-      out = git(probe.args, probe.cwd);
-    } catch {
-      return probe.onFailure;
-    }
-    return probe.onOutput(out);
+  const driver: DirtyRuleDriver<DirtyResult> = {
+    probe: (probe) => runProbe(git, probe),
+    sequencer: (worktreePath) => sequencerVerdict(detectSequencerState(git, worktreePath)),
+    lock: lockVerdict,
   };
-  const checks: (() => DirtyResult)[] = [
-    () => run(statusProbe(input.worktreePath)),
-    () => sequencerVerdict(detectSequencerState(git, input.worktreePath)),
-    () => run(unreachableCommitsProbe(input)),
-    () =>
-      // Reuse the caller's listing when given (sweep hot path); else spawn our own.
-      input.worktreeEntries
-        ? lockVerdict(input.worktreeEntries, input.worktreePath)
-        : run(lockProbe(input)),
-    () => run(submodulesProbe(input.worktreePath)),
-  ];
-  for (const check of checks) {
-    const result = check();
+  for (const rule of orderedDirtyRules(input)) {
+    const result = runOrderedDirtyRule(rule, driver);
     if (result.dirty) return result;
   }
   return CLEAN;
@@ -199,27 +247,14 @@ export async function isWorktreeDirtyAsync(
   git: RunGitAsync,
   input: DirtyInput,
 ): Promise<DirtyResult> {
-  const run = async (probe: GitProbe): Promise<DirtyResult> => {
-    let out: string;
-    try {
-      out = await git(probe.args, probe.cwd);
-    } catch {
-      return probe.onFailure;
-    }
-    return probe.onOutput(out);
+  const driver: DirtyRuleDriver<Promise<DirtyResult>> = {
+    probe: (probe) => runProbeAsync(git, probe),
+    sequencer: async (worktreePath) =>
+      sequencerVerdict(await detectSequencerStateAsync(git, worktreePath)),
+    lock: async (entries, worktreePath) => lockVerdict(entries, worktreePath),
   };
-  const checks: (() => Promise<DirtyResult>)[] = [
-    () => run(statusProbe(input.worktreePath)),
-    async () => sequencerVerdict(await detectSequencerStateAsync(git, input.worktreePath)),
-    () => run(unreachableCommitsProbe(input)),
-    async () =>
-      input.worktreeEntries
-        ? lockVerdict(input.worktreeEntries, input.worktreePath)
-        : run(lockProbe(input)),
-    () => run(submodulesProbe(input.worktreePath)),
-  ];
-  for (const check of checks) {
-    const result = await check();
+  for (const rule of orderedDirtyRules(input)) {
+    const result = await runOrderedDirtyRule(rule, driver);
     if (result.dirty) return result;
   }
   return CLEAN;

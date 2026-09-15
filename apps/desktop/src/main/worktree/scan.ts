@@ -96,7 +96,7 @@ import { listWorktreePaths } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
 import { isWorktreeDirtyAsync } from "./dirty";
-import { parseWorktreeList, runGitCapturingAsync, type WorktreeListEntry } from "./git";
+import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { homeDir } from "./home";
 import { canonicalize, isInside } from "./paths";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
@@ -276,9 +276,10 @@ export async function scanOrphans(
   deps: WorktreeDeps,
   options: OrphanScanOptions = {},
 ): Promise<OrphanScanReport> {
-  // The async runner, never `deps.git`: a fallback to the sync one would put
-  // the whole walk back on the main thread in silence (the `read.ts` rule).
-  const git = readOnlyGitAsync(deps.gitAsync ?? runGitCapturingAsync);
+  // The required async runner, never `deps.git`: a missing seam must fail at
+  // bundle construction rather than putting the whole walk back on the main
+  // thread in silence (the `read.ts` rule).
+  const git = readOnlyGitAsync(deps.gitAsync);
   const now = deps.now?.() ?? Date.now();
   const revision = (options.newRevision ?? randomUUID)();
   const report: OrphanScanReport = {
