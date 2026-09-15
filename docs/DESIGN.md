@@ -118,6 +118,30 @@ badge is printed against a single menu row. Model and effort appear only for cha
 kickoff; an Automation uses its saved Runtime. Launch mode is per-open and resets
 when retargeting projects; the ticket draft itself still survives closing.
 
+**Those three commits are why this tray folds early.** They take ~215px of the
+settings' own line where a chat footer spends ~100px on one send key, so at the
+dialog's own 36rem the model pill, the effort chip and the buttons no longer fit
+on one line and the whole button group wrapped (VC-382). The tray marks its
+container `data-composer-container="commit-tray"` and gives in three steps
+instead:
+
+| Tray | The run reads |
+|---|---|
+| ≥ 40rem (the expanded sheet) | two pills — model, then effort |
+| 34–40rem (the dialog's own 36rem) | one pill, `Model · Effort` |
+| < 34rem | one pill, the model alone |
+
+The value never leaves the CONTROL, only the face: the trigger is still named
+"Model and effort: … · Extra high" and its popover still opens on the slider. The
+run is the row's elastic member (`basis-38`, the Add door plus the pill's own
+116px floor), so the model name truncates and the commits never squash — a
+wrapped tray is a layout accident wearing the shape of a decision, and the only
+box that still earns one is narrower than this dialog can be.
+
+**Staged files sit in a band of their own**, between the metadata chips and the
+tray, hairline above and `py-2` inside it — the same inset on both edges, so the
+thumbnails never touch the tray they sit on.
+
 ### Prompt chrome — writing sheet and control tray (VC-335)
 
 The first pass unified controls but still looked like the old flat box. The follow-up makes
@@ -132,7 +156,7 @@ treatment.
 
 | Piece | Rung | Says |
 |---|---|---|
-| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem | facts about the turn |
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
 | Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
 | Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
 | Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
@@ -163,8 +187,18 @@ control the chord replaces; never as a hint line under the box.
 
 **Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
 separate effort pill folds into the model control, whose face and popover then expose both values.
-Within that control the tier truncates before the model does — a qualifier must not outlive the
-thing it qualifies, and the pill's one fact is the model this Session sends to.
+**Below 18rem the face keeps the model alone**: past that width the printed effort word is paid for
+out of the model name (42px of name at the app's narrowest pane, against 83px without it), and the
+value is still on the control — in its accessible name, and on the slider its popover opens to.
+(A tray whose commits are buttons rather than one send key runs the same ladder wider: it folds at
+40rem and drops the printed value at 34rem — see the New-ticket composer above. One rule, two
+ladders, all four thresholds in `globals.css` beside the constants `composer-ui.tsx` measures the
+portalled popover with.)
+Within that control the tier gives before the model does — a qualifier must not outlive the thing
+it qualifies, and the pill's one fact is the model this Session sends to. Wide, it truncates first;
+through the fold it leaves the face entirely rather than clipping to a letter or two (`Ticket
+Sess…`, then a bare `T` welded to the model name), and the full line stays in the accessible name
+and at the head of the open list.
 The rule is shared by Session chat, New-ticket kickoff, and one-off Automation runtime controls.
 The context pill also drops its percent while keeping the ring. During a live turn, model and effort
 are frozen, so that disabled combined control leaves the narrow tray entirely; the queued Steer

@@ -393,7 +393,14 @@ export function ComposerForm({
     // content, which lets the host shrink, which is the resize Monaco's
     // `automaticLayout` observer was waiting for.
     <div
-      data-composer-container=""
+      // `commit-tray`, not the bare marker every other prompt surface carries:
+      // this footer's three welded commits leave the settings run ~215px less
+      // room than a chat footer's single send key, so model and effort have to
+      // fold into one control while the box is still 36rem wide rather than at
+      // the chat composer's 24rem (VC-382). Both halves of that decision read
+      // this attribute — the container queries in `globals.css` and the React
+      // branch that puts the effort slider inside the portalled model popover.
+      data-composer-container="commit-tray"
       onKeyDownCapture={handleKeyDownCapture}
       // The whole composer is the drop target, not just the description box: a
       // file meant for this ticket is aimed at the dialog, and the title input,
@@ -474,10 +481,17 @@ export function ComposerForm({
         />
       </div>
 
+      {/* `py-2`, not `pt-2`: the strip is a band between two hairlines and it
+          has to pay the same inset on both of them. With no bottom inset the
+          64px tiles sat ON the tray's top edge — the row of thumbnails and the
+          row of controls read as one crowded object, and the strip's own top
+          air made the imbalance plain (VC-382). 8px is the ladder's default
+          inset and it also clears the remove badge, which overhangs its tile
+          by 6px. */}
       <AttachmentStrip
         attachments={attachments}
         onRemove={(attachment) => void removeAttachment(attachment)}
-        className="border-t border-border px-6 pt-2"
+        className="border-t border-border px-6 py-2"
       />
 
       <div className="prompt-toolbar px-6 py-4">

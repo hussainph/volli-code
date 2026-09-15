@@ -72,7 +72,16 @@ export function ComposerFooter({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-1">
+      {/* THE SETTINGS RUN GIVES BEFORE THE ROW BREAKS, and `basis-38` is what
+          orders those two. A wrapping row breaks on an item's flex BASIS, not
+          on the width it would shrink to — the lesson `MODEL_PILL_GIVE` records
+          one level down — so at `basis-auto` this run held its full natural
+          width and sent the whole commit group to a second line while the model
+          name still had everything to give (VC-382). 38 is 152px: the Add door
+          (32), its gap (4), and the pill's own 116px floor, so the line breaks
+          only once the pill has nothing left. `grow` then spends whatever the
+          commits did not take. */}
+      <div className="flex min-w-0 grow basis-38 flex-wrap items-center gap-1">
         {onAttachFiles === undefined ? null : (
           <ComposerAttachButton className="prompt-add" onFiles={onAttachFiles} />
         )}
@@ -92,7 +101,10 @@ export function ComposerFooter({
         ) : null}
       </div>
 
-      <div className="ml-auto flex min-w-0 max-w-full items-center">
+      {/* `shrink-0`: three welded WORDS. The run beside them is the elastic
+          member of this row and these are not — a squeezed Create & start
+          truncates the only label that says what the press does. */}
+      <div className="ml-auto flex min-w-0 max-w-full shrink-0 items-center">
         {/* The quiet half of the pair, and a peer of the primary rather than a
             row inside its menu — but still an OBJECT. `secondary` put a fill
             two steps off the tray's own tint here, which on the dark canvases

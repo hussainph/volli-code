@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import type { Automation, Project } from "@volli/shared";
+import type { Automation, BlobLinkView, Project } from "@volli/shared";
 import { ComposerForm } from "./composer-form";
 import type { ComposerFooter } from "./composer-footer";
 import type { ComposerBreadcrumb } from "./composer-breadcrumb";
@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   },
   files: { getIndex: () => [], refresh: () => {}, forceRefresh: () => {}, version: 0 },
   attachments: {
-    attachments: [],
+    attachments: [] as readonly BlobLinkView[],
     attachFiles: async () => {},
     remove: async () => {},
     clear: () => {},
@@ -105,6 +105,7 @@ let host: HTMLDivElement;
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.clearAllMocks();
+  mocks.attachments.attachments = [];
   mocks.offer.ready = true;
   mocks.offer.groups = [
     { status: "doing", label: "Doing", current: false, automations: [automation] },
@@ -206,6 +207,48 @@ it("blocks submission if the saved record vanishes after selection", async () =>
   expect(runKickoff).not.toHaveBeenCalled();
   expect(runPlainCreate).not.toHaveBeenCalled();
 });
+/**
+ * The composer opens at 36rem, and its tray commits rather than sends: Create,
+ * the primary and the launch caret take 215px of the settings' own line, so
+ * model and effort have to fold into one control far earlier than a chat
+ * footer's 24rem (VC-382). The threshold is asked for by MARKING the container
+ * — `globals.css` and the model pill's portalled popover both read this exact
+ * value — so losing the mark silently restores the wrapped footer.
+ */
+it("asks for the commit tray's own fold by marking its composer container", () => {
+  expect(
+    host.querySelector("[data-composer-container]")?.getAttribute("data-composer-container"),
+  ).toBe("commit-tray");
+});
+
+it("gives the attachment strip the same air above the tiles and below them", async () => {
+  mocks.attachments.attachments = [
+    {
+      linkId: null,
+      blobHash: "a".repeat(64),
+      label: "screenshot.png",
+      originalName: "screenshot.png",
+      mime: "image/png",
+      sizeBytes: 1024,
+    },
+  ];
+  await act(async () =>
+    root.render(
+      <ComposerForm
+        initialProject={project}
+        expanded={false}
+        onToggleExpand={() => {}}
+        onClose={() => {}}
+      />,
+    ),
+  );
+  // The strip is the last band before the tray's own top edge, so a top-only
+  // inset left the 64px tiles sitting ON that hairline beside the buttons.
+  const strip = host.querySelector('[aria-label="Attachments"]');
+  expect(strip?.className).toContain("py-2");
+  expect(strip?.className).not.toContain("pt-2");
+});
+
 it.each([
   ["plain-create", "Create", runPlainCreate],
   ["kickoff", "Submit", runKickoff],

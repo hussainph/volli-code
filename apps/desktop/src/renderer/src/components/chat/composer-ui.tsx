@@ -10,7 +10,12 @@
  *     at ordinary widths it sits beside the model as its own chip
  *     (`composer-effort-ui.tsx`). Below 24rem the model face names both values
  *     and its popover adds the same effort slider, leaving one configuration
- *     control rather than wrapping two. An executor that pins its own model
+ *     control rather than wrapping two; below 18rem even the printed value goes
+ *     and the face keeps the model, because past that point the word is paid
+ *     for out of the model name's own give — the measurements are in
+ *     `globals.css` beside the rule. The value is never lost, only unprinted:
+ *     the trigger's accessible name and the slider under it still carry it. An
+ *     executor that pins its own model
  *     renders no pill at all rather than a disabled one, on the same rule as
  *     the mode segment below: a control naming models the harness will drop is
  *     worse than no control.
@@ -1603,6 +1608,20 @@ interface CompactEffortControl {
 
 /** Keep the JS branch in lockstep with globals.css's 23.999rem container query. */
 const COMPACT_COMPOSER_WIDTH_PX = 384;
+/**
+ * And with the 39.999rem one beside it, for a tray whose commits are three
+ * words wide instead of one send key (VC-382). `globals.css` carries the
+ * measurements; a surface asks for this number by marking its container
+ * `data-composer-container="commit-tray"`.
+ */
+const COMPACT_COMMIT_TRAY_WIDTH_PX = 640;
+
+/** Which of the two thresholds a marked container has asked for. */
+function compactWidthFor(container: HTMLElement): number {
+  return container.dataset.composerContainer === "commit-tray"
+    ? COMPACT_COMMIT_TRAY_WIDTH_PX
+    : COMPACT_COMPOSER_WIDTH_PX;
+}
 
 /**
  * Radix portals the model popover to `body`, outside the composer's CSS
@@ -1624,11 +1643,12 @@ function useCompactComposer(
     }
     const container = anchor.current?.closest<HTMLElement>("[data-composer-container]");
     if (container === undefined || container === null) return;
+    const threshold = compactWidthFor(container);
     // Container queries read the content box. These marked containers have no
     // padding, so clientWidth is the same box; getBoundingClientRect includes
     // the 1px prompt border and creates a two-pixel state where CSS and React
     // disagree about whether the merged slider exists.
-    const measure = () => setCompact(container.clientWidth < COMPACT_COMPOSER_WIDTH_PX);
+    const measure = () => setCompact(container.clientWidth < threshold);
     measure();
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(measure);

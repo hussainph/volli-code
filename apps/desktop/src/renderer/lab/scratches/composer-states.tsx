@@ -4,11 +4,13 @@
  * same one.
  *
  * One state at a time by default (the picker row at the top), or every state
- * stacked, at one of three widths: the reading measure (720px), a comfortable
- * split (480px) and the app's own narrowest chat pane (265px — the 940px
- * window minimum less the rail, the sidebar, the frame and a ticket's right
- * rail). Idle and empty, idle with a draft, a live turn with a queue,
- * attachments, the frozen pill (no model choosable) and the inert box. The
+ * stacked, at one of five widths: the reading measure (720px), the New-ticket
+ * dialog's own box (576px), a comfortable split (480px), a narrow one (320px,
+ * the band where the folded face still prints both values) and the app's own
+ * narrowest chat pane (265px — the 940px window minimum less the rail, the
+ * sidebar, the frame and a ticket's right rail). Idle and empty, idle with a
+ * draft, a live turn with a queue, attachments, the frozen pill (no model
+ * choosable) and the inert box. The
  * new-ticket footer and the Automation Instructions box sit under them,
  * because the ticket asked that the chat composer's language carry to every
  * prompt surface and this is where the three are judged side by side.
@@ -34,7 +36,7 @@ import { cn } from "@renderer/lib/utils";
 
 export const title = "Composer · states × widths";
 export const note =
-  "Every composer state at 720 / 480 / 265px, with the other prompt surfaces under it";
+  "Every composer state at 720 / 576 / 480 / 320 / 265px, with the other prompt surfaces under it";
 
 const MODELS: readonly ComposerModel[] = [
   {
@@ -51,7 +53,10 @@ const MODELS: readonly ComposerModel[] = [
     providerLabel: "Anthropic",
     modelId: "claude-opus-4.1",
     label: "Claude Opus 4.1",
-    reasoningLevels: ["off", "low", "medium", "high", "max"],
+    // `xhigh` earns its place on a LAYOUT rig: "Extra high" is the longest word
+    // the effort chip ever prints, and a fixture whose widest value is "Max"
+    // measures a row nobody has (VC-382).
+    reasoningLevels: ["off", "low", "medium", "high", "xhigh", "max"],
   },
   {
     id: "openai/gpt-5",
@@ -116,6 +121,19 @@ const SELECTION = {
   reasoningLevel: "high",
 } as const satisfies ComposerModelSelection;
 
+/**
+ * The widest run the New-ticket footer can be asked to draw: a long model name
+ * beside the longest effort word. The chat cells above keep the ordinary
+ * selection — they have one send key to fit beside it — but this footer's three
+ * welded commits take 215px of the same line, so its worst case IS its layout,
+ * and the seeded `Sonnet 4.5 · High` hid a wrap that shipped (VC-382).
+ */
+const TICKET_SELECTION = {
+  providerId: "anthropic",
+  modelId: "claude-opus-4.1",
+  reasoningLevel: "xhigh",
+} as const satisfies ComposerModelSelection;
+
 const TEMPLATES: readonly PromptTemplate[] = [
   {
     name: "review",
@@ -173,7 +191,15 @@ const ATTACHMENTS: readonly BlobLinkView[] = [
 
 const WIDTHS = [
   { label: "720 · reading measure", width: 720 },
+  // The New-ticket dialog's own width (`sm:max-w-xl`), and the reason it is on
+  // this rig at all: the footer under here ships at exactly this size, and the
+  // three widths above and below it all missed the wrap it produced (VC-382).
+  { label: "576 · new-ticket dialog", width: 576 },
   { label: "480 · split", width: 480 },
+  // The band where the chat composer's face carries BOTH values: under 24rem
+  // it has folded, and it still prints the effort word until 18rem (VC-382).
+  // Without a column in it that middle state is never drawn.
+  { label: "320 · narrow split", width: 320 },
   { label: "265 · narrowest pane", width: 265 },
 ] as const;
 
@@ -283,18 +309,25 @@ export default function ComposerStatesScratch() {
         <h2 className="text-label uppercase text-muted-foreground">New-ticket footer</h2>
         <div
           data-testid="new-ticket-footer"
-          data-composer-container=""
+          // The real composer marks its container the same way: this tray
+          // commits rather than sends, so it folds model and effort together
+          // at 40rem instead of 24rem (VC-382, `globals.css`).
+          data-composer-container="commit-tray"
           style={{ width }}
           className={cn("@container/composer overflow-hidden", PROMPT_SURFACE)}
         >
-          <div className="prompt-toolbar px-4 py-2">
+          {/* The shipped tray's own inset (`px-6 py-4` in `composer-form.tsx`),
+              not the chat composer's `px-4 py-2`: 16px of extra gutter is 16px
+              this row does not have, and a rig that gives it back measures a
+              wider box than the dialog ever hands the footer (VC-382). */}
+          <div className="prompt-toolbar px-6 py-4">
             <ComposerFooter
               projectId="composer-lab"
               onAttachFiles={() => undefined}
               run={{
                 models: MODELS,
                 tiers: TIERS,
-                selection: SELECTION,
+                selection: TICKET_SELECTION,
                 setSelection: () => undefined,
               }}
               launch={{ kind: "kickoff" }}
