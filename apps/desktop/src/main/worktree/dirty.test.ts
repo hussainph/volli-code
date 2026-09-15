@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { isWorktreeDirty } from "./dirty";
+import { isWorktreeDirty, isWorktreeDirtyAsync } from "./dirty";
 import { scriptedGit } from "./scripted-git";
 
 let dirs: string[] = [];
@@ -158,5 +158,92 @@ describe("isWorktreeDirty", () => {
     // Only `--not --remotes` remains — never a `--not <base>` pair.
     expect(logCall?.args.filter((a) => a === "--not")).toHaveLength(1);
     expect(logCall?.args).toContain("--remotes");
+  });
+});
+
+/**
+ * The async driver is the same five rules over the runner that lets Electron
+ * main keep turning (VC-383). These hold it to the sync driver's answers,
+ * probe by probe, so the two can never say different things about one tree.
+ */
+const input = (wt: string) => ({ worktreePath: wt, branch: "b", baseBranch: "main" });
+
+describe("isWorktreeDirtyAsync", () => {
+
+  it("is clean when every rule passes, and runs the probes in the sync driver's order", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    const { git, gitAsync, calls } = cleanGit(wt, gitDir);
+    expect(await isWorktreeDirtyAsync(gitAsync, input(wt))).toEqual({ dirty: false, reason: null });
+    const asyncOrder = calls.map((c) => c.args.join(" "));
+    calls.length = 0;
+    isWorktreeDirty(git, input(wt));
+    expect(asyncOrder).toEqual(calls.map((c) => c.args.join(" ")));
+  });
+
+  it("fires the same rule the sync driver fires, with the same reason", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    const cases: Parameters<typeof cleanGit>[2][] = [
+      { status: () => "?? new.txt\n" },
+      { log: () => "abc123\n" },
+      { list: () => `worktree ${wt}\nHEAD abc\nbranch refs/heads/b\nlocked\n` },
+      { submodule: () => "+abc path/to/sub (v1)\n" },
+      { submodule: () => "-abc path/to/sub\n" },
+    ];
+    for (const over of cases) {
+      const { git, gitAsync } = cleanGit(wt, gitDir, over);
+      expect(await isWorktreeDirtyAsync(gitAsync, input(wt))).toEqual(
+        isWorktreeDirty(git, input(wt)),
+      );
+    }
+  });
+
+  it("is dirty when sequencer state exists, and errs dirty when the git dir cannot be resolved", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    writeFileSync(join(gitDir, "MERGE_HEAD"), "abc\n");
+    const { gitAsync } = cleanGit(wt, gitDir);
+    const active = await isWorktreeDirtyAsync(gitAsync, input(wt));
+    expect(active.dirty).toBe(true);
+    expect(active.reason).toMatch(/in-progress/);
+
+    const { gitAsync: broken } = scriptedGit((args) => {
+      if (args[0] === "rev-parse") throw new Error("no git dir");
+      return "";
+    });
+    const unknown = await isWorktreeDirtyAsync(broken, input(wt));
+    expect(unknown.dirty).toBe(true);
+    expect(unknown.reason).toMatch(/git directory/);
+  });
+
+  it("reuses a supplied worktree listing for the lock check, never re-spawning git worktree list", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    const { gitAsync, calls } = cleanGit(wt, gitDir);
+    const result = await isWorktreeDirtyAsync(gitAsync, {
+      ...input(wt),
+      worktreeEntries: [{ path: wt, branch: "b", locked: true, bare: false, prunable: null }],
+    });
+    expect(result.reason).toMatch(/locked/);
+    expect(calls.some((c) => c.args[0] === "worktree" && c.args[1] === "list")).toBe(false);
+  });
+
+  it("errs dirty on ANY git failure, naming the probe that could not be read", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    const failing = (probe: string) =>
+      scriptedGit((args) => {
+        if (args[0] === probe) throw new Error("git exploded");
+        if (args[0] === "rev-parse") return gitDir;
+        if (args[0] === "worktree") return `worktree ${wt}\nHEAD abc\nbranch refs/heads/b\n`;
+        return "";
+      }).gitAsync;
+    expect((await isWorktreeDirtyAsync(failing("status"), input(wt))).reason).toMatch(/status/);
+    expect((await isWorktreeDirtyAsync(failing("log"), input(wt))).reason).toMatch(/compare/);
+    expect((await isWorktreeDirtyAsync(failing("worktree"), input(wt))).reason).toMatch(/lock/);
+    expect((await isWorktreeDirtyAsync(failing("submodule"), input(wt))).reason).toMatch(
+      /submodule/,
+    );
   });
 });

@@ -39,7 +39,7 @@ import { buildLaunchConfig, mergeWorkspaceFile } from "@volli/shared";
 import type { HarnessAdapter, HarnessId, HarnessWorkspaceFile } from "@volli/shared";
 
 import { writeGeneratedFile } from "./harness-runtime";
-import type { RunGit } from "./worktree";
+import type { RunGitAsync } from "./worktree/types";
 import { isInside } from "./worktree/paths";
 
 /** Opens and closes the fenced block in `.git/info/exclude`. */
@@ -53,7 +53,12 @@ export interface HarnessWorkspaceInput {
   socketPath: string;
   /** The generated `volli` launcher a fired hook invokes. */
   shimPath: string;
-  git: RunGit;
+  /**
+   * The ASYNC runner (VC-383): this runs inside every terminal and Session
+   * boot — the app's most frequent action — and its `ls-files` per workspace
+   * file plus `rev-parse` were the last sync git children on that path.
+   */
+  git: RunGitAsync;
 }
 
 /** A workspace file Volli declined to write, and the reason a human needs. */
@@ -100,9 +105,13 @@ async function textAt(path: string): Promise<string | null> {
  * cost of the two wrong answers is not symmetric: refusing to write costs cursor
  * its events for one session, and writing wrongly costs the user a dirty diff.
  */
-function isTracked(git: RunGit, worktreePath: string, relPath: string): boolean {
+async function isTracked(
+  git: RunGitAsync,
+  worktreePath: string,
+  relPath: string,
+): Promise<boolean> {
   try {
-    return git(["ls-files", "-z", "--", relPath], worktreePath).length > 0;
+    return (await git(["ls-files", "-z", "--", relPath], worktreePath)).length > 0;
   } catch {
     return true;
   }
@@ -113,8 +122,8 @@ function isTracked(git: RunGit, worktreePath: string, relPath: string): boolean 
  * for a linked worktree. Git may answer relatively (`.git`) for a main
  * checkout, so the result is resolved against the worktree.
  */
-function commonGitDir(git: RunGit, worktreePath: string): string {
-  const answer = git(["rev-parse", "--git-common-dir"], worktreePath).trim();
+async function commonGitDir(git: RunGitAsync, worktreePath: string): Promise<string> {
+  const answer = (await git(["rev-parse", "--git-common-dir"], worktreePath)).trim();
   return isAbsolute(answer) ? answer : resolve(worktreePath, answer);
 }
 
@@ -163,7 +172,7 @@ export async function ensureHarnessWorkspaceFiles(
         refuse("path escapes the worktree");
         continue;
       }
-      if (isTracked(input.git, input.worktreePath, file.path)) {
+      if (await isTracked(input.git, input.worktreePath, file.path)) {
         refuse("git tracks this file — writing it would show up in the ticket's diff");
         continue;
       }
@@ -200,11 +209,11 @@ async function mergeExisting(
 }
 
 async function ensureExcluded(
-  git: RunGit,
+  git: RunGitAsync,
   worktreePath: string,
   patterns: readonly string[],
 ): Promise<void> {
-  const excludePath = join(commonGitDir(git, worktreePath), "info", "exclude");
+  const excludePath = join(await commonGitDir(git, worktreePath), "info", "exclude");
   const current = (await textAt(excludePath)) ?? "";
   const next = excludeWithBlock(current, patterns);
   if (next !== null) await writeGeneratedFile(excludePath, next, 0o644);

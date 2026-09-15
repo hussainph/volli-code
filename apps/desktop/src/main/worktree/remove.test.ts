@@ -62,8 +62,8 @@ function statusGit(wt: string, gitDir: string, dirty = false) {
 describe("remove", () => {
   it("no-ops when the ticket has no worktree path", async () => {
     seed(null);
-    const { git, calls } = scriptedGit(() => "");
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const { git, gitAsync, calls } = scriptedGit(() => "");
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
     expect(result.ok).toBe(true);
@@ -75,9 +75,9 @@ describe("remove", () => {
     const gitDir = tempDir("gitdir");
     seed(wt);
     setPhase("ticket-1", "ready");
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -100,9 +100,9 @@ describe("remove", () => {
   it("prunes and clears the path when the dir is already gone (no dead end)", async () => {
     const gone = join(tempDir("wt"), "vanished"); // parent exists, target does not
     seed(gone);
-    const { git, calls } = scriptedGit(() => "");
+    const { git, gitAsync, calls } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -122,9 +122,9 @@ describe("remove", () => {
     const gone = join(tempDir("wt"), "vanished");
     seed(gone);
     archiveTicket(ctx.db, "ticket-1", 2);
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -141,9 +141,9 @@ describe("remove", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, true);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
     });
 
@@ -157,9 +157,9 @@ describe("remove", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, true);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, true);
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: true,
     });
 
@@ -176,23 +176,27 @@ describe("remove", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
     const order: string[] = [];
     const released: string[] = [];
 
-    const tracedGit = (args: readonly string[], cwd: string): string => {
+    const tracedGit = async (args: readonly string[], cwd: string): Promise<string> => {
       order.push(`git:${args[1] ?? args[0]}`);
-      return git(args, cwd);
+      return gitAsync(args, cwd);
     };
 
-    const result = await remove({ db: ctx.db, git: tracedGit, blobsRoot: "unused" }, "ticket-1", {
-      force: false,
-      releaseAgentSites: async (directory) => {
-        order.push("release");
-        released.push(directory);
-        return { released: ["chat-1"], stillOpen: [] };
+    const result = await remove(
+      { db: ctx.db, git, gitAsync: tracedGit, blobsRoot: "unused" },
+      "ticket-1",
+      {
+        force: false,
+        releaseAgentSites: async (directory) => {
+          order.push("release");
+          released.push(directory);
+          return { released: ["chat-1"], stillOpen: [] };
+        },
       },
-    });
+    );
 
     expect(result.ok).toBe(true);
     expect(released).toEqual([wt]);
@@ -206,10 +210,10 @@ describe("remove", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git } = statusGit(wt, gitDir, true);
+    const { git, gitAsync } = statusGit(wt, gitDir, true);
     let releases = 0;
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async () => {
         releases += 1;
@@ -224,10 +228,10 @@ describe("remove", () => {
   it("releases the bindings pointed at a checkout that is already gone", async () => {
     const gone = join(tempDir("wt"), "vanished");
     seed(gone);
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const released: string[] = [];
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async (directory) => {
         released.push(directory);
@@ -246,9 +250,9 @@ describe("remove", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const result = await remove({ db: ctx.db, git, blobsRoot: "unused" }, "ticket-1", {
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
       force: false,
       releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }),
     });
@@ -291,11 +295,15 @@ describe("remove — a directory git has forgotten", () => {
   it("deletes the folder itself once the user confirms, and clears the stamp", async () => {
     const home = tempDir("home");
     const wt = seedStranded(home);
-    const { git, calls } = forgottenGit(wt);
+    const { git, gitAsync, calls } = forgottenGit(wt);
 
-    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
-      force: true,
-    });
+    const result = await remove(
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
+      "ticket-1",
+      {
+        force: true,
+      },
+    );
 
     expect(result.ok).toBe(true);
     expect(existsSync(wt)).toBe(false);
@@ -311,11 +319,15 @@ describe("remove — a directory git has forgotten", () => {
   it("still asks first: an unconfirmed remove refuses with the escalation prefix", async () => {
     const home = tempDir("home");
     const wt = seedStranded(home);
-    const { git } = forgottenGit(wt);
+    const { git, gitAsync } = forgottenGit(wt);
 
-    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
-      force: false,
-    });
+    const result = await remove(
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
+      "ticket-1",
+      {
+        force: false,
+      },
+    );
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -331,11 +343,15 @@ describe("remove — a directory git has forgotten", () => {
     const outside = tempDir("elsewhere");
     writeFileSync(join(outside, "precious.txt"), "not ours");
     seed(outside);
-    const { git } = forgottenGit(outside);
+    const { git, gitAsync } = forgottenGit(outside);
 
-    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
-      force: true,
-    });
+    const result = await remove(
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
+      "ticket-1",
+      {
+        force: true,
+      },
+    );
 
     expect(result.ok).toBe(false);
     expect(existsSync(join(outside, "precious.txt"))).toBe(true);
@@ -345,15 +361,19 @@ describe("remove — a directory git has forgotten", () => {
   it("routes back to git's own refusal when the listing cannot be read at all", async () => {
     const home = tempDir("home");
     const wt = seedStranded(home);
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "worktree" && args[1] === "list") throw new Error("not a git repository");
       if (args[0] === "worktree" && args[1] === "remove") throw new Error("fatal: nope");
       return "";
     });
 
-    const result = await remove({ db: ctx.db, git, home, blobsRoot: "unused" }, "ticket-1", {
-      force: true,
-    });
+    const result = await remove(
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
+      "ticket-1",
+      {
+        force: true,
+      },
+    );
 
     // Ambiguity must never reach the rm -rf branch.
     expect(result.ok).toBe(false);

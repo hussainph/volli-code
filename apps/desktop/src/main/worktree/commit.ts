@@ -27,16 +27,17 @@
  *  - Hook failures (a real reason a commit should not land) surface the actual
  *    stderr, never a swallowed toast.
  *
- * The quick probes (sequencer marker, `status --porcelain`) stay on the sync
- * `RunGit`, but `add`/`commit` run through the ASYNC {@link RunNet} runner:
- * `git commit` executes arbitrary hook code (pre-commit, commit-msg) whose
- * duration is unbounded, and a sync subprocess there would freeze the main
- * process — every window, IPC channel, and PTY — for the hook's full run.
+ * The probes (sequencer marker, `status --porcelain`) run on the async
+ * `RunGitAsync` (VC-383 — they were the last two sync children on the Done
+ * rail's click), and `add`/`commit` run through the ASYNC {@link RunNet}
+ * runner: `git commit` executes arbitrary hook code (pre-commit, commit-msg)
+ * whose duration is unbounded, and a sync subprocess there would freeze the
+ * main process — every window, IPC channel, and PTY — for the hook's full run.
  */
 import { stderrOf } from "./git";
 import { extractFailure, type RunNet } from "./net";
-import { detectSequencerState } from "./sequencer";
-import { err, ok, type RunGit, type WorktreeResult } from "./types";
+import { detectSequencerStateAsync } from "./sequencer";
+import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface CommitRemainingInput {
   worktreePath: string;
@@ -84,13 +85,13 @@ export type CommitOutcome = { committed: true; message: string } | { committed: 
 
 /** Runs the one-click commit safety net; see the module doc for its rules. */
 export async function commitRemaining(
-  git: RunGit,
+  git: RunGitAsync,
   net: RunNet,
   input: CommitRemainingInput,
 ): Promise<WorktreeResult<CommitOutcome>> {
   // Only a CONFIRMED in-progress operation blocks; `unknown` (git-dir
   // unresolvable) falls through so the real breakage surfaces on `add`/`commit`.
-  if (detectSequencerState(git, input.worktreePath) === "active") {
+  if ((await detectSequencerStateAsync(git, input.worktreePath)) === "active") {
     return err(
       "This worktree has a merge, rebase, cherry-pick, revert, or bisect in progress. " +
         "Finish or abort that operation before committing.",
@@ -101,7 +102,7 @@ export async function commitRemaining(
   try {
     // `status --porcelain` covers staged + unstaged + untracked; empty means
     // `add -A` would stage nothing, so there is genuinely nothing to commit.
-    porcelain = git(["status", "--porcelain"], input.worktreePath);
+    porcelain = await git(["status", "--porcelain"], input.worktreePath);
   } catch (caught) {
     return err(stderrOf(caught));
   }

@@ -19,8 +19,19 @@
  * as the delete is also what narrows the gate's own check-to-destroy window:
  * anything that started a turn since the gate ran is stopped here rather than
  * having its directory pulled out from under it.
+ *
+ * OFF THE MAIN THREAD (VC-383). This verb runs on the Electron main process,
+ * and it is reached unattended: the retention watch's reclaim fires it from a
+ * timer and from every window focus, not only from the "Remove worktree…"
+ * click. On the sync runner it was five serial `execFileSync` children for the
+ * dirty predicate, then `git worktree remove` — which deletes the whole
+ * checkout, `node_modules` and all, inside one child — and for a forgotten
+ * directory a recursive `rmSync` of the same. Every window froze for the length
+ * of the delete, with nothing the person had clicked. All of it is on the
+ * async runner and `fs/promises` now; the order and the refusals are unchanged.
  */
-import { existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 
 import {
   WORKTREE_DIRTY_REFUSAL_PREFIX,
@@ -33,12 +44,12 @@ import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import type { AgentSiteReleaseReport } from "./agent-sites";
 import { isOwnedWorktreePath, ownedContainers } from "./containers";
-import { isWorktreeDirty } from "./dirty";
-import { GitError, parseWorktreeList } from "./git";
+import { isWorktreeDirtyAsync } from "./dirty";
+import { GitError, parseWorktreeList, runGitCapturingAsync } from "./git";
 import { homeDir } from "./home";
 import { canonicalize } from "./paths";
 import { clearPhase } from "./phase";
-import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
@@ -82,6 +93,10 @@ export async function remove(
   const project = getProjectById(deps.db, ticket.project_id);
   if (!project) return err("Unknown project");
 
+  // The async runner, never `deps.git`: a fallback to the sync one would put
+  // the delete back on the main thread in silence (the `read.ts` rule).
+  const git = deps.gitAsync ?? runGitCapturingAsync;
+
   // Dir already gone (deleted manually, or a stale row): there is no work left
   // to protect and `git worktree remove` would fail on the missing path — prune
   // the stale registration and clear identity so the ticket isn't dead-ended.
@@ -89,17 +104,13 @@ export async function remove(
   // exists to clean up, so it is released here too.
   if (!existsSync(worktreePath)) {
     await opts.releaseAgentSites?.(worktreePath);
-    try {
-      deps.git(["worktree", "prune"], project.path);
-    } catch {
-      // Metadata cleanup is best-effort; the identity clear below still runs.
-    }
+    await pruneBestEffort(git, project.path);
     clearIdentity(deps, ticketId);
     return ok(undefined);
   }
 
   if (!opts.force) {
-    const dirty = isWorktreeDirty(deps.git, {
+    const dirty = await isWorktreeDirtyAsync(git, {
       worktreePath,
       branch: ticket.branch,
       baseBranch: ticket.base_branch,
@@ -124,7 +135,7 @@ export async function remove(
   //
   // Deciding this is a READ, so it happens here: after the dirty gate, before
   // anything is released or deleted.
-  const registered = isRegisteredWorktree(deps, project.path, worktreePath);
+  const registered = await isRegisteredWorktree(git, project.path, worktreePath);
   // The plain delete is the one destructive act in this module git itself does
   // not perform, so it is never reached without an explicit confirmation, not
   // even when the dirty predicate happened to read the folder as clean. It
@@ -158,24 +169,20 @@ export async function remove(
       );
     }
     try {
-      rmSync(worktreePath, { recursive: true, force: true });
+      await rm(worktreePath, { recursive: true, force: true });
     } catch (caught) {
       return err(
         `Couldn't delete the folder: ${caught instanceof Error ? caught.message : String(caught)}`,
       );
     }
-    try {
-      deps.git(["worktree", "prune"], project.path);
-    } catch {
-      // Metadata cleanup is best-effort; the identity clear below still runs.
-    }
+    await pruneBestEffort(git, project.path);
     clearIdentity(deps, ticketId);
     return ok(undefined);
   }
 
   try {
     const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
-    deps.git(args, project.path);
+    await git(args, project.path);
   } catch (caught) {
     const message =
       caught instanceof GitError && caught.stderr.trim()
@@ -191,20 +198,29 @@ export async function remove(
   return ok(undefined);
 }
 
+/** Metadata cleanup is best-effort; the identity clear that follows still runs. */
+async function pruneBestEffort(git: RunGitAsync, projectPath: string): Promise<void> {
+  try {
+    await git(["worktree", "prune"], projectPath);
+  } catch {
+    // Best-effort by contract — see the caller.
+  }
+}
+
 /**
  * Whether git still registers `worktreePath` as a worktree of the project. An
  * unreadable listing answers TRUE — the plain-delete fallback above is the
  * destructive branch, so ambiguity has to route back to git's own refusal
  * rather than to an rm -rf.
  */
-function isRegisteredWorktree(
-  deps: WorktreeDeps,
+async function isRegisteredWorktree(
+  git: RunGitAsync,
   projectPath: string,
   worktreePath: string,
-): boolean {
+): Promise<boolean> {
   let listing: string;
   try {
-    listing = deps.git(["worktree", "list", "--porcelain"], projectPath);
+    listing = await git(["worktree", "list", "--porcelain"], projectPath);
   } catch {
     return true;
   }

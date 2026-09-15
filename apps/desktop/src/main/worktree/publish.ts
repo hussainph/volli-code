@@ -298,7 +298,7 @@ export async function commitTicketRemaining(
     return err("This ticket has no worktree yet, so there is nothing to commit.");
   }
   const displayId = displayTicketId(project.ticketPrefix, ticket.ticket_number);
-  const result = await commitRemaining(deps.git, deps.net, {
+  const result = await commitRemaining(deps.gitAsync ?? runGitCapturingAsync, deps.net, {
     worktreePath: ticket.worktree_path,
     displayId,
     ...choices,
