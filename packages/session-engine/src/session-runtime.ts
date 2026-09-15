@@ -657,6 +657,11 @@ const EVENT_PAGE_SIZE = 500;
  * of every file at once on a machine that is already running a dozen agents.
  * Order is preserved: the frame list is positional, so the window only
  * changes WHEN each artifact is read, never where it lands.
+ *
+ * The bound is exported deliberately: VC-383's behavioral test imports this
+ * source of truth through the package barrel instead of carrying a second
+ * magic number. It is an observable runtime limit, not a caller-tunable
+ * option.
  */
 export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
 /**
@@ -2936,20 +2941,30 @@ class DefaultSessionRuntime implements SessionRuntime {
    * at once is the wrong shape for a long Session on a loaded machine. Each
    * worker takes the next index, reads it, and writes the frame into that
    * index's slot, so the result is positional regardless of which read
-   * finished first. A rejected read rejects the whole snapshot, exactly as the
-   * serial loop did — a transcript the store cannot verify is not a frame to
-   * silently skip.
+   * finished first. VC-383 also stops workers before they claim another index
+   * after a read fails. The peer worker promises remain enrolled in
+   * `Promise.all`, so concurrent read failures are observed rather than
+   * becoming unhandled; its first rejection remains the snapshot's error, just
+   * as the serial loop did — a transcript the store cannot verify is not a
+   * frame to silently skip.
    */
   async #frames(events: readonly SessionEvent[]): Promise<SessionStreamFrame[]> {
     const frames: SessionStreamFrame[] = [];
     frames.length = events.length;
     let next = 0;
+    let stopped = false;
     const worker = async (): Promise<void> => {
       for (;;) {
+        if (stopped) return;
         const index = next++;
         const event = events[index];
         if (event === undefined) return;
-        frames[index] = await this.#frame(event);
+        try {
+          frames[index] = await this.#frame(event);
+        } catch (error) {
+          stopped = true;
+          throw error;
+        }
       }
     };
     const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, events.length);

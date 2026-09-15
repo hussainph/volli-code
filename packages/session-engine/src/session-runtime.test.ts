@@ -1247,24 +1247,32 @@ describe("SessionRuntime native adapter contract", () => {
     // more than the bound, and the frames land in event order regardless of
     // which read finished first.
     const memory = createInMemoryTranscriptArtifactStore();
+    const turns = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 3;
+    const artifactIndexes = new Map<string, number>();
+    const completed: number[] = [];
     let inFlight = 0;
     let peak = 0;
     const artifacts: TranscriptArtifactStore = {
-      write: (record) => memory.write(record),
+      write: async (record) => {
+        const reference = await memory.write(record);
+        artifactIndexes.set(reference.id, artifactIndexes.size);
+        return reference;
+      },
       read: async (reference) => {
+        const index = artifactIndexes.get(reference.id)!;
         inFlight += 1;
         peak = Math.max(peak, inFlight);
-        // Every read yields once, so the pool's reads genuinely overlap; a
-        // store that resolved synchronously would show a peak of one and
-        // prove nothing about the bound.
-        await settleMicrotasks();
+        // The last artifact issued has the shortest delay, so this fixture
+        // settles reads out of issue order. A completion-order `push` would
+        // therefore scramble the snapshot rather than accidentally passing.
+        for (let delay = turns - index; delay > 0; delay -= 1) await Promise.resolve();
+        completed.push(index);
         inFlight -= 1;
         return memory.read(reference);
       },
     };
     const { runtime, adapter } = composition({ artifacts });
     const sessionId = await createAndAttach(runtime);
-    const turns = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 3;
     for (let index = 0; index < turns; index += 1) {
       await adapter.emit({
         kind: "message-settled",
@@ -1278,6 +1286,7 @@ describe("SessionRuntime native adapter contract", () => {
 
     expect(peak).toBeGreaterThan(1);
     expect(peak).toBeLessThanOrEqual(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(completed).not.toEqual(Array.from({ length: turns }, (_, index) => index));
     expect(snapshot.frames.map(({ sequence }) => sequence)).toEqual(
       snapshot.frames.map((_, index) => index + 1),
     );
@@ -1286,6 +1295,173 @@ describe("SessionRuntime native adapter contract", () => {
         message: { parts: [{ text: `Reply ${index}` }] },
       })),
     );
+  });
+
+  it("stops a snapshot's artifact pool after a mid-pool read rejects", async () => {
+    // VC-383: Feed the pool only transcript events, so every first-window
+    // cursor index is a read. The successful peers wait until the failure is
+    // visible; an old worker would then keep consuming later indices, while a
+    // stopped pool has only this first window in its attempt log.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const artifactCount = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 1;
+    const failedArtifact = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
+    const failure = new Error("transcript artifact cannot be verified");
+    const artifactIndexes = new Map<string, number>();
+    const reads: number[] = [];
+    const failedRead = new Gate();
+    const releasePeers = new Gate();
+    const firstWindowSettled = new Gate();
+    let settledPeers = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: async (record) => {
+        const reference = await memory.write(record);
+        artifactIndexes.set(reference.id, artifactIndexes.size);
+        return reference;
+      },
+      read: async (reference) => {
+        const index = artifactIndexes.get(reference.id)!;
+        reads.push(index);
+        if (index === failedArtifact) {
+          failedRead.resolve();
+          throw failure;
+        }
+        if (index < SNAPSHOT_ARTIFACT_READ_CONCURRENCY) {
+          await releasePeers.promise;
+          settledPeers += 1;
+          if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
+            firstWindowSettled.resolve();
+          }
+        }
+        return memory.read(reference);
+      },
+    };
+    const seeded = composition({ artifacts });
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < artifactCount; index += 1) {
+      await seeded.adapter.emit({
+        kind: "message-settled",
+        turnId: `failed-turn-${index}`,
+        occurredAt: 400 + index,
+        message: {
+          entryId: `failed-assistant-${index}`,
+          role: "assistant",
+          text: `Failed reply ${index}`,
+        },
+      });
+    }
+    const transcriptEvents = (await seeded.engine.listEvents({ sessionId })).filter(
+      (event) => event.payload.kind === "transcript.referenced",
+    );
+    expect(transcriptEvents).toHaveLength(artifactCount);
+    const transcriptOnly: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => transcriptEvents,
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: transcriptOnly,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = runtime.snapshot({ sessionId });
+    await failedRead.promise;
+    await expect(snapshot).rejects.toBe(failure);
+    releasePeers.resolve();
+    await firstWindowSettled.promise;
+    await settleMicrotasks();
+
+    expect(reads).toHaveLength(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(reads).toContain(failedArtifact);
+    expect(reads.length).toBeLessThan(transcriptEvents.length);
+  });
+
+  it("reads every artifact when a snapshot has fewer events than its window", async () => {
+    // VC-383: a short history still takes one worker per actual event, rather
+    // than reserving a full window or treating a small snapshot as empty.
+    const memory = createInMemoryTranscriptArtifactStore();
+    const replies = 3;
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: async (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const seeded = composition({ artifacts });
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < replies; index += 1) {
+      await seeded.adapter.emit({
+        kind: "message-settled",
+        turnId: `short-turn-${index}`,
+        occurredAt: 500 + index,
+        message: {
+          entryId: `short-assistant-${index}`,
+          role: "assistant",
+          text: `Short reply ${index}`,
+        },
+      });
+    }
+    const transcriptEvents = (await seeded.engine.listEvents({ sessionId })).filter(
+      (event) => event.payload.kind === "transcript.referenced",
+    );
+    const transcriptOnly: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => transcriptEvents,
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: transcriptOnly,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(transcriptEvents.length).toBeLessThan(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(snapshot.frames.map(({ event }) => event.id)).toEqual(
+      transcriptEvents.map(({ id }) => id),
+    );
+    expect(reads).toBe(transcriptEvents.length);
+    expect(snapshot.transcript).toMatchObject(
+      Array.from({ length: replies }, (_, index) => ({
+        message: { parts: [{ text: `Short reply ${index}` }] },
+      })),
+    );
+  });
+
+  it("returns empty frames and transcript without reading artifacts for an empty event list", async () => {
+    // VC-383: zero events creates zero workers, and there is no phantom
+    // artifact operation for an empty Session history.
+    const seeded = composition();
+    const sessionId = await createAndAttach(seeded.runtime);
+    const memory = createInMemoryTranscriptArtifactStore();
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: async (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const emptyEvents: SessionEngine = {
+      ...seeded.engine,
+      listEvents: async () => [],
+      getProjectionCheckpoint: async () => null,
+    };
+    const runtime = composition({
+      engine: emptyEvents,
+      adapter: new FakeAdapter(),
+      artifacts,
+    }).runtime;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.throughSequence).toBe(0);
+    expect(snapshot.frames).toEqual([]);
+    expect(snapshot.transcript).toEqual([]);
+    expect(reads).toBe(0);
   });
 
   it("does not append or publish a transcript reference when the artifact write fails", async () => {
