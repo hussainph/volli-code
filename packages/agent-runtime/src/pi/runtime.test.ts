@@ -9464,12 +9464,15 @@ function utilityModels(
   onCall?: (call: {
     model: Model<string>;
     context: Context;
-    options: { reasoning?: string; signal?: AbortSignal } | undefined;
+    options:
+      | { reasoning?: string; signal?: AbortSignal; headers?: Record<string, string> }
+      | undefined;
   }) => void,
+  provider = PROVIDER_ID,
 ): Models {
   const faux = fauxProvider({
     api: "anthropic-messages",
-    provider: PROVIDER_ID,
+    provider,
     models: [{ id: MODEL_ID, reasoning: true }],
   });
   const models = createModels();
@@ -9554,6 +9557,32 @@ describe("completeUtility", () => {
       user: "The login button is broken",
     });
     expect(calls[0]!.options).toEqual({ reasoning: "low" });
+  });
+
+  it("sends a distinct routing identity with every OpenCode Go utility request", async () => {
+    const calls: Parameters<NonNullable<Parameters<typeof utilityModels>[1]>>[0][] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: mkdtempSync(join(tmpdir(), "volli-utility-")),
+      models: utilityModels(
+        { text: "Fix the login flow" },
+        (call) => calls.push(call),
+        "opencode-go",
+      ),
+    });
+    const input = {
+      model: { providerId: "opencode-go", modelId: MODEL_ID, reasoningLevel: "off" } as const,
+      systemPrompt: "Title this conversation.",
+      user: "The login button is broken",
+    };
+
+    await runtime.completeUtility(input);
+    await runtime.completeUtility(input);
+
+    const first = calls[0]!.options?.headers?.["x-opencode-session"];
+    const second = calls[1]!.options?.headers?.["x-opencode-session"];
+    expect(first).toEqual(expect.any(String));
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
   });
 
   it("hands the caller's deadline to the provider", async () => {
