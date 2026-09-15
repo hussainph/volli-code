@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { SyncStateStorage } from "@renderer/lib/app-state-storage";
 
@@ -21,6 +21,20 @@ function fakeStorage(): SyncStateStorage & { map: Map<string, string> } {
   };
 }
 
+/**
+ * The same double, plus the durable adapter's `flush` — which is what says a
+ * write left now instead of on the debounce.
+ */
+function flushableStorage(): SyncStateStorage & {
+  map: Map<string, string>;
+  flush: ReturnType<typeof vi.fn>;
+} {
+  const base = fakeStorage();
+  return Object.assign(base, { flush: vi.fn<(key: string) => void>() });
+}
+
+const DRAFT_KEY = "volli:automation-editor-draft";
+
 function draft(overrides: Partial<AutomationEditorDraft> = {}): AutomationEditorDraft {
   return {
     name: "Nightly sweep",
@@ -33,6 +47,59 @@ function draft(overrides: Partial<AutomationEditorDraft> = {}): AutomationEditor
     ...overrides,
   };
 }
+
+describe("a retraction does not wait for the debounce", () => {
+  // The defect this covers (VC-375): the clear reached the cache but its write
+  // was still sitting on the 200ms debounce when the app quit, so the next
+  // launch read the draft back out of SQLite and the Automations page opened
+  // on a create form with the saved record unreachable.
+  it("flushes when a slot is cleared, so a quit cannot resurrect the draft", () => {
+    const storage = flushableStorage();
+    saveEditorDraft("p1", draft(), storage);
+    expect(storage.flush).not.toHaveBeenCalled();
+
+    clearEditorDraft("p1", storage);
+    expect(storage.flush).toHaveBeenCalledWith(DRAFT_KEY);
+    expect(loadEditorDraft("p1", storage)).toBeNull();
+  });
+
+  it("flushes when erasing a new draft, which is the same retraction by another name", () => {
+    const storage = flushableStorage();
+    saveEditorDraft("p1", draft(), storage);
+    storage.flush.mockClear();
+
+    saveEditorDraft("p1", draft({ name: "", instructions: "", triggerChoice: "none" }), storage);
+    expect(storage.flush).toHaveBeenCalledWith(DRAFT_KEY);
+    expect(loadEditorDraft("p1", storage)).toBeNull();
+  });
+
+  it("does not flush an ordinary keystroke, which the debounce exists for", () => {
+    const storage = flushableStorage();
+    saveEditorDraft("p1", draft({ name: "N" }), storage);
+    saveEditorDraft("p1", draft({ name: "Ni" }), storage);
+    saveEditorDraft("p1", draft({ name: "Nig" }), storage, "a1");
+    expect(storage.flush).not.toHaveBeenCalled();
+  });
+
+  it("clears every other project's draft not at all, and still flushes", () => {
+    const storage = flushableStorage();
+    saveEditorDraft("p1", draft(), storage);
+    saveEditorDraft("p2", draft({ name: "Kept" }), storage);
+    storage.flush.mockClear();
+
+    clearEditorDraft("p1", storage);
+    expect(storage.flush).toHaveBeenCalledWith(DRAFT_KEY);
+    expect(loadEditorDraft("p1", storage)).toBeNull();
+    expect(loadEditorDraft("p2", storage)?.name).toBe("Kept");
+  });
+
+  it("asks nothing of a storage that cannot flush", () => {
+    const storage = fakeStorage();
+    saveEditorDraft("p1", draft(), storage);
+    expect(() => clearEditorDraft("p1", storage)).not.toThrow();
+    expect(loadEditorDraft("p1", storage)).toBeNull();
+  });
+});
 
 describe("saveEditorDraft/loadEditorDraft", () => {
   it("round-trips the full field state, per project", () => {

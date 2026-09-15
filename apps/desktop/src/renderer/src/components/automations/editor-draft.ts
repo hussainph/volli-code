@@ -141,20 +141,29 @@ export function saveEditorDraft(
 ): void {
   const drafts = readDrafts(storage);
   const key = slotKey(projectId, automationId);
-  if (automationId === null && isEmptyEditorDraft(draft)) {
+  // Erasing a new draft is a retraction like {@link clearEditorDraft}'s, so it
+  // leaves the same way: at once, rather than on the debounce.
+  const retracting = automationId === null && isEmptyEditorDraft(draft);
+  if (retracting) {
     if (drafts[key] === undefined) return;
     delete drafts[key];
   } else {
     drafts[key] = draft;
   }
-  if (Object.keys(drafts).length === 0) {
-    storage.removeItem(DRAFT_KEY);
-    return;
-  }
-  storage.setItem(DRAFT_KEY, JSON.stringify({ version: DRAFT_VERSION, drafts }));
+  writeDrafts(storage, drafts, retracting);
 }
 
-/** Consume or explicitly discard one slot, leaving every other draft intact. */
+/**
+ * Consume or explicitly discard one slot, leaving every other draft intact.
+ *
+ * The write leaves on the spot rather than on the debounce. A draft is the one
+ * value here whose retraction matters MORE than its last keystroke: a save the
+ * debounce drops at quit costs a few typed words, but a CLEAR the debounce
+ * drops is the draft coming back from the dead at the next launch — and a
+ * resurrected new-record draft is what the Automations page reads as "resume
+ * the record you were creating", so the page opens on a blank create form with
+ * the saved Automation unreachable, every arrival, forever (VC-375).
+ */
 export function clearEditorDraft(
   projectId: string,
   storage: SyncStateStorage = appStateStorage,
@@ -164,9 +173,19 @@ export function clearEditorDraft(
   const key = slotKey(projectId, automationId);
   if (drafts[key] === undefined) return;
   delete drafts[key];
-  if (Object.keys(drafts).length === 0) {
-    storage.removeItem(DRAFT_KEY);
-    return;
-  }
-  storage.setItem(DRAFT_KEY, JSON.stringify({ version: DRAFT_VERSION, drafts }));
+  writeDrafts(storage, drafts, true);
+}
+
+/**
+ * One way out to storage for both writers, so "the row holds what is left" and
+ * "a retraction does not wait" are decided in one place.
+ */
+function writeDrafts(
+  storage: SyncStateStorage,
+  drafts: Record<string, AutomationEditorDraft>,
+  retracting: boolean,
+): void {
+  if (Object.keys(drafts).length === 0) storage.removeItem(DRAFT_KEY);
+  else storage.setItem(DRAFT_KEY, JSON.stringify({ version: DRAFT_VERSION, drafts }));
+  if (retracting) storage.flush?.(DRAFT_KEY);
 }
