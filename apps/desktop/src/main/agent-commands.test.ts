@@ -56,6 +56,7 @@ import { writeModelAccessDefault } from "./session-runtime/model-access-preferen
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { scriptedGit } from "./worktree/scripted-git";
+import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
 
@@ -177,6 +178,9 @@ function createAgentCommandService(
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
+// The rail's last-known snapshot is process-wide (VC-372): every test here
+// starts from a clean launch and leaves no covered ticket behind.
+afterEach(() => resetWorktreeSnapshotsForTest());
 
 /**
  * The notification port, as a test records it: the WHOLE request (producer and
@@ -4943,6 +4947,102 @@ describe("agent command service", () => {
     await seedWorktreeTicket(service);
     return { service, calls };
   };
+
+  it("retires the rail's last-known snapshot when a merge lands", async () => {
+    let head = "aaaaaaa";
+    const { service } = await syncScenario((args) => {
+      if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "rev-parse") return `${head}\n`;
+      if (args[0] === "merge") {
+        head = "ddddddd";
+        return "";
+      }
+      if (args[0] === "rev-list") return "2\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      return "";
+    });
+
+    // Prime a covered answer, the way an open rail would have.
+    const snapshots = getWorktreeSnapshots();
+    snapshots.noteCovered("ticket-one");
+    const okRead = {
+      kind: "ok" as const,
+      displayId: "VC-1",
+      worktreePath: "/wt/VC-1",
+      branch: "volli/VC-1-ship",
+      baseBranch: "main",
+      status: {
+        uncommitted: false,
+        sequencerActive: false,
+        aheadOfBase: 0,
+        behindBase: 0,
+        unpushed: null,
+      },
+    };
+    const load = vi.fn(async () => okRead);
+    await snapshots.readStatus("ticket-one", load);
+    expect(await snapshots.readStatus("ticket-one", load)).toBe(okRead);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(res).toMatchObject({ ok: true });
+
+    // The merge moved the branch: the rail must not be served the pre-merge
+    // answer any more.
+    await snapshots.readStatus("ticket-one", load);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves `worktree status` from the rail's last-known snapshot while it is covered", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git, gitAsync, calls } = scriptedGit((args) => {
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t0\n";
+      if (args[0] === "rev-list") return "0\n";
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+    getWorktreeSnapshots().noteCovered("ticket-one");
+
+    const request = {
+      v: 1 as const,
+      cmd: "worktree.status" as const,
+      args: {},
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
+    };
+    await service.execute(request);
+    const afterFirst = calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    // The five-child read a window's rail just paid for answers the CLI too.
+    expect(await service.execute(request)).toMatchObject({ ok: true });
+    expect(calls.length).toBe(afterFirst);
+  });
 
   it("merges the base into a ticket's branch and reports what moved", async () => {
     let head = "aaaaaaa";
