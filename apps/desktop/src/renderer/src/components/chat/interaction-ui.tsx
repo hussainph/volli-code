@@ -169,7 +169,7 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
  * drift apart a class at a time.
  */
 const OPTION_ROW =
-  "group flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
+  "group flex min-w-0 cursor-default items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
 
 /** The disc at the head of a row: a numeral on one card, a tick on the other. */
 const OPTION_MARK =

@@ -79,13 +79,15 @@ const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
  * It cannot take `MENU_ROW` wholesale: a menu row is a 28px single-line
  * control and this one stacks a title over its context. What it can take is the
  * part that has nothing to do with height — cmdk's selected/disabled recipe —
- * so the palette highlights exactly like every menu in the app.
+ * so the palette highlights exactly like every menu in the app, cursor
+ * included: a row answers a press with the arrow, never the hand
+ * (`docs/DESIGN.md`'s cursor rule).
  *
  * The height is the two line boxes plus `py-2`: `text-ui` (20) over
  * `text-label` (16) plus 16 is 52. Nothing here pins it, and every value is a
  * ladder rung (docs/DESIGN.md's five steps — no half-steps here).
  */
-const PALETTE_ROW = `flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const PALETTE_ROW = `flex cursor-default items-center gap-2 rounded-lg px-2 py-2 outline-none ${MENU_ROW_STATE_CMDK}`;
 
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";

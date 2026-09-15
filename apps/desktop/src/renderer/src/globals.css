@@ -1521,7 +1521,6 @@ input[type="range"] {
   appearance: none;
   height: 1rem;
   background: transparent;
-  cursor: pointer;
 }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
