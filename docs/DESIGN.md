@@ -263,6 +263,37 @@ drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-p
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
 hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
 
+## Cursors — native, and one rule
+
+The pointer stays native, and native means the arrow. The hand is reserved for **links that
+leave the app** — a rendered `<a>` in prose, Document Mode's followable link. Nothing else: a
+button, a row, or any control that answers a press shows the arrow. Tailwind v4 dropped the old
+`cursor: pointer` from buttons and this app keeps it dropped (VC-381); a `cursor-pointer` in the
+app UI is a bug, not a missing affordance.
+
+Clickable rows that are not `<button>`s — tabs, menu rows, the palette and quick-open rows, the
+transcript's tool rows, the answer and verdict rows — carry `cursor-default select-none`: the
+arrow, so a row never shows the text caret, and no selection, so a press-drag across a row
+answers the click instead of painting a selection. `MENU_ROW` has said this since the menus were
+unified; `ui/tab-strip.tsx` was the one interactive row that never picked it up, which is why
+every tab in the app hovered like a line of text. A `select-none` row that contains a real field
+is the field's exception: `ui/inline-rename.tsx` hands selection back with `select-text`.
+
+The deliberate exceptions, all already in the code:
+
+| Surface | Cursor | Where |
+|---|---|---|
+| Links that leave the app | hand | the UA default on `<a>`; `.volli-md-link-open` for the editor's links |
+| A drag in flight | `cursor-grabbing` | the board's lifted card, a tab being carried, the effort rail at `data-dragging` |
+| A surface that is only a drag | `cursor-grab` | the board's canvas pan, automation lane cards |
+| Resize handles | `cursor-col-resize` / `cursor-row-resize` | `sidebar/sidebar-resize-handle.tsx`, `ticket/rail-resize-handle.tsx`, `split/split-view-divider.tsx`, `sessions/session-split-layout.tsx` |
+| Disabled controls | `cursor-not-allowed` | `ui/switch.tsx`, `ui/input.tsx`, `ui/textarea.tsx`, `ui/select.tsx`, `ui/command.tsx` |
+| Text, and the controls that open onto it | I-beam | real fields (UA default); `cursor-text` on `ui/input-group.tsx`'s addon and `ticket/ticket-title.tsx`, where a press lands the caret |
+
+Click-and-drag tiles — board cards, tabs before the drag engages — keep the arrow at rest: the
+click is the primary answer, and the closed hand appears only once a drag is actually carrying
+something. The UI lab (`renderer/lab/`) is a scratch space and is not held to this.
+
 ## Split view — panes, zones, and the empty pane (VC-202)
 
 Both tabbed surfaces divide their plane into **panes** (`components/split/`). One grid draws the

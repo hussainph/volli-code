@@ -46,7 +46,7 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
  * file's name and its folder are one fact read left to right, and the list is
  * long enough that 52px rows would show half as many of them.
  */
-const QUICK_OPEN_ROW = `flex h-7 cursor-pointer items-center gap-2 rounded-lg px-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const QUICK_OPEN_ROW = `flex h-7 cursor-default items-center gap-2 rounded-lg px-2 outline-none ${MENU_ROW_STATE_CMDK}`;
 
 /** The row's leading glyph: bare and muted, exactly the palette's. */
 const QUICK_OPEN_ROW_ICON = "size-4 shrink-0 text-muted-foreground";

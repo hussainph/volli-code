@@ -311,7 +311,7 @@ export function EffortSlider({
       aria-valuetext={effortLabel(value)}
       data-dragging={dragging ? "" : undefined}
       className={cn(
-        "group/rail relative w-56 shrink-0 cursor-pointer touch-none select-none outline-none",
+        "group/rail relative w-56 shrink-0 cursor-default touch-none select-none outline-none",
         "data-[dragging]:cursor-grabbing",
       )}
       onPointerDown={(event) => {
