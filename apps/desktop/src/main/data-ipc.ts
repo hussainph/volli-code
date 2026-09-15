@@ -214,6 +214,7 @@ import {
   WorktreeChangeWatchManager,
 } from "./worktree";
 import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./worktree/coalesce";
+import { getWorktreeSnapshots } from "./worktree/snapshot";
 import { credentialHelperIssues } from "./credential-helper-diagnostics";
 import { getRetentionWatcher } from "./retention-runtime";
 import {
@@ -336,6 +337,9 @@ async function materializeSwitchedOnWorktree(
   const outcome = await ensure(worktreeDeps(db), ticketId).finally(() => {
     materializingWorktrees.delete(ticketId);
   });
+  // A checkout appeared (or the attempt left one half-made): a last-known
+  // snapshot taken while the ticket had no worktree cannot describe it (VC-372).
+  getWorktreeSnapshots().invalidate(ticketId);
   // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
   // new identity stamp to show. Failure has a scope flag that really did change
   // under a renderer that is about to revert it optimistically off the back of
@@ -470,7 +474,21 @@ export function registerDataIpcHandlers(
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
-  const changeWatchManager = new WorktreeChangeWatchManager();
+  const changeWatchManager = new WorktreeChangeWatchManager({
+    // The rail's last-known snapshot (VC-372) listens to the same watch the
+    // renderers do: coverage says whether an answer can be trusted at all, and
+    // a relevant change (reported before the debounced broadcast, which is the
+    // earliest this process knows) says the answer is already stale.
+    onCoverageChange: (ticketId, covered) => {
+      const snapshots = getWorktreeSnapshots();
+      if (covered) snapshots.noteCovered(ticketId);
+      else snapshots.noteUncovered(ticketId);
+    },
+    onRelevantChange: (ticketIds) => {
+      const snapshots = getWorktreeSnapshots();
+      for (const ticketId of ticketIds) snapshots.invalidate(ticketId);
+    },
+  });
   const coalesceChangeSet = createCoalescer();
   /**
    * The rail's status and diff reads, coalesced per ticket the way the Change
@@ -513,6 +531,9 @@ export function registerDataIpcHandlers(
     )
       .then((outcome) => {
         if (outcome.kind !== "trimmed") return;
+        // The checkout's contents moved under a ticket a rail may still be
+        // watching: its last-known snapshot is stale (VC-372).
+        getWorktreeSnapshots().invalidate(ticketId);
         broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
       })
       .catch((error: unknown) => {
@@ -1272,6 +1293,7 @@ export function registerDataIpcHandlers(
       // with it. Renderers never unwatch here — from their side the ticket
       // simply stopped having a worktree.
       changeWatchManager.unwatchTicket(input.ticketId);
+      getWorktreeSnapshots().invalidate(input.ticketId);
       // The worktree identity changed (path cleared) for THIS ticket — re-hydrate
       // every board, and let this ticket's own surfaces refresh promptly.
       broadcastDataChanged({
@@ -1309,6 +1331,9 @@ export function registerDataIpcHandlers(
       if (!outcome.ok) return { ok: false, error: outcome.error };
       const worktreePath = outcome.value.identity.worktreePath;
       if (worktreePath === null) return { ok: false, error: "Worktree path was not resolved" };
+      // A checkout came back (or was replaced): whatever this ticket's watch was
+      // serving describes the directory that was missing (VC-372).
+      getWorktreeSnapshots().invalidate(input.ticketId);
       // The identity moved (or came back), so every board re-hydrates and this
       // ticket's own surfaces refresh promptly — same targeting the scope
       // switch and the terminal boot use.
@@ -1446,8 +1471,10 @@ export function registerDataIpcHandlers(
       // The cached scan describes a world that no longer exists.
       invalidateOrphanScan();
       // Orphans are by definition unlinked from any live ticket, so there is no
-      // ticket to target — untargeted (everyone re-hydrates).
+      // ticket to target — untargeted (everyone re-hydrates). Their directories
+      // are gone, so no last-known snapshot may outlive them either (VC-372).
       if (outcome.run.items.some((item) => item.state === "completed")) {
+        getWorktreeSnapshots().invalidateAll();
         broadcastDataChanged({ kind: "worktree" });
       }
       return { ok: true, run: outcome.run, receipt: outcome.receipt };
@@ -1519,7 +1546,9 @@ export function registerDataIpcHandlers(
       invalidateOrphanScan();
       // A dirty orphan left the board's attention list. An orphan is by
       // definition unlinked from any live ticket, so there's no ticket to
-      // target — untargeted (everyone re-hydrates).
+      // target — untargeted (everyone re-hydrates), and no last-known snapshot
+      // of the vanished directory may be served either (VC-372).
+      getWorktreeSnapshots().invalidateAll();
       broadcastDataChanged({ kind: "worktree" });
       return { ok: true };
     },
@@ -1536,8 +1565,12 @@ export function registerDataIpcHandlers(
       // Nothing about any ticket's identity moved — the checkouts are all still
       // there, on the same branches, and git's own records are untouched — but
       // the Settings table and any surface reading worktree state should re-read
-      // what is now on disk.
-      if (!report.dryRun && report.removedCount > 0) broadcastDataChanged({ kind: "worktree" });
+      // what is now on disk. Files went from tickets this call cannot name, so
+      // every last-known snapshot goes with them (VC-372).
+      if (!report.dryRun && report.removedCount > 0) {
+        getWorktreeSnapshots().invalidateAll();
+        broadcastDataChanged({ kind: "worktree" });
+      }
       return { ok: true, report };
     },
 
@@ -1564,9 +1597,12 @@ export function registerDataIpcHandlers(
       // read and lied `uncommitted: true` to the renderer.
       //
       // Coalesced per ticket: the read is five git children, and both rail
-      // surfaces ask for it on mount (VC-369).
-      const read = await coalesceStatus(input.ticketId, () =>
-        readWorktreeStatus(worktreeDeps(db), input.ticketId),
+      // surfaces ask for it on mount (VC-369). Served from the last-known
+      // snapshot while a watch covers the worktree (VC-372), so the Now↔Diffs
+      // page flip — one surface unmounting as the other mounts — asks git
+      // nothing at all.
+      const read = await getWorktreeSnapshots().readStatus(input.ticketId, () =>
+        coalesceStatus(input.ticketId, () => readWorktreeStatus(worktreeDeps(db), input.ticketId)),
       );
       switch (read.kind) {
         case "missing-ticket":
@@ -1604,9 +1640,14 @@ export function registerDataIpcHandlers(
     "volli:worktree-change-set": async (input: TicketIdInput): Promise<WorktreeChangeSetResult> => {
       // Coalesced per ticket: a burst of filesystem events can have several
       // panels and windows asking at once, and each snapshot is five git
-      // commands over the whole worktree.
-      const read = await coalesceChangeSet(input.ticketId, () =>
-        readWorktreeChangeSet(worktreeDeps(db), input.ticketId),
+      // commands over the whole worktree. Served from the last-known snapshot
+      // while a watch covers the worktree (VC-372) — which is also what keeps a
+      // diff tab's mount read free: the Diffs page it opened from just read the
+      // same Change Set.
+      const read = await getWorktreeSnapshots().readChangeSet(input.ticketId, () =>
+        coalesceChangeSet(input.ticketId, () =>
+          readWorktreeChangeSet(worktreeDeps(db), input.ticketId),
+        ),
       );
       switch (read.kind) {
         case "missing-ticket":
@@ -1697,6 +1738,9 @@ export function registerDataIpcHandlers(
         // Clean-tree no-op: nothing landed, no event, nothing to re-hydrate.
         return { ok: true, committed: false, message: null };
       }
+      // The commit moved HEAD and the working tree: the last-known snapshot this
+      // ticket's watch was serving is stale (VC-372).
+      getWorktreeSnapshots().invalidate(input.ticketId);
       // No ticket row changed, but a `worktree_committed` event landed on THIS
       // ticket. Targeting it is what lets the Details rail's git summary refresh
       // promptly (the CLI/rail-side commit → rail guarantee, issue #80) instead
@@ -1711,6 +1755,9 @@ export function registerDataIpcHandlers(
         input.ticketId,
       );
       if (!result.ok) return { ok: false, error: result.error };
+      // The branch moved on the remote (and `pr_url` may have been written):
+      // this ticket's last-known snapshot is stale (VC-372).
+      getWorktreeSnapshots().invalidate(input.ticketId);
       // `pr_url` was written (and a `pr_opened` event recorded) on THIS ticket —
       // target it so its rail refreshes promptly, same as the commit path.
       broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
@@ -1763,6 +1810,7 @@ export function registerDataIpcHandlers(
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
       changeWatchManager.unwatchTicket(input.ticketId);
+      getWorktreeSnapshots().invalidate(input.ticketId);
       // The ticket archived + its worktree was removed — target it so its own
       // still-open surfaces refresh (the full re-hydrate drops the card).
       broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });

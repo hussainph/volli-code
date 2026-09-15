@@ -24,6 +24,27 @@ import type { RunGitAsync } from "./types";
 export const WATCH_DEBOUNCE_MS = 250;
 
 /**
+ * How long a released root stays armed, waiting for the subscriber that
+ * replaces the one that just left (VC-372).
+ *
+ * The rail's pages are exclusive: Now↔Diffs unmounts one panel and mounts the
+ * other in the SAME render commit, so the outgoing panel's `unwatch` arrives an
+ * instant before the incoming panel's `watch`. Tearing the root down in between
+ * would close the OS handle, throw away the last-known snapshot the new panel is
+ * about to read, and re-arm (a `git ls-files`) a moment later — three costs for
+ * one page flip that changed nothing. Releasing a root therefore leaves it armed
+ * for this grace; any new subscriber for the same worktree cancels the teardown
+ * and reuses the handle, so coverage is continuous and a change during the swap
+ * still invalidates.
+ *
+ * Only a renderer `unwatch` lingers. A window gone, a fault, a moved worktree,
+ * or `unwatchTicket` (a checkout about to be deleted) tears down immediately —
+ * those are not swaps, and holding an FSEvents handle on a deleted directory
+ * would only produce errors.
+ */
+export const WATCH_REWATCH_GRACE_MS = 1000;
+
+/**
  * Ceiling on how long the trailing debounce may keep deferring. An agent
  * writing a file every ~200ms — a long codegen run, a watch-mode build — never
  * leaves a 250ms gap, so a pure trailing debounce would postpone the refresh
@@ -57,9 +78,18 @@ interface WorktreeWatchSubscriber {
 interface SharedWorktreeWatch {
   worktreePath: string;
   subscribers: Map<string, WorktreeWatchSubscriber>;
+  /**
+   * Every ticket that has ever subscribed here. Kept past the last subscriber
+   * so a lingering root (see {@link WATCH_REWATCH_GRACE_MS}) can still report
+   * coverage and changes for the ticket whose panel is swapping, and so
+   * teardown can retire exactly those tickets' snapshots (VC-372).
+   */
+  knownTickets: Set<string>;
   watcher: WorktreeWatchHandle | null;
   armPromise: Promise<Result> | null;
   debounceTimer: NodeJS.Timeout | null;
+  /** Pending teardown of a root whose last subscriber released it. */
+  lingerTimer: NodeJS.Timeout | null;
   /** Deadline for the current burst; null when no burst is pending. */
   maxWaitAt: number | null;
   /** Git-reported ignored files and directory prefixes, always slash-normalized. */
@@ -87,6 +117,21 @@ export interface WorktreeChangeWatchOptions {
   watch?: WorktreeWatchFn;
   debounceMs?: number;
   maxWaitMs?: number;
+  /** How long a released root stays armed for a replacement subscriber (VC-372). */
+  rewatchGraceMs?: number;
+  /**
+   * Whether an armed watcher has begun or stopped covering a ticket's worktree
+   * (VC-372). The rail's last-known snapshot is served only while covered: an
+   * answer nothing is watching for changes must not be trusted.
+   */
+  onCoverageChange?: (ticketId: string, covered: boolean) => void;
+  /**
+   * A filesystem change this watch considers RELEVANT was observed for these
+   * tickets' worktree — the same events that will become the debounced
+   * `volli:worktree-changed` broadcast. Reported eagerly, before the debounce,
+   * because a last-known answer is stale the moment the change is seen.
+   */
+  onRelevantChange?: (ticketIds: readonly string[]) => void;
   /** Async git seam used to derive the repository's complete current ignored set. */
   git?: RunGitAsync;
   /** Injectable `git check-ignore --stdin` seam for new-directory batches. */
@@ -221,6 +266,9 @@ export class WorktreeChangeWatchManager {
   private readonly watchFn: WorktreeWatchFn;
   private readonly debounceMs: number;
   private readonly maxWaitMs: number;
+  private readonly rewatchGraceMs: number;
+  private readonly onCoverageChange: ((ticketId: string, covered: boolean) => void) | undefined;
+  private readonly onRelevantChange: ((ticketIds: readonly string[]) => void) | undefined;
   private readonly git: RunGitAsync;
   private readonly checkIgnoredPaths: CheckIgnoredPaths;
   private readonly gitPathIsDirectory: (worktreePath: string) => boolean;
@@ -231,6 +279,9 @@ export class WorktreeChangeWatchManager {
     this.watchFn = options.watch ?? ((path, opts, listener) => fsWatch(path, opts, listener));
     this.debounceMs = options.debounceMs ?? WATCH_DEBOUNCE_MS;
     this.maxWaitMs = options.maxWaitMs ?? WATCH_MAX_WAIT_MS;
+    this.rewatchGraceMs = options.rewatchGraceMs ?? WATCH_REWATCH_GRACE_MS;
+    this.onCoverageChange = options.onCoverageChange;
+    this.onRelevantChange = options.onRelevantChange;
     this.git = options.git ?? runGitCapturingAsync;
     this.checkIgnoredPaths = options.checkIgnoredPaths ?? checkIgnoredPathsWithGit;
     this.gitPathIsDirectory = options.gitPathIsDirectory ?? statGitPathIsDirectory;
@@ -279,9 +330,11 @@ export class WorktreeChangeWatchManager {
       root = {
         worktreePath,
         subscribers: new Map(),
+        knownTickets: new Set(),
         watcher: null,
         armPromise: null,
         debounceTimer: null,
+        lingerTimer: null,
         maxWaitAt: null,
         ignoredPaths: new Set(),
         ignoreLoadId: 0,
@@ -293,6 +346,11 @@ export class WorktreeChangeWatchManager {
         skipGitEvents: this.gitPathIsDirectory(worktreePath),
       };
       this.roots.set(worktreePath, root);
+    } else {
+      // A released root was still armed for exactly this moment (VC-372): the
+      // panel swap's replacement subscriber reuses the handle instead of
+      // closing and re-opening (and re-running) the watch.
+      this.cancelRootTeardown(root);
     }
 
     const sub: WorktreeWatchSubscriber = {
@@ -304,6 +362,7 @@ export class WorktreeChangeWatchManager {
     };
     this.subs.set(key, sub);
     root.subscribers.set(key, sub);
+    root.knownTickets.add(ticketId);
     webContents.once("destroyed", sub.onDestroyed);
     return this.ensureRootArmed(root);
   }
@@ -351,6 +410,7 @@ export class WorktreeChangeWatchManager {
         this.emitWatchError(root, this.watchErrorMessage(root, error));
         this.teardownRoot(root);
       });
+      this.emitCoverageChange(root, true);
       return { ok: true };
     } catch (error) {
       const message = this.watchErrorMessage(root, error);
@@ -361,7 +421,10 @@ export class WorktreeChangeWatchManager {
 
   /** Releases one subscriber and closes its root only when the refcount hits zero. */
   unwatch(webContents: WebContents, ticketId: string): void {
-    this.teardownSubscriber(this.keyFor(webContents, ticketId));
+    // The renderer's own release: a rail page flip or a StrictMode remount may
+    // replace this subscriber in the same commit, so the root waits out the
+    // rewatch grace before closing (VC-372).
+    this.teardownSubscriber(this.keyFor(webContents, ticketId), { linger: true });
   }
 
   /** Pauses one background subscriber and the OS watcher if no foreground ref remains. */
@@ -491,6 +554,9 @@ export class WorktreeChangeWatchManager {
       // Change Set watch. The previous cache remains valid for older rules.
     }
     if (!this.isRootLive(root)) return;
+    // Which files count as changed just moved (or may have): every last-known
+    // answer riding this root is stale (VC-372).
+    this.emitRelevantChange(root);
     const broadcast = root.ignoreRefreshNeedsBroadcast;
     root.ignoreRefreshNeedsBroadcast = false;
     if (broadcast) this.scheduleBroadcast(root);
@@ -537,6 +603,10 @@ export class WorktreeChangeWatchManager {
 
   /** Trailing debounce with a max-wait ceiling, shared by the whole root. */
   private scheduleBroadcast(root: SharedWorktreeWatch): void {
+    // Reported before the subscriber check on purpose: a lingering root has no
+    // subscribers to broadcast to yet, but the change still invalidates any
+    // last-known answer the replacement subscriber is about to read (VC-372).
+    this.emitRelevantChange(root);
     if (!this.hasActiveSubscribers(root)) return;
     const now = this.now();
     if (root.maxWaitAt === null) root.maxWaitAt = now + this.maxWaitMs;
@@ -562,7 +632,7 @@ export class WorktreeChangeWatchManager {
     }
   }
 
-  private teardownSubscriber(key: string): void {
+  private teardownSubscriber(key: string, options: { linger?: boolean } = {}): void {
     const sub = this.subs.get(key);
     if (!sub) return;
     this.subs.delete(key);
@@ -571,10 +641,41 @@ export class WorktreeChangeWatchManager {
       sub.webContents.removeListener("destroyed", sub.onDestroyed);
     }
     if (sub.root.subscribers.size === 0) {
-      this.teardownRoot(sub.root);
+      if (options.linger === true) this.scheduleRootTeardown(sub.root);
+      else this.teardownRoot(sub.root);
     } else if (!this.hasActiveSubscribers(sub.root)) {
       this.disarmRoot(sub.root);
     }
+  }
+
+  /**
+   * Defers a root's teardown by the rewatch grace, so the subscriber that
+   * replaces a released one reuses the armed handle (VC-372). The root stays a
+   * live root throughout: its events still arrive, and invalidate whatever
+   * last-known answer was being served.
+   */
+  private scheduleRootTeardown(root: SharedWorktreeWatch): void {
+    if (root.lingerTimer !== null) return;
+    root.lingerTimer = setTimeout(() => {
+      root.lingerTimer = null;
+      this.teardownRoot(root);
+    }, this.rewatchGraceMs);
+  }
+
+  private cancelRootTeardown(root: SharedWorktreeWatch): void {
+    if (root.lingerTimer === null) return;
+    clearTimeout(root.lingerTimer);
+    root.lingerTimer = null;
+  }
+
+  private emitCoverageChange(root: SharedWorktreeWatch, covered: boolean): void {
+    if (this.onCoverageChange === undefined) return;
+    for (const ticketId of root.knownTickets) this.onCoverageChange(ticketId, covered);
+  }
+
+  private emitRelevantChange(root: SharedWorktreeWatch): void {
+    if (this.onRelevantChange === undefined || root.knownTickets.size === 0) return;
+    this.onRelevantChange([...root.knownTickets]);
   }
 
   private disarmRoot(root: SharedWorktreeWatch): void {
@@ -589,6 +690,9 @@ export class WorktreeChangeWatchManager {
     root.maxWaitAt = null;
     root.ignoreRefreshNeedsBroadcast = false;
     root.pendingDirectoryEvents.clear();
+    // Disarmed means nothing observes changes: last-known answers for every
+    // ticket that was riding this root stop being trustworthy (VC-372).
+    this.emitCoverageChange(root, false);
     root.watcher?.close();
     root.watcher = null;
   }
@@ -596,6 +700,7 @@ export class WorktreeChangeWatchManager {
   private teardownRoot(root: SharedWorktreeWatch): void {
     if (!this.isRootLive(root)) return;
     this.roots.delete(root.worktreePath);
+    this.cancelRootTeardown(root);
     this.disarmRoot(root);
 
     for (const [key, sub] of root.subscribers) {
@@ -605,5 +710,6 @@ export class WorktreeChangeWatchManager {
       }
     }
     root.subscribers.clear();
+    root.knownTickets.clear();
   }
 }
