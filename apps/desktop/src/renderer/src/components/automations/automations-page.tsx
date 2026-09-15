@@ -381,6 +381,11 @@ function AutomationsSurface({
             projectId={projectId}
             automation={selectedAutomation}
             actions={editorActions}
+            onDiscardedNewDraft={() => {
+              const first = automations[0];
+              if (first === undefined) closeEditor();
+              else editAutomation(projectId, first);
+            }}
             history={
               selectedAutomation === null ? undefined : (
                 <RunHistory

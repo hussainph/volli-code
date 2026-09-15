@@ -16,8 +16,9 @@ import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
 import type { Automation, AutomationRun, AutomationSkippedOccurrence, Ticket } from "@volli/shared";
 
 import { AutomationsPage } from "./automations-page";
-import { clearEditorDraft, loadEditorDraft } from "./editor-draft";
+import { clearEditorDraft, loadEditorDraft, saveEditorDraft } from "./editor-draft";
 import { openRunSession, runAutomationForProject, runAutomationOnTicket } from "./run-automation";
+import { appStateStorage } from "@renderer/lib/app-state-storage";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
@@ -809,6 +810,72 @@ describe("editor navigation keeps drafts", () => {
       "Draft restored",
     );
     clearEditorDraft("p1");
+  });
+
+  // VC-375. A new-record draft that survived a quit (its clear was still on the
+  // debounce) put the page into create mode on EVERY arrival, and the saved
+  // Automation could not be reached from the editor at all.
+  it("does not re-persist a new draft it only restored", async () => {
+    saveEditorDraft("p1", {
+      name: "Resurrected",
+      instructions: "/review",
+      ownership: "project",
+      triggerChoice: "none",
+      columns: [],
+      schedule: { preset: "daily", hour: 9, minute: 0, timeZone: "Europe/London" },
+      runtime: null,
+    });
+    const setItem = vi.spyOn(appStateStorage, "setItem");
+    await mount({ automations: [automation()] });
+    // The arrival resumes it, as it is meant to.
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Resurrected",
+    );
+
+    // Nobody typed, so the arrival must write nothing. A draft that rewrites
+    // itself on arrival is one no quit can ever age out.
+    expect(setItem.mock.calls.filter(([key]) => key === "volli:automation-editor-draft")).toEqual(
+      [],
+    );
+
+    // And a real keystroke still persists, so the elision is not a mute.
+    await act(async () =>
+      setInputValue(document.querySelector('[aria-label="Name"]') as HTMLInputElement, "Typed"),
+    );
+    expect(loadEditorDraft("p1")?.name).toBe("Typed");
+    setItem.mockRestore();
+    clearEditorDraft("p1");
+  });
+
+  it("hands the surface back to a saved record when a new draft is discarded", async () => {
+    saveEditorDraft("p1", {
+      name: "Resurrected",
+      instructions: "/review",
+      ownership: "project",
+      triggerChoice: "none",
+      columns: [],
+      schedule: { preset: "daily", hour: 9, minute: 0, timeZone: "Europe/London" },
+      runtime: null,
+    });
+    await mount({ automations: [automation()] });
+    const discard = [...document.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent?.trim() === "Discard draft",
+    );
+    expect(discard).toBeDefined();
+
+    await act(async () => discard?.click());
+    // The create form is gone and the saved Automation owns the editor again,
+    // so its Run control is reachable rather than stranded behind a blank form.
+    expect(loadEditorDraft("p1")).toBeNull();
+    expect((document.querySelector('[aria-label="Name"]') as HTMLInputElement).value).toBe(
+      "Review sweep",
+    );
+    expect(
+      [...document.querySelectorAll("button")].some(
+        (candidate) => candidate.getAttribute("aria-label") === "Run Review sweep",
+      ),
+    ).toBe(true);
+    clearEditorDraft("p1", undefined, "automation-1");
   });
 
   it("keeps unsaved existing edits across Lanes and record switches", async () => {

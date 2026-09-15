@@ -134,6 +134,16 @@ export interface SyncStateStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+  /**
+   * Sends this key's pending write NOW instead of waiting out the debounce.
+   *
+   * For a write whose LOSS is worse than its cost: a value the debounce drops
+   * at quit is normally a preference the next launch merely guesses again, but
+   * a RETRACTION dropped at quit comes back as the thing it retracted. Optional
+   * because it is a property of the durable adapter, not of the cache face a
+   * test substitutes; a caller that flushes must work without one.
+   */
+  flush?(key: string): void;
 }
 
 /**
@@ -149,5 +159,11 @@ export const appStateStorage: StateStorage & SyncStateStorage = {
   removeItem: (key) => {
     cache.delete(key);
     persistDebounced(key, "", "clear");
+  },
+  // Fire-and-forget on purpose: the caller wants the write on its way before
+  // the window can close, not an ack it would have to await on a synchronous
+  // path. `persist` still reports a failure the ordinary way.
+  flush: (key) => {
+    void flushPendingAppStateKey(key);
   },
 };

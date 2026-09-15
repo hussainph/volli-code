@@ -429,11 +429,14 @@ export function AutomationEditorPanel({
   automation,
   actions,
   history,
+  onDiscardedNewDraft,
 }: {
   projectId: string;
   automation: Automation | null;
   actions?: React.ReactNode;
   history?: React.ReactNode;
+  /** Discarding a NEW record leaves nothing to show; the page chooses what replaces it. */
+  onDiscardedNewDraft?: () => void;
 }) {
   const save = useAutomationsStore((state) => state.save);
   const update = useAutomationsStore((state) => state.update);
@@ -563,9 +566,24 @@ export function AutomationEditorPanel({
         JSON.stringify(trigger) !== JSON.stringify(automation.trigger) ||
         JSON.stringify(runtime) !== JSON.stringify(automation.runtime);
 
+  // What this slot already holds, so a pass that would rewrite the same bytes
+  // writes nothing. A draft merely RESTORED is the case that matters: its
+  // fields are dirty by definition, so without this every arrival re-persists
+  // a draft nobody touched — and a new-record draft that renews itself on
+  // arrival is one the page keeps reading as "resume the record you were
+  // creating", forever (VC-375). Advanced on every write, so reverting an edit
+  // to the stored text still leaves screen and storage saying the same thing.
+  const persisted = React.useRef(restored === null ? null : JSON.stringify(restored));
   React.useEffect(() => {
-    if (dirty) saveEditorDraft(projectId, draft, undefined, automationId);
-    else clearEditorDraft(projectId, undefined, automationId);
+    if (dirty) {
+      const next = JSON.stringify(draft);
+      if (persisted.current === next) return;
+      saveEditorDraft(projectId, draft, undefined, automationId);
+      persisted.current = next;
+    } else {
+      clearEditorDraft(projectId, undefined, automationId);
+      persisted.current = null;
+    }
   }, [automationId, projectId, draft, dirty]);
 
   /** Discard restores the saved record; only a new record becomes blank. */
@@ -596,6 +614,11 @@ export function AutomationEditorPanel({
     setTimeZone(savedSchedule?.timeZone ?? hostTimeZone());
     setResumed(false);
     setProblem(null);
+    // A new record has nothing to restore TO, so discarding it would otherwise
+    // leave a blank create form standing where the page expects one selected
+    // record. Hand the surface back to the rail's first Automation, which is
+    // the same answer an ordinary arrival gives.
+    if (automation === null) onDiscardedNewDraft?.();
   }
 
   async function submit(): Promise<void> {
