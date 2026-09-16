@@ -5,10 +5,15 @@ import {
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
-import { CHECKPOINT_REFRESH_EVENTS } from "./session-engine";
+import {
+  CHECKPOINT_REFRESH_EVENTS,
+  SESSION_LISTING_CACHE_LIMIT,
+  SESSION_LISTING_FOLD_CHUNK,
+} from "./session-engine";
 import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
+  ListSessionsQuery,
   Session,
   SessionAttachment,
   SessionCommand,
@@ -3692,4 +3697,291 @@ describe("the in-memory ledger's usage port", () => {
       plane.reportUsage({ scope: { kind: "session", sessionId: "session-that-never-existed" } }),
     ).resolves.toMatchObject({ total: { requestCount: 0 }, meteredSessionCount: 0 });
   });
+});
+
+/**
+ * A project's whole roster, folded on the process that also serves every other
+ * Session operation (VC-388).
+ *
+ * The cost per Session is already bounded by the checkpoint tail. What these
+ * cover is the cost of doing it N times in a row with nothing in between: a
+ * listing that holds the ledger for its whole length starves every write
+ * behind it, and one that never returns to the event loop blocks the host for
+ * the same span whether or not a skeleton is drawn over it.
+ */
+/** The first {@link SESSION_LISTING_CACHE_LIMIT} rows of a roster: exactly a full cache. */
+const rosterAtCacheLimit = (rows: readonly Session[]): readonly Session[] =>
+  rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
+
+describe("listSessions over a project roster (VC-388)", () => {
+  async function roster(count: number) {
+    const { plane } = composition();
+    const sessions = [];
+    for (let index = 0; index < count; index += 1) {
+      sessions.push((await plane.createSession(createRequest(`command-roster-${index}`))).session);
+    }
+    return { plane, sessions };
+  }
+
+  it("lets a write commit while a listing is still in flight", async () => {
+    const { plane, sessions } = await roster(40);
+    const settled: string[] = [];
+
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" }).then((rows) => {
+      settled.push("listing");
+      return rows;
+    });
+    const write = plane
+      .submit({
+        commandId: "command-roster-write",
+        sessionId: sessions[0].id,
+        intent: { kind: "session.retitle", title: "Wrote mid-listing" },
+        provenance: userProvenance,
+      })
+      .then((result) => {
+        settled.push("write");
+        return result;
+      });
+
+    const [rows] = await Promise.all([listing, write]);
+    // The whole point: the roster's fold is not one indivisible hold on the
+    // ledger, so a Session that wants to record a fact is not made to wait for
+    // 39 other Sessions to be projected first.
+    expect(settled).toEqual(["write", "listing"]);
+    expect(rows).toHaveLength(40);
+  });
+
+  it("returns to the host's event loop before the roster is folded", async () => {
+    const { plane } = await roster(40);
+
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" });
+    // Registered AFTER the listing began, so it can only run if the listing
+    // gives the loop a turn back. A promise chain would not: awaiting a
+    // resolved promise drains as a microtask, and the whole microtask queue
+    // runs to exhaustion before any timer does.
+    let hostRanMidListing = false;
+    setTimeout(() => {
+      hostRanMidListing = true;
+    }, 0);
+
+    await expect(listing).resolves.toHaveLength(40);
+    expect(hostRanMidListing).toBe(true);
+  });
+
+  it("yields through the host's own primitive when one is injected", async () => {
+    // The engine owns no host API, so its default yield is the portable
+    // `setTimeout(0)`; a host with a better spelling hands it in here. This
+    // proves the port is the seam the listing goes through, and that it is
+    // taken once between chunks rather than once per Session.
+    let yields = 0;
+    const yieldToHost = () =>
+      new Promise<void>((resolve) => {
+        yields += 1;
+        setTimeout(resolve, 0);
+      });
+    let now = 100;
+    const plane = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => now++ },
+      ids: ids(),
+      yieldToHost,
+    });
+    const count = SESSION_LISTING_FOLD_CHUNK * 2 + 1;
+    for (let index = 0; index < count; index += 1) {
+      await plane.createSession(createRequest(`command-yield-${index}`));
+    }
+
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(count);
+    // Three chunks, and the yield is between them, not before the first.
+    expect(yields).toBe(2);
+  });
+
+  /**
+   * A ledger that reports which Sessions each read actually folded.
+   *
+   * `listProjectionEvents` is the fold's own read, so a Session that appears
+   * here was projected from its log and one that does not was answered from
+   * somewhere cheaper.
+   */
+  function foldWatchingComposition(
+    /**
+     * Which of the stored rows a listing sees, so a test can shrink and grow
+     * one roster instead of building two.
+     */
+    visibleRows: (rows: readonly Session[]) => readonly Session[] = (rows) => rows,
+  ) {
+    const stored = createInMemorySessionLedger();
+    const folded: string[] = [];
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property === "listSessions") {
+                  return (query: ListSessionsQuery) => visibleRows(transaction.listSessions(query));
+                }
+                if (property !== "listProjectionEvents") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
+                  folded.push(query.sessionId);
+                  return transaction.listProjectionEvents(query);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    let now = 100;
+    const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+    return { plane, folded };
+  }
+
+  it("re-folds only the Sessions whose log moved since the last listing", async () => {
+    const { plane, folded } = foldWatchingComposition();
+    const quiet = (await plane.createSession(createRequest("command-cache-quiet"))).session;
+    const busy = (await plane.createSession(createRequest("command-cache-busy"))).session;
+    const alsoQuiet = (await plane.createSession(createRequest("command-cache-also-quiet")))
+      .session;
+
+    folded.length = 0;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(3);
+    // Nothing is cached yet, so the first visit pays for all three.
+    expect(folded.toSorted()).toEqual([alsoQuiet.id, busy.id, quiet.id].toSorted());
+
+    await plane.submit({
+      commandId: "command-cache-retitle",
+      sessionId: busy.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+
+    folded.length = 0;
+    const second = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(folded).toEqual([busy.id]);
+    // And the answer is the same one a full fold would have given.
+    expect(second.find(({ session }) => session.id === busy.id)?.session.title).toBe("Moved on");
+    expect(second.find(({ session }) => session.id === quiet.id)?.session.title).toBe(
+      "Durable Session",
+    );
+  });
+
+  /**
+   * The case that decides whether a cursor is a sufficient cache key. It is
+   * not.
+   *
+   * `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a Ticket moves a
+   * field of an otherwise insert-only row and appends NOTHING to any Session's
+   * log. A listing cache keyed on the log head alone would keep answering with
+   * the Ticket that was deleted, and no later event would ever dislodge it.
+   */
+  it("re-folds a Session whose row moved even though its log did not", async () => {
+    const stored = createInMemorySessionLedger();
+    let ticketDeleted = false;
+    // Copy-on-write, as the store's own decoder is: the rows the ledger holds
+    // must not be edited in place by a reader pretending a Ticket went away.
+    const afterTicketDelete = (rows: readonly Session[]): readonly Session[] => {
+      if (!ticketDeleted) return rows;
+      const moved: Session[] = [];
+      for (const session of rows) moved.push({ ...session, ticketId: null });
+      return moved;
+    };
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "listSessions") return Reflect.get(target, property, receiver);
+                return (query: ListSessionsQuery) =>
+                  afterTicketDelete(transaction.listSessions(query));
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-cache-ticket-delete"));
+
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: "ticket-1" } }]);
+
+    ticketDeleted = true;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: null } }]);
+  });
+
+  /**
+   * The cache's bound, which is the half of a cache that has to be proved
+   * rather than observed: a memo that never evicts also answers every
+   * assertion about hits and misses, and only grows.
+   *
+   * The roster is grown by ONE past {@link SESSION_LISTING_CACHE_LIMIT} rather
+   * than by many, because the interesting boundary is exactly there: a roster
+   * at the limit must survive a repeat listing whole, and the first row over
+   * it must cost exactly one entry — the least recently listed one — and not
+   * the whole cache.
+   *
+   * Budgeted like the other roster-sized tests: it creates one Session more
+   * than the cache holds and folds that roster four times, which is under a
+   * second here and several under coverage instrumentation on a shared CI
+   * runner. The default five seconds timed out on main.
+   */
+  it(
+    "evicts the least recently listed Session once the cache is full",
+    { timeout: 30_000 },
+    async () => {
+      // One roster, listed through a moving window: at the cache's size, then
+      // one over it, then one row at a time to ask which entry survived.
+      let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
+      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-evict-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "all" } as const;
+
+      folded.length = 0;
+      const full = await plane.listSessions(query);
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+
+      // A roster that exactly fills the cache is served entirely from it: the
+      // limit holds this many, not this many minus one.
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      expect(folded).toEqual([]);
+
+      // One Session more than the cache can hold. Only the newcomer is folded,
+      // and storing it pushes out the head of the insertion order — which is
+      // the first row of the listing, since a hit re-inserts in listing order.
+      visible = (rows) => rows;
+      folded.length = 0;
+      const overflowing = await plane.listSessions(query);
+      expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+      expect(folded).toEqual([overflowing.at(-1)?.session.id]);
+
+      // Which entry went, asked one row at a time so a miss cannot cascade into
+      // the next row and blur the answer. The middle of the roster is still
+      // memoized...
+      const middle = full[SESSION_LISTING_CACHE_LIMIT >> 1].session;
+      visible = (rows) => rows.filter((row) => row.id === middle.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([]);
+
+      // ...and the row listed longest ago is not: it has to be folded again,
+      // which is the eviction, observed.
+      const listedLongestAgo = full[0].session;
+      visible = (rows) => rows.filter((row) => row.id === listedLongestAgo.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([listedLongestAgo.id]);
+    },
+  );
 });

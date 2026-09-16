@@ -34,6 +34,7 @@ import {
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
+import { PROJECTION_CACHE_LIMIT } from "./session-runtime";
 
 const venue = { id: "machine-1", kind: "local" as const };
 
@@ -4097,6 +4098,146 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.projection({ sessionId: oldest });
 
     expect(reads).toEqual([...sessions, oldest]);
+  });
+
+  /**
+   * Pure recency is the wrong eviction rule for this cache (VC-388, audit item
+   * D4).
+   *
+   * A Session somebody is watching is the one whose fold will be wanted again
+   * within the second, and background work reads Sessions nobody has open all
+   * the time — a listing, an await, a watchdog sweep. Under recency alone the
+   * background read wins, because it happened later, and the open tab pays a
+   * full re-fold for a Session it never stopped looking at.
+   */
+  it("keeps a subscribed Session's fold while unwatched Sessions crowd the cache", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+    };
+    const { runtime } = composition({ engine: counting, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+
+    // Enough unwatched Sessions to evict the whole cache twice over.
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    // A re-read here would mean the tab's own Session was thrown away to make
+    // room for Sessions nobody has open.
+    expect(reads).toEqual([]);
+
+    // And once the tab closes it is an ordinary candidate again, so the bound
+    // still holds: nothing is pinned by a subscriber that no longer exists.
+    release();
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`after-close-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([watched]);
+
+    await runtime.close();
+  });
+
+  /**
+   * The exemption lasts exactly as long as the subscription, and a
+   * subscription that never opened is not one. `subscribe` registers the
+   * watcher before it replays history, so a replay that fails has to take the
+   * registration back whole — the entry as well as the member — or an empty
+   * Set would read as "watched" for the rest of the process.
+   */
+  it("does not pin a Session whose subscribe failed before it opened", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    let failReplayFor: string | null = null;
+    const faulty: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+      listEvents: async (query) => {
+        if (query.sessionId === failReplayFor) throw new Error("replay failed");
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime } = composition({ engine: faulty, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const unopened = await create("unopened-create");
+    await runtime.projection({ sessionId: unopened });
+    failReplayFor = unopened;
+    await expect(
+      runtime.subscribe({ sessionId: unopened, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: unopened });
+    // A cache hit here would mean the failed subscribe left its Session
+    // exempt from the bound with nobody watching it.
+    expect(reads).toEqual([unopened]);
+
+    // The other half: a failed subscribe beside a live one takes back only
+    // its own registration. The tab that did open still holds its Session.
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+    failReplayFor = watched;
+    await expect(
+      runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-again-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([]);
+    release();
+
+    await runtime.close();
   });
 });
 

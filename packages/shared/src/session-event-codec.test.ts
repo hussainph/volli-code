@@ -19,6 +19,7 @@ import {
   UnknownSessionEventKindError,
 } from "./session-event-codec";
 import { BUILTIN_RULE_PACK_HASH, BUILTIN_RULE_PACK_ID } from "./authority";
+import { SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type { AuthoritySnapshot } from "./authority";
 import type {
   CommandReceipt,
@@ -106,320 +107,348 @@ function roundTrip(payload: SessionEventPayload): SessionEventPayload {
   return decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload");
 }
 
-describe("decodeSessionEventPayload round-trips every durable kind", () => {
-  const payloads: SessionEventPayload[] = [
-    { kind: "command.recorded", command },
-    {
-      kind: "command.recorded",
-      command: { ...command, intent: { kind: "session.archive" }, route: null },
-    },
-    { kind: "session.created", session },
-    { kind: "session.created", session: { ...session, ticketId: "ticket-1", title: null } },
-    { kind: "session.archived" },
-    { kind: "session.retitled", title: "Renamed" },
-    { kind: "session.retitled", title: null },
-    {
-      kind: "model.selected",
-      selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
-    },
-    // A start that named a tier writes it beside the selection (VC-259); the
-    // exact-id pick above stays the bytes it always was.
-    {
-      kind: "model.selected",
-      selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
-      tier: "fast",
-    },
-    { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
-    // The attach-time skill record: names + whole delivered bodies, so a
-    // recovery re-attach composes the prompt the first attach composed.
-    {
-      kind: "session.input.recorded",
-      input: {
-        kind: "prompt-resources",
-        resources: [
-          { name: "svg-logo-designer", text: "Skill directory: .agents/skills/x/\n\nBody" },
-          { name: "skills index", text: "- a (.agents/skills/a/SKILL.md): does a" },
-        ],
-      },
-    },
-    { kind: "session.input.recorded", input: { kind: "prompt-resources", resources: [] } },
-    {
-      kind: "session.input.recorded",
-      input: {
-        kind: "tool-surface",
-        tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
-      },
-    },
-    { kind: "session.signaled", signal: "done", reason: null },
-    { kind: "session.signaled", signal: "blocked", reason: "stuck" },
-    // The stop fact (VC-86): each actor arm crosses whole.
-    { kind: "session.stopped", reason: "Wedged for 3h", by: { kind: "session", sessionId: "s-1" } },
-    { kind: "session.stopped", reason: null, by: { kind: "user" } },
-    { kind: "session.stopped", reason: "Silent 10m mid-turn", by: { kind: "watchdog" } },
-    { kind: "attachment.opened", attachment },
-    { kind: "attachment.opened", attachment: { ...attachment, native: null } },
-    {
-      kind: "attachment.native_referenced",
-      attachmentId: "attachment-1",
-      native: { id: null, detail: null },
-    },
-    {
-      kind: "attachment.failed",
-      attachment,
-      failure: { code: "spawn", detail: "no binary", diagnostic: { stderr: "boom" } },
-    },
-    {
-      kind: "attachment.failed",
-      attachment,
-      failure: { code: "spawn", detail: null, diagnostic: null },
-    },
-    { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
-    // The executor's process status (VC-290). `0` is a value like any other
-    // here: a round trip that turned it into an absence would be the exact
-    // confusion the fact exists to end.
-    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
-    { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 137 },
-    { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
-    { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
-    { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
-    { kind: "turn.completed", attachmentId: "attachment-1", turnId: "turn-1" },
-    { kind: "turn.interrupted", attachmentId: "attachment-1", turnId: "turn-1" },
-    {
-      kind: "transcript.referenced",
-      attachmentId: null,
-      turnId: null,
-      reference: { id: "sha256:a", mediaType: null, digest: null },
-    },
-    {
-      kind: "transcript.referenced",
-      attachmentId: "attachment-1",
-      turnId: "turn-1",
-      reference: { id: "sha256:a", mediaType: "text/plain", digest: "sha256:a" },
-    },
-    {
-      kind: "attention.raised",
-      attention: {
-        kind: "rate_limited",
-        id: "attention-1",
-        attachmentId: "attachment-1",
-        detail: "slow down",
-        diagnostic: { status: 429 },
-        retryAt: 200,
-      },
-    },
-    {
-      kind: "attention.raised",
-      attention: {
-        kind: "rate_limited",
-        id: "attention-1",
-        attachmentId: null,
-        detail: null,
-        diagnostic: null,
-        retryAt: null,
-      },
-    },
-    {
-      kind: "attention.raised",
-      attention: {
-        kind: "quota_exhausted",
-        id: "attention-2",
-        attachmentId: null,
-        detail: null,
-        diagnostic: null,
-        resetAt: 300,
-      },
-    },
-    {
-      kind: "attention.raised",
-      attention: {
-        kind: "quota_exhausted",
-        id: "attention-2",
-        attachmentId: null,
-        detail: null,
-        diagnostic: null,
-        resetAt: null,
-      },
-    },
-    {
-      kind: "attention.raised",
-      attention: {
-        kind: "auth_required",
-        id: "attention-3",
-        attachmentId: null,
-        detail: null,
-        diagnostic: null,
-      },
-    },
-    { kind: "attention.cleared", attentionId: "attention-1" },
-    { kind: "interaction.opened", interaction },
-    {
-      kind: "interaction.opened",
-      interaction: {
-        ...interaction,
-        kind: "question",
-        prompts: [
-          {
-            id: "prompt:0",
-            label: "Which files?",
-            detail: "Pick all that apply",
-            options: [{ id: "src", label: "src", description: null }],
-            multiple: true,
-            custom: false,
-          },
-          {
-            id: "prompt:1",
-            label: "Anything else?",
-            detail: null,
-            options: [{ id: "no", label: "No", description: "Nothing further" }],
-            multiple: false,
-            custom: true,
-          },
-        ],
-      },
-    },
-    {
-      kind: "interaction.resolved",
-      attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
-      resolution: { optionIds: ["once"], response: null },
-    },
-    {
-      kind: "interaction.resolved",
-      attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
-      resolution: {
-        optionIds: ["src", "no"],
-        response: "text",
-        answers: [
-          { promptId: "prompt:0", optionIds: ["src"], response: null },
-          { promptId: "prompt:1", optionIds: ["no"], response: "nothing further" },
-        ],
-      },
-    },
-    {
-      kind: "interaction.cancelled",
-      attachmentId: "attachment-1",
-      interactionId: "ask:tool-1",
-      reason: "abandoned",
-    },
-    { kind: "command.receipt.recorded", receipt },
-    {
-      kind: "command.receipt.recorded",
-      receipt: {
-        id: "receipt-2",
-        commandId: "command-1",
-        status: "rejected",
-        code: "route.mismatch",
-        detail: "stale attachment",
-        recordedAt: 103,
-        sequence: 3,
-      },
-    },
-    {
-      kind: "command.receipt.recorded",
-      receipt: {
-        id: "receipt-3",
-        commandId: "command-1",
-        status: "completed",
-        result: { kind: "session.retitled", sessionId: "session-1" },
-        recordedAt: 104,
-        sequence: 4,
-      },
-    },
-    {
-      kind: "command.receipt.recorded",
-      receipt: {
-        id: "receipt-4",
-        commandId: "command-1",
-        status: "unreconciled",
-        detail: null,
-        recordedAt: 105,
-        sequence: 5,
-      },
-    },
-    {
-      kind: "authority.denied",
-      attachmentId: "attachment-1",
-      turnId: null,
-      tool: "bash",
-      cause: "command.destructive-removal",
-      reason: "rm -rf ~ discards more than this Session's workspace.",
-    },
-    {
-      kind: "context.compacted",
-      attachmentId: "attachment-1",
-      reason: "threshold",
-      entryId: "pi-entry-9",
-      tokensBefore: 190_000,
-      tokensAfter: 12_000,
-    },
-    {
-      kind: "context.compaction_failed",
-      attachmentId: "attachment-1",
-      reason: "overflow",
-      detail: "Summarization failed: the model refused.",
-    },
-    {
-      // The fourth reason, and the only one with no producer on the compacted
-      // arm: a provider-native checkpoint this Session can no longer use.
-      kind: "context.compaction_failed",
-      attachmentId: "attachment-1",
-      reason: "checkpoint",
-      detail: "A provider-native compaction checkpoint could not be read.",
-    },
-    {
-      kind: "context.reasoning_dropped",
-      attachmentId: "attachment-1",
-      turnId: "turn-1",
-      count: 2,
-      causes: ["prefix-mismatch", "model-mismatch"],
-      paths: ["messages.1.content.0", "messages.3.content.0"],
-    },
-    { kind: "adapter.observed", attachmentId: null, name: "session-wide", native: null },
-    {
-      kind: "adapter.observed",
-      attachmentId: "attachment-1",
-      name: "message",
-      native: { parts: [true, 1, "text"] },
-    },
-    {
-      kind: "usage.recorded",
-      attachmentId: "attachment-1",
-      turnId: "turn-1",
-      attribution: { projectId: "project-1", ticketId: "ticket-1" },
-      usage: {
-        cause: "assistant",
-        providerId: "anthropic",
-        modelId: "claude-opus-4-1",
-        inputTokens: 412,
-        outputTokens: 1_204,
-        cacheReadTokens: 96_000,
-        cacheWriteTokens: 2_100,
-        costUsd: 0.418_23,
-        costBasis: "catalog-estimate",
-      },
-    },
-    {
-      kind: "usage.recorded",
-      attachmentId: null,
-      turnId: null,
-      // Project spend: a Session born without a Ticket still records what
-      // project it belongs to, so an unticketed total is attributable.
-      attribution: { projectId: "project-1", ticketId: null },
-      usage: {
-        cause: "utility",
-        providerId: "openai",
-        modelId: "gpt-5",
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        costUsd: null,
-        costBasis: "unavailable",
-      },
-    },
-  ];
+/**
+ * Holds each sample's own type rather than the union an annotated array would
+ * collapse to, which is what lets {@link payloads} answer *which* kinds it
+ * covers. A plain `SessionEventPayload[]` annotation widens every `kind` back
+ * to the whole union and takes the coverage check below with it.
+ */
+function samples<const T extends readonly SessionEventPayload[]>(...items: T): T {
+  return items;
+}
 
+/**
+ * One durable sample per kind — the roster both round trips read.
+ *
+ * The renderer edge reads the same samples: a kind that survives the durable
+ * trip but cannot cross to the renderer is exactly the failure VC-368 shipped,
+ * and one shared roster is what makes both questions ask about the same kinds.
+ */
+const payloads = samples(
+  { kind: "command.recorded", command },
+  {
+    kind: "command.recorded",
+    command: { ...command, intent: { kind: "session.archive" }, route: null },
+  },
+  { kind: "session.created", session },
+  { kind: "session.created", session: { ...session, ticketId: "ticket-1", title: null } },
+  { kind: "session.archived" },
+  { kind: "session.retitled", title: "Renamed" },
+  { kind: "session.retitled", title: null },
+  {
+    kind: "model.selected",
+    selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+  },
+  // A start that named a tier writes it beside the selection (VC-259); the
+  // exact-id pick above stays the bytes it always was.
+  {
+    kind: "model.selected",
+    selection: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
+    tier: "fast",
+  },
+  { kind: "session.input.recorded", input: { kind: "runtime-brief", text: "brief" } },
+  // The attach-time skill record: names + whole delivered bodies, so a
+  // recovery re-attach composes the prompt the first attach composed.
+  {
+    kind: "session.input.recorded",
+    input: {
+      kind: "prompt-resources",
+      resources: [
+        { name: "svg-logo-designer", text: "Skill directory: .agents/skills/x/\n\nBody" },
+        { name: "skills index", text: "- a (.agents/skills/a/SKILL.md): does a" },
+      ],
+    },
+  },
+  { kind: "session.input.recorded", input: { kind: "prompt-resources", resources: [] } },
+  {
+    kind: "session.input.recorded",
+    input: {
+      kind: "tool-surface",
+      tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
+    },
+  },
+  { kind: "session.signaled", signal: "done", reason: null },
+  { kind: "session.signaled", signal: "blocked", reason: "stuck" },
+  // The stop fact (VC-86): each actor arm crosses whole.
+  { kind: "session.stopped", reason: "Wedged for 3h", by: { kind: "session", sessionId: "s-1" } },
+  { kind: "session.stopped", reason: null, by: { kind: "user" } },
+  { kind: "session.stopped", reason: "Silent 10m mid-turn", by: { kind: "watchdog" } },
+  { kind: "attachment.opened", attachment },
+  { kind: "attachment.opened", attachment: { ...attachment, native: null } },
+  {
+    kind: "attachment.native_referenced",
+    attachmentId: "attachment-1",
+    native: { id: null, detail: null },
+  },
+  {
+    kind: "attachment.failed",
+    attachment,
+    failure: { code: "spawn", detail: "no binary", diagnostic: { stderr: "boom" } },
+  },
+  {
+    kind: "attachment.failed",
+    attachment,
+    failure: { code: "spawn", detail: null, diagnostic: null },
+  },
+  { kind: "attachment.closed", attachmentId: "attachment-1", outcome: "completed" },
+  // The executor's process status (VC-290). `0` is a value like any other
+  // here: a round trip that turned it into an absence would be the exact
+  // confusion the fact exists to end.
+  { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 0 },
+  { kind: "attachment.exited", attachmentId: "attachment-1", exitCode: 137 },
+  { kind: "run.started", attachmentId: "attachment-1", runId: "run-1" },
+  { kind: "run.completed", attachmentId: "attachment-1", runId: "run-1" },
+  { kind: "turn.started", attachmentId: "attachment-1", turnId: "turn-1" },
+  { kind: "turn.completed", attachmentId: "attachment-1", turnId: "turn-1" },
+  { kind: "turn.interrupted", attachmentId: "attachment-1", turnId: "turn-1" },
+  {
+    kind: "transcript.referenced",
+    attachmentId: null,
+    turnId: null,
+    reference: { id: "sha256:a", mediaType: null, digest: null },
+  },
+  {
+    kind: "transcript.referenced",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    reference: { id: "sha256:a", mediaType: "text/plain", digest: "sha256:a" },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "rate_limited",
+      id: "attention-1",
+      attachmentId: "attachment-1",
+      detail: "slow down",
+      diagnostic: { status: 429 },
+      retryAt: 200,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "rate_limited",
+      id: "attention-1",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      retryAt: null,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "quota_exhausted",
+      id: "attention-2",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      resetAt: 300,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "quota_exhausted",
+      id: "attention-2",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+      resetAt: null,
+    },
+  },
+  {
+    kind: "attention.raised",
+    attention: {
+      kind: "auth_required",
+      id: "attention-3",
+      attachmentId: null,
+      detail: null,
+      diagnostic: null,
+    },
+  },
+  { kind: "attention.cleared", attentionId: "attention-1" },
+  { kind: "interaction.opened", interaction },
+  {
+    kind: "interaction.opened",
+    interaction: {
+      ...interaction,
+      kind: "question",
+      prompts: [
+        {
+          id: "prompt:0",
+          label: "Which files?",
+          detail: "Pick all that apply",
+          options: [{ id: "src", label: "src", description: null }],
+          multiple: true,
+          custom: false,
+        },
+        {
+          id: "prompt:1",
+          label: "Anything else?",
+          detail: null,
+          options: [{ id: "no", label: "No", description: "Nothing further" }],
+          multiple: false,
+          custom: true,
+        },
+      ],
+    },
+  },
+  {
+    kind: "interaction.resolved",
+    attachmentId: "attachment-1",
+    interactionId: "ask:tool-1",
+    resolution: { optionIds: ["once"], response: null },
+  },
+  {
+    kind: "interaction.resolved",
+    attachmentId: "attachment-1",
+    interactionId: "ask:tool-1",
+    resolution: {
+      optionIds: ["src", "no"],
+      response: "text",
+      answers: [
+        { promptId: "prompt:0", optionIds: ["src"], response: null },
+        { promptId: "prompt:1", optionIds: ["no"], response: "nothing further" },
+      ],
+    },
+  },
+  {
+    kind: "interaction.cancelled",
+    attachmentId: "attachment-1",
+    interactionId: "ask:tool-1",
+    reason: "abandoned",
+  },
+  { kind: "command.receipt.recorded", receipt },
+  {
+    kind: "command.receipt.recorded",
+    receipt: {
+      id: "receipt-2",
+      commandId: "command-1",
+      status: "rejected",
+      code: "route.mismatch",
+      detail: "stale attachment",
+      recordedAt: 103,
+      sequence: 3,
+    },
+  },
+  {
+    kind: "command.receipt.recorded",
+    receipt: {
+      id: "receipt-3",
+      commandId: "command-1",
+      status: "completed",
+      result: { kind: "session.retitled", sessionId: "session-1" },
+      recordedAt: 104,
+      sequence: 4,
+    },
+  },
+  {
+    kind: "command.receipt.recorded",
+    receipt: {
+      id: "receipt-4",
+      commandId: "command-1",
+      status: "unreconciled",
+      detail: null,
+      recordedAt: 105,
+      sequence: 5,
+    },
+  },
+  {
+    kind: "authority.denied",
+    attachmentId: "attachment-1",
+    turnId: null,
+    tool: "bash",
+    cause: "command.destructive-removal",
+    reason: "rm -rf ~ discards more than this Session's workspace.",
+  },
+  {
+    kind: "context.compacted",
+    attachmentId: "attachment-1",
+    reason: "threshold",
+    entryId: "pi-entry-9",
+    tokensBefore: 190_000,
+    tokensAfter: 12_000,
+  },
+  {
+    kind: "context.compaction_failed",
+    attachmentId: "attachment-1",
+    reason: "overflow",
+    detail: "Summarization failed: the model refused.",
+  },
+  {
+    // The fourth reason, and the only one with no producer on the compacted
+    // arm: a provider-native checkpoint this Session can no longer use.
+    kind: "context.compaction_failed",
+    attachmentId: "attachment-1",
+    reason: "checkpoint",
+    detail: "A provider-native compaction checkpoint could not be read.",
+  },
+  {
+    kind: "context.reasoning_dropped",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    count: 2,
+    causes: ["prefix-mismatch", "model-mismatch"],
+    paths: ["messages.1.content.0", "messages.3.content.0"],
+  },
+  { kind: "adapter.observed", attachmentId: null, name: "session-wide", native: null },
+  {
+    kind: "adapter.observed",
+    attachmentId: "attachment-1",
+    name: "message",
+    native: { parts: [true, 1, "text"] },
+  },
+  {
+    kind: "usage.recorded",
+    attachmentId: "attachment-1",
+    turnId: "turn-1",
+    attribution: { projectId: "project-1", ticketId: "ticket-1" },
+    usage: {
+      cause: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-opus-4-1",
+      inputTokens: 412,
+      outputTokens: 1_204,
+      cacheReadTokens: 96_000,
+      cacheWriteTokens: 2_100,
+      costUsd: 0.418_23,
+      costBasis: "catalog-estimate",
+    },
+  },
+  {
+    kind: "usage.recorded",
+    attachmentId: null,
+    turnId: null,
+    // Project spend: a Session born without a Ticket still records what
+    // project it belongs to, so an unticketed total is attributable.
+    attribution: { projectId: "project-1", ticketId: null },
+    usage: {
+      cause: "utility",
+      providerId: "openai",
+      modelId: "gpt-5",
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      costUsd: null,
+      costBasis: "unavailable",
+    },
+  },
+);
+
+/**
+ * A kind with no sample above fails to compile, the same way an event kind
+ * missing from the projection vocabulary does in ./session-ledger: the check
+ * is a type alias whose argument must be `never`, so the error names the
+ * unsampled kind rather than a count. Exported only because an unused local
+ * type alias is not a thing lint keeps.
+ */
+type MissingPayloadSample = Exclude<SessionEventPayload["kind"], (typeof payloads)[number]["kind"]>;
+type AssertEveryKindSampled<Missing extends never> = Missing;
+export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
+
+describe("decodeSessionEventPayload round-trips every durable kind", () => {
   for (const payload of payloads) {
     it(`round-trips ${payload.kind}${"attention" in payload ? ` (${payload.attention.kind})` : ""}${"receipt" in payload ? ` (${payload.receipt.status})` : ""}`, () => {
       expect(roundTrip(payload)).toEqual(payload);
@@ -1738,38 +1767,29 @@ describe("the renderer-side parse", () => {
     expect(parsed).toEqual({ ok: true, event: shipped });
   });
 
-  it("parses every scrubbed kind the table publishes", () => {
-    // The kinds whose scrub removes keys carry their own renderer decode;
-    // everything else parses through scrub(decode(…)). Both paths, per kind.
-    const durables: SessionEventPayload[] = [
-      { kind: "command.recorded", command },
-      {
-        kind: "command.recorded",
-        command: { ...command, intent: { kind: "session.retitle", title: null }, route: null },
-      },
-      { kind: "attachment.opened", attachment },
-      {
-        kind: "attachment.failed",
-        attachment,
-        failure: { code: "spawn", detail: null, diagnostic: { stderr: "boom" } },
-      },
-      {
-        kind: "attachment.native_referenced",
-        attachmentId: "attachment-1",
-        native: { id: "native-1", detail: null },
-      },
-      { kind: "interaction.opened", interaction },
-      { kind: "session.archived" },
-    ];
-    for (const durable of durables) {
-      const shipped = scrubSessionEventPayload(durable);
-      const parsed = parseRendererSessionEvent(
-        rendererEvent({ payload: JSON.parse(encodeSessionJson(shipped)) }),
-        "event",
-      );
-      expect(parsed.ok ? parsed.event.payload : parsed).toEqual(shipped);
-    }
-  });
+  // Every kind, not a hand-picked few: the kinds whose scrub removes keys
+  // carry their own renderer decode, everything else parses through
+  // scrub(decode(…)), and which path a kind takes is the table's business, not
+  // a test's. `context.reasoning_dropped` shipped for a release reading its own
+  // scrubbed shape as corruption (VC-368) because this test named seven kinds
+  // and claimed all of them.
+  for (const kind of SESSION_PROJECTION_EVENT_KINDS) {
+    it(`parses the scrubbed ${kind} the table publishes`, () => {
+      const durables = payloads.filter((payload) => payload.kind === kind);
+      // A kind the roster forgot would otherwise pass this test by having
+      // nothing to check; the compile-time coverage assert beside `payloads`
+      // is the other half of the same guarantee.
+      expect(durables.length).toBeGreaterThan(0);
+      for (const durable of durables) {
+        const shipped = scrubSessionEventPayload(durable);
+        const parsed = parseRendererSessionEvent(
+          rendererEvent({ payload: JSON.parse(encodeSessionJson(shipped)) }),
+          "event",
+        );
+        expect(parsed.ok ? parsed.event.payload : parsed).toEqual(shipped);
+      }
+    });
+  }
 
   it("answers an unknown kind with the distinct tolerant arm, not an error", () => {
     expect(

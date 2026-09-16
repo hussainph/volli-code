@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setImmediate } from "node:timers";
 import type Database from "better-sqlite3";
 import { createSessionEngine } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
@@ -27,6 +28,22 @@ export function createDesktopSessionEngine(
     ids: { next: () => nextId() },
     onProjectionCheckpointFailure:
       ports.onProjectionCheckpointFailure ?? createCheckpointFailureReporter(),
+    yieldToHost: yieldToMainProcess,
+  });
+}
+
+/**
+ * The main process's turn of its event loop, for a roster fold that spans
+ * many Sessions (VC-388).
+ *
+ * `setImmediate` lands in the check phase with no floor; the engine's own
+ * default is `setTimeout(0)`, which Node clamps to a millisecond, and that
+ * clamp is paid once per chunk. The engine owns no Node API, so the faster
+ * spelling is this host's to supply.
+ */
+function yieldToMainProcess(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
   });
 }
 
