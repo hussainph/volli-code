@@ -81,6 +81,8 @@ import { iconLabel, iconReading, type IconReading, type PinnedWindow } from "../
 import {
   CANDIDATES,
   DEFAULT_NUMBER,
+  TYPE_FLOOR_PX,
+  figureFit,
   type Candidate,
   type NumberStyle,
 } from "../usage-icon/variants";
@@ -93,9 +95,10 @@ const REAL = 14;
 /** Big enough to judge geometry. Never big enough to judge legibility. */
 const LOUPE = 44;
 
-type View = "shapes" | "states" | "motion" | "pinning";
+type View = "size" | "shapes" | "states" | "motion" | "pinning";
 
 const VIEWS: readonly { id: View; label: string; asks: string }[] = [
+  { id: "size", label: "Size", asks: "Does a readable figure fit in the band at all?" },
   { id: "shapes", label: "Shapes", asks: "At this state, which drawing wins?" },
   { id: "states", label: "States", asks: "This drawing, across everything the button can be in." },
   { id: "motion", label: "Motion", asks: "Does it get between those states without flickering?" },
@@ -105,7 +108,7 @@ const VIEWS: readonly { id: View; label: string; asks: string }[] = [
 export default function UsageLimitsIconScratch() {
   const [shapeId, setShapeId] = React.useState("centre-windows");
   const [stateId, setStateId] = React.useState("six-accounts");
-  const [view, setView] = React.useState<View>("shapes");
+  const [view, setView] = React.useState<View>("size");
   const [numberStyle, setNumberStyle] = React.useState<NumberStyle>(DEFAULT_NUMBER);
 
   const shape = CANDIDATES.find((candidate) => candidate.id === shapeId) ?? CANDIDATES[0];
@@ -132,6 +135,7 @@ export default function UsageLimitsIconScratch() {
 
       <ViewSwitcher value={view} onChange={setView} />
 
+      {view === "size" ? <SizeView shape={shape} glyph={glyph} onPick={setShapeId} /> : null}
       {view === "shapes" ? <ShapesView glyph={glyph} active={shape} onPick={setShapeId} /> : null}
       {view === "states" ? (
         <StatesView shape={shape} numberStyle={numberStyle} onPick={setStateId} />
@@ -336,6 +340,199 @@ function ViewSwitcher({ value, onChange }: { value: View; onChange(next: View): 
       <p className="text-label text-muted-foreground">{active?.asks}</p>
     </div>
   );
+}
+
+/* ---------------------------------------------------------------- size view */
+
+/** The band is `h-9`. These are the things already in it, for scale. */
+const BAND_NEIGHBOURS: readonly { px: number; what: string }[] = [
+  { px: 13, what: "traffic light" },
+  { px: 22, what: "⌘K pill" },
+  { px: 24, what: "today's button" },
+];
+
+/** The rungs worth looking at, and what adopting each would really cost. */
+const LADDER: readonly { glyph: number; button: number; cost: string }[] = [
+  { glyph: 14, button: 24, cost: "Ships today. `size-3.5` in `icon-sm`." },
+  { glyph: 16, button: 24, cost: "Free — same button, glyph grows into its padding." },
+  { glyph: 18, button: 24, cost: "Still free. 3px of padding left; the hit target never moves." },
+  {
+    glyph: 20,
+    button: 28,
+    cost: "`icon`. Now the tallest thing in the cluster, 6px over the pill.",
+  },
+  { glyph: 22, button: 32, cost: "`icon-lg`. Two thirds of a 36px band, and it reads as a badge." },
+];
+
+/**
+ * The gating question, and the one this scratch got wrong first.
+ *
+ * The figure was set at 13/700 because that was the first setting that could
+ * be READ, which is the wrong test — it answers "is it legible" when the
+ * question is "does it belong". Here is what was actually going on: at the
+ * shipping 14px glyph the ring's clear middle is 10.5 CSS px, and two digits
+ * of `--text-label` — the SMALLEST type this system has — are about 12.3px
+ * wide. The app's smallest type does not fit inside the app's icon. 13/700
+ * was not a type choice, it was a 36%-under-the-floor figure compensating
+ * with weight, which is why it reads as a badge: that is what a badge IS.
+ *
+ * So there are exactly three ways out, and the point of this view is that the
+ * ladder makes their cost visible rather than arguable:
+ *
+ *   1. GROW THE BOX. The fit is a fixed fraction (the middle is 75% of the
+ *      box), so only the box is free. 16 and 18 are genuinely free — the glyph
+ *      grows into padding the button already has and the hit target never
+ *      moves. Past that the button itself has to grow, and at 28px it is the
+ *      tallest thing in a 36px band, taller than the ⌘K pill it sits beside.
+ *   2. SPEND WIDTH INSTEAD OF HEIGHT. The band is short and very wide. Put the
+ *      figure BESIDE the ring and it is ordinary 11px type — on the ladder, no
+ *      compensation — while the ring stays a pure 14px shape. It stops being
+ *      an icon button and becomes a small readout.
+ *   3. DROP THE FIGURE. The arc already carries the amount at a glance, which
+ *      is what a 14px glyph is for; the exact number lives one click away in
+ *      the popover, where it is already set in readable type. This is what
+ *      Apple does at small sizes — the cover-screen icon is big, and the
+ *      menu-bar ones carry no figures at all.
+ */
+function SizeView({
+  shape,
+  glyph,
+  onPick,
+}: {
+  shape: Candidate;
+  glyph: GlyphArgs;
+  onPick(id: string): void;
+}) {
+  const atReal = figureFit(REAL, glyph.numberStyle);
+  return (
+    <div className="flex flex-col gap-4">
+      <Panel>
+        <div className="flex flex-col gap-2">
+          <p className="text-ui font-medium">The figure is below the type ladder, not badly set</p>
+          <p className="max-w-[70ch] text-label leading-relaxed text-muted-foreground">
+            At {REAL}px the ring leaves <Num>{atReal.clear}</Num>px of clear middle. Two digits at
+            the current setting want <Num>{atReal.digits}</Num>px, and render at{" "}
+            <Num>{atReal.px}</Num>px —{" "}
+            <span className={atReal.fromFloor < 0 ? "text-destructive" : "text-foreground"}>
+              {Math.abs(Math.round(atReal.fromFloor * 100))}%{" "}
+              {atReal.fromFloor < 0 ? "under" : "over"}
+            </span>{" "}
+            <code className="text-foreground">--text-label</code> ({TYPE_FLOOR_PX}px), the smallest
+            type in the system. Weight cannot buy space, so no setting of the dial fixes this — it
+            only decides how loudly the figure compensates.
+          </p>
+        </div>
+      </Panel>
+
+      <Panel>
+        <p className="pb-3 text-ui font-medium">1 · Grow the box</p>
+        <div data-testid="size-ladder" className="flex flex-col gap-2">
+          {LADDER.map((rung) => {
+            const fit = figureFit(rung.glyph, glyph.numberStyle);
+            return (
+              <div
+                key={rung.glyph}
+                className="flex items-center gap-3 rounded-md border border-border bg-background p-2"
+              >
+                {/* The band, at its real 36px, so the button's growth is seen
+                    against the room it has rather than in isolation. */}
+                <span className="flex h-9 shrink-0 items-center gap-1 rounded-md border border-border/50 px-2">
+                  <span className="h-[22px] w-16 rounded-md border border-border/50 bg-foreground/10" />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0"
+                    style={{ width: rung.button, height: rung.button }}
+                    aria-label={`Usage limits at ${rung.glyph}px`}
+                  >
+                    {draw(shape, glyph, rung.glyph)}
+                  </Button>
+                </span>
+                <span className="w-24 shrink-0 font-mono text-label text-foreground">
+                  {rung.glyph}px glyph
+                </span>
+                <span
+                  className={cn(
+                    "w-28 shrink-0 font-mono text-label",
+                    fit.fits && fit.fromFloor >= -0.05 ? "text-primary" : "text-muted-foreground",
+                  )}
+                >
+                  figure {fit.px.toFixed(1)}px
+                  <span className={fit.fromFloor < -0.05 ? "text-destructive" : ""}>
+                    {" "}
+                    {fit.fromFloor >= 0 ? "+" : ""}
+                    {Math.round(fit.fromFloor * 100)}%
+                  </span>
+                </span>
+                <span className="min-w-0 flex-1 text-label leading-snug text-muted-foreground">
+                  {rung.cost}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="pt-3 text-label text-muted-foreground">
+          For scale, in the same 36px band:{" "}
+          {BAND_NEIGHBOURS.map((n) => `${n.what} ${n.px}px`).join(" · ")}.
+        </p>
+      </Panel>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel>
+          <p className="pb-1 text-ui font-medium">2 · Spend width instead</p>
+          <p className="pb-3 max-w-[46ch] text-label leading-relaxed text-muted-foreground">
+            The band is short and very wide. Beside the ring the figure is ordinary {TYPE_FLOOR_PX}
+            px type with nothing to compensate for, and the ring goes back to being a pure shape.
+            The trigger stops being an icon button and becomes a small readout.
+          </p>
+          <WayOut id="ring-pill" glyph={glyph} onPick={onPick} />
+        </Panel>
+        <Panel>
+          <p className="pb-1 text-ui font-medium">3 · Drop the figure</p>
+          <p className="pb-3 max-w-[46ch] text-label leading-relaxed text-muted-foreground">
+            The arc carries the amount at a glance, which is all {REAL}px can honestly do; the exact
+            number is one click away in the popover, already set in readable type. Colour still is
+            not the only signal — the arc's length is.
+          </p>
+          <WayOut id="ring-beads-windows" glyph={glyph} onPick={onPick} />
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+/** One alternative, in the band at real size, adoptable in a click. */
+function WayOut({
+  id,
+  glyph,
+  onPick,
+}: {
+  id: string;
+  glyph: GlyphArgs;
+  onPick(next: string): void;
+}) {
+  const candidate = CANDIDATES.find((entry) => entry.id === id);
+  if (candidate === undefined) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onPick(id)}
+      className="flex w-full items-center gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong"
+    >
+      <span className="flex h-9 shrink-0 items-center gap-1 rounded-md border border-border/50 px-2">
+        <span className="h-[22px] w-16 rounded-md border border-border/50 bg-foreground/10" />
+        <InBand shape={candidate} glyph={glyph} />
+      </span>
+      <span className="min-w-0 flex-1 text-label text-muted-foreground">
+        <span className="text-foreground">{candidate.name}</span> — click to make it the shape
+      </span>
+    </button>
+  );
+}
+
+/** A measured quantity, rounded once, so prose and drawing cannot disagree. */
+function Num({ children }: { children: number }) {
+  return <span className="font-mono text-foreground">{children.toFixed(1)}</span>;
 }
 
 /** Every shape at the chosen state — the comparison, one row, click to adopt. */

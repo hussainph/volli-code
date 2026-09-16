@@ -272,6 +272,43 @@ export interface NumberStyle {
 
 export const DEFAULT_NUMBER: NumberStyle = { size: 12, weight: 600 };
 
+/** `--text-label`, 0.6875rem. The smallest type this design system admits. */
+export const TYPE_FLOOR_PX = 11;
+
+export interface FigureFit {
+  /** What the figure actually renders at, in CSS px. */
+  px: number;
+  /** Signed fraction away from {@link TYPE_FLOOR_PX}: -0.36 is 36% under. */
+  fromFloor: number;
+  /** Width of two tabular digits, CSS px. */
+  digits: number;
+  /** Clear space between the ring's inner edges, CSS px. */
+  clear: number;
+  /** Whether two digits sit inside the ring with any margin at all. */
+  fits: boolean;
+}
+
+/**
+ * Does the figure fit, at this glyph size, with this type?
+ *
+ * Stated as a function because the answer is arithmetic and the arithmetic is
+ * the finding: a ring's usable middle is a fixed FRACTION of its box (18/24 =
+ * 75%), so the figure's size and the glyph's size are locked together and the
+ * only free variable is the box. Weight does not appear here, because weight
+ * cannot buy space.
+ *
+ * `0.56em` per digit is Inter's tabular advance; `0.86` keeps a digit's worth
+ * of margin inside the stroke, without which the figure kisses the ring and
+ * both stop being legible.
+ */
+export function figureFit(glyphPx: number, style: NumberStyle): FigureFit {
+  const k = glyphPx / BOX;
+  const px = style.size * k;
+  const digits = 2 * 0.56 * px;
+  const clear = CENTRE_CLEAR * k;
+  return { px, fromFloor: px / TYPE_FLOOR_PX - 1, digits, clear, fits: digits <= clear * 0.86 };
+}
+
 /**
  * The figure, wherever a variant puts it.
  *
@@ -472,6 +509,19 @@ function DotRow({
  */
 const CENTRE_SW = 2;
 const CENTRE_R = EDGE - CENTRE_SW / 2;
+
+/**
+ * What the ring actually leaves the figure, in box units, so the fit can be
+ * COMPUTED rather than eyeballed: the clear diameter between the inner edges
+ * of the stroke. Multiply by `glyphPx / BOX` for CSS pixels.
+ *
+ * This is the number the whole design turns on. At the shipping 14px glyph it
+ * is 10.5 CSS px of clear space, and two digits of `--text-label` (11px) are
+ * about 12.3px wide — so the app's SMALLEST type does not fit inside the app's
+ * icon, and no choice of weight changes that. {@link figureFit} is the honest
+ * version of the arithmetic.
+ */
+export const CENTRE_CLEAR = 2 * (CENTRE_R - CENTRE_SW / 2);
 /** Wide enough for four beads with clearance; the arc keeps the other 290°. */
 const CENTRE_NOTCH = 70;
 const CENTRE_DOT_D = 1.7;
