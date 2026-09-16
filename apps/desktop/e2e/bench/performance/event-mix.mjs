@@ -45,6 +45,8 @@ const BODY_BYTES = Object.freeze({
 const TOOL_NAMES = ["read", "grep", "execute", "edit", "write"];
 const DENIED_CAUSES = ["rule.write-outside-worktree", "rule.network-egress", "rule.secret-path"];
 const OBSERVATION_STATES = ["working", "streaming", "idle", "awaiting-tool"];
+/** Mirrors `REASONING_DROP_CAUSES`; a word outside it fails the write gate. */
+const REASONING_CAUSES = ["prefix-mismatch", "model-mismatch", "unknown"];
 
 /**
  * The weighted mix, in per-mille of allocated units.
@@ -86,7 +88,7 @@ export const EVENT_FAMILIES = Object.freeze(
     },
     {
       id: "observation.token-batch",
-      weight: 220,
+      weight: 210,
       eventCount: 1,
       build: (context) => [
         observed(context, "token.batch", {
@@ -295,19 +297,37 @@ export const EVENT_FAMILIES = Object.freeze(
         },
       ],
     },
-    // `context.reasoning_dropped` belongs in this mix by weight and by realism,
-    // and it is deliberately absent: VC-368. The kind's `scrub` removes `paths`,
-    // which its `decode` requires, and it carries no `decodeRenderer`, so every
-    // such event reaches the chat surface as a dropped frame plus a console
-    // error. Generating it would make every benchmark run fail the harness's
-    // renderer-error gate for a product defect this ticket must not fix and
-    // must not hide. Put it back — weight 10, one event per unit, an
-    // attachment-scoped payload with `causes` and a `paths` body — when VC-368
-    // lands, and regenerate the baseline. Its 10 per-mille went to
-    // `observation.token-batch` rather than to a neighbouring lifecycle family,
-    // because inflating interruptions or denials would change what the mix
-    // claims a Session's history looks like; another runtime observation does
-    // not.
+    {
+      id: "context.reasoning_dropped",
+      weight: 10,
+      eventCount: 1,
+      // One path per dropped block is the upper bound: the host collects
+      // `paths` into a Set, so duplicates collapse and `paths.length` can be
+      // smaller than `count`. The fixture writes the bound. `causes` is a Set
+      // too, unioned across messages, so a notice can name one cause or
+      // several — the renderer copy has a separate branch for the plural, and
+      // the fixture draws both. The paths never cross to the renderer — the
+      // scrub drops them — so this family is also what keeps the fixture
+      // honest about a payload that is bigger on disk than it is on screen.
+      build: (context) => {
+        const count = 1 + context.pick(2);
+        const causeCount = 1 + context.pick(REASONING_CAUSES.length);
+        const causes = REASONING_CAUSES.slice(0, causeCount);
+        return [
+          {
+            attachment: true,
+            payload: {
+              kind: "context.reasoning_dropped",
+              attachmentId: context.attachmentId,
+              turnId: context.turnId,
+              count,
+              causes,
+              paths: Array.from({ length: count }, () => context.body(BODY_BYTES.reasoningPath)),
+            },
+          },
+        ];
+      },
+    },
     {
       id: "turn.interrupted",
       weight: 10,

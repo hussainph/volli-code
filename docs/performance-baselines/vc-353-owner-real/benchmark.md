@@ -13,6 +13,23 @@ Loaded-arm contract: 2 busy cores for a fixed 3,600 seconds.
 Fixture file: 373,002,240 bytes total — 256,671,744 live, 116,330,496 free pages, 175,083,520 in `session_events`; largest `app_state` row 508 bytes.
 Health: 0 renderer console errors and `firstTurn.reached: true` in every iteration of both arms; the run publishes nothing otherwise.
 
+## The event mix has changed since this run (VC-368)
+
+This run generated **no `context.reasoning_dropped` events**. The kind was held
+out of `apps/desktop/e2e/bench/performance/event-mix.mjs` while the renderer
+could not read its scrubbed shape, and every benchmark run would otherwise have
+failed the harness's zero-renderer-error gate. VC-368 fixed the codec and put
+the family back at weight 10 per 1,000 allocated units, taken back from
+`observation.token-batch`.
+
+So the distribution behind the numbers below differs from today's by **10 events
+per 1,000** — roughly 2,600 of this fixture's 259,855 events are a reasoning-drop
+payload now where they were a token batch then. Both are small single-event
+families, so the effect on fixture mass is well under the run-to-run spread this
+file already warns about, and the numbers stay usable as a rough comparison
+point. They are no longer a byte-exact match for a fresh run's fixture: a
+like-for-like comparison wants a re-take on the owner's machine.
+
 ## Host conditions when this was taken — read before comparing
 
 The host was **not exclusively idle**. System load was sampled every 30s throughout:
