@@ -33,6 +33,7 @@ import {
   type TranscriptArtifactStore,
   type TranscriptDelta,
 } from "./index";
+import { PROJECTION_CACHE_LIMIT } from "./session-runtime";
 
 const venue = { id: "machine-1", kind: "local" as const };
 
@@ -3871,6 +3872,70 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.projection({ sessionId: oldest });
 
     expect(reads).toEqual([...sessions, oldest]);
+  });
+
+  /**
+   * Pure recency is the wrong eviction rule for this cache (VC-388, audit item
+   * D4).
+   *
+   * A Session somebody is watching is the one whose fold will be wanted again
+   * within the second, and background work reads Sessions nobody has open all
+   * the time — a listing, an await, a watchdog sweep. Under recency alone the
+   * background read wins, because it happened later, and the open tab pays a
+   * full re-fold for a Session it never stopped looking at.
+   */
+  it("keeps a subscribed Session's fold while unwatched Sessions crowd the cache", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    const counting: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+    };
+    const { runtime } = composition({ engine: counting, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+
+    // Enough unwatched Sessions to evict the whole cache twice over.
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    // A re-read here would mean the tab's own Session was thrown away to make
+    // room for Sessions nobody has open.
+    expect(reads).toEqual([]);
+
+    // And once the tab closes it is an ordinary candidate again, so the bound
+    // still holds: nothing is pinned by a subscriber that no longer exists.
+    release();
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`after-close-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([watched]);
+
+    await runtime.close();
   });
 });
 

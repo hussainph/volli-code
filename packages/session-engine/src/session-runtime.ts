@@ -646,11 +646,28 @@ interface ProjectedHistory {
 
 const EVENT_PAGE_SIZE = 500;
 /**
- * How many Sessions keep a folded history. A Session's events are held for as
- * long as its entry lives, so this is the bound on that memory; the desktop
- * reads one or two Sessions at a time and an evicted entry costs one re-read.
+ * How many UNWATCHED Sessions keep a folded history (VC-388, audit item D4).
+ *
+ * A Session's events are held for as long as its entry lives, so this is the
+ * bound on that memory: a measured entry is 17.4 KB for an ordinary Session
+ * and 272.5 KB for a 450-event one
+ * (`docs/research/perf/session-listing-vc388.md`).
+ *
+ * It used to read "the desktop reads one or two Sessions at a time", which
+ * stopped being true once a person could keep dozens of tabs open, and the
+ * obvious repair — raise the number until it covers them — is the wrong one.
+ * Any fixed number is a guess about how many tabs someone has, and a listing
+ * or a watchdog sweep would still evict them all in one pass. {@link
+ * DefaultSessionRuntime.keepHistory} exempts Sessions that have a subscriber
+ * instead, which is this process's own evidence that a surface has one open,
+ * so tabs are held by the thing that actually owns them and this number went
+ * back to meaning what it says.
+ *
+ * So it stays at eight, and eight is now a bound on background reads: the
+ * Sessions nobody is looking at, each of which costs exactly one re-read when
+ * it is dropped.
  */
-const PROJECTION_CACHE_LIMIT = 8;
+export const PROJECTION_CACHE_LIMIT = 8;
 /**
  * How many Sessions keep a transient overlay, bounded the same way and for the
  * same reason as the fold cache above: the explicit drop points (attachment
@@ -3070,12 +3087,37 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
   }
 
+  /**
+   * Keeps one Session's fold, evicting by recency among the Sessions nobody is
+   * watching (VC-388).
+   *
+   * A subscriber is this process's own evidence that a surface has the Session
+   * open: a tab subscribes when it mounts and the teardown removes it, so the
+   * set is neither a guess nor something a caller has to remember to declare.
+   * Recency alone cannot use that, and gets the common case backwards — a
+   * listing, an await or a watchdog sweep reads Sessions nobody has open, all
+   * of them more recently than the tab that has been sitting there, so the
+   * cheap-to-rebuild entries evict the expensive one.
+   *
+   * Watched entries are exempt, not pinned: the exemption lasts exactly as
+   * long as the subscription, and nothing outlives the tab that asked for it.
+   * The limit therefore bounds the UNWATCHED entries, and the watched ones are
+   * bounded by how many Sessions the user can have open at once — which is
+   * their choice to make, and which they are already paying for in the
+   * renderer.
+   */
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
     this.#histories.delete(sessionId);
     this.#histories.set(sessionId, history);
+    let evictable = 0;
+    for (const key of this.#histories.keys()) {
+      if (!this.#subscribers.has(key)) evictable += 1;
+    }
     for (const oldest of this.#histories.keys()) {
-      if (this.#histories.size <= PROJECTION_CACHE_LIMIT) break;
+      if (evictable <= PROJECTION_CACHE_LIMIT) break;
+      if (this.#subscribers.has(oldest)) continue;
       this.#histories.delete(oldest);
+      evictable -= 1;
     }
     return history;
   }

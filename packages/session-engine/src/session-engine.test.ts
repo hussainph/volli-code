@@ -3693,3 +3693,173 @@ describe("the in-memory ledger's usage port", () => {
     ).resolves.toMatchObject({ total: { requestCount: 0 }, meteredSessionCount: 0 });
   });
 });
+
+/**
+ * A project's whole roster, folded on the process that also serves every other
+ * Session operation (VC-388).
+ *
+ * The cost per Session is already bounded by the checkpoint tail. What these
+ * cover is the cost of doing it N times in a row with nothing in between: a
+ * listing that holds the ledger for its whole length starves every write
+ * behind it, and one that never returns to the event loop blocks the host for
+ * the same span whether or not a skeleton is drawn over it.
+ */
+describe("listSessions over a project roster (VC-388)", () => {
+  async function roster(count: number) {
+    const { plane } = composition();
+    const sessions = [];
+    for (let index = 0; index < count; index += 1) {
+      sessions.push(
+        (await plane.createSession(createRequest(`command-roster-${index}`))).session,
+      );
+    }
+    return { plane, sessions };
+  }
+
+  it("lets a write commit while a listing is still in flight", async () => {
+    const { plane, sessions } = await roster(40);
+    const settled: string[] = [];
+
+    const listing = plane
+      .listSessions({ projectId: "project-1", scope: "all" })
+      .then((rows) => void settled.push("listing") ?? rows);
+    const write = plane
+      .submit({
+        commandId: "command-roster-write",
+        sessionId: sessions[0].id,
+        intent: { kind: "session.retitle", title: "Wrote mid-listing" },
+        provenance: userProvenance,
+      })
+      .then((result) => void settled.push("write") ?? result);
+
+    const [rows] = await Promise.all([listing, write]);
+    // The whole point: the roster's fold is not one indivisible hold on the
+    // ledger, so a Session that wants to record a fact is not made to wait for
+    // 39 other Sessions to be projected first.
+    expect(settled).toEqual(["write", "listing"]);
+    expect(rows).toHaveLength(40);
+  });
+
+  it("returns to the host's event loop before the roster is folded", async () => {
+    const { plane } = await roster(40);
+
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" });
+    // Registered AFTER the listing began, so it can only run if the listing
+    // gives the loop a turn back. A promise chain would not: awaiting a
+    // resolved promise drains as a microtask, and the whole microtask queue
+    // runs to exhaustion before any timer does.
+    let hostRanMidListing = false;
+    setTimeout(() => {
+      hostRanMidListing = true;
+    }, 0);
+
+    await expect(listing).resolves.toHaveLength(40);
+    expect(hostRanMidListing).toBe(true);
+  });
+
+  /**
+   * A ledger that reports which Sessions each read actually folded.
+   *
+   * `listProjectionEvents` is the fold's own read, so a Session that appears
+   * here was projected from its log and one that does not was answered from
+   * somewhere cheaper.
+   */
+  function foldWatchingComposition() {
+    const stored = createInMemorySessionLedger();
+    const folded: string[] = [];
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "listProjectionEvents") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) => {
+                  folded.push(query.sessionId);
+                  return transaction.listProjectionEvents(query);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    let now = 100;
+    const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+    return { plane, folded };
+  }
+
+  it("re-folds only the Sessions whose log moved since the last listing", async () => {
+    const { plane, folded } = foldWatchingComposition();
+    const quiet = (await plane.createSession(createRequest("command-cache-quiet"))).session;
+    const busy = (await plane.createSession(createRequest("command-cache-busy"))).session;
+    const alsoQuiet = (await plane.createSession(createRequest("command-cache-also-quiet"))).session;
+
+    folded.length = 0;
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(3);
+    // Nothing is cached yet, so the first visit pays for all three.
+    expect(folded.toSorted()).toEqual([alsoQuiet.id, busy.id, quiet.id].toSorted());
+
+    await plane.submit({
+      commandId: "command-cache-retitle",
+      sessionId: busy.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+
+    folded.length = 0;
+    const second = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(folded).toEqual([busy.id]);
+    // And the answer is the same one a full fold would have given.
+    expect(second.find(({ session }) => session.id === busy.id)?.session.title).toBe("Moved on");
+    expect(second.find(({ session }) => session.id === quiet.id)?.session.title).toBe(
+      "Durable Session",
+    );
+  });
+
+  /**
+   * The case that decides whether a cursor is a sufficient cache key. It is
+   * not.
+   *
+   * `sessions.ticket_id` is `ON DELETE SET NULL`, so deleting a Ticket moves a
+   * field of an otherwise insert-only row and appends NOTHING to any Session's
+   * log. A listing cache keyed on the log head alone would keep answering with
+   * the Ticket that was deleted, and no later event would ever dislodge it.
+   */
+  it("re-folds a Session whose row moved even though its log did not", async () => {
+    const stored = createInMemorySessionLedger();
+    let ticketDeleted = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "listSessions") return Reflect.get(target, property, receiver);
+                return (query: ListSessionsQuery) =>
+                  transaction
+                    .listSessions(query)
+                    .map((session) =>
+                      ticketDeleted ? { ...session, ticketId: null } : session,
+                    );
+              },
+            }),
+          ),
+        ),
+    };
+    const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
+    const created = await plane.createSession(createRequest("command-cache-ticket-delete"));
+
+    await expect(plane.listSessions({ projectId: "project-1", scope: "all" })).resolves.toMatchObject(
+      [{ session: { id: created.session.id, ticketId: "ticket-1" } }],
+    );
+
+    ticketDeleted = true;
+    await expect(plane.listSessions({ projectId: "project-1", scope: "all" })).resolves.toMatchObject(
+      [{ session: { id: created.session.id, ticketId: null } }],
+    );
+  });
+});
