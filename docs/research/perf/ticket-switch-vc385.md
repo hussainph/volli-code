@@ -281,6 +281,32 @@ palette-driven number stops being a good proxy for "switching between two open
 tabs", and a second interaction — not a replacement — is the honest way to
 measure that.
 
+## The two halves of the unsaved-edit guarantee
+
+The ticket asks that unsaved **description and file** edits still save to the
+ticket that wrote them, held by a test rather than a claim. Both halves now
+have one, and they are not held the same way — which is worth stating, because
+it is what anyone revisiting `<Activity>` will trip over.
+
+| | Held by | Survives an unmount | Survives the ticket changing under a live editor |
+|---|---|---|---|
+| Ticket Body | `authoredForRef`, pinned when the draft is typed | yes | **yes** |
+| Ticket Files | the props the write closes over | yes | no |
+
+The Body pins the document its draft was typed into, so the rule holds whether
+or not anything above it remounts. A Files tab still resolves
+`{projectId, ticketId, relPath}` from its *current* props at flush time, so its
+correctness depends on the workspace being destroyed on a switch — which is
+exactly what `key={ticket.id}` does, and why its test exercises the unmount.
+
+That asymmetry is fine while the key stays, and the key is staying. But it is a
+live trap for the `<Activity>` option: an artifact writes into the ticket's own
+**worktree**, so a draft flushed against the wrong ticket lands in the wrong
+checkout — a worse failure than the body's, which writes the wrong row in one
+database. Anything that stops the workspace remounting has to give `FileView`
+the same treatment the body just got, and this table is the record of what is
+owed.
+
 ## A budget, now that a clean "before" exists
 
 `real` fixture, `--interactions ticket_switch`, 20 repetitions:
