@@ -17,8 +17,10 @@ description editor and builds them again. The ticket's own review had already
 withdrawn the numbers attached to it and flagged that "the cost is re-render,
 not IPC" did not follow from the evidence given.
 
-It does not follow, and it is not true. Rebuilding the entire ticket workspace
-costs **1.1 ms**. Two thirds of the switch was one IPC read.
+It does not follow, and it is not true. The whole renderer side of the switch —
+rebuilding the ticket page, its rail, every panel, and creating the description
+editor — costs **about 30 ms**, 4% of the number. Two thirds of it was one IPC
+read.
 
 ## Method
 
@@ -134,8 +136,8 @@ measurement instead of a phase that silently reads as zero.
 | ↳ of which `sessions.list` | 496.8 ms | 8.9 ms | 760.6 ms | 9.6 ms |
 
 The loaded arm is where this change matters most, and the tail is the reason.
-Contention does almost nothing to the switch's renderer work — the rebuild is
-1.1 ms on both arms, the description editor moves by a millisecond — but it
+Contention does almost nothing to the switch's renderer work — rebuild plus
+description editor is 30.0 ms idle and 31.2 ms loaded — but it
 punishes a blocking main-process transaction badly: `sessions.list` p95 was
 542 ms idle and 761 ms loaded before the fix. Removing the repeat read takes
 the loaded p95 from 1185.2 ms to 351.3 ms (−70%) and collapses its variance
@@ -144,16 +146,44 @@ is far more predictable under load — which is the state a person's machine is
 actually in while agents are running, and the state the original "feels slow"
 report came from.
 
+### A correction to what two of these rows mean
+
+When these four runs were taken, the `ticket-workspace.mount` mark was stamped
+in the workspace's render body, which put it at the **start** of that render
+rather than at the end of it. So the `rebuild workspace` row above does not
+measure the rebuild: it measures the scheduling gap between the store commit
+and React beginning to render the workspace. The actual cost of building the
+ticket page, its rail and its panels fell into the row below it, inside
+`description editor`, together with creating Monaco.
+
+The mark now fires from a layout effect, after the subtree is on the DOM, so
+the row means what its name says from here on. The four published reports
+carry the older meaning. Their **totals are unaffected** and so is the sum of
+the two rows; only the split between those two rows moves, and a later run will
+show a larger `rebuild workspace` and a smaller `description editor` without
+anything having changed in the app.
+
+**This does not change any decision on this ticket, and it is worth being
+explicit about why.** The claim that carried the argument was never "the
+rebuild is 1.1 ms" on its own — it is that the rebuild and the editor
+*together* are about 30 ms (30.0 ms idle before, 31.2 ms loaded before) against
+470 ms of `sessions.list`, i.e. roughly 4% of the switch. Both dropped options
+were weighed against that combined figure, which is measured correctly and is
+unaffected by where the boundary between them sits. What was overstated is the
+precision of the 1.1 ms, not the size of the renderer's share.
+
 Read the idle "before" column as the answer to the question the ticket asked:
 
 - **66% of the switch was `sessions.list`.** Opening the command palette read
   every tracked project's whole Session listing, every time, with no cache.
   That call folds a project's entire roster inside one blocking transaction on
   the main process — 1,198 Sessions in this fixture.
-- **0.16% was the workspace rebuild.** The keyed remount that names this
-  ticket is 1.1 ms. It is not worth changing.
-- **4% was the description editor.** Creating and laying out Monaco for the
-  first time is 28.9 ms — real, and an order of magnitude below the palette.
+- **4% was the whole renderer side of the switch.** The keyed remount that
+  names this ticket, plus building the page, the rail, every panel, and
+  creating Monaco for the first time, is 30.0 ms together — the two rows
+  `rebuild workspace` and `description editor`, which these reports divide at
+  the wrong point (see the correction above). An order of magnitude below the
+  palette either way.
 - The remaining ~12% is settle: the two frames the harness waits for after the
   workspace is ready.
 
@@ -215,14 +245,17 @@ does every other caller.
 
 ## What was considered and dropped
 
-**Stop rebuilding the workspace on every switch** — dropped. The rebuild is
-1.1 ms p50 and ≤ 1.4 ms p95, and it is 1.1 ms on the loaded arm too: it does
-not even degrade under contention. `<Activity mode="hidden">` would keep the subtree's
-DOM and state alive across switches at the cost of holding every open ticket's
-tree resident, and it still tears down effects when hiding — so the Monaco
-editor, which is created in an effect, would be destroyed and rebuilt anyway.
-Paying that complexity and that memory for 1.1 ms is not defensible. The
-`key={ticket.id}` stays.
+**Stop rebuilding the workspace on every switch** — dropped. Everything the
+remount throws away and rebuilds — the page, the rail, every panel, and the
+description editor — comes to 30.0 ms p50 idle and 31.2 ms loaded, so it barely
+degrades under contention. (Read as one figure on purpose: these reports divide
+that work across two rows at the wrong point — see the correction above — and
+the sum is the part measured correctly.) `<Activity mode="hidden">` would keep
+the subtree's DOM and state alive across switches at the cost of holding every
+open ticket's tree resident, and it still tears down effects when hiding — so
+the Monaco editor, which is created in an effect, would be destroyed and
+rebuilt anyway. Paying that complexity and that memory for 30 ms, against 470
+ms sitting in one IPC read, is not defensible. The `key={ticket.id}` stays.
 
 **Reuse one Monaco editor instead of creating one per switch** — dropped for
 now. At 28.9 ms p50 it is the second largest renderer-side phase, and swapping

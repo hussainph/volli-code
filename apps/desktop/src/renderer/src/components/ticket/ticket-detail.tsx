@@ -207,19 +207,25 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
-  // The moment this workspace starts existing for THIS ticket (VC-385). In the
-  // render body rather than in an effect on purpose: effects run after the
-  // whole subtree has committed, so an effect here would bill the rail and
-  // every panel to the "rebuild" phase and leave nothing for the phases after
-  // it. Guarded by ticket id rather than by a bare `once` flag so it stays
-  // correct if this view ever stops being remounted per ticket — a re-render
-  // is not a new workspace, and stamping one would shorten the editor phase by
-  // exactly the time it was late.
+  // This workspace is built and on the DOM for THIS ticket (VC-385).
+  //
+  // A layout effect, not the render body. Rendering must stay free of side
+  // effects: the app runs under `StrictMode` and React is free to start a
+  // render and throw it away, so a mark stamped during render can describe a
+  // workspace that never committed — a measurement of something that did not
+  // happen. A layout effect runs after the subtree is on the DOM and before
+  // paint, which is both honest and the moment the phase is named for.
+  //
+  // Guarded by ticket id rather than by a bare `once` flag so it stays correct
+  // if this view ever stops being remounted per ticket: a re-render is not a
+  // new workspace, and stamping one would shorten the editor phase by exactly
+  // the time it was late.
   const markedWorkspaceForRef = React.useRef<string | null>(null);
-  if (markedWorkspaceForRef.current !== ticket.id) {
+  React.useLayoutEffect(() => {
+    if (markedWorkspaceForRef.current === ticket.id) return;
     markedWorkspaceForRef.current = ticket.id;
     markPerfPhase(PERF_PHASE.ticketWorkspaceMount);
-  }
+  }, [ticket.id]);
 
   const ticketBody = useTicketBody(ticket);
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
