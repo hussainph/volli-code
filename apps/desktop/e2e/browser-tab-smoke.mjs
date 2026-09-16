@@ -263,6 +263,34 @@ async function osWindowCount(app) {
   );
 }
 
+/**
+ * How many entries the new tab's blank start page has COMMITTED into its own
+ * session history.
+ *
+ * The strip paints "New Tab" from product state, and that lands BEFORE
+ * Chromium commits `about:blank`. A navigation issued inside that window
+ * replaces the still-pending entry instead of pushing past it, so the blank
+ * page quietly stops being a step Back can reach.
+ *
+ * That is precisely how check 4 went red under a loaded runner: address bar,
+ * title, settle state and Forward were all correct, and Back alone came back
+ * disabled — the history it wanted to walk had never been written. Waiting on
+ * the commit makes the tab's opening history deterministic instead of a race
+ * between the renderer's chrome and Chromium's navigation.
+ */
+async function startPageHistoryDepth(app) {
+  return app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    for (const view of window?.contentView.children ?? []) {
+      const child = view;
+      if (!("webContents" in child) || child.webContents.isDestroyed()) continue;
+      if (child.webContents.getURL() !== "about:blank") continue;
+      return child.webContents.navigationHistory.length();
+    }
+    return 0;
+  });
+}
+
 async function remoteViewAttached(app, targetUrl) {
   return app.evaluate(({ BrowserWindow }, url) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
@@ -445,6 +473,13 @@ async function main() {
       // own focus survives, and an earlier build of this feature failed here
       // with the "+" button still focused over an empty address bar.
       const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+
+      // Only type once the blank page is a committed history entry rather than
+      // painted chrome; see startPageHistoryDepth for what racing it costs.
+      await waitUntil(
+        "the blank start page to commit its history entry",
+        async () => (await startPageHistoryDepth(app)) >= 1,
+      );
 
       await addressBar(page).fill(startUrl);
       await addressBar(page).press("Enter");
