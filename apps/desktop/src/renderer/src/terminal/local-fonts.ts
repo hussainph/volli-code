@@ -1,9 +1,10 @@
 /**
  * The installed font families, via the Local Font Access API.
  *
- * restty already resolves ghostty's `font-family` values against installed
- * fonts through this API (main grants the `local-fonts` permission — see
- * src/main/index.ts), so Settings can offer the same list the renderer will
+ * The terminal hands ghostty's `font-family` values to the engine as a CSS
+ * font stack, which Chromium resolves against the same installed faces this
+ * API enumerates (main grants the `local-fonts` permission — see
+ * src/main/index.ts). So Settings can offer the list the terminal will
  * actually be able to load: no bundled font bytes, and no picker entry that
  * silently fails to resolve.
  *

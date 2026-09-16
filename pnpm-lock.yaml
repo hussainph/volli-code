@@ -35,7 +35,6 @@ patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
   '@earendil-works/pi-agent-core@0.85.0': 3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b
   '@earendil-works/pi-ai@0.85.0': 741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6
-  restty@0.2.0: a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af
 
 importers:
 
@@ -146,6 +145,15 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
+      '@xterm/addon-fit':
+        specifier: 0.12.0-beta.301
+        version: 0.12.0-beta.301(@xterm/xterm@6.1.0-beta.304)
+      '@xterm/addon-unicode11':
+        specifier: 0.10.0-beta.301
+        version: 0.10.0-beta.301(@xterm/xterm@6.1.0-beta.304)
+      '@xterm/xterm':
+        specifier: 6.1.0-beta.304
+        version: 6.1.0-beta.304
       ai:
         specifier: ^7.0.83
         version: 7.0.84(zod@4.4.3)
@@ -194,9 +202,6 @@ importers:
       react-dom:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
-      restty:
-        specifier: ^0.2.0
-        version: 0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2)
       sharp:
         specifier: 0.35.4
         version: 0.35.4(@types/node@26.3.0)
@@ -4179,6 +4184,19 @@ packages:
     engines: {node: '>=10.0.0'}
     deprecated: this version has critical issues, please update to the latest version
 
+  '@xterm/addon-fit@0.12.0-beta.301':
+    resolution: {integrity: sha512-MukRyJLAFQrW/++aM209jBZ8G9J/Ioe4SGS6c3ba87v+zYuX/I66JrDB7sVfykQ9t7DlT+c1MWl1jTlX2kyx1w==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.304
+
+  '@xterm/addon-unicode11@0.10.0-beta.301':
+    resolution: {integrity: sha512-SS5BzfbvfFIikE4xZFAtHu6n0Kl5R1ZCPx41RL2WULLSE+HFo/WmYee53tMxNK/QUjpcQWepeVB7HebCPhHnig==}
+    peerDependencies:
+      '@xterm/xterm': ^6.1.0-beta.304
+
+  '@xterm/xterm@6.1.0-beta.304':
+    resolution: {integrity: sha512-Wq9d4qFYslYQBIan+riXotdyurtREc6v+HWdAwV6Y2JSDI9eJ1dkWm/fzYb2rCGgGnM3baiYuSK4Z6OLNKLzDw==}
+
   '@yuku-codegen/binding-darwin-arm64@0.5.48':
     resolution: {integrity: sha512-yo96Oef12WzqnphInfz/eexVse3+kWgfGS5g2S3rFS3dcGn1ENW9xLFDZUP9rh+yP76DOq38wBoFi1+I9+6qBg==}
     cpu: [arm64]
@@ -6797,10 +6815,6 @@ packages:
   responselike@2.0.1:
     resolution: {integrity: sha512-4gl03wn3hj1HP3yzgdI7d3lCkF95F21Pz4BPGvKHinyQzALR5CapwC8yIi0Rh58DEMQ/SguC03wFj2k0M/mHhw==}
 
-  restty@0.2.0:
-    resolution: {integrity: sha512-PVD4+PxX0tFGd6qMDRywL+ME0PXSBX+QEjzJpfSy2i6dycOzyDYB0Z5RRuHZhzpqXeYN+wr20ffu8fixuWE+SQ==}
-    engines: {bun: '>=1.2.0'}
-
   retext-latin@4.0.0:
     resolution: {integrity: sha512-hv9woG7Fy0M9IlRQloq/N6atV82NxLGveq+3H2WOi79dtIYWN8OaxogDm77f8YnVXJL2VD3bbqowu5E3EMhBYA==}
 
@@ -7079,11 +7093,6 @@ packages:
   temp@0.9.4:
     resolution: {integrity: sha512-yYrrsWnrXMcdsnu/7YMYAofM1ktpL5By7vZhf15CrXijWWrEYZks5AXBudalfSWJLlnen/QUJUB5aoB0kqZUGA==}
     engines: {node: '>=6.0.0'}
-
-  text-shaper@0.1.23:
-    resolution: {integrity: sha512-kBItvxckAzS4JkcferjxbXN7tFir/RDUBcxk1aKe2Z9QqtmoddGezmwFOc7xBjKKF/Nf9JVDCWXnK6XNVzTjIA==}
-    peerDependencies:
-      typescript: ^5
 
   tiny-async-pool@1.3.0:
     resolution: {integrity: sha512-01EAw5EDrcVrdgyCLgoSPvqznC0sVxDSVeiOz09FUpjh71G79VCqneOr+xvt7T1r76CF6ZZfPjHorN2+d+3mqA==}
@@ -11406,6 +11415,16 @@ snapshots:
 
   '@xmldom/xmldom@0.8.14': {}
 
+  '@xterm/addon-fit@0.12.0-beta.301(@xterm/xterm@6.1.0-beta.304)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.304
+
+  '@xterm/addon-unicode11@0.10.0-beta.301(@xterm/xterm@6.1.0-beta.304)':
+    dependencies:
+      '@xterm/xterm': 6.1.0-beta.304
+
+  '@xterm/xterm@6.1.0-beta.304': {}
+
   '@yuku-codegen/binding-darwin-arm64@0.5.48':
     optional: true
 
@@ -14748,12 +14767,6 @@ snapshots:
     dependencies:
       lowercase-keys: 2.0.0
 
-  restty@0.2.0(patch_hash=a46f6a7e25a538e5e66f5926232dce77460fd3d08a2af7424ca0148f2ee242af)(typescript@7.0.2):
-    dependencies:
-      text-shaper: 0.1.23(typescript@7.0.2)
-    transitivePeerDependencies:
-      - typescript
-
   retext-latin@4.0.0:
     dependencies:
       '@types/nlcst': 2.0.3
@@ -15145,10 +15158,6 @@ snapshots:
     dependencies:
       mkdirp: 0.5.6
       rimraf: 2.6.3
-
-  text-shaper@0.1.23(typescript@7.0.2):
-    dependencies:
-      typescript: 7.0.2
 
   tiny-async-pool@1.3.0:
     dependencies:

@@ -775,11 +775,13 @@ app.whenReady().then(async () => {
 
   // Renderer permission policy. Electron's default with NO handler installed
   // is grant-everything; this allowlist keeps exactly what the app uses:
-  //  - local-fonts: restty resolves the ghostty-config font families against
-  //    installed fonts via the Local Font Access API (issue #18).
+  //  - local-fonts: the Terminal settings font picker enumerates the user's
+  //    installed families through the Local Font Access API (issue #18), so
+  //    the ghostty-config font chain can be offered as real choices.
   //  - clipboard-read / clipboard-sanitized-write: terminal copy/paste and
   //    OSC 52 (status quo under the old default-grant; a ghostty-style
-  //    clipboard-read=ask policy needs a restty seam that 0.2.0 lacks).
+  //    clipboard-read=ask policy would need a per-request prompt this app
+  //    does not have a surface for yet).
   //  - fullscreen: standard window affordance.
   const allowedPermissions = new Set([
     "local-fonts",
@@ -2281,7 +2283,7 @@ app.whenReady().then(async () => {
   // window edge and by every ghostty chain read — a `theme = light:X,dark:Y`
   // pair resolves to a different half in each.
   const currentAppearance = (): ResolvedAppearance => currentFirstPaint().appearance;
-  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // Ghostty config read + live-reload watch, feeding the terminal appearance. The
   // `userData` root is where Volli's own ghostty OVERLAY files live (decision
   // #67). Registered after the db opens because the chain read needs the
   // resolved mode, which lives in `app_state`.
