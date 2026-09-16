@@ -186,16 +186,22 @@ const BOOT_TIER = new Set([
  * times: split-view passed 5/5 (including the tab drag), so it returned to the
  * ordinary pool; terminal passed only 2/5. In every terminal failure check 1's
  * first shell probe stayed null, and dependent checks inherited that missing
- * shell state; one run also failed to acquire its GPU backend. That points at
- * first-canvas/WebGPU readiness under concurrent GPU+PTY startup, not another
- * window intercepting CDP input. A dropped first command cannot be waited back.
+ * shell state; one run also failed to acquire its GPU backend. A dropped first
+ * command cannot be waited back.
  *
  * The retained probe runs last after the concurrent pass finishes.
  */
 const SERIAL = new Set([
-  // Clicks and wheels a WebGPU canvas and asserts the SGR mouse reports that
-  // reach its PTY; its first terminal command is not reliable under concurrent
-  // GPU+PTY startup (2/5 paired runs after throttling was disabled).
+  // Clicks and wheels a live terminal and asserts the SGR mouse reports that
+  // reach its PTY; its first terminal command was not reliable under concurrent
+  // startup (2/5 paired runs after throttling was disabled).
+  //
+  // That measurement predates VC-107 and its stated cause — WebGPU backend
+  // acquisition racing PTY startup — no longer exists: the renderer is xterm's
+  // DOM renderer and asks the GPU for nothing. The entry stays because nobody
+  // has re-run the experiment, not because the old reason still holds. To
+  // retire it, pair this probe with split-view-smoke five times
+  // (`--jobs 2`) and drop the line if it passes 5/5.
   "terminal-smoke.mjs",
 ]);
 

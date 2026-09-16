@@ -1,13 +1,17 @@
 /**
- * End-to-end acceptance smoke for Volli's terminal system (libghostty/restty +
- * node-pty). Drives the REAL packaged renderer through Playwright: two separate
+ * End-to-end acceptance smoke for Volli's terminal system (xterm.js + node-pty).
+ * Drives the REAL packaged renderer through Playwright: two separate
  * workspaces, each with its own scoped terminal session, cwd = that workspace's
  * path, running concurrently and cleanly isolated.
  *
- * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM. So every
- * assertion about shell behaviour is made through SIDE EFFECTS: keystrokes are
- * typed into the focused canvas and we poll for the file the shell writes. cwd
- * correctness is proven by echoing `$PWD` into that file.
+ * The terminal is xterm.js's DOM renderer (VC-107), so the grid IS in the DOM:
+ * `.xterm` is one terminal and `.xterm-rows` holds its visible text. Shell
+ * BEHAVIOUR is still asserted through side effects — keystrokes go into the
+ * focused terminal and we poll for the file the shell writes, with cwd proven
+ * by echoing `$PWD` into it — because a file written by the shell is evidence
+ * the bytes reached the PTY, which rendered text alone is not. What the rows
+ * text is for is the other half: that a terminal is still PAINTED, and painted
+ * with the same content, after something moved it.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -54,58 +58,88 @@ function loginShellCount() {
   }
 }
 
-// ---- terminal interaction (via real canvas, no DOM text) -------------------
+// ---- terminal interaction (one `.xterm` element per live terminal) --------
 
-/** Focus the single VISIBLE terminal canvas by clicking its centre. */
-async function focusTerminal(page) {
-  const box = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll("canvas"));
-    // The active tab's view is the only one not display:none (offsetParent set)
-    // and with a real measured size.
-    const visible = canvases.find(
-      (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
-    );
-    if (!visible) return null;
-    const r = visible.getBoundingClientRect();
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  });
-  if (!box) throw new Error("no visible terminal canvas to focus");
-  await page.mouse.click(box.x, box.y);
-  await sleep(200);
-}
-
-/** Focus a visible terminal canvas by its left-to-right, top-to-bottom index. */
-/** Rects of visible terminal canvases, spatially ordered (top-left first). */
-async function visibleCanvasRects(page) {
+/**
+ * Rects of the visible terminals, spatially ordered (top-left first).
+ *
+ * `.xterm` is xterm.js's own root: one per live terminal, and the element the
+ * engine's persistent host holds. The active tab's view is the only one not
+ * display:none (offsetParent set) and with a real measured size, which is what
+ * keeps a background tab's terminal out of the ordering.
+ */
+async function visibleTerminalRects(page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll("canvas"))
+    Array.from(document.querySelectorAll(".xterm"))
       .filter(
-        (canvas) =>
-          canvas.offsetParent !== null && canvas.clientWidth > 0 && canvas.clientHeight > 0,
+        (element) =>
+          element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
       )
-      .map((canvas) => {
-        const rect = canvas.getBoundingClientRect();
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })
       .toSorted((a, b) => a.y - b.y || a.x - b.x),
   );
 }
 
-/** A viewport point inside the `index`-th visible canvas, at box fractions
- *  (fx, fy). Throws if that canvas is absent so callers can't silently target
+/** A viewport point inside the `index`-th visible terminal, at box fractions
+ *  (fx, fy). Throws if that terminal is absent so callers can't silently target
  *  the wrong pane. */
-async function visibleCanvasPointAt(page, index, fx = 0.5, fy = 0.5) {
-  const rects = await visibleCanvasRects(page);
+async function visibleTerminalPointAt(page, index, fx = 0.5, fy = 0.5) {
+  const rects = await visibleTerminalRects(page);
   const rect = rects[index];
-  if (!rect)
-    throw new Error(`visible terminal canvas ${index} does not exist (count=${rects.length})`);
+  if (!rect) throw new Error(`visible terminal ${index} does not exist (count=${rects.length})`);
   return { x: rect.x + rect.width * fx, y: rect.y + rect.height * fy };
 }
 
+/** Focus the single VISIBLE terminal by clicking its centre. */
+async function focusTerminal(page) {
+  await focusTerminalAt(page, 0);
+}
+
+/** Focus a visible terminal by its left-to-right, top-to-bottom index. */
 async function focusTerminalAt(page, index) {
-  const point = await visibleCanvasPointAt(page, index);
+  const point = await visibleTerminalPointAt(page, index);
   await page.mouse.click(point.x, point.y);
   await sleep(200);
+}
+
+/**
+ * The rendered text of the `index`-th visible terminal, whitespace collapsed.
+ *
+ * `.xterm-rows` is the DOM renderer's grid: one div per visible row, each a run
+ * of spans. `textContent` therefore runs the rows together with no separator,
+ * so this is only ever asked whether it CONTAINS a marker — never what its
+ * lines are.
+ */
+async function visibleRowsText(page, index = 0) {
+  return page.evaluate((wanted) => {
+    const terminals = Array.from(document.querySelectorAll(".xterm"))
+      .filter(
+        (element) =>
+          element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
+      )
+      .toSorted((a, b) => {
+        const ra = a.getBoundingClientRect();
+        const rb = b.getBoundingClientRect();
+        return ra.y - rb.y || ra.x - rb.x;
+      });
+    const rows = terminals[wanted]?.querySelector(".xterm-rows");
+    return rows === null || rows === undefined ? null : rows.textContent.replace(/\s+/g, " ");
+  }, index);
+}
+
+/** Poll a visible terminal's rendered rows until they contain `needle`. */
+async function waitForRowsContaining(page, needle, { index = 0, timeoutMs = 8000 } = {}) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await visibleRowsText(page, index);
+    if (last?.includes(needle)) return last;
+    await sleep(150);
+  }
+  return last;
 }
 
 /** Type a shell command into the focused terminal and submit it. */
@@ -167,28 +201,33 @@ async function tabCount(page) {
   return page.locator('[aria-label^="Close Terminal"]').count();
 }
 
-/** Wait for a live terminal canvas with a real (non-zero) size to appear. */
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+/** Wait for a live terminal with a real (non-zero) size and a painted grid. */
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
-        (el) => el.offsetParent !== null,
+      const element = Array.from(document.querySelectorAll(".xterm")).find(
+        (candidate) => candidate.offsetParent !== null,
       );
-      return c && c.clientWidth > 0 && c.clientHeight > 0;
+      return (
+        element &&
+        element.clientWidth > 0 &&
+        element.clientHeight > 0 &&
+        element.querySelector(".xterm-rows") !== null
+      );
     },
     { timeout: timeoutMs },
   );
-  // Give restty a beat to boot the shell, measure, and paint the prompt.
+  // Give the shell a beat to boot and paint its prompt.
   await sleep(2200);
 }
 
 /**
  * Boot a terminal tab through the session-start control's caret and wait for
- * its canvas. Home's session-start control starts a structured CHAT on a press
+ * its terminal. Home's session-start control starts a structured CHAT on a press
  * (a terminal is the companion kind, one caret away), so a PTY smoke mints
  * every terminal itself through that caret. `.first()` because the ticket
  * surfaces mount the same control too; `expectedTabs` pins the wait to this
- * create rather than a canvas an earlier tab painted.
+ * create rather than a terminal an earlier tab painted.
  */
 async function startTerminalTab(page, expectedTabs) {
   await page.getByLabel("Other things to open").first().click();
@@ -198,7 +237,7 @@ async function startTerminalTab(page, expectedTabs) {
     expectedTabs,
     { timeout: 10000 },
   );
-  await waitForLiveCanvas(page);
+  await waitForLiveTerminal(page);
 }
 
 // ---- main ------------------------------------------------------------------
@@ -229,6 +268,10 @@ async function main() {
   const rootGridAfterPath = join(SCRATCH, "root-grid-after.txt");
   const childGridBeforePath = join(SCRATCH, "child-grid-before.txt");
   const childGridAfterPath = join(SCRATCH, "child-grid-after.txt");
+  const dprGridBeforePath = join(SCRATCH, "dpr-grid-before.txt");
+  const dprGridAfterPath = join(SCRATCH, "dpr-grid-after.txt");
+  const keepAliveGridBeforePath = join(SCRATCH, "keepalive-grid-before.txt");
+  const keepAliveGridAfterPath = join(SCRATCH, "keepalive-grid-after.txt");
   const mouseReportPath = join(SCRATCH, "mouse-report.txt");
   const mouseReadyPath = join(SCRATCH, "mouse-ready.txt");
   for (const p of [
@@ -243,6 +286,10 @@ async function main() {
     rootGridAfterPath,
     childGridBeforePath,
     childGridAfterPath,
+    dprGridBeforePath,
+    dprGridAfterPath,
+    keepAliveGridBeforePath,
+    keepAliveGridAfterPath,
     mouseReportPath,
     mouseReadyPath,
   ]) {
@@ -285,7 +332,6 @@ async function main() {
     dbPath: join(profileDir, "volli.db"),
     userDataDir: profileDir,
   });
-  let backendReport = { webgpu: false, webgl2: false, navigatorGpu: false };
 
   try {
     const page = await app.firstWindow();
@@ -295,21 +341,8 @@ async function main() {
     page.on("pageerror", (e) => consoleErrors.push("pageerror: " + e.message));
     await page.waitForLoadState("domcontentloaded");
 
-    // Spy on canvas context acquisition BEFORE the app boots restty, so we can
-    // report which renderer backend actually won. addInitScript persists across
-    // the reload below.
-    await page.addInitScript(() => {
-      window.volliCtxSpy = [];
-      const orig = HTMLCanvasElement.prototype.getContext;
-      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
-        const ctx = orig.call(this, type, ...rest);
-        window.volliCtxSpy.push({ type, ok: ctx != null });
-        return ctx;
-      };
-    });
-
-    // Seed two workspaces + select alpha, then reload so persisted state (and
-    // the getContext spy) take effect from a clean boot.
+    // Seed two workspaces + select alpha, then reload so persisted state takes
+    // effect from a clean boot.
     await page.evaluate((projs) => {
       localStorage.setItem(
         "volli:projects",
@@ -362,7 +395,7 @@ async function main() {
     // Alpha remembers it was on Sessions, but re-assert to be robust.
     await page.getByText("AR", { exact: true }).click(); // Alpha Ridge monogram
     await page.getByText("Home", { exact: true }).click();
-    await waitForLiveCanvas(page);
+    await waitForLiveTerminal(page);
     const aTabs2 = await tabCount(page);
     await focusTerminal(page);
     await runInTerminal(page, `echo again-$PWD >> ${probeA}`);
@@ -390,7 +423,7 @@ async function main() {
       .getByRole("tab", { name: /^Terminal/ })
       .first()
       .click();
-    await waitForLiveCanvas(page);
+    await waitForLiveTerminal(page);
     const aTabs3 = await tabCount(page);
     await focusTerminal(page);
     // No re-cd: if the same shell survived, $PWD is still ws-alpha.
@@ -404,68 +437,75 @@ async function main() {
       `tabs=${aTabs3}`,
     );
 
-    // === 5. Display-scale change: backing buffer follows DPR without resize =
+    // === 5. Display-scale change: the grid survives a DPR-only change =======
     // Electron cannot be moved between physical monitors deterministically in
     // CI, so override only the DPR getter and dispatch the presentation-level
-    // resize fallback. The terminal's CSS box stays fixed; a correct refit must
-    // still rebuild the canvas backing buffer at the new pixel density.
-    const dprReport = await page.evaluate(async () => {
-      const canvas = Array.from(document.querySelectorAll("canvas")).find(
-        (candidate) =>
-          candidate.offsetParent !== null &&
-          candidate.clientWidth > 0 &&
-          candidate.clientHeight > 0,
-      );
-      if (!(canvas instanceof HTMLCanvasElement)) return null;
+    // resize fallback the registry's watcher listens for. The terminal's CSS
+    // box stays fixed, so a DOM-rendered grid must come through a scale change
+    // UNCHANGED — same rows, same content — and must still paint what the shell
+    // prints afterwards. (The renderer before this one kept its own backing
+    // buffer here; Chromium owns device pixels for DOM text, so the thing worth
+    // asserting is that nothing was blanked or reflowed.)
+    await focusTerminal(page);
+    await runInTerminal(page, "echo DPR-BEFORE-MARK");
+    const rowsBeforeDpr = await waitForRowsContaining(page, "DPR-BEFORE-MARK");
+    await runInTerminal(page, `stty size > ${dprGridBeforePath}`);
+    const dprGridBefore = await waitForFileMatching(dprGridBeforePath, GRID_SHAPE, 5000);
 
-      const originalDescriptor = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    const dprReport = await page.evaluate(async () => {
       const originalDpr = window.devicePixelRatio;
       const forcedDpr = originalDpr === 1 ? 2 : 1;
-      const scale = () => {
-        const rect = canvas.getBoundingClientRect();
-        return {
-          x: canvas.width / rect.width,
-          y: canvas.height / rect.height,
-          cssWidth: rect.width,
-          cssHeight: rect.height,
-        };
-      };
-
-      const before = scale();
-      let after = before;
-      try {
-        Object.defineProperty(window, "devicePixelRatio", {
-          configurable: true,
-          get: () => forcedDpr,
-        });
-        window.dispatchEvent(new Event("resize"));
-
-        const deadline = performance.now() + 3000;
-        do {
-          await new Promise(requestAnimationFrame);
-          after = scale();
-        } while (
-          performance.now() < deadline &&
-          (Math.abs(after.x - forcedDpr) > 0.05 || Math.abs(after.y - forcedDpr) > 0.05)
-        );
-      } finally {
-        if (originalDescriptor === undefined) delete window.devicePixelRatio;
-        else Object.defineProperty(window, "devicePixelRatio", originalDescriptor);
-        window.dispatchEvent(new Event("resize"));
-        await new Promise(requestAnimationFrame);
-      }
-
-      return { originalDpr, forcedDpr, before, after };
+      // Stash the descriptor for the restore below, which happens in a LATER
+      // evaluate (the forced ratio has to survive a round trip through the
+      // shell). Getting the restore wrong is not cosmetic: if `devicePixelRatio`
+      // ends up `undefined`, every cell measurement downstream becomes NaN, and
+      // a terminal whose cell size is NaN silently stops fitting and reports
+      // NaN mouse coordinates — with nothing on screen or in the console saying
+      // so.
+      window.volliOriginalDprDescriptor = Object.getOwnPropertyDescriptor(
+        window,
+        "devicePixelRatio",
+      );
+      Object.defineProperty(window, "devicePixelRatio", {
+        configurable: true,
+        get: () => forcedDpr,
+      });
+      window.dispatchEvent(new Event("resize"));
+      // Two frames: the engine refits now and once more on its settle frame.
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      return { originalDpr, forcedDpr };
     });
+    await sleep(500);
+    const rowsAfterDpr = await visibleRowsText(page);
+    await runInTerminal(page, "echo DPR-AFTER-MARK");
+    const rowsRepainted = await waitForRowsContaining(page, "DPR-AFTER-MARK");
+    await runInTerminal(page, `stty size > ${dprGridAfterPath}`);
+    const dprGridAfter = await waitForFileMatching(dprGridAfterPath, GRID_SHAPE, 5000);
+    const dprRestored = await page.evaluate(() => {
+      const original = window.volliOriginalDprDescriptor;
+      delete window.volliOriginalDprDescriptor;
+      if (original === undefined) delete window.devicePixelRatio;
+      else Object.defineProperty(window, "devicePixelRatio", original);
+      window.dispatchEvent(new Event("resize"));
+      return window.devicePixelRatio;
+    });
+    await sleep(300);
     check(
       5,
-      "Canvas backing buffer tracks DPR-only display changes without a layout resize",
-      dprReport !== null &&
-        Math.abs(dprReport.before.x - dprReport.originalDpr) < 0.05 &&
-        Math.abs(dprReport.before.y - dprReport.originalDpr) < 0.05 &&
-        Math.abs(dprReport.after.x - dprReport.forcedDpr) < 0.05 &&
-        Math.abs(dprReport.after.y - dprReport.forcedDpr) < 0.05,
-      JSON.stringify(dprReport),
+      "A DPR-only display change leaves the rendered grid intact and still painting",
+      rowsBeforeDpr !== null &&
+        rowsBeforeDpr.includes("DPR-BEFORE-MARK") &&
+        rowsAfterDpr !== null &&
+        rowsAfterDpr.includes("DPR-BEFORE-MARK") &&
+        rowsRepainted !== null &&
+        rowsRepainted.includes("DPR-AFTER-MARK") &&
+        dprGridBefore !== null &&
+        dprGridAfter === dprGridBefore &&
+        // The override really was undone: every later check measures cells
+        // against this number.
+        dprRestored === dprReport.originalDpr,
+      `dpr=${JSON.stringify(dprReport)} restored=${dprRestored} grid=${dprGridBefore}→${dprGridAfter}`,
     );
 
     // === 6. Second tab in A: caret → two tabs, each its own live shell ======
@@ -503,16 +543,16 @@ async function main() {
 
     // === 7. Split panes: each leaf owns an independent shell + renderer ====
     // This is the architecture boundary used by Ghostty/cmux: splitting a
-    // surface creates a fresh terminal surface/PTY. A second canvas wired to
+    // surface creates a fresh terminal surface/PTY. A second `.xterm` wired to
     // the original PTY is not a split — input/output from both panes aliases.
     await runInTerminal(page, `echo $$ > ${splitRootPid}`);
     await waitForFileContains(splitRootPid, "", 3000);
     await page.keyboard.press("Meta+d");
     await page.waitForFunction(
       () =>
-        Array.from(document.querySelectorAll("canvas")).filter(
-          (canvas) =>
-            canvas.offsetParent !== null && canvas.clientWidth > 0 && canvas.clientHeight > 0,
+        Array.from(document.querySelectorAll(".xterm")).filter(
+          (element) =>
+            element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
         ).length === 2,
       { timeout: 10000 },
     );
@@ -594,26 +634,55 @@ async function main() {
       `child=${childGridBefore}→${childGridAfter} root=${rootGridBefore}→${rootGridAfter} chrome=${JSON.stringify(chromeAfter)}`,
     );
 
-    // === 10. Renderer backend ================================================
-    backendReport = await page.evaluate(() => {
-      const ctx = window.volliCtxSpy || [];
-      return {
-        webgpu: ctx.some((c) => c.type === "webgpu" && c.ok),
-        webgl2: ctx.some((c) => c.type === "webgl2" && c.ok),
-        navigatorGpu: typeof navigator.gpu !== "undefined",
-      };
-    });
+    // === 10. Tab switch away and back: correct grid, no user resize =========
+    // VC-107 acceptance #1, and the one assertion only a DOM-rendered terminal
+    // can make: after the surface goes away and comes back, the rows on screen
+    // still hold what the shell printed before the trip, and the shell's own
+    // view of the grid has not moved. A renderer that measured a hidden host
+    // would come back with a wrong grid until the user resized the window —
+    // which is exactly the failure nobody can see in a screenshot, because the
+    // screenshot is of a terminal that looks fine and is one `stty` wrong.
+    await focusTerminalAt(page, 0);
+    await runInTerminal(page, "echo KEEPALIVE-MARK");
+    const rowsBeforeSwitch = await waitForRowsContaining(page, "KEEPALIVE-MARK");
+    await runInTerminal(page, `stty size > ${keepAliveGridBeforePath}`);
+    const keepAliveGridBefore = await waitForFileMatching(
+      keepAliveGridBeforePath,
+      GRID_SHAPE,
+      5000,
+    );
+
+    await homeTabs.getByRole("tab", { name: "Board" }).click();
+    await sleep(800);
+    await homeTabs
+      .getByRole("tab", { name: /^Terminal/ })
+      .first()
+      .click();
+    await waitForLiveTerminal(page);
+    // Read the rows BEFORE touching the mouse or the keyboard: any interaction
+    // would be a chance to refit, and the claim is that none was needed.
+    const rowsAfterSwitch = await visibleRowsText(page, 0);
+    await page.screenshot({ path: shot("10-after-tab-return.png") });
+    await focusTerminalAt(page, 0);
+    await runInTerminal(page, `stty size > ${keepAliveGridAfterPath}`);
+    const keepAliveGridAfter = await waitForFileMatching(keepAliveGridAfterPath, GRID_SHAPE, 5000);
     check(
       10,
-      "Renderer is a real GPU canvas backend",
-      backendReport.webgpu || backendReport.webgl2,
-      `webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu}`,
+      "Tab switch away and back: same rendered rows and the same grid, unresized",
+      rowsBeforeSwitch !== null &&
+        rowsBeforeSwitch.includes("KEEPALIVE-MARK") &&
+        rowsAfterSwitch !== null &&
+        rowsAfterSwitch.includes("KEEPALIVE-MARK") &&
+        keepAliveGridBefore !== null &&
+        keepAliveGridAfter === keepAliveGridBefore,
+      `grid=${keepAliveGridBefore}→${keepAliveGridAfter} rows=${JSON.stringify(rowsAfterSwitch?.slice(-60) ?? null)}`,
     );
 
     // === 11. Mouse reporting reaches the PTY ================================
     // The probe enables DECSET 1000 + SGR 1006 and records raw stdin bytes.
     // This is the same protocol Claude Code's TUI relies on for clickable UI
-    // and wheel input; checking the PTY bytes avoids canvas/OCR ambiguity.
+    // and wheel input; checking the PTY bytes asserts the report itself rather
+    // than anything the terminal happened to draw about it.
     await focusTerminalAt(page, 0);
     await runInTerminal(
       page,
@@ -621,12 +690,12 @@ async function main() {
     );
     await waitForFileContains(mouseReadyPath, "ready", 5000);
     // The readiness file is written immediately after stdout.write(DECSET),
-    // while node-pty batches output for up to one frame. Wait until restty has
-    // consumed the mode sequences before generating pointer input.
+    // while node-pty batches output for up to one frame. Wait until the
+    // terminal has consumed the mode sequences before generating pointer input.
     await sleep(250);
-    // Target the SAME canvas focusTerminalAt(page, 0) just focused — the probe
+    // Target the SAME terminal focusTerminalAt(page, 0) just focused — the probe
     // runs in that pane, so pointer input must land there too.
-    const mouseBox = await visibleCanvasPointAt(page, 0, 0.7, 0.6);
+    const mouseBox = await visibleTerminalPointAt(page, 0, 0.7, 0.6);
     await page.mouse.click(mouseBox.x, mouseBox.y);
     await page.mouse.wheel(0, 180);
     const mouseHex = await waitForFileContains(mouseReportPath, "1b5b3c", 5000);
@@ -636,37 +705,38 @@ async function main() {
     const hasMouseWheel = /1b5b3c(?:3634|3635)3b[0-9a-f]+4d/.test(mouseHex ?? "");
     check(
       11,
-      "Canvas click + wheel become SGR mouse reports at the PTY",
+      "Click + wheel on the terminal become SGR mouse reports at the PTY",
       hasMouseDown && hasMouseWheel,
       `down=${hasMouseDown} wheel=${hasMouseWheel} raw=${JSON.stringify(mouseHex?.trim() ?? null)}`,
     );
 
-    // === 12. Normal-screen wheel scrolls restty's viewport ==================
-    const readScrollHost = () =>
-      page.evaluate(() => {
-        const host = Array.from(document.querySelectorAll(".restty-native-scroll-host")).find(
-          (element) => element.offsetParent !== null,
-        );
-        return host ? { top: host.scrollTop, max: host.scrollHeight - host.clientHeight } : null;
-      });
-    await runInTerminal(page, "seq 1 500");
-    await sleep(1000);
-    const scrollBefore = await readScrollHost();
+    // === 12. Normal-screen wheel scrolls the terminal's own scrollback ======
+    // xterm scrolls through its own scrollable element rather than a native
+    // `scrollTop`, so the honest reading is the one the user has: which lines
+    // are DRAWN. 500 lines in, the last one is on screen; a wheel up has to put
+    // an earlier one there instead.
+    await runInTerminal(page, 'seq -f "line-%g" 1 500');
+    const rowsAtBottom = await waitForRowsContaining(page, "line-500", { timeoutMs: 10000 });
     await page.mouse.move(mouseBox.x, mouseBox.y);
     await page.mouse.wheel(0, -600);
-    await sleep(300);
-    const scrollAfter = await readScrollHost();
+    await sleep(400);
+    const rowsScrolledBack = await visibleRowsText(page, 0);
     check(
       12,
       "Wheel scrolls ordinary terminal scrollback",
-      scrollBefore !== null && scrollAfter !== null && scrollAfter.top < scrollBefore.top,
-      `before=${JSON.stringify(scrollBefore)} after=${JSON.stringify(scrollAfter)}`,
+      rowsAtBottom !== null &&
+        rowsAtBottom.includes("line-500") &&
+        rowsScrolledBack !== null &&
+        !rowsScrolledBack.includes("line-500") &&
+        /line-\d+/.test(rowsScrolledBack),
+      `bottom=${JSON.stringify(rowsAtBottom?.slice(-40) ?? null)} scrolled=${JSON.stringify(rowsScrolledBack?.slice(-40) ?? null)}`,
     );
 
-    // Manual visual diagnostic for Claude-style status symbols. Restty renders
-    // into a GPU canvas, so Playwright cannot inspect the glyphs as DOM text and
-    // this screenshot is intentionally NOT a pass/fail assertion. Inspect both
-    // the bare U+23FA and explicit U+23FA U+FE0E rows for ghost tofu boxes.
+    // Manual visual diagnostic for Claude-style status symbols. The codepoints
+    // are in the DOM now, but which FACE the font stack picked for them — and
+    // whether that face draws a tofu box — is a pixel question no DOM read can
+    // answer, so this screenshot stays intentionally NOT a pass/fail assertion.
+    // Inspect both the bare U+23FA and explicit U+23FA U+FE0E rows.
     await runInTerminal(
       page,
       "printf '\\033[32m⏺\\033[0m bare-symbol\\n\\033[36m⏺︎\\033[0m explicit-text-symbol\\n'",
@@ -692,11 +762,13 @@ async function main() {
     `baseline=${baseline} after=${after}`,
   );
 
-  // Fatal renderer errors (WASM/CSP/data-URI) invalidate the whole run.
+  // Fatal renderer errors (CSP/data-URI) invalidate the whole run. WASM is
+  // still matched deliberately: the CSP no longer permits it, so a renderer
+  // that tries to compile any is a dependency nobody meant to add.
   const fatal = consoleErrors.filter((e) =>
     /wasm|WebAssembly|Content Security|CSP|data: URI|not base64|Refused to/i.test(e),
   );
-  check(0, "No fatal renderer console errors (WASM/CSP)", fatal.length === 0, fatal.join(" | "));
+  check(0, "No fatal renderer console errors (CSP)", fatal.length === 0, fatal.join(" | "));
 
   console.log("\nScreenshots:");
   console.log(`  ${join(SCRATCH, "01-workspace-a-terminal.png")}  — Workspace A live terminal`);
@@ -705,13 +777,11 @@ async function main() {
   console.log(`  ${join(SCRATCH, "06-two-tabs.png")}              — A with two session tabs`);
   console.log(`  ${join(SCRATCH, "07-independent-split.png")}      — two independent split panes`);
   console.log(
-    `  ${join(SCRATCH, "08-symbol-presentation.png")}     — manual-only U+23FA bare + VS15 visual check (pixels not asserted)`,
+    `  ${join(SCRATCH, "10-after-tab-return.png")}       — A after a Board↔Terminal round trip`,
   );
   console.log(
-    `\nRenderer backend: ${backendReport.webgpu ? "WebGPU" : backendReport.webgl2 ? "WebGL2" : "UNKNOWN"}` +
-      ` (webgpu=${backendReport.webgpu} webgl2=${backendReport.webgl2} navigator.gpu=${backendReport.navigatorGpu})`,
+    `  ${join(SCRATCH, "08-symbol-presentation.png")}     — manual-only U+23FA bare + VS15 visual check (pixels not asserted)`,
   );
-
   const failures = results.filter((r) => !r.ok);
   console.log(
     `\n${failures.length === 0 ? "ALL CHECKS PASSED" : `${failures.length} CHECK(S) FAILED: ${failures.map((f) => f.n).join(", ")}`}`,
