@@ -4163,6 +4163,64 @@ describe("SessionRuntime native adapter contract", () => {
 
     await runtime.close();
   });
+
+  /**
+   * The exemption lasts exactly as long as the subscription, and a
+   * subscription that never opened is not one. `subscribe` registers the
+   * watcher before it replays history, so a replay that fails has to take the
+   * registration back whole — the entry as well as the member — or an empty
+   * Set would read as "watched" for the rest of the process.
+   */
+  it("does not pin a Session whose subscribe failed before it opened", async () => {
+    const base = composition();
+    const reads: string[] = [];
+    let failReplayFor: string | null = null;
+    const faulty: SessionEngine = {
+      ...base.engine,
+      getBaseSession: async (query) => {
+        reads.push(query.sessionId);
+        return base.engine.getBaseSession(query);
+      },
+      listEvents: async (query) => {
+        if (query.sessionId === failReplayFor) throw new Error("replay failed");
+        return base.engine.listEvents(query);
+      },
+    };
+    const { runtime } = composition({ engine: faulty, adapter: base.adapter });
+    const create = async (commandId: string): Promise<string> =>
+      (
+        await runtime.command({
+          commandId,
+          command: {
+            kind: "session.create",
+            projectId: "project-1",
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: null,
+          },
+        })
+      ).sessionId;
+
+    const unopened = await create("unopened-create");
+    await runtime.projection({ sessionId: unopened });
+    failReplayFor = unopened;
+    await expect(
+      runtime.subscribe({ sessionId: unopened, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-create-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: unopened });
+    // A cache hit here would mean the failed subscribe left its Session
+    // exempt from the bound with nobody watching it.
+    expect(reads).toEqual([unopened]);
+
+    await runtime.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

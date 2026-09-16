@@ -1949,6 +1949,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       await this.#enqueueCompactionProgressBaseline(subscriber);
     } catch (error) {
       subscribers.delete(subscriber);
+      // The empty Set has to go too: {@link #keepHistory} reads membership of
+      // this map as "a surface is watching", so a subscription that never
+      // opened would otherwise exempt the Session from eviction for ever.
+      if (subscribers.size === 0) this.#subscribers.delete(input.sessionId);
       throw error;
     }
     return () => {
