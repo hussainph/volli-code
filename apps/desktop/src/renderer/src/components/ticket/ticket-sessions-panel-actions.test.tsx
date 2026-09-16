@@ -25,11 +25,14 @@ function panel(creating: boolean): string {
 }
 
 describe("TicketSessionsPanel", () => {
-  // Nothing seeds the listing cache here, so every case below is the EMPTY
-  // roster. The create control lives in the Sessions HEADING and is present
-  // either way (the scratch draws it always) — these cases prove its shape and
-  // its disabled state; `ticket-sessions-panel-rows.test.tsx` proves it survives
-  // a populated roster.
+  // Static markup reads every store's INITIAL state (`getServerSnapshot`), so
+  // every case below is the roster BEFORE its baseline read — which paints the
+  // rows' box, not an empty sentence (VC-383). The empty sentence itself is
+  // proven on the mounted path in `ticket-sessions-panel-push.test.tsx`, where
+  // a listing can land. The create control lives in the Sessions HEADING and is
+  // present either way (the scratch draws it always) — these cases prove its
+  // shape and its disabled state; `ticket-sessions-panel-rows.test.tsx` proves
+  // it survives a populated roster.
   it("starts a chat in one press and keeps the terminal behind the caret", () => {
     const html = panel(false);
 
@@ -55,13 +58,13 @@ describe("TicketSessionsPanel", () => {
     expect(buttonTag(html, "Other things to open")).toContain('disabled=""');
   });
 
-  it("says what is missing, once, with the offer already above it", () => {
-    // An empty roster is one sentence in a dashed frame: the heading's own
-    // control sits 20px above it, so a second copy inside the frame would be
-    // the same offer twice in one glance.
+  it("holds the rows' box, with the offer once above it, before the listing has answered", () => {
+    // The heading's own control sits above the list either way, so neither the
+    // pending box nor the empty frame carries a second copy of the same offer.
     const html = panel(false);
 
-    expect(html).toContain("No active sessions");
+    expect(html).toContain('data-testid="ticket-sessions-loading"');
+    expect(html).not.toContain("No active sessions");
     expect(html.match(/aria-label="New chat"/g)?.length).toBe(1);
   });
 });

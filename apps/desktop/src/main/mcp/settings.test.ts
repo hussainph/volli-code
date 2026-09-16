@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { MCP_ERROR_MAX_CHARS } from "@volli/shared";
+import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { McpSettingsService } from "./settings";
+import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
 
 let ctx: TestDb;
 let listedTools: readonly { name: string; description?: string; inputSchema: unknown }[];
@@ -176,5 +176,174 @@ describe("McpSettingsService", () => {
     expect(settings.selectedTools("p1").map((tool) => tool.toolName)).toEqual(["later"]);
     expect(settings.remove({ projectId: "p1", serverId: "server-1" })).toEqual({ ok: true });
     expect(settings.list("p1")).toEqual([]);
+  });
+});
+
+describe("McpSettingsService cancellation and provenance (VC-380)", () => {
+  it("honours a caller's signal during an install and says it was cancelled", async () => {
+    const controller = new AbortController();
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => 100,
+      open: async (_server, _workspacePath, signal): Promise<McpProtocolClient> => {
+        controller.abort();
+        signal.throwIfAborted();
+        throw new Error("unreachable");
+      },
+    });
+
+    const result = await settings.save({
+      projectId: "p1",
+      server: draft,
+      enabledTools: ["echo"],
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "The MCP connection was cancelled before it finished.",
+    });
+    // A first-time failure writes nothing at all — the row must not exist.
+    expect(settings.list("p1")).toEqual([]);
+  });
+
+  it("tells a timeout apart from a cancellation, so a caller knows which happened", async () => {
+    // The attempt spends the whole deadline and then fails. Nothing in the
+    // error says "timeout": what makes it one is the duration, and that is what
+    // is measured.
+    let clock = 100;
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => clock,
+      open: async (): Promise<McpProtocolClient> => {
+        clock += MCP_CONNECTION_TIMEOUT_MS;
+        throw new Error("socket hang up");
+      },
+    });
+
+    const result = await settings.save({ projectId: "p1", server: draft, enabledTools: [] });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Fixture did not answer within the 10s MCP connection limit.",
+    });
+    expect(settings.list("p1")).toEqual([]);
+  });
+
+  it("leaves a server's own wording out of the verdict entirely", async () => {
+    // A server that proxies something slow may print "timeout" in an error it
+    // raised immediately. Reading the words would blame Volli's connection
+    // limit for a fault well inside it.
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => 100,
+      open: async (): Promise<McpProtocolClient> => {
+        throw new Error("upstream request timed out after 20ms");
+      },
+    });
+
+    const result = await settings.save({ projectId: "p1", server: draft, enabledTools: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).not.toContain("did not answer within");
+  });
+
+  it("writes nothing when the caller cancels after the catalog arrives", async () => {
+    // The narrow window between a successful handshake and the only write in
+    // `save`. Acceptance 6 promises a cancelled install leaves NO partial
+    // configuration, and "almost none" is a different promise.
+    const controller = new AbortController();
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => 100,
+      open: async (): Promise<McpProtocolClient> => ({
+        listTools: async () => {
+          controller.abort();
+          return [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }];
+        },
+        callTool: async () => ({ content: [] }),
+        close: async () => {},
+      }),
+    });
+
+    const result = await settings.save({
+      projectId: "p1",
+      server: draft,
+      enabledTools: [],
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ ok: false, error: MCP_CANCELLED_MESSAGE });
+    expect(settings.list("p1")).toEqual([]);
+  });
+
+  it("carries the caller's signal into a preview, and leaves nothing behind", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const settings = service();
+
+    const result = await settings.test({
+      projectId: "p1",
+      server: draft,
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "The MCP connection was cancelled before it finished.",
+    });
+    expect(settings.list("p1")).toEqual([]);
+  });
+
+  it("stores the provenance an install supplied, and refuses one it cannot read back", async () => {
+    const settings = service();
+
+    const saved = await settings.save({
+      projectId: "p1",
+      server: draft,
+      enabledTools: ["echo"],
+      provenance: {
+        source: "registry.modelcontextprotocol.io",
+        registryType: "npm",
+        version: "1.4.2",
+      },
+    });
+
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.server.provenance).toEqual({
+      source: "registry.modelcontextprotocol.io",
+      registryType: "npm",
+      version: "1.4.2",
+      digest: null,
+    });
+
+    expect(
+      await settings.save({
+        projectId: "p1",
+        server: draft,
+        enabledTools: ["echo"],
+        provenance: { registryType: "homebrew" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: "registry type must be one of: npm, pypi, nuget, cargo, oci, mcpb",
+    });
+  });
+
+  it("keeps recorded provenance through a refresh nobody gave a new origin for", async () => {
+    const settings = service();
+    await settings.save({
+      projectId: "p1",
+      server: draft,
+      enabledTools: ["echo"],
+      provenance: { source: "npm", version: "1.4.2" },
+    });
+
+    const refreshed = await settings.refresh({ projectId: "p1", serverId: "server-1" });
+
+    expect(refreshed.ok).toBe(true);
+    if (!refreshed.ok) return;
+    expect(refreshed.server.provenance).toMatchObject({ source: "npm", version: "1.4.2" });
   });
 });

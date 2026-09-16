@@ -991,6 +991,17 @@ describe("registry ↔ argv mechanics", () => {
       "session.send",
       "session.delegate",
       "session.await",
+      // The MCP management family (VC-380), tool-only for the reason the rest
+      // of this list is: a same-uid process must not be able to install an MCP
+      // server, and absence of a shell door is the enforcement.
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 });

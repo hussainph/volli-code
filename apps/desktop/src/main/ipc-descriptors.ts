@@ -415,6 +415,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
   },
+  "volli:data-project-roster": {
+    guard: (args): args is IpcArgs<"volli:data-project-roster"> =>
+      args.length === 1 && isProjectIdInput(args[0]),
+    invalidError: "Invalid project",
+  },
   "volli:database": {
     guard: (args): args is IpcArgs<"volli:database"> =>
       args.length === 0 || (args.length === 1 && (args[0] === "reveal" || args[0] === "export")),
@@ -692,6 +697,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   },
   "volli:ticket-events": {
     guard: (args): args is IpcArgs<"volli:ticket-events"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
+  "volli:ticket-body": {
+    guard: (args): args is IpcArgs<"volli:ticket-body"> =>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },

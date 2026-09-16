@@ -106,6 +106,8 @@ describe("refresh", () => {
     await store.getState().refresh("t1");
 
     expect(store.getState().byTicket["t1"]).toEqual(rows);
+    expect(store.getState().listingState.t1).toBe("loaded");
+    expect(store.getState().listingError.t1).toBeNull();
   });
 
   it("toasts and keeps the cache unchanged on a typed failure", async () => {
@@ -115,6 +117,8 @@ describe("refresh", () => {
     await store.getState().refresh("t1");
 
     expect(store.getState().byTicket["t1"]).toBeUndefined();
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().listingError.t1).toBe("db locked");
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't load sessions: db locked",
       expect.anything(),
@@ -128,7 +132,28 @@ describe("refresh", () => {
     await store.getState().refresh("t1");
 
     expect(store.getState().byTicket["t1"]).toBeUndefined();
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().listingError.t1).toBe("ipc gone");
     expect(toast.error).toHaveBeenCalledWith("Couldn't load sessions: ipc gone", expect.anything());
+  });
+
+  it("records loading before a baseline has answered", async () => {
+    let resolve!: (result: unknown) => void;
+    stubListForTicket(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const store = createTicketSessionRecordsStore();
+
+    const pending = store.getState().refresh("t1");
+    expect(store.getState().listingState.t1).toBe("loading");
+    expect(store.getState().listingError.t1).toBeNull();
+
+    resolve({ ok: true, sessions: [] });
+    await pending;
+    expect(store.getState().listingState.t1).toBe("loaded");
   });
 });
 
@@ -288,6 +313,26 @@ describe("ensure", () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(store.getState().byTicket["t1"]).toEqual([]);
   });
+
+  it("retries a failed baseline only when another caller asks", async () => {
+    const list = stubListForTicket(
+      vi
+        .fn<() => Promise<unknown>>()
+        .mockResolvedValueOnce({ ok: false, error: "db locked" })
+        .mockResolvedValueOnce({ ok: true, sessions: [terminalRow()] }),
+    );
+    const store = createTicketSessionRecordsStore();
+
+    await store.getState().ensure("t1");
+    expect(store.getState().listingState.t1).toBe("failed");
+    expect(store.getState().byTicket.t1).toBeUndefined();
+
+    // No timer retried it: this second, explicit ensure owns the next read.
+    await store.getState().ensure("t1");
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.getState().listingState.t1).toBe("loaded");
+    expect(store.getState().byTicket.t1).toEqual([terminalRow()]);
+  });
 });
 
 /**
@@ -402,6 +447,8 @@ describe("subscribeTicketSessionActivity", () => {
     Object.assign(globalThis, { window: { api: { sessions: { onActivity } } } });
     useTicketSessionRecordsStore.setState({
       byTicket: { t1: [chatRow({ sessionId: "chat-1" })] },
+      listingState: { t1: "loaded" },
+      listingError: { t1: null },
     });
 
     const unsubscribe = subscribeTicketSessionActivity();
@@ -413,6 +460,6 @@ describe("subscribeTicketSessionActivity", () => {
     ]);
     unsubscribe();
     expect(off).toHaveBeenCalledTimes(1);
-    useTicketSessionRecordsStore.setState({ byTicket: {} });
+    useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
   });
 });

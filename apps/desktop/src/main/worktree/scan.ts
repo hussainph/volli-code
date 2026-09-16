@@ -61,6 +61,17 @@
  *    project whose listing cannot be read is named as unreadable rather than
  *    silently dropped, which used to make its checkouts read as "not
  *    registered with git".
+ *
+ * OFF THE MAIN THREAD (VC-383). This scan runs after every first paint and on
+ * every Storage visit, and it is proportional to the number of registered
+ * worktrees: one `worktree list` per project, then five probes per orphan. On
+ * `execFileSync` that was the whole walk with zero event-loop turns — the
+ * launch beachball, sized by how many tickets a person has ever had. Every git
+ * question here now goes through the async runner (`deps.gitAsync`), SERIAL as
+ * before: what changed is that main keeps turning between children, not that
+ * the scan got faster. The cleanup's confirmed act keeps the sync forms of
+ * {@link readOnlyGit} and {@link lastTouchedAt} on purpose — its gate may not
+ * yield between its last look and the delete.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -84,12 +95,12 @@ import { listProjects } from "../db/projects-repo";
 import { listWorktreePaths } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
-import { isWorktreeDirty } from "./dirty";
+import { isWorktreeDirtyAsync } from "./dirty";
 import { parseWorktreeList, type WorktreeListEntry } from "./git";
 import { homeDir } from "./home";
 import { canonicalize, isInside } from "./paths";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
-import { type RunGit, type WorktreeDeps } from "./types";
+import { type RunGit, type RunGitAsync, type WorktreeDeps } from "./types";
 
 /**
  * Git that may not write. `--no-optional-locks` is git's own switch for exactly
@@ -98,6 +109,11 @@ import { type RunGit, type WorktreeDeps } from "./types";
  * quietly rewrites an index it only meant to read.
  */
 export function readOnlyGit(git: RunGit): RunGit {
+  return (args, cwd) => git(["--no-optional-locks", ...args], cwd);
+}
+
+/** {@link readOnlyGit} over the async runner — the same switch, the same reason. */
+export function readOnlyGitAsync(git: RunGitAsync): RunGitAsync {
   return (args, cwd) => git(["--no-optional-locks", ...args], cwd);
 }
 
@@ -166,25 +182,49 @@ export function lastTouchedAt(
   git: RunGit,
   entry: Pick<WorktreeListEntry, "path" | "branch">,
 ): WorktreeAge | null {
-  let directoryMtime: number;
+  const directoryMtime = directoryMtimeOf(entry.path);
+  if (directoryMtime === null) return null;
   try {
-    directoryMtime = statSync(entry.path).mtimeMs;
+    return ageFrom(directoryMtime, git(lastCommitArgs(entry), entry.path));
   } catch {
     return null;
   }
+}
+
+/** {@link lastTouchedAt} over the async runner — the scan's form (VC-383). */
+export async function lastTouchedAtAsync(
+  git: RunGitAsync,
+  entry: Pick<WorktreeListEntry, "path" | "branch">,
+): Promise<WorktreeAge | null> {
+  const directoryMtime = directoryMtimeOf(entry.path);
+  if (directoryMtime === null) return null;
   try {
-    const seconds = Number.parseInt(
-      git(["log", "-1", "--format=%ct", entry.branch ?? "HEAD"], entry.path).trim(),
-      10,
-    );
-    if (!Number.isFinite(seconds)) return null;
-    const commitMs = seconds * 1000;
-    return commitMs > directoryMtime
-      ? { at: commitMs, basis: "commit" }
-      : { at: directoryMtime, basis: "directory" };
+    return ageFrom(directoryMtime, await git(lastCommitArgs(entry), entry.path));
   } catch {
     return null;
   }
+}
+
+function directoryMtimeOf(path: string): number | null {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function lastCommitArgs(entry: Pick<WorktreeListEntry, "branch">): readonly string[] {
+  return ["log", "-1", "--format=%ct", entry.branch ?? "HEAD"];
+}
+
+/** The newer of the two clocks, from git's `%ct` output — shared by both drivers. */
+function ageFrom(directoryMtime: number, logOutput: string): WorktreeAge | null {
+  const seconds = Number.parseInt(logOutput.trim(), 10);
+  if (!Number.isFinite(seconds)) return null;
+  const commitMs = seconds * 1000;
+  return commitMs > directoryMtime
+    ? { at: commitMs, basis: "commit" }
+    : { at: directoryMtime, basis: "directory" };
 }
 
 /** What one project's listing produced, or why it could not be read. */
@@ -193,10 +233,10 @@ interface ProjectListing {
   error: string | null;
 }
 
-function listWorktrees(git: RunGit, projectPath: string): ProjectListing {
+async function listWorktrees(git: RunGitAsync, projectPath: string): Promise<ProjectListing> {
   try {
     return {
-      entries: parseWorktreeList(git(["worktree", "list", "--porcelain"], projectPath)),
+      entries: parseWorktreeList(await git(["worktree", "list", "--porcelain"], projectPath)),
       error: null,
     };
   } catch (caught) {
@@ -236,7 +276,10 @@ export async function scanOrphans(
   deps: WorktreeDeps,
   options: OrphanScanOptions = {},
 ): Promise<OrphanScanReport> {
-  const git = readOnlyGit(deps.git);
+  // The required async runner, never `deps.git`: a missing seam must fail at
+  // bundle construction rather than putting the whole walk back on the main
+  // thread in silence (the `read.ts` rule).
+  const git = readOnlyGitAsync(deps.gitAsync);
   const now = deps.now?.() ?? Date.now();
   const revision = (options.newRevision ?? randomUUID)();
   const report: OrphanScanReport = {
@@ -276,7 +319,7 @@ export async function scanOrphans(
     const container = containerById.get(project.id);
     projectNames.set(project.id, project.name);
 
-    const listing = listWorktrees(git, project.path);
+    const listing = await listWorktrees(git, project.path);
     if (listing.error !== null) {
       // A project whose git can't be read is REPORTED, not skipped in silence
       // (review C5). Without the listing every checkout in its container is
@@ -354,7 +397,7 @@ export async function scanOrphans(
       if (container === undefined || !isOwnedWorktreeLeaf(container, entry.path)) continue;
 
       // An orphan: an app-owned registered worktree with no DB row.
-      const dirty = isWorktreeDirty(git, {
+      const dirty = await isWorktreeDirtyAsync(git, {
         worktreePath: entry.path,
         branch: entry.branch,
         baseBranch: null,
@@ -373,7 +416,7 @@ export async function scanOrphans(
       // Tier 2: clean, but recently touched — proposing a checkout somebody was
       // working in an hour ago is the "nuke that fires asap" VC-113 is about.
       // An unreadable age keeps it too: we only offer what we can date.
-      const age = lastTouchedAt(git, entry);
+      const age = await lastTouchedAtAsync(git, entry);
       if (age === null || now - age.at < graceMs) {
         report.keptRecent.push({
           path: entry.path,

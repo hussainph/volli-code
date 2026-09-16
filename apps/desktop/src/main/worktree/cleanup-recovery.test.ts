@@ -91,13 +91,14 @@ function realFixture(): { deps: WorktreeDeps; projectPath: string; orphan: strin
   // are not what these cases are about.
   runRepoGit(projectPath, ["push", "-q", "origin", "volli/VC-7"]);
   insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-  const { git } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
+  const { git, gitAsync } = scriptedGit((args, cwd) => runRepoGit(cwd, args));
   return {
     projectPath,
     orphan,
     deps: {
       db: ctx.db,
       git,
+      gitAsync,
       home,
       now: () => Date.now() + 400 * DAY_MS,
       blobsRoot: "unused",
@@ -201,10 +202,10 @@ describe("reconcileInterruptedCleanups", () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    const { git } = scriptedGit(() => {
+    const { git, gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     const orphan = join(home, "gone");
 
     await engine.accept({
@@ -230,10 +231,10 @@ describe("reconcileInterruptedCleanups", () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     // Git cannot be read at all, so the one announced item is genuinely
     // unresolvable — the honest third answer.
-    const { git } = scriptedGit(() => {
+    const { git, gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-1",
@@ -275,12 +276,12 @@ describe("reconcileInterruptedCleanups", () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     const stale = join(home, "records", "VC-9");
     let stillStale = true;
-    const { git } = scriptedGit(() =>
+    const { git, gitAsync } = scriptedGit(() =>
       stillStale
         ? `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${stale}\nHEAD b\nprunable gitdir file points to non-existent location\n`
         : `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     const metadata: OrphanCleanupPlanItem = {
       id: "m1",
       kind: "metadata",
@@ -335,11 +336,11 @@ describe("reconcileInterruptedCleanups", () => {
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     const record = join(home, "records", "VC-9");
-    const { git } = scriptedGit(
+    const { git, gitAsync } = scriptedGit(
       () =>
         `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${record}\nHEAD b\nbranch refs/heads/volli/VC-9\n`,
     );
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-3",
@@ -382,8 +383,10 @@ describe("reconcileInterruptedCleanups", () => {
     const unreadable = join(blocker, "VC-8-orphan");
     // Git says it is not registered — the same half of the answer a real
     // removal leaves behind.
-    const { git } = scriptedGit(() => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`);
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const { git, gitAsync } = scriptedGit(
+      () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
+    );
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-4",
@@ -409,8 +412,10 @@ describe("reconcileInterruptedCleanups", () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    const { git } = scriptedGit(() => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`);
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const { git, gitAsync } = scriptedGit(
+      () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
+    );
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     // Still on disk, no longer registered: the mixed state, so the assertion
     // below is about the run being FOUND, not about which verdict it got.
     mkdirSync(join(home, "long-gone"), { recursive: true });
@@ -448,8 +453,8 @@ describe("reconcileInterruptedCleanups", () => {
 
   it("does nothing when every run closed normally", async () => {
     const home = tempDir("home");
-    const { git } = scriptedGit(() => "");
-    const deps: WorktreeDeps = { db: ctx.db, git, home, blobsRoot: "unused" };
+    const { git, gitAsync } = scriptedGit(() => "");
+    const deps: WorktreeDeps = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
     expect(await reconcileInterruptedCleanups({ worktree: deps, engine })).toEqual([]);
   });
 });

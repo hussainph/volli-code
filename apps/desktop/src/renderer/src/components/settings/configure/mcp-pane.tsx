@@ -1,13 +1,16 @@
 /** Configure → MCP Servers: app-owned, per-project transport and tool settings. */
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import type {
   McpCatalogTool,
+  McpOperationRecord,
   McpServerDraft,
+  McpServerProvenance,
   McpServerRecord,
   McpTransportConfig,
   Project,
@@ -17,6 +20,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Cell, DataTable, PrefSection, SectionAction } from "@renderer/components/settings/kit";
+import { relativeTime } from "@renderer/lib/relative-time";
 
 const EMPTY_DRAFT: McpServerDraft = {
   id: "",
@@ -33,6 +37,53 @@ function serverStatus(server: McpServerRecord): string {
   if (server.stale) return "Stale catalog";
   if (server.error !== null) return "Needs attention";
   return server.enabled ? "Enabled" : "Disabled";
+}
+
+/**
+ * When this server's tool list was last read successfully.
+ *
+ * `Enabled` says what the settings ALLOW, which is a different question from
+ * whether the catalog beside it is anything like current — a server can read
+ * as perfectly healthy while showing tools discovered weeks ago. The stamp was
+ * always stored and never shown; a row that reports staleness but not freshness
+ * leaves the reader unable to judge the row that is not stale.
+ */
+function refreshedLabel(server: McpServerRecord): string {
+  return server.refreshedAt === null
+    ? "Never refreshed"
+    : `Refreshed ${relativeTime(server.refreshedAt)}`;
+}
+
+/**
+ * Where a server came from, as one line, or nothing at all (VC-380).
+ *
+ * Two decisions here follow the repository's "let controls talk" rule. A server
+ * with no recorded origin — every one a person typed in by hand — renders
+ * NOTHING, rather than a row of em-dashes describing an absence. And a server
+ * that does carry one says "not verified" once, because a version and a digest
+ * displayed plainly read as a guarantee, and Volli downloads nothing and so
+ * checks nothing against them. That is a trust boundary a person cannot see
+ * from the control, which is the narrow exception the rule allows.
+ */
+function provenanceLine(provenance: McpServerProvenance): string | null {
+  const parts = [
+    provenance.source,
+    provenance.registryType,
+    provenance.version,
+    provenance.digest,
+  ].filter((part): part is string => part !== null && part.length > 0);
+  return parts.length === 0 ? null : `${parts.join(" · ")} — recorded, not verified`;
+}
+
+/**
+ * Who asked for one recorded operation.
+ *
+ * A Session id is not a name a person recognises, but "an agent Session" versus
+ * "someone here" is the distinction that actually decides what to do about a
+ * row, and it is the one the record can answer honestly.
+ */
+function operationActor(entry: McpOperationRecord): string {
+  return entry.sessionId === null ? "in Settings" : "by an agent Session";
 }
 
 function enabledToolNames(catalog: readonly McpCatalogTool[]): string[] {
@@ -54,6 +105,7 @@ function replaceServer(
 export function McpPane({ project }: { project: Project }) {
   const nameRef = React.useRef<HTMLInputElement>(null);
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
+  const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
   const [draft, setDraft] = React.useState<McpServerDraft>(EMPTY_DRAFT);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [catalog, setCatalog] = React.useState<readonly McpCatalogTool[]>([]);
@@ -71,6 +123,7 @@ export function McpPane({ project }: { project: Project }) {
     }
     setError(null);
     setServers(result.servers);
+    setOperations(result.operations);
   }, [project.id]);
 
   React.useEffect(() => {
@@ -322,6 +375,12 @@ export function McpPane({ project }: { project: Project }) {
             className="mt-3 rounded-md border border-border/60 px-3 py-2"
           >
             <p className="mb-2 text-ui font-medium">{server.name} tools</p>
+            <p className="mb-2 text-ui text-muted-foreground">{refreshedLabel(server)}</p>
+            {provenanceLine(server.provenance) === null ? null : (
+              <p className="mb-2 text-ui text-muted-foreground">
+                {provenanceLine(server.provenance)}
+              </p>
+            )}
             {server.error === null ? null : (
               <p className="mb-2 text-ui text-destructive">Stale catalog: {server.error}</p>
             )}
@@ -351,6 +410,39 @@ export function McpPane({ project }: { project: Project }) {
           </div>
         ))}
       </PrefSection>
+
+      {operations.length === 0 ? null : (
+        <PrefSection title="Recent activity" icon={ClockCounterClockwiseIcon}>
+          {/*
+            Where an install an AGENT performed becomes findable by a person.
+            The audit row is the only trace of a removal once the server is gone,
+            and the only trace of a failed first install at all — that one writes
+            no server row, so without this list its recovery line exists nowhere
+            a person looks.
+          */}
+          <ul className="grid gap-2">
+            {operations.map((entry) => (
+              <li key={entry.id} className="rounded-md border border-border/60 px-3 py-2">
+                <p className="text-ui">
+                  <span
+                    className={
+                      entry.outcome === "failed" ? "font-medium text-destructive" : "font-medium"
+                    }
+                  >
+                    {entry.summary}
+                  </span>
+                </p>
+                <p className="text-ui text-muted-foreground">
+                  {relativeTime(entry.createdAt)} · {operationActor(entry)}
+                </p>
+                {entry.detail === null ? null : (
+                  <p className="text-ui text-muted-foreground">{entry.detail}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </PrefSection>
+      )}
 
       <PrefSection title={editingId === null ? "Add server" : "Edit server"} icon={PlusIcon}>
         <div className="grid gap-3 sm:grid-cols-2">

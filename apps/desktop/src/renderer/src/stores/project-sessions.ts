@@ -74,6 +74,19 @@ export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
 export type ProjectSessionListingState = "loading" | "loaded" | "failed";
 
 /**
+ * Whether a surface must hold the project's Session rows rather than explain
+ * them. `undefined` is deliberately pending: it means the baseline has never
+ * been requested, not that a Project has no agents. Home and the sidebar share
+ * this selector so VC-383 cannot leave one surface honest while the other turns
+ * the same unread listing into an empty sentence.
+ */
+export function projectSessionListingPending(
+  listingState: ProjectSessionListingState | undefined,
+): boolean {
+  return listingState === undefined || listingState === "loading";
+}
+
+/**
  * The chat rows a surface may DRAW as a listing (VC-279) — every one except a
  * Subagent Session, which is reached from the chat that delegated it.
  *

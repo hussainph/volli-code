@@ -17,6 +17,7 @@ import {
 import type { NotificationRequest } from "../notifications/dispatch";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
+import type { WorktreeDeps } from "./types";
 import { setRetentionTtlDays } from "./retention";
 import { netFailure, scriptedNet } from "./scripted-net";
 import {
@@ -45,14 +46,20 @@ afterEach(() => {
 });
 
 /** A git that reports the worktree clean, so `remove` proceeds to delete it. */
-function cleanGit(wt: string) {
-  return (args: readonly string[]): string => {
+/**
+ * A git that reads the worktree as clean, on BOTH required seams: the reclaim's
+ * remove runs its probes on the async runner (VC-383), so this fixture must
+ * supply that seam rather than accidentally exercising the host repository.
+ */
+function cleanGit(wt: string): Pick<WorktreeDeps, "git" | "gitAsync"> {
+  const git = (args: readonly string[]): string => {
     if (args[0] === "worktree" && args[1] === "list") {
       return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
     }
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return wt;
     return "";
   };
+  return { git, gitAsync: async (args) => git(args) };
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -312,7 +319,7 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
       {
         ...deps,
         reclaim: {
-          worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+          worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
           now: () => 100 * DAY,
         },
       },
@@ -341,7 +348,7 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
       {
         ...deps,
         reclaim: {
-          worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+          worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
           now: () => 100 * DAY,
         },
       },
@@ -405,7 +412,7 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
       ...deps,
       db: dbWithBrokenTransaction(ctx.db),
       reclaim: {
-        worktree: { db: ctx.db, git: cleanGit(wt), blobsRoot: "unused" },
+        worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
         now: () => 100 * DAY,
       },
     };

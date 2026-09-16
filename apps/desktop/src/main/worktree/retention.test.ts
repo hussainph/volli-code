@@ -144,9 +144,9 @@ describe("archiveAndClean", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const result = await archiveAndClean({ db: ctx.db, git, blobsRoot: "unused" }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
 
     const row = getTicketRow(ctx.db, "t1")!;
@@ -161,9 +161,9 @@ describe("archiveAndClean", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, calls } = statusGit(wt, gitDir, true);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, true);
 
-    const result = await archiveAndClean({ db: ctx.db, git, blobsRoot: "unused" }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("uncommitted work");
@@ -177,8 +177,8 @@ describe("archiveAndClean", () => {
 
   it("archives a PR-less ticket with no worktree (nothing to remove)", async () => {
     seed(null);
-    const { git } = scriptedGit(() => "");
-    const result = await archiveAndClean({ db: ctx.db, git, blobsRoot: "unused" }, "t1");
+    const { git, gitAsync } = scriptedGit(() => "");
+    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
   });
@@ -220,9 +220,12 @@ describe("reclaimIfStale", () => {
     }
   }
 
-  function deps(git: ReturnType<typeof scriptedGit>["git"], busy: string[] = []) {
+  function deps(
+    runners: Pick<ReturnType<typeof scriptedGit>, "git" | "gitAsync">,
+    busy: string[] = [],
+  ) {
     return {
-      worktree: { db: ctx.db, git, blobsRoot: "unused" },
+      worktree: { db: ctx.db, git: runners.git, gitAsync: runners.gitAsync, blobsRoot: "unused" },
       now: () => NOW,
       busyWorktreeSites: async () =>
         busy.map((directory) => ({ directory, surface: "terminal" as const })),
@@ -238,9 +241,9 @@ describe("reclaimIfStale", () => {
     const gitDir = tempDir("gitdir");
     seedDone(wt, 20);
     updateTicketFields(ctx.db, "t1", { prUrl: "https://gh/pr/1" }, 2);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const outcome = await reclaimIfStale(deps(git), "t1", "merged");
+    const outcome = await reclaimIfStale(deps({ git, gitAsync }), "t1", "merged");
 
     expect(outcome).toEqual({ kind: "reclaimed", branch: "volli/VC-1-x", daysInDone: 20 });
     expect(calls.some((c) => c.args[1] === "remove")).toBe(true);
@@ -255,9 +258,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 15);
-    const { git } = statusGit(wt, gitDir, false);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
 
-    await reclaimIfStale(deps(git), "t1", null);
+    await reclaimIfStale(deps({ git, gitAsync }), "t1", null);
 
     expect(reclaimEvents()).toEqual([
       expect.objectContaining({
@@ -274,9 +277,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 0);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const outcome = await reclaimIfStale(deps(git), "t1", "merged");
+    const outcome = await reclaimIfStale(deps({ git, gitAsync }), "t1", "merged");
 
     expect(outcome).toEqual({ kind: "skipped", reason: "not stale enough" });
     expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
@@ -288,9 +291,9 @@ describe("reclaimIfStale", () => {
     const gitDir = tempDir("gitdir");
     seedDone(wt, 90);
     updateTicketFields(ctx.db, "t1", { prUrl: "https://gh/pr/1" }, 2);
-    const { git } = statusGit(wt, gitDir, false);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
 
-    expect(await reclaimIfStale(deps(git), "t1", "open")).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", "open")).toEqual({
       kind: "skipped",
       reason: "not stale enough",
     });
@@ -301,9 +304,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 13); // TTL is 14
-    const { git } = statusGit(wt, gitDir, false);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
 
-    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", null)).toEqual({
       kind: "skipped",
       reason: "not stale enough",
     });
@@ -313,9 +316,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 200, { keep: true });
-    const { git } = statusGit(wt, gitDir, false);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
 
-    expect(await reclaimIfStale(deps(git), "t1", "merged")).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", "merged")).toEqual({
       kind: "skipped",
       reason: "kept",
     });
@@ -326,9 +329,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 200, { noDoneEntry: true }); // Done, old, clean — but no dated entry
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", null)).toEqual({
       kind: "skipped",
       reason: "cannot date the Done entry",
     });
@@ -340,9 +343,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 60);
-    const { git, calls } = statusGit(wt, gitDir, true);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, true);
 
-    const outcome = await reclaimIfStale(deps(git), "t1", null);
+    const outcome = await reclaimIfStale(deps({ git, gitAsync }), "t1", null);
 
     expect(outcome.kind).toBe("skipped");
     expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
@@ -354,9 +357,9 @@ describe("reclaimIfStale", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seedDone(wt, 60);
-    const { git, calls } = statusGit(wt, gitDir, false);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const outcome = await reclaimIfStale(deps(git, [wt]), "t1", null);
+    const outcome = await reclaimIfStale(deps({ git, gitAsync }, [wt]), "t1", null);
 
     expect(outcome).toEqual({ kind: "skipped", reason: "work in flight" });
     expect(calls.some((c) => c.args[1] === "remove")).toBe(false);
@@ -367,9 +370,9 @@ describe("reclaimIfStale", () => {
     const gitDir = tempDir("gitdir");
     seedDone(wt, 60);
     ctx.db.prepare("UPDATE tickets SET status = 'doing' WHERE id = 't1'").run();
-    const { git } = statusGit(wt, gitDir, false);
+    const { git, gitAsync } = statusGit(wt, gitDir, false);
 
-    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", null)).toEqual({
       kind: "skipped",
       reason: "not stale enough",
     });
@@ -378,9 +381,9 @@ describe("reclaimIfStale", () => {
   it("leaves the stamp alone when the directory is already gone", async () => {
     const wt = join(tmpdir(), "volli-never-existed-vc113");
     seedDone(wt, 60);
-    const { git, calls } = scriptedGit(() => "");
+    const { git, gitAsync, calls } = scriptedGit(() => "");
 
-    expect(await reclaimIfStale(deps(git), "t1", null)).toEqual({
+    expect(await reclaimIfStale(deps({ git, gitAsync }), "t1", null)).toEqual({
       kind: "skipped",
       reason: "worktree already missing",
     });

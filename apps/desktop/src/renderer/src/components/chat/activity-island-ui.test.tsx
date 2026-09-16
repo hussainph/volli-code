@@ -739,3 +739,75 @@ describe("the now channel", () => {
     expect(container?.querySelector("[data-island-ticker]")?.textContent).toBe("1 tab");
   });
 });
+
+describe("responsive card width", () => {
+  // jsdom has no layout and no ResizeObserver; both are stubbed so the
+  // measurement path runs exactly as it does in the app — the island reads
+  // its own centering wrapper (full column width) less the column gutter
+  // (zero in jsdom, where nothing is styled), and the card takes 75% of that.
+  let clientWidthSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  function stubMeasurement(columnWidth: number): void {
+    // `observe` stays silent on purpose: the hook measures once on mount
+    // itself, and a stub that fired every observer would also fire
+    // floating-ui's own ResizeObserver (Radix popper positioning), whose
+    // callback destructures entries the stub cannot invent.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    clientWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(columnWidth);
+  }
+
+  // The file's own afterEach unstubs the ResizeObserver; the prototype spy is
+  // restored here so no other suite inherits a measured column.
+  afterEach(() => {
+    clientWidthSpy?.mockRestore();
+    clientWidthSpy = null;
+  });
+
+  it("sizes a pinned card to 75% of the measured column", async () => {
+    stubMeasurement(800);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")?.style.width).toBe("600px");
+    // jsdom serializes the rem against its 16px root; the authored value is
+    // `calc(100vw - 2rem)`.
+    expect(card("tabs")?.style.maxWidth).toBe("calc(100vw - 32px)");
+  });
+
+  it("floors a narrow column at the proven row width instead of crushing it", async () => {
+    // 75% of 300 would be 225 — narrower than the rows the old fixed width
+    // already proved usable — so the card holds 288 and truncates instead.
+    stubMeasurement(300);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")?.style.width).toBe("288px");
+  });
+
+  it("gives the agents card the higher floor its three row actions need", async () => {
+    stubMeasurement(300);
+    await render({ ...EMPTY_ACTIVITY_ISLAND, agents: [agent()] });
+    click(cluster("agents"));
+
+    expect(card("agents")?.style.width).toBe("320px");
+  });
+
+  it("keeps the fallback widths where there is nothing to measure with", async () => {
+    // No ResizeObserver stub: jsdom proper. The card still opens at its
+    // fixed fallback width rather than collapsing to nothing.
+    await render({ ...EMPTY_ACTIVITY_ISLAND, tabs: [tab()] });
+    click(cluster("tabs"));
+
+    expect(card("tabs")).not.toBeNull();
+    expect(card("tabs")?.style.width).toBe("");
+  });
+});

@@ -27,6 +27,10 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
     // The whole family travels together (VC-92's pairing rule; stop and send
     // joined start in VC-86, and `automation.run` rides with them per VC-134)
     // — shipping part of it would make the bundle no boundary.
+    // VC-380's MCP family joins it on a different ground: not agent control,
+    // but a project-wide configuration write whose effect outlives the Session
+    // making it. Same bundle, because a Board Session is the Role that owns the
+    // project rather than one ticket.
     expect(roleVerbBundle("project")).toEqual([
       "session.start",
       "session.stop",
@@ -35,6 +39,14 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
       "automation.run",
       "session.delegate",
       "session.await",
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
     // The default-bundle property is asserted as absence rather than prose. An
     // injected instruction telling a Ticket Session to start ten Sessions has
@@ -90,6 +102,14 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.send",
       "session.delegate",
       "session.await",
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 
@@ -218,6 +238,14 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.send",
       "session.delegate",
       "session.await",
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 
@@ -245,6 +273,14 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "session.send",
       "session.delegate",
       "session.await",
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 });
@@ -296,12 +332,17 @@ describe("session.await is the working Roles' wait over Sessions (VC-324 item 3)
     expect(roleVerbBundle("subagent")).not.toContain("session.await");
   });
 
-  it("is the LAST tool key, so no frozen surface shifted under it", () => {
-    // Registry declaration order is the frozen tool order: a tool appended
-    // last changes no already-born Session's array (Cache Prefix).
-    expect(VERB_TOOL_KEYS.at(-1)).toBe("session.await");
+  it("keeps its position, so no frozen surface shifted under it", () => {
+    // Registry declaration order is the frozen tool order. VC-324 appended
+    // this key last; VC-380's MCP family appended after it, which is the same
+    // discipline seen from the other side — what matters is that nothing was
+    // INSERTED before it, so every already-born Session's array is unchanged
+    // (Cache Prefix).
     expect(VERB_TOOL_KEYS.indexOf("session.await")).toBe(
       VERB_TOOL_KEYS.indexOf("session.delegate") + 1,
+    );
+    expect(VERB_TOOL_KEYS.slice(0, VERB_TOOL_KEYS.indexOf("session.await") + 1).at(-1)).toBe(
+      "session.await",
     );
   });
 });
@@ -531,5 +572,66 @@ describe("Verb Tier once the socket door is shut (VC-162 → VC-163)", () => {
     // what changed is that nothing ELSE can.
     expect(roleVerbBundle("project")).toContain("session.start");
     expect(roleVerbBundle("ticket")).not.toContain("session.start");
+  });
+});
+
+describe("the MCP management verbs live in the Board Role's bundle (VC-380)", () => {
+  const MCP_VERBS = [
+    "mcp.list",
+    "mcp.preview",
+    "mcp.install",
+    "mcp.refresh",
+    "mcp.enable",
+    "mcp.disable",
+    "mcp.tools",
+    "mcp.remove",
+  ] as const;
+
+  it("gives them to the project Role and to no other bundle", () => {
+    for (const verb of MCP_VERBS) {
+      // Configuring a project's MCP servers is a project-wide act whose effect
+      // outlives every Session it reaches, which is what a Board Session is
+      // for. A Ticket Session executing one ticket has no standing to change
+      // what every later Session in the project is handed.
+      expect(roleVerbBundle("project"), verb).toContain(verb);
+      expect(roleVerbBundle("ticket"), verb).not.toContain(verb);
+      // A Subagent Session could not confirm anything even if it held them:
+      // its bundle is empty and it has no `ask_user` door.
+      expect(roleVerbBundle("subagent"), verb).not.toContain(verb);
+    }
+  });
+
+  it("reaches a Ticket Session only through an explicit durable grant", () => {
+    const surface = resolveAgentToolSurface({
+      role: "ticket",
+      capabilities: { coding: ["read"], interaction: ["ask_user"] },
+      grants: ["mcp.install"],
+    });
+
+    expect(surface).toContain("mcp.install");
+    expect(surface).not.toContain("mcp.remove");
+  });
+
+  it("refuses a grant to a Subagent Session, whatever the grant names", () => {
+    expect(() =>
+      resolveAgentToolSurface({
+        role: "subagent",
+        capabilities: { coding: ["read"], interaction: [] },
+        grants: ["mcp.install"],
+      }),
+    ).toThrow("A Subagent Session takes no verb grant");
+  });
+
+  it("appends them after every previously frozen verb position", () => {
+    const surface = resolveAgentToolSurface({
+      role: "project",
+      capabilities: { coding: ["read"], interaction: ["ask_user"] },
+    });
+    const verbs = verbToolsOf(surface);
+
+    expect(verbs.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // The family is appended, so a Board Session born before VC-380 has every
+    // tool it had, in the order it had them, with the new ones after.
+    expect(verbs.indexOf("session.start")).toBe(0);
   });
 });

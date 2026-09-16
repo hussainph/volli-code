@@ -45,7 +45,7 @@ import {
   acquireWorktreeStartLease,
   createSetupRun,
   ensure,
-  runGitCapturing,
+  runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
 } from "../worktree";
 import type { EnsureOutcome, SetupRun } from "../worktree";
@@ -319,7 +319,7 @@ export class PtyManager {
         adapters: runtime.adapters ?? harnessAdapters,
         socketPath: runtime.socketPath,
         shimPath: join(runtime.binDir, "volli"),
-        git: runGitCapturing,
+        git: runGitCapturingAsync,
       });
       for (const refusal of result.refused) {
         console.warn(

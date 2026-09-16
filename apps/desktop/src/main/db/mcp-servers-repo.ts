@@ -3,9 +3,11 @@ import {
   MCP_DESCRIPTION_MAX_CHARS,
   MCP_ERROR_MAX_CHARS,
   MCP_TOOL_NAME_MAX_CHARS,
+  sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   validateMcpToolDefinitions,
   type McpCatalogTool,
+  type McpServerProvenance,
   type McpServerRecord,
   type McpToolDefinition,
   type McpTransportConfig,
@@ -25,6 +27,29 @@ interface McpServerRow {
   refreshed_at: number | null;
   created_at: number;
   updated_at: number;
+  source: string | null;
+  registry_type: string | null;
+  version: string | null;
+  digest: string | null;
+}
+
+/**
+ * Stored provenance, re-validated on the way out (VC-380).
+ *
+ * The same discipline `mapRow` already holds for the transport and the
+ * catalog: a row is untrusted until this build has checked it, because the
+ * file on disk outlives the version that wrote it and a hand-edited profile is
+ * an ordinary thing to meet.
+ */
+function parseProvenance(row: McpServerRow): McpServerProvenance {
+  const sanitized = sanitizeMcpProvenance({
+    source: row.source,
+    registryType: row.registry_type,
+    version: row.version,
+    digest: row.digest,
+  });
+  if (!sanitized.ok) throw new Error(`Stored MCP provenance is invalid: ${sanitized.reason}`);
+  return sanitized.provenance;
 }
 
 function parseJson(value: string, field: string): unknown {
@@ -92,6 +117,7 @@ function mapRow(row: McpServerRow): McpServerRecord {
   return {
     ...draft.server,
     projectId: row.project_id,
+    provenance: parseProvenance(row),
     catalog: parseCatalog(row.catalog, row.id),
     stale: row.stale === 1,
     error: row.error,
@@ -120,6 +146,8 @@ export function getMcpServer(db: Database.Database, serverId: string): McpServer
 export function putMcpServer(db: Database.Database, server: McpServerRecord): McpServerRecord {
   const sanitized = sanitizeMcpServerDraft(server);
   if (!sanitized.ok) throw new Error(sanitized.reason);
+  const provenance = sanitizeMcpProvenance(server.provenance);
+  if (!provenance.ok) throw new Error(provenance.reason);
   validateMcpToolDefinitions(
     server.catalog.flatMap((tool) => (tool.definition === null ? [] : [tool.definition])),
   );
@@ -127,8 +155,8 @@ export function putMcpServer(db: Database.Database, server: McpServerRecord): Mc
     db,
     `INSERT INTO mcp_servers (
        id, project_id, name, enabled, transport, catalog, stale, error,
-       refreshed_at, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       refreshed_at, created_at, updated_at, source, registry_type, version, digest
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        project_id = excluded.project_id,
        name = excluded.name,
@@ -138,7 +166,11 @@ export function putMcpServer(db: Database.Database, server: McpServerRecord): Mc
        stale = excluded.stale,
        error = excluded.error,
        refreshed_at = excluded.refreshed_at,
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       source = excluded.source,
+       registry_type = excluded.registry_type,
+       version = excluded.version,
+       digest = excluded.digest`,
   ).run(
     sanitized.server.id,
     server.projectId,
@@ -151,6 +183,10 @@ export function putMcpServer(db: Database.Database, server: McpServerRecord): Mc
     server.refreshedAt,
     server.createdAt,
     server.updatedAt,
+    provenance.provenance.source,
+    provenance.provenance.registryType,
+    provenance.provenance.version,
+    provenance.provenance.digest,
   );
   return getMcpServer(db, server.id)!;
 }

@@ -30,7 +30,6 @@ import { resolve } from "node:path";
 import type { WorktreeBranchListing } from "../../ipc/contract";
 
 import { getProjectById } from "../db/projects-repo";
-import { runGitCapturingAsync } from "./git";
 import { err, ok, type StatMtimeMs, type WorktreeDeps, type WorktreeResult } from "./types";
 
 export const statMtimeMs: StatMtimeMs = (path) => {
@@ -61,7 +60,7 @@ export async function listBranches(
   deps: WorktreeDeps,
   projectId: string,
 ): Promise<WorktreeResult<WorktreeBranchListing>> {
-  const git = deps.gitAsync ?? runGitCapturingAsync;
+  const git = deps.gitAsync;
   const stat = deps.statMtimeMs ?? statMtimeMs;
   const project = getProjectById(deps.db, projectId);
   if (!project) return err("Unknown project");

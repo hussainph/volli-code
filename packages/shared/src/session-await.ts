@@ -33,6 +33,7 @@
  */
 
 import type { SessionEventPayload } from "./session-ledger";
+import { uniqueTokenList } from "./token-list";
 
 /** Every durable Session Event kind, as this module names them. */
 type SessionEventKind = SessionEventPayload["kind"];
@@ -118,9 +119,5 @@ export function sessionAwaitEventKinds(
  * judgement, made against the project the attachment is bound to.
  */
 export function parseSessionAwaitTargets(raw: string): readonly string[] {
-  const targets = raw
-    .split(/[\s,]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-  return [...new Set(targets)];
+  return uniqueTokenList(raw);
 }

@@ -1265,15 +1265,36 @@ async function main() {
         // already-active tab changes nothing on screen.)
         await page.getByRole("tab", { name: "Board", exact: true }).click();
         await page.keyboard.press("c");
-        await sleep(400);
-        const dialogOpenCount = await page.getByRole("dialog").count();
+        const dialogOpenCount = await waitUntil(
+          'the New-ticket composer to open on the "c" hotkey',
+          async () => ((await page.getByRole("dialog").count()) === 1 ? 1 : null),
+        ).catch(() => page.getByRole("dialog").count());
         const title = "Global create dialog smoke card";
         const titleField = page.getByPlaceholder("Ticket title");
         await titleField.fill(title);
         await titleField.focus();
         await page.keyboard.press("Meta+Enter");
-        await sleep(400);
-        const dialogClosedCount = await page.getByRole("dialog").count();
+        // WAIT for the close rather than sampling after a fixed sleep.
+        //
+        // Creating is a write-through, not an optimistic append: `addTicket`
+        // awaits SQLite and only then puts the card on the board, and the
+        // composer closes in the same continuation. So a fixed 400ms RACED the
+        // commit, and on a loaded runner it lost — sampling the dialog while
+        // the write was still in flight, then reading the card a few
+        // milliseconds later once it had landed. That produced the exact
+        // contradiction this check kept failing with: `dialogClosedAfter=1`
+        // beside `cardVisible=true vc14=1`, which describes no real state the
+        // composer can be in.
+        //
+        // On timeout the real count is reported, so a composer that genuinely
+        // stays open still fails here rather than hanging.
+        const dialogClosedCount = await waitUntil(
+          "the New-ticket composer to close after \u2318Enter",
+          async () => ((await page.getByRole("dialog").count()) === 0 ? "closed" : null),
+        ).then(
+          () => 0,
+          () => page.getByRole("dialog").count(),
+        );
         const cardVisible = (await page.getByText(title, { exact: true }).count()) >= 1;
         const vc14 = await cardById(page, "VC-14").count();
         const ok = dialogOpenCount === 1 && dialogClosedCount === 0 && cardVisible && vc14 === 1;

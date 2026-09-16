@@ -8,6 +8,7 @@ import {
 } from "@volli/shared";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import {
   SidebarGroup,
   SidebarMenu,
@@ -37,6 +38,7 @@ import {
 import {
   ActiveBandRow,
   PreviousBandRow,
+  SessionBandRowSkeleton,
   sessionGroupPanelId,
   TicketGroupRow,
 } from "@renderer/components/sidebar/session-band-row";
@@ -55,6 +57,7 @@ import {
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
+  projectSessionListingPending,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
@@ -309,6 +312,14 @@ export function ActiveSessions({
   // knows a project has come on screen.
   const projectRows =
     useProjectSessionsStore((state) => state.byProject[project.id]) ?? EMPTY_PROJECT_SESSION_ROWS;
+  // Whether that baseline has ever answered for THIS project (VC-383). The
+  // store has kept this bit since the push channel arrived and no band read
+  // it: a project switched to for the first time this run painted "No active
+  // sessions" for the length of the read, about a project that may have three
+  // agents mid-turn. Not hydrated yet must never read as empty.
+  const listingState = useProjectSessionsStore((state) => state.listingState[project.id]);
+  const listingPending = projectSessionListingPending(listingState);
+  const listingFailed = listingState === "failed";
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
   const projectChatSessionIds = React.useMemo(
@@ -906,7 +917,20 @@ export function ActiveSessions({
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
       <SessionBandHeader label="Active" count={activeRows.length} />
-      {activeRows.length === 0 ? (
+      {activeRows.length === 0 && listingPending ? (
+        // The rows' box, held while the listing is read. Live tabs this window
+        // already holds are rows regardless (they come from the sessions store,
+        // not the listing), so this only ever stands where nothing is known.
+        <SidebarMenu {...loadingRegionProps("sessions")}>
+          <SessionBandRowSkeleton primaryWidth="w-3/4" />
+          <SessionBandRowSkeleton primaryWidth="w-1/2" />
+        </SidebarMenu>
+      ) : activeRows.length === 0 && listingFailed ? (
+        // A failed baseline cannot establish that the Project is quiet. Keep
+        // this terse — the toast owns the bridge detail — but never let an
+        // unread roster become the false empty VC-383 removed.
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
+      ) : activeRows.length === 0 ? (
         <p className={EMPTY_INLINE}>No active sessions</p>
       ) : (
         <SidebarMenu>
@@ -933,7 +957,13 @@ export function ActiveSessions({
       <SessionBandHeader label="Previous" count={listing.previous.length}>
         <SessionBandFilterMenu filter={filter} onChange={setFilter} />
       </SessionBandHeader>
-      {previousEntries.length === 0 ? (
+      {previousEntries.length === 0 && listingPending ? (
+        <SidebarMenu {...loadingRegionProps("sessions")}>
+          <SessionBandRowSkeleton primaryWidth="w-2/3" />
+        </SidebarMenu>
+      ) : previousEntries.length === 0 && listingFailed ? (
+        <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
+      ) : previousEntries.length === 0 ? (
         <p className={EMPTY_INLINE}>Nothing yet</p>
       ) : (
         <SidebarMenu>

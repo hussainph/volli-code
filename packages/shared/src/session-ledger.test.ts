@@ -4,6 +4,7 @@ import {
   askUserInteractionId,
   assertSessionProjectionCheckpoint,
   budgetAskInteractionId,
+  confirmAskInteractionId,
   DEFAULT_INTERACTION_PROMPT_ID,
   isSessionAttentionKind,
   isSessionAttachmentContinuity,
@@ -2176,5 +2177,10 @@ describe("the frozen ask interaction id derivations", () => {
     // call can raise both a gate ask and a budget ask (VC-204).
     expect(askInteractionId("x")).not.toBe(askUserInteractionId("x"));
     expect(budgetAskInteractionId("x")).not.toBe(askInteractionId("x"));
+    // VC-380's confirmation, a third frozen segment for the same reason: a
+    // question the verb's own door raises before it writes anything.
+    expect(confirmAskInteractionId("call-1")).toBe("confirm-ask:call-1");
+    expect(confirmAskInteractionId("x")).not.toBe(budgetAskInteractionId("x"));
+    expect(confirmAskInteractionId("x")).not.toBe(askInteractionId("x"));
   });
 });

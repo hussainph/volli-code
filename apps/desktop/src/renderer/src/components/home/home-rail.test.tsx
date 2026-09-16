@@ -7,6 +7,7 @@ import { HomeRail } from "./home-rail";
 import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
 
@@ -41,6 +42,8 @@ afterEach(() => {
   useUiStore.getInitialState().homeRailMode = "now";
   useChatSessionsStore.getInitialState().sessions = {};
   useVenueStore.getInitialState().byScope = {};
+  useProjectSessionsStore.getInitialState().byProject = {};
+  useProjectSessionsStore.getInitialState().listingState = {};
 });
 
 /** A venue with values longer than the rail is wide, which is the ordinary case. */
@@ -205,5 +208,38 @@ describe("HomeRail", () => {
     // VC-104 owns `@vc-nn` backlinks; a section that can never fill in this
     // build is furniture.
     expect(draw("chat:s1")).not.toContain("Mentioned");
+  });
+
+  it("holds the Sessions page's rows until the project's listing answers (VC-383)", () => {
+    // Static markup reads the store's initial state, which here is exactly the
+    // state before any read: the page must hold the rows' box, not say the
+    // project has no Sessions.
+    useUiStore.getInitialState().homeRailMode = "sessions";
+    const markup = draw(HOME_BOARD_TAB_ID);
+
+    expect(markup).toContain('data-testid="home-sessions-loading"');
+    expect(markup).not.toContain("No sessions yet");
+  });
+
+  it("says the Sessions page is empty only once the listing has said so", () => {
+    useUiStore.getInitialState().homeRailMode = "sessions";
+    useProjectSessionsStore.getInitialState().byProject = {
+      p1: { terminal: [], chat: [], provenance: {} },
+    };
+    useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+    const markup = draw(HOME_BOARD_TAB_ID);
+
+    expect(markup).not.toContain('data-testid="home-sessions-loading"');
+    expect(markup).toContain("No sessions yet");
+  });
+
+  it("stands the skeleton down after a failed listing without calling the Project empty", () => {
+    useUiStore.getInitialState().homeRailMode = "sessions";
+    useProjectSessionsStore.getInitialState().listingState = { p1: "failed" };
+    const markup = draw(HOME_BOARD_TAB_ID);
+
+    expect(markup).not.toContain('data-testid="home-sessions-loading"');
+    expect(markup).not.toContain("No sessions yet");
+    expect(markup).toContain("Couldn&#x27;t load sessions.");
   });
 });
