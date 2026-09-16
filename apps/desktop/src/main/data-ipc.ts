@@ -255,6 +255,21 @@ function recordInterruptFailure(error: unknown): void {
 
 // ---- bootstrap payload --------------------------------------------------
 
+/**
+ * The `projectId` a ticket-scoped invalidation should carry, or nothing when the
+ * ticket is unknown (VC-387).
+ *
+ * A broadcast that names only a `ticketId` costs every window a WHOLE-BOARD
+ * re-read, because a scoped refresh cannot ask "which project?" without a
+ * second round trip. Main already has the row, so it answers here — one indexed
+ * primary-key read, against the bootstrap it saves. Spread it into the scope so
+ * an unknown ticket simply omits the key rather than asserting `undefined`.
+ */
+function ticketScope(db: Database.Database, ticketId: string): { projectId?: string } {
+  const projectId = getTicketRow(db, ticketId)?.project_id;
+  return projectId === undefined ? {} : { projectId };
+}
+
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   const projects = listProjects(db);
   const appState = getAllAppState(db);
@@ -1782,7 +1797,11 @@ export function registerDataIpcHandlers(
       // ticket. Targeting it is what lets the Details rail's git summary refresh
       // promptly (the CLI/rail-side commit → rail guarantee, issue #80) instead
       // of riding the debounced untargeted arm.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "worktree",
+      });
       return { ok: true, committed: true, message: result.value.message };
     },
 
@@ -1797,7 +1816,11 @@ export function registerDataIpcHandlers(
       getWorktreeSnapshots().invalidate(input.ticketId);
       // `pr_url` was written (and a `pr_opened` event recorded) on THIS ticket —
       // target it so its rail refreshes promptly, same as the commit path.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "worktree",
+      });
       return { ok: true, url: result.value.url, existing: result.value.existing };
     },
 
@@ -1818,14 +1841,22 @@ export function registerDataIpcHandlers(
       setTicketRetentionKeep(db, input.ticketId, input.keep, Date.now());
       // The pin exempts both retention paths for THIS ticket — target it so its
       // retention surface updates promptly.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "retention",
+      });
       return { ok: true, keep: input.keep };
     },
 
     "volli:retention-dismiss": (input: TicketIdInput): RetentionDismissResult => {
       // In-memory, launch-scoped: the prompt is re-offered next launch.
       getRetentionWatcher(db).dismiss(input.ticketId);
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "retention",
+      });
       return { ok: true };
     },
 

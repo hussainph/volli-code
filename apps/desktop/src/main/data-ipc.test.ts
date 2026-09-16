@@ -11,6 +11,7 @@ import type {
   ProjectUpdateResult,
   Result,
   RetentionArchiveCleanResult,
+  RetentionKeepResult,
   RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
@@ -598,6 +599,35 @@ describe("volli:project-session-defaults — Chat model", () => {
       ctx.db.prepare("SELECT session_harness FROM projects WHERE id = ?").get(projectId),
     ).toEqual({ session_harness: "codex" });
   });
+});
+
+describe("ticket-scoped invalidations carry their project (VC-387)", () => {
+  it("names the project on a retention pin, so windows re-read one board not all of them", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    dataChangedSends.length = 0;
+
+    const kept = invoke<RetentionKeepResult>("volli:retention-keep", {
+      ticketId: ticket.id,
+      keep: true,
+    });
+
+    expect(kept.ok).toBe(true);
+    // Without the projectId the renderer cannot scope its refresh and falls
+    // back to a whole-board bootstrap — the exact read this ticket removes.
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "retention",
+    });
+  });
+
+  // `volli:retention-dismiss` and the two worktree publish paths take the same
+  // `ticketScope` helper this pins; they are not asserted separately because the
+  // retention watcher is a process-wide singleton that broadcasts on its own
+  // schedule, and a second assertion here would be pinning the coalescer's merge
+  // rather than the scope.
 });
 
 describe("volli:data-project-roster — the steady-state refresh read (VC-387)", () => {

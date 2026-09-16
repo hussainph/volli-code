@@ -5,11 +5,17 @@ import {
   type Ticket,
   type TicketPriority,
   type TicketStatus,
+  type TicketSummary,
 } from "@volli/shared";
 import type { TicketResult } from "../../../ipc/contract";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
-import { type BoardGateway, createBoardStore, planningChangeAffects } from "./board";
+import {
+  isTicketBodyLoaded,
+  type BoardGateway,
+  createBoardStore,
+  planningChangeAffects,
+} from "./board";
 import { useChatSessionsStore } from "./chat-sessions";
 import { ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
 
@@ -49,7 +55,7 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
 }
 
 /** One roster row — a ticket as the steady-state refresh carries it, i.e. without its body (VC-387). */
-function rosterRow(overrides: Partial<Ticket> & { status: TicketStatus }): Omit<Ticket, "body"> {
+function rosterRow(overrides: Partial<Ticket> & { status: TicketStatus }): TicketSummary {
   const { body: _body, ...rest } = ticket(overrides);
   return rest;
 }
@@ -252,6 +258,116 @@ describe("adoptTicketBody", () => {
       { id: "a", body: "" },
     ]);
     expect(store.getState().ticketsByProject["forgotten-project"]).toBeUndefined();
+  });
+
+  it("leaves every OTHER ticket's object identity alone", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate(
+      {
+        p1: [
+          ticket({ id: "a", status: "doing" }),
+          ticket({ id: "b", status: "doing" }),
+          ticket({ id: "c", status: "todo" }),
+        ],
+      },
+      {},
+    );
+    const [beforeA, , beforeC] = store.getState().ticketsByProject.p1 ?? [];
+
+    store.getState().adoptTicketBody("p1", "b", "# Only b");
+
+    const [afterA, afterB, afterC] = store.getState().ticketsByProject.p1 ?? [];
+    // The documented reason the splice is a splice and not a `.map`: a body read
+    // for ONE open ticket must not re-render the cards beside it.
+    expect(afterA).toBe(beforeA);
+    expect(afterC).toBe(beforeC);
+    expect(afterB?.body).toBe("# Only b");
+  });
+
+  it("marks a body loaded even when the body it read is empty", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [] }, { p1: [] });
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "new", status: "todo" })], []);
+    expect(isTicketBodyLoaded(store.getState(), "new")).toBe(false);
+
+    // A ticket whose canonical body genuinely IS "" must come out loaded. The
+    // value matches the placeholder, so only the mark can tell the two apart —
+    // and a ticket left marked forever is one nobody can ever edit.
+    store.getState().adoptTicketBody("p1", "new", "");
+
+    expect(isTicketBodyLoaded(store.getState(), "new")).toBe(true);
+  });
+});
+
+describe("unloaded ticket bodies (VC-387)", () => {
+  it("treats every ticket as loaded after a wholesale hydrate", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", body: "# Real" })] }, {});
+
+    // The boot payload carries every live body, so nothing is a placeholder.
+    expect(isTicketBodyLoaded(store.getState(), "a")).toBe(true);
+  });
+
+  it("marks only the tickets the roster introduced, never the ones already held", () => {
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .hydrate({ p1: [ticket({ id: "known", status: "doing", body: "# Real" })] }, {});
+
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [rosterRow({ id: "known", status: "doing" }), rosterRow({ id: "fresh", status: "todo" })],
+        [],
+      );
+
+    expect(isTicketBodyLoaded(store.getState(), "known")).toBe(true);
+    expect(isTicketBodyLoaded(store.getState(), "fresh")).toBe(false);
+  });
+
+  it("drops the mark of a ticket that leaves the board", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [] }, { p1: [] });
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "gone", status: "todo" })], []);
+    expect(store.getState().unloadedTicketBodies).toEqual({ gone: true });
+
+    store.getState().hydrateProjectRoster("p1", [], []);
+
+    // An archive must not leave an entry nothing can ever clear.
+    expect(store.getState().unloadedTicketBodies).toEqual({});
+  });
+
+  it("clears the mark when a write-through returns the authoritative ticket", async () => {
+    const gateway = fakeGateway();
+    const store = createBoardStore(gateway);
+    store.getState().hydrate({ p1: [] }, { p1: [] });
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "fresh", status: "todo" })], []);
+    expect(isTicketBodyLoaded(store.getState(), "fresh")).toBe(false);
+
+    // Main answers every ticket write with the whole row, body included — so
+    // landing one retires the placeholder whatever field was edited.
+    await store.getState().updateTicket({ ticketId: "fresh", title: "Renamed" });
+
+    expect(isTicketBodyLoaded(store.getState(), "fresh")).toBe(true);
+  });
+});
+
+describe("planningRecoveryNeeded (VC-387)", () => {
+  it("starts clear, arms on a failed refresh, and is retired by a wholesale hydrate", () => {
+    const store = createBoardStore(fakeGateway());
+    expect(store.getState().planningRecoveryNeeded).toBe(false);
+
+    store.getState().notePlanningRefreshFailed();
+    expect(store.getState().planningRecoveryNeeded).toBe(true);
+
+    // The wholesale read IS the heal — nothing else clears it, and in
+    // particular a scoped roster hydrate must not.
+    store.getState().hydrateProjectRoster("p1", [], []);
+    expect(store.getState().planningRecoveryNeeded).toBe(true);
+
+    store.getState().hydrate({}, {});
+    expect(store.getState().planningRecoveryNeeded).toBe(false);
   });
 });
 

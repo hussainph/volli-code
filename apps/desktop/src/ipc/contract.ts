@@ -103,6 +103,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  TicketSummary,
   ValidAutomationRuntime,
   VenueReading,
   WorkspaceDependenciesStatus,
@@ -2962,24 +2963,18 @@ export interface BootstrapPayload {
 export type BootstrapResult = Result<{ data: BootstrapPayload }>;
 
 /**
- * One live ticket as the STEADY-STATE refresh carries it: everything a board
- * card and the ticket rail are drawn from, minus {@link Ticket.body} (VC-387).
- *
- * The body is ~90% of a board's bytes (measured: 1056 KiB of payload becomes
- * 123 KiB without it) and no board surface renders it. Every `volli:data-changed`
- * used to re-read it for every live ticket of every project; now it rides in
- * once on the boot payload, and after that only the OPEN ticket reads its own
- * through {@link TicketBodyResult}.
- */
-export type TicketRosterRow = Omit<Ticket, "body">;
-
-/**
  * One project's live board — the read a targeted `volli:data-changed` makes
- * instead of re-reading every project (VC-387). `labels` is the project's label
- * set, which a label rename/retire moves in step with the tickets that carry it,
- * so the two travel together exactly as they do in the boot payload.
+ * instead of re-reading every project (VC-387). The rows are
+ * {@link TicketSummary}: bodies are ~90% of a board's bytes (measured: 1056 KiB
+ * of payload becomes 123 KiB without them) and no board surface renders one, so
+ * a body rides in once on the boot payload and after that only the OPEN ticket
+ * reads its own through {@link TicketBodyResult}.
+ *
+ * `labels` is the project's label set, which a label rename/retire moves in step
+ * with the tickets that carry it, so the two travel together exactly as they do
+ * in the boot payload.
  */
-export type ProjectRosterResult = Result<{ tickets: TicketRosterRow[]; labels: Label[] }>;
+export type ProjectRosterResult = Result<{ tickets: TicketSummary[]; labels: Label[] }>;
 
 /** One ticket's Markdown body — what the roster no longer carries (VC-387). */
 export type TicketBodyResult = Result<{ body: string }>;

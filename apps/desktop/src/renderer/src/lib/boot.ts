@@ -70,26 +70,6 @@ function movesBoardData(kind: DataChangeKind | undefined): boolean {
   return kind !== "comment";
 }
 
-/**
- * A failed snapshot may have missed the mutation that triggered it, so the next
- * board-moving signal must replace every planning slice rather than trust scope.
- *
- * Window-global because the staleness is: one renderer has one board, and the
- * scoped read is exactly the read that cannot repair a slice it does not name.
- */
-let planningRefreshNeedsRecovery = false;
-
-/**
- * Forget that a refresh failed, so one test's failed read cannot make the next
- * test's targeted change go wholesale. The isolation half of the flag above,
- * on `broadcast.ts`'s `resetDataChangedForTest` pattern — module state that
- * outlives a test has to have a door, or the suite silently depends on its own
- * order.
- */
-export function resetPlanningRecoveryForTest(): void {
-  planningRefreshNeedsRecovery = false;
-}
-
 /** The minimal localStorage surface boot() needs — narrow enough to fake in tests. */
 export interface BootStorage {
   getItem(key: string): string | null;
@@ -108,9 +88,9 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  * roster. An untargeted change, one naming a project this window does not yet
  * hold, or the first board-moving change after a failed read uses bootstrap to
  * replace projects and every board slice wholesale. That successful wholesale
- * read clears recovery, so a stale board always has a healing path. Every
- * successful path still publishes the scope for per-ticket surfaces — see
- * `useBoardStore().lastPlanningChange`.
+ * read clears recovery (`useBoardStore().planningRecoveryNeeded`), so a stale
+ * board always has a healing path. Every successful path still publishes the
+ * scope for per-ticket surfaces — see `useBoardStore().lastPlanningChange`.
  *
  * THE RECOVERY GUARANTEE IS RESTATED, NOT PRESERVED (VC-387). It used to be
  * "always wholesale", so any broadcast repaired any drift; what is given up is
@@ -146,13 +126,13 @@ export async function refreshPlanningData(
   try {
     const projectId = change.projectId;
     if (
-      !planningRefreshNeedsRecovery &&
+      !useBoardStore.getState().planningRecoveryNeeded &&
       projectId !== undefined &&
       projectId in useBoardStore.getState().ticketsByProject
     ) {
       const result = await gateway.projectRoster({ projectId });
       if (!result.ok) {
-        planningRefreshNeedsRecovery = true;
+        useBoardStore.getState().notePlanningRefreshFailed();
         return result;
       }
       useBoardStore.getState().hydrateProjectRoster(projectId, result.tickets, result.labels);
@@ -162,10 +142,10 @@ export async function refreshPlanningData(
 
     const result = await gateway.bootstrap();
     if (!result.ok) {
-      planningRefreshNeedsRecovery = true;
+      useBoardStore.getState().notePlanningRefreshFailed();
       return result;
     }
-    planningRefreshNeedsRecovery = false;
+    // `hydrate` below retires the recovery arm: the wholesale read IS the heal.
     const { projects, ticketsByProject, labelsByProject } = result.data;
     const previousSelection = useProjectsStore.getState().selectedProjectId;
     const selectedProjectId = projects.some(({ id }) => id === previousSelection)
@@ -182,7 +162,10 @@ export async function refreshPlanningData(
     useBoardStore.getState().notePlanningChange(change);
     return { ok: true };
   } catch (error) {
-    planningRefreshNeedsRecovery = true;
+    // A throw is a read that did not land, exactly like an `ok: false` — the
+    // board may now be missing the mutation that triggered this refresh, so the
+    // next board-moving change has to go wholesale.
+    useBoardStore.getState().notePlanningRefreshFailed();
     throw error;
   } finally {
     // In a `finally` because a failed hydrate is not a reason to leave a

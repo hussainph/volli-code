@@ -51,6 +51,7 @@ import {
 } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
+import { appendRefToTicketBody } from "@renderer/components/ticket/ticket-body-ref-append";
 import { useTicketBody } from "@renderer/components/ticket/use-ticket-body";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
@@ -61,7 +62,6 @@ import {
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-tabs";
-import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
 import {
@@ -206,7 +206,7 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
-  useTicketBody(ticket);
+  const ticketBody = useTicketBody(ticket);
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
   const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);
@@ -321,7 +321,6 @@ export function TicketDetail({
   // store instead, which is safe precisely because an unmounted editor has
   // already flushed its draft on the way out.
   const bodyEditorRef = React.useRef<MonacoDocumentEditorHandle>(null);
-  const updateTicket = useBoardStore((state) => state.updateTicket);
   /**
    * The Ticket's attachment strip, owned HERE rather than in the Files rail
    * that draws it (VC-106).
@@ -344,15 +343,12 @@ export function TicketDetail({
       // slice synchronously — the render-time body could still be a turn behind
       // and would drop the previous ref, which for a repo document is the whole
       // attachment (a pure ref creates no blob to fall back on).
-      const current =
-        useBoardStore
-          .getState()
-          .ticketsByProject[ticket.projectId]?.find((candidate) => candidate.id === ticket.id) ??
-        ticket;
-      void updateTicket({
-        ticketId: ticket.id,
-        body: appendFileRef(current.body, token),
-      });
+      //
+      // A body this renderer has never read is a `""` PLACEHOLDER, not an empty
+      // body (VC-387), so appending to it would save one `@ref` OVER the real
+      // Ticket Body. Read the canonical body first on that path, and append to
+      // what comes back.
+      void appendRefToTicketBody(ticket, token);
     },
     onError: (message) => toastError(message),
   });
@@ -1442,6 +1438,8 @@ export function TicketDetail({
                 fileRefs={fileRefs}
                 editorRef={bodyEditorRef}
                 attachments={materializedAttachments}
+                bodyStatus={ticketBody.status}
+                onRetryBody={ticketBody.retry}
               />
             </div>
           ) : null}

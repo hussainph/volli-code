@@ -842,6 +842,8 @@ describe("DATA_IPC descriptor table", () => {
       ["volli:ticket-unarchive", "Invalid ticket"],
       ["volli:ticket-delete", "Invalid ticket"],
       ["volli:ticket-events", "Invalid ticket"],
+      // The per-open-ticket body read the steady-state roster traded away (VC-387).
+      ["volli:ticket-body", "Invalid ticket"],
     ] as const;
 
     for (const [channel, expectedError] of cases) {
@@ -890,6 +892,32 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project id");
+    });
+  });
+
+  describe("volli:data-project-roster", () => {
+    const { guard, invalidError } = DATA_IPC["volli:data-project-roster"];
+
+    it("accepts a valid { projectId } payload", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+      expect(guard(["p1"])).toBe(false);
+    });
+
+    it("rejects a non-string projectId", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ projectId: "p1" }, {}])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project");
     });
   });
 

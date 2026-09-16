@@ -16,8 +16,8 @@ import {
   type HarnessId,
   type TicketPriority,
   type TicketStatus,
+  type TicketSummary,
 } from "@volli/shared";
-import type { TicketRosterRow } from "../../ipc/contract";
 import { prepared } from "./prepared";
 
 export interface TicketRow {
@@ -69,8 +69,13 @@ function hasKnownStatus(row: Pick<TicketRow, "id" | "status">): boolean {
   return false;
 }
 
-/** The board-facing half of a row — everything {@link mapTicket} maps except the body. */
-function mapTicketRosterRow(row: Omit<TicketRow, "body">, labels: string[]): TicketRosterRow {
+/**
+ * The board-facing half of a row — everything {@link mapTicket} maps except the
+ * body, and the ONE definition of it. {@link mapTicket} spreads this and adds
+ * the body, so a column added to {@link Ticket} cannot reach the boot payload
+ * while the roster read silently drops it (VC-387).
+ */
+function mapTicketSummary(row: Omit<TicketRow, "body">, labels: string[]): TicketSummary {
   return {
     id: row.id,
     projectId: row.project_id,
@@ -92,25 +97,7 @@ function mapTicketRosterRow(row: Omit<TicketRow, "body">, labels: string[]): Tic
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    ticketNumber: row.ticket_number,
-    title: row.title,
-    body: row.body,
-    status: row.status as TicketStatus,
-    priority: row.priority as TicketPriority,
-    labels,
-    usesWorktree: row.uses_worktree !== 0,
-    preferredHarnessId: row.preferred_harness_id as Ticket["preferredHarnessId"],
-    order: row.position,
-    worktreePath: row.worktree_path,
-    branch: row.branch,
-    baseBranch: row.base_branch,
-    prUrl: row.pr_url,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+  return { ...mapTicketSummary(row, labels), body: row.body };
 }
 
 interface TicketLabelJoinRow {
@@ -259,7 +246,7 @@ export function listAllTickets(db: Database.Database): Ticket[] {
 export function listTicketRosterByProject(
   db: Database.Database,
   projectId: string,
-): TicketRosterRow[] {
+): TicketSummary[] {
   const rows = prepared<[string], Omit<TicketRow, "body">>(
     db,
     `SELECT id, project_id, ticket_number, title, status, priority, uses_worktree,
@@ -272,7 +259,7 @@ export function listTicketRosterByProject(
   const labelsByTicket = labelNamesByTicket(db, projectId, "live");
   return rows
     .filter(hasKnownStatus)
-    .map((row) => mapTicketRosterRow(row, labelsByTicket.get(row.id) ?? []));
+    .map((row) => mapTicketSummary(row, labelsByTicket.get(row.id) ?? []));
 }
 
 /**

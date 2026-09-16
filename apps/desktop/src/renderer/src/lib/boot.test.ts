@@ -10,13 +10,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-import {
-  boot,
-  refreshPlanningData,
-  resetPlanningRecoveryForTest,
-  type BootGateway,
-  type BootStorage,
-} from "./boot";
+import { boot, refreshPlanningData, type BootGateway, type BootStorage } from "./boot";
 import { takeBootNotice } from "./boot-notice";
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
@@ -502,11 +496,12 @@ describe("boot", () => {
 });
 
 describe("refreshPlanningData", () => {
-  // The "a read failed, heal wholesale next time" bit is module state and
-  // outlives a test: drained here so a failing-read test cannot decide how the
+  // The "a read failed, heal wholesale next time" bit is board state now, so a
+  // wholesale hydrate is what drains it — the same door the app uses, rather
+  // than a test-only reset. A failing-read test therefore cannot decide how the
   // NEXT test's targeted change is read.
   beforeEach(() => {
-    resetPlanningRecoveryForTest();
+    useBoardStore.getState().hydrate({}, {});
   });
 
   it("replaces planning stores from a fresh bootstrap while preserving the live selection", async () => {
@@ -873,6 +868,11 @@ describe("refreshPlanningData", () => {
 
   describe("a comment", () => {
     it("re-reads nothing: no row the board holds can have moved", async () => {
+      // The board HOLDS p1 — the normal case, and the one that matters. With an
+      // empty board the scoped arm is unreachable, so a regression that made a
+      // comment read again would still be caught by the bootstrap assertion
+      // alone and the scoped assertion below would prove nothing.
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
       const gateway = fakeGateway();
       const before = useBoardStore.getState().lastPlanningChange.version;
 
@@ -882,7 +882,10 @@ describe("refreshPlanningData", () => {
       );
 
       expect(result).toEqual({ ok: true });
+      // BOTH reads, because a comment must make no read at all — not merely a
+      // narrower one.
       expect(gateway.bootstrap).not.toHaveBeenCalled();
+      expect(gateway.projectRoster).not.toHaveBeenCalled();
       // The per-ticket surfaces still hear about it — the Activity feed IS how
       // a comment reaches the screen.
       expect(useBoardStore.getState().lastPlanningChange).toEqual({
@@ -890,6 +893,51 @@ describe("refreshPlanningData", () => {
         ticketId: "t1",
         projectId: "p1",
       });
+    });
+
+    it("leaves a pending recovery armed, so the next board-moving change still heals", async () => {
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const failing = fakeGateway({
+        projectRoster: vi.fn<BootGateway["projectRoster"]>(async () => ({
+          ok: false,
+          error: "db gone",
+        })),
+      });
+      await refreshPlanningData({ projectId: "p1", kind: "ticket" }, failing);
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      // A comment returns before the recovery arm is even consulted. It must
+      // not be mistaken for the healthy read that clears it.
+      const gateway = fakeGateway();
+      await refreshPlanningData({ projectId: "p1", kind: "comment" }, gateway);
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway);
+      expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+      expect(gateway.projectRoster).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a refresh that throws", () => {
+    it("arms recovery, so the next board-moving change is wholesale", async () => {
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const gateway = fakeGateway({
+        projectRoster: vi.fn<BootGateway["projectRoster"]>(async () => {
+          throw new Error("transport died");
+        }),
+      });
+
+      await expect(
+        refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway),
+      ).rejects.toThrow("transport died");
+      expect(useBoardStore.getState().planningRecoveryNeeded).toBe(true);
+
+      const healthy = fakeGateway();
+      expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, healthy)).toEqual({
+        ok: true,
+      });
+      expect(healthy.bootstrap).toHaveBeenCalledTimes(1);
+      expect(healthy.projectRoster).not.toHaveBeenCalled();
     });
   });
 

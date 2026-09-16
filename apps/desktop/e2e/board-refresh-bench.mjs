@@ -19,11 +19,10 @@
  *     [--body-bytes N] [--agents N] [--repetitions N] [--json PATH]
  */
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFile } from "node:fs/promises";
-import os from "node:os";
+import os, { tmpdir } from "node:os";
 
 import { createServer } from "vite";
 
@@ -183,6 +182,7 @@ async function main() {
   seed();
 
   const hotProject = projectIds[0];
+  const hotTicketId = mods.tickets.listTicketRosterByProject(db, hotProject)[0]?.id ?? "";
 
   // What `data.bootstrap` does today, every broadcast (see buildBootstrapPayload).
   const wholeBoard = () => {
@@ -192,12 +192,18 @@ async function main() {
     const allLabels = mods.labels.listAllLabels(db);
     return projects.length + all.length + allLabels.length + Object.keys(appState).length;
   };
-  // Fix shape 1: one project's roster.
+  // Fix shape 1 + 2 AS SHIPPED: `listTicketRosterByProject` is the query the
+  // steady-state refresh actually runs, and it omits the body column in SQL
+  // rather than stripping it afterwards in JS. Measured through the real
+  // function so these numbers describe the code, not a stand-in for it.
   const oneProject = () => {
-    const rows = mods.tickets.listTicketsByProject(db, hotProject);
+    const rows = mods.tickets.listTicketRosterByProject(db, hotProject);
     const labels = mods.labels.listLabelsByProject(db, hotProject);
     return rows.length + labels.length;
   };
+  // The body read the open ticket now makes on its own, so the per-ticket cost
+  // the roster traded the per-board one for is on the record too.
+  const oneBody = () => mods.tickets.getTicketBody(db, hotTicketId)?.length ?? 0;
 
   // The read is only half of what a broadcast costs: the payload is then
   // structured-cloned across the IPC boundary (main → every window) before the
@@ -215,13 +221,14 @@ async function main() {
     labels: mods.labels.listLabelsByProject(db, hotProject),
   };
   const bodylessPayload = {
-    ...scopedPayload,
-    tickets: scopedPayload.tickets.map(({ body: _body, ...rest }) => rest),
+    tickets: mods.tickets.listTicketRosterByProject(db, hotProject),
+    labels: mods.labels.listLabelsByProject(db, hotProject),
   };
 
   const rows = [
     measure("data.bootstrap (whole board, today)", args.repetitions, wholeBoard),
-    measure("one project's roster (fix shape 1)", args.repetitions, oneProject),
+    measure("one project's roster, no bodies (shipped)", args.repetitions, oneProject),
+    measure("one ticket's body (shipped)", args.repetitions, oneBody),
     measure("IPC copy of the whole board", args.repetitions, () => structuredClone(wholePayload)),
     measure("IPC copy of one project", args.repetitions, () => structuredClone(scopedPayload)),
     measure("IPC copy of one project, no bodies (shape 2)", args.repetitions, () =>
