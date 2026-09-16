@@ -4219,6 +4219,24 @@ describe("SessionRuntime native adapter contract", () => {
     // exempt from the bound with nobody watching it.
     expect(reads).toEqual([unopened]);
 
+    // The other half: a failed subscribe beside a live one takes back only
+    // its own registration. The tab that did open still holds its Session.
+    const watched = await create("watched-create");
+    const release = await runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {});
+    await runtime.projection({ sessionId: watched });
+    failReplayFor = watched;
+    await expect(
+      runtime.subscribe({ sessionId: watched, afterSequence: 0 }, () => {}),
+    ).rejects.toThrow("replay failed");
+    failReplayFor = null;
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+      await runtime.projection({ sessionId: await create(`crowd-again-${index}`) });
+    }
+    reads.length = 0;
+    await runtime.projection({ sessionId: watched });
+    expect(reads).toEqual([]);
+    release();
+
     await runtime.close();
   });
 });

@@ -3709,6 +3709,10 @@ describe("the in-memory ledger's usage port", () => {
  * behind it, and one that never returns to the event loop blocks the host for
  * the same span whether or not a skeleton is drawn over it.
  */
+/** The first {@link SESSION_LISTING_CACHE_LIMIT} rows of a roster: exactly a full cache. */
+const rosterAtCacheLimit = (rows: readonly Session[]): readonly Session[] =>
+  rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
+
 describe("listSessions over a project roster (VC-388)", () => {
   async function roster(count: number) {
     const { plane } = composition();
@@ -3928,8 +3932,7 @@ describe("listSessions over a project roster (VC-388)", () => {
   it("evicts the least recently listed Session once the cache is full", async () => {
     // One roster, listed through a moving window: at the cache's size, then
     // one over it, then one row at a time to ask which entry survived.
-    let visible: (rows: readonly Session[]) => readonly Session[] = (rows) =>
-      rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
+    let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
     const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
     for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
       await plane.createSession(createRequest(`command-evict-${index}`));
