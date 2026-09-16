@@ -101,6 +101,7 @@ import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -206,6 +207,26 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
+  // This workspace is built and on the DOM for THIS ticket (VC-385).
+  //
+  // A layout effect, not the render body. Rendering must stay free of side
+  // effects: the app runs under `StrictMode` and React is free to start a
+  // render and throw it away, so a mark stamped during render can describe a
+  // workspace that never committed — a measurement of something that did not
+  // happen. A layout effect runs after the subtree is on the DOM and before
+  // paint, which is both honest and the moment the phase is named for.
+  //
+  // Guarded by ticket id rather than by a bare `once` flag so it stays correct
+  // if this view ever stops being remounted per ticket: a re-render is not a
+  // new workspace, and stamping one would shorten the editor phase by exactly
+  // the time it was late.
+  const markedWorkspaceForRef = React.useRef<string | null>(null);
+  React.useLayoutEffect(() => {
+    if (markedWorkspaceForRef.current === ticket.id) return;
+    markedWorkspaceForRef.current = ticket.id;
+    markPerfPhase(PERF_PHASE.ticketWorkspaceMount);
+  }, [ticket.id]);
+
   const ticketBody = useTicketBody(ticket);
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);

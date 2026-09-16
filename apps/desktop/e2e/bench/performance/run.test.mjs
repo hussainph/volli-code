@@ -9,6 +9,7 @@ import {
   addNullableMeasurements,
   aggregateInteraction,
   backgroundLoadGap,
+  INTERACTION_IDS,
   markdown,
   parseArgs,
   summarize,
@@ -393,6 +394,28 @@ describe("ChatPlane report validation", () => {
 });
 
 describe("whole-report validation and Markdown", () => {
+  /**
+   * VC-385 — `--interactions` is the supported way to measure one interaction
+   * without paying for the other eight (about nineteen minutes an arm). The
+   * run itself honoured the flag; validation did not, and rejected the report
+   * it had just produced for containing exactly what was asked for. A filtered
+   * run that cannot write its report is a flag that does not work.
+   */
+  it("accepts a run that measured only the interactions it was asked for", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["ticket_switch"];
+    report.arms[0].interactions = [
+      aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+        streamSample({ latencyMs: 120 }),
+        streamSample({ latencyMs: 140 }),
+      ]),
+    ];
+    report.arms[0].chatWindow = null;
+
+    expect(validateBenchmarkReport(report)).toBe(report);
+  });
+
   it("accepts zero latency samples and renders the report contract", () => {
     const report = benchmarkReport();
     report.arms[0].interactions[0] = aggregateInteraction(
@@ -407,6 +430,61 @@ describe("whole-report validation and Markdown", () => {
     expect(output).toContain("Loaded-arm contract: 2 busy cores for a fixed 60 seconds.");
     expect(output).toContain("Simultaneous streaming and scrolling");
     expect(output).toContain("N-busy-core-for-60s");
+  });
+
+  /**
+   * VC-385 — `docs/performance-benchmark.md` makes the Markdown the only
+   * committed artifact, so it has to be self-describing: none of the JSON is
+   * kept. A narrowed run's report was not. It named neither the interaction
+   * filter it ran under nor the way its load actually ended, and its Method
+   * section asserted a full fixed-duration exposure that a narrowed arm never
+   * receives — three claims a reader had no way to check and one that was
+   * simply false.
+   */
+  it("states the interaction filter and the real load ending on a narrowed run", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["ticket_switch"];
+    report.config.arms = ["loaded"];
+    const name = busyLoadName(2, 60_000);
+    report.arms[0] = {
+      ...report.arms[0],
+      name,
+      busyCores: 2,
+      interactions: [
+        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+          streamSample({ latencyMs: 120 }),
+          streamSample({ latencyMs: 140 }),
+        ]),
+      ],
+      chatWindow: null,
+      load: {
+        configuredDurationMs: 60_000,
+        exposureDurationMs: 9_000,
+        measurementsDurationMs: 8_500,
+        completion: "narrowed-interactions-early-stop",
+      },
+    };
+
+    const output = markdown(report);
+
+    // The filter, so a reader knows this report covers one interaction.
+    expect(output).toContain("Interactions measured: `ticket_switch`");
+    // How the load really ended, rather than the contract it did not meet.
+    expect(output).toContain("narrowed-interactions-early-stop");
+    // And the Method must stop ASSERTING a complete exposure for this run. It
+    // may still describe one as the ending a full arm has — that is the point
+    // of naming which ending happened — but not as what happened here.
+    expect(output).not.toContain("otherwise holds the load until the configured exposure");
+    expect(output).toContain("stops as soon as its measurements are done");
+    expect(output).toContain("sized to the measurements");
+  });
+
+  it("says so plainly when a run measured every interaction", () => {
+    const report = benchmarkReport();
+    report.config.interactions = INTERACTION_IDS;
+
+    expect(markdown(report)).toContain("Interactions measured: all nine");
   });
 
   it("rejects missing arms, console errors, zero samples, and null latency", () => {
@@ -541,6 +619,47 @@ describe("whole-report validation and Markdown", () => {
 
     report.arms[0].load.completion = "fixed-duration-complete";
     expect(() => validateBenchmarkReport(report)).toThrow("load ended as");
+  });
+
+  /**
+   * VC-385 — the loaded arm of a narrowed run.
+   *
+   * `runArm` stops the busy workers as soon as the wanted interactions are
+   * done rather than holding the exposure open for the full configured
+   * duration, because a narrowed run has no streaming bench left to cover.
+   * Validation only knew the two completions a FULL run can end with, so the
+   * loaded arm of `--interactions ticket_switch` measured correctly and then
+   * failed on its own load metadata — the same shape of bug as the interaction
+   * list and the chat-window report.
+   */
+  it("accepts a loaded arm that stopped its load early because the run was narrowed", () => {
+    const report = benchmarkReport();
+    const name = busyLoadName(2, 60_000);
+    report.config.streamOnly = false;
+    report.config.arms = ["loaded"];
+    report.config.interactions = ["ticket_switch"];
+    report.arms[0] = {
+      ...report.arms[0],
+      name,
+      busyCores: 2,
+      interactions: [
+        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+          streamSample({ latencyMs: 120 }),
+          streamSample({ latencyMs: 140 }),
+        ]),
+      ],
+      chatWindow: null,
+      load: {
+        configuredDurationMs: 60_000,
+        // Both shorter than the configured exposure: the arm ended when the
+        // measurements did, which is the whole point of narrowing it.
+        exposureDurationMs: 9_000,
+        measurementsDurationMs: 8_500,
+        completion: "narrowed-interactions-early-stop",
+      },
+    };
+
+    expect(validateBenchmarkReport(report)).toBe(report);
   });
 });
 

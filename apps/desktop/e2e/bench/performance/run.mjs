@@ -23,6 +23,7 @@ import { busyLoadName, startBusyLoad } from "./background-load.mjs";
 import { generateFixture, verifyFixture } from "./fixture.mjs";
 import { DEFAULT_SEED, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
+import { ticketSwitchBreakdown, TICKET_SWITCH_MARKS } from "./ticket-switch-breakdown.mjs";
 
 const execFileAsync = promisify(execFile);
 const CHAT_BENCH = join(APP_DIR, "e2e", "chat-window-bench.mjs");
@@ -49,6 +50,8 @@ const INTERACTIONS = Object.freeze([
   ["board_render", "Board render"],
   ["rpc_round_trip", "Session RPC projection round trip"],
 ]);
+/** Every interaction id, in order — what a run with no `--interactions` covers. */
+export const INTERACTION_IDS = Object.freeze(INTERACTIONS.map(([id]) => id));
 
 export function parseArgs(argv) {
   const args = {
@@ -214,6 +217,14 @@ export function aggregateInteraction(id, label, samples) {
     "settledHighlightedTokens",
     "resizeObserverCallbacks",
     "resizeObserverCallbacksPerSecond",
+    // The ticket switch's phase split (VC-385). Plain per-sample scalars, so
+    // each one gets the same percentile treatment as the latency it divides.
+    "paletteOpenMs",
+    "paletteResolveMs",
+    "workspaceRebuildMs",
+    "descriptionEditorMs",
+    "settleMs",
+    "sessionsListMs",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -653,7 +664,13 @@ async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
   const input = page.getByPlaceholder("Search tickets and sessions…");
   await input.waitFor({ state: "visible", timeout: 10_000 });
   await input.fill(targetDisplayId);
-  const row = page.getByText(targetTitle, { exact: true });
+  // Scoped to the palette's own list, not the page. A page-wide text match also
+  // finds the OPEN ticket's `h1`, which carries the same title — harmless in a
+  // full run, where the interactions before this one have navigated away, and a
+  // strict-mode violation the moment `--interactions ticket_switch` skips them
+  // and leaves the workspace on screen. The flag is the cheap way to measure
+  // just this interaction, so it has to be the supported way too.
+  const row = page.getByLabel("Suggestions").getByText(targetTitle, { exact: true });
   await row.waitFor({ state: "visible", timeout: 30_000 });
   await row.click();
 }
@@ -708,13 +725,66 @@ async function openTicketWorkspaceFromPalette(page, targetTitle, targetDisplayId
   await waitForTicketWorkspace(page, targetTitle, targetDisplayId);
 }
 
+/**
+ * Switch on the renderer's phase marks and clear anything an earlier
+ * repetition left on the timeline.
+ *
+ * Both halves matter. The flag is what makes `markPerfPhase` write at all
+ * (`@renderer/lib/perf-marks`), and the clear is what keeps the reducer's
+ * "latest stamp wins" honest: the warm-up switches this measurement runs
+ * before it starts capturing stamp the same mark names, and a stale
+ * `ticket-description.ready` from the previous open would otherwise be read as
+ * this switch's.
+ */
+async function armPhaseMarks(page) {
+  await page.evaluate((names) => {
+    window.volliPerfMarks = true;
+    for (const name of names) performance.clearMarks(name);
+  }, Object.values(TICKET_SWITCH_MARKS));
+}
+
+async function phaseMarks(page, names) {
+  return page.evaluate(
+    (wanted) =>
+      performance
+        .getEntriesByType("mark")
+        .filter((entry) => wanted.includes(entry.name))
+        .map((entry) => ({ name: entry.name, startTime: entry.startTime })),
+    names,
+  );
+}
+
 async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
-  return measured(
+  await armPhaseMarks(page);
+  const sample = await measured(
     page,
     app,
-    () => selectTicketFromPalette(page, targetTitle, targetDisplayId),
+    async () => {
+      // The start boundary is stamped on the page's own timeline, in the same
+      // clock as every other mark, so the segments subtract cleanly. It sits
+      // immediately before the first input of the switch — which is what makes
+      // opening the palette part of the number, and therefore visible as its
+      // own phase instead of hidden inside the total.
+      await page.evaluate((name) => performance.mark(name), TICKET_SWITCH_MARKS.start);
+      await selectTicketFromPalette(page, targetTitle, targetDisplayId);
+    },
     () => waitForTicketWorkspace(page, targetTitle, targetDisplayId),
   );
+  const breakdown = ticketSwitchBreakdown({
+    marks: await phaseMarks(page, Object.values(TICKET_SWITCH_MARKS)),
+    latencyMs: sample.latencyMs,
+  });
+  const { missingMarks, ...phases } = breakdown;
+  if (missingMarks.length > 0) {
+    // Not a soft finding. A missing mark means the renderer and this harness
+    // disagree about a boundary's name, and a split that quietly reports
+    // `null` for a phase is worse than no split at all — it reads as "we
+    // measured that and it was nothing".
+    throw new Error(
+      `ticket switch phase marks missing: ${missingMarks.join(", ")} — renderer marks and ticket-switch-breakdown.mjs have drifted`,
+    );
+  }
+  return { ...sample, ...phases };
 }
 
 async function measureBoardRender(page, app, ticketCount) {
@@ -1026,9 +1096,13 @@ export function validateBenchmarkReport(report) {
   if (!isRecord(report) || !isRecord(report.config) || !Array.isArray(report.arms)) {
     throw new Error("benchmark report is malformed");
   }
+  // What this run was ASKED to measure, not what a full run would have.
+  // `--interactions` is how a change that touches one interaction avoids the
+  // other eight (VC-385); the run honoured it, so validation has to as well,
+  // or the flag produces numbers it then refuses to write down.
   const expectedInteractions = report.config.streamOnly
     ? ["stream_scroll"]
-    : INTERACTIONS.map(([id]) => id);
+    : (report.config.interactions ?? INTERACTIONS.map(([id]) => id));
   const expectedArmNames = report.config.arms.map((arm) =>
     arm === "idle"
       ? "idle"
@@ -1062,20 +1136,25 @@ export function validateBenchmarkReport(report) {
     for (const interaction of arm.interactions) {
       validateInteraction(interaction, report.config.repetitions);
     }
-    const stream = arm.interactions.find((interaction) => interaction.id === "stream_scroll");
-    validateChatBenchReport(
-      {
-        ...arm.chatWindow,
-        streamingSamples: stream?.samples,
-      },
-      {
-        expectedSamples: report.config.repetitions,
-        expectedSteps: report.config.streamSteps,
-        requireCodeFence:
-          report.config.streamSteps === DEFAULT_STREAM_STEPS &&
-          report.config.streamTokenRate === DEFAULT_STREAM_TOKEN_RATE,
-      },
-    );
+    // The chat-window bench is the streaming interaction's other half, so it
+    // is validated only when this run measured streaming at all. A filtered
+    // run never launches it and has no report to check.
+    if (expectedInteractions.includes("stream_scroll")) {
+      const stream = arm.interactions.find((interaction) => interaction.id === "stream_scroll");
+      validateChatBenchReport(
+        {
+          ...arm.chatWindow,
+          streamingSamples: stream?.samples,
+        },
+        {
+          expectedSamples: report.config.repetitions,
+          expectedSteps: report.config.streamSteps,
+          requireCodeFence:
+            report.config.streamSteps === DEFAULT_STREAM_STEPS &&
+            report.config.streamTokenRate === DEFAULT_STREAM_TOKEN_RATE,
+        },
+      );
+    }
 
     const loaded = arm.busyCores > 0;
     if (!loaded && arm.load !== undefined)
@@ -1089,20 +1168,40 @@ export function validateBenchmarkReport(report) {
       ) {
         throw new Error(`${arm.name} load metadata differs from the configured load arm`);
       }
+      // A run that measured every interaction holds its exposure open for the
+      // whole configured duration; the two narrowed shapes stop as soon as
+      // their measurements are done, and each says so in its own words.
+      // `--interactions` is the ordinary way to measure one interaction, so
+      // its early stop is an expected ending, not a broken arm.
+      const narrowed = !expectedInteractions.includes("stream_scroll");
       const expectedCompletion = report.config.streamOnly
         ? "quick-smoke-early-stop"
-        : "fixed-duration-complete";
+        : narrowed
+          ? "narrowed-interactions-early-stop"
+          : "fixed-duration-complete";
       if (arm.load.completion !== expectedCompletion) {
         throw new Error(`${arm.name} load ended as ${String(arm.load.completion)}`);
       }
+      // Only a full arm can be asked whether it received one COMPLETE
+      // fixed-duration exposure. A narrowed arm deliberately did not, and
+      // holding it to that bar would fail every run the flag exists to enable.
       if (
         !report.config.streamOnly &&
+        !narrowed &&
         (!Number.isFinite(arm.load.exposureDurationMs) ||
           arm.load.exposureDurationMs < expectedDurationMs ||
           !Number.isFinite(arm.load.measurementsDurationMs) ||
           arm.load.measurementsDurationMs >= expectedDurationMs)
       ) {
         throw new Error(`${arm.name} did not receive one complete fixed-duration exposure`);
+      }
+      if (
+        narrowed &&
+        (!Number.isFinite(arm.load.exposureDurationMs) ||
+          !Number.isFinite(arm.load.measurementsDurationMs) ||
+          arm.load.measurementsDurationMs > arm.load.exposureDurationMs)
+      ) {
+        throw new Error(`${arm.name} load did not cover its own measurements`);
       }
     }
   }
@@ -1342,6 +1441,19 @@ export function summaryReport(report) {
 }
 
 export function markdown(report) {
+  // What this run covered and how its load really ended. Both belong in the
+  // Markdown rather than only in the JSON, because the JSON is not committed
+  // (`docs/performance-benchmark.md`) and the Markdown is therefore the whole
+  // of what a later reader gets. A report that does not say it measured one
+  // interaction reads as a full matrix; a loaded report that quotes the
+  // fixed-duration contract it did not meet is simply wrong.
+  const measuredIds = report.config.interactions ?? INTERACTION_IDS;
+  const everyInteraction = measuredIds.length === INTERACTION_IDS.length;
+  const interactionsLine = everyInteraction
+    ? `Interactions measured: all nine (no \`--interactions\` filter).`
+    : `Interactions measured: ${measuredIds.map((id) => `\`${id}\``).join(", ")} — a narrowed run (\`--interactions\`); every other interaction was skipped and is absent from the table below.`;
+  const loadedArms = report.arms.filter((arm) => arm.busyCores > 0);
+  const loadEndings = [...new Set(loadedArms.map((arm) => arm.load?.completion ?? "unknown"))];
   const lines = [
     "# Desktop performance baseline",
     "",
@@ -1355,6 +1467,12 @@ export function markdown(report) {
     `Sampling: ${report.config.repetitions} repetitions per interaction and arm; arms: ${report.arms.map((arm) => arm.name).join(", ")}.`,
     `Each arm discards ${report.config.warmupIterationsPerArm ?? 0} warm-up iteration(s) first, so the arms differ by load rather than by which met a cold cache.`,
     `Loaded-arm contract: ${report.config.busyCores} busy cores for a fixed ${report.config.loadDurationSeconds.toLocaleString()} seconds.`,
+    ...(loadedArms.length === 0
+      ? []
+      : [
+          `Loaded-arm ending: ${loadEndings.join(", ")}. \`fixed-duration-complete\` is the only one that met the contract above; every other value means the load stopped when its measurements did, so the exposure was sized to the run rather than to the configured duration.`,
+        ]),
+    interactionsLine,
     "",
     "## Results",
     "",
@@ -1376,6 +1494,25 @@ export function markdown(report) {
         lines.push(
           `| ${arm.name} | ↳ close / open | ${summary.closeMs?.p50 ?? "—"} / ${summary.openMs?.p50 ?? "—"} ms | ${summary.closeMs?.p95 ?? "—"} / ${summary.openMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
         );
+      }
+      if (interaction.id === "ticket_switch") {
+        // The phases sum back to the latency above them, so a reader can see
+        // which part of the switch a change moved (VC-385). `sessions.list` is
+        // called out separately because it sits INSIDE "find row" and is
+        // VC-388's cost appearing in this window.
+        for (const [key, label] of [
+          ["paletteOpenMs", "open palette"],
+          ["paletteResolveMs", "find row"],
+          ["workspaceRebuildMs", "rebuild workspace"],
+          ["descriptionEditorMs", "description editor"],
+          ["settleMs", "settle"],
+          ["sessionsListMs", "(of which sessions.list)"],
+        ]) {
+          if (summary[key] === undefined) continue;
+          lines.push(
+            `| ${arm.name} | ↳ ${label} | ${summary[key]?.p50 ?? "—"} ms | ${summary[key]?.p95 ?? "—"} ms | ${summary[key]?.variance ?? "—"} ms² | — | — | — | — |`,
+          );
+        }
       }
     }
   }
@@ -1400,7 +1537,7 @@ export function markdown(report) {
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
     `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
-    `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline and otherwise holds the load until the configured exposure is complete; quick stream-only smoke runs stop early and say so in JSON.`,
+    `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline. What happens otherwise depends on the run, and the "Loaded-arm ending" line above states which of these this one did: a full arm holds the load until the configured exposure is complete (\`fixed-duration-complete\`), a quick stream-only smoke stops early (\`quick-smoke-early-stop\`), and a run narrowed with \`--interactions\` stops as soon as its measurements are done (\`narrowed-interactions-early-stop\`) — that last exposure is sized to the measurements, so it is comparable to another narrowed run but not to a full matrix.`,
     "- Ticket switching first makes both workspaces usable, returns to the first, then times selection and focus-readiness of the already-open second workspace.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",
@@ -1478,6 +1615,11 @@ async function main() {
       streamTokenRate: args.streamTokenRate,
       streamContent: "live-prose-4kb-open-code-fence-96-growth-close-prose",
       streamOnly: args.streamOnly,
+      // The interaction filter this run was invoked with, stated in the
+      // artifact because it changes what the report covers: a reader comparing
+      // two files has to be able to see that one measured a single interaction
+      // and the other measured all nine.
+      interactions: args.interactions ?? INTERACTIONS.map(([id]) => id),
       arms: args.arms,
     },
     arms: [],

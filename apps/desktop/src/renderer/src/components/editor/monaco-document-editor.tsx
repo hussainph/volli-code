@@ -13,6 +13,7 @@ import type { DocumentLease, DocumentRevision } from "@renderer/editor/document-
 import { activeMonacoEditorThemeId } from "@renderer/editor/monaco-theme";
 import { type FileRefsConfig, refInsertion } from "@renderer/editor/file-refs";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { cn } from "@renderer/lib/utils";
 
 /**
@@ -418,6 +419,14 @@ export const MonacoDocumentEditor = React.forwardRef<
         // editable" there rather than "not applicable".
         host.dataset.monacoReadOnly = "false";
         if (liveRef.current.autoFocus) view.focus();
+        // The ticket description is the surface the switch benchmark waits on
+        // — the harness's readiness predicate looks for Monaco's own textarea,
+        // so creating and laying out this editor is inside the measured window
+        // (VC-385). Only the ticket body stamps it: a file or diff editor
+        // opening elsewhere is not what the switch is waiting for.
+        if (liveRef.current.identity.kind === "ticket-body") {
+          markPerfPhase(PERF_PHASE.ticketDescriptionReady);
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return;

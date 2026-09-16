@@ -33,7 +33,20 @@ vi.mock("@renderer/components/editor/monaco-file-editor", () => ({
 }));
 
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
-  MonacoDocumentEditor: () => <div data-testid="monaco-document-editor" />,
+  MonacoDocumentEditor: (props: Record<string, unknown>) => {
+    // Carries `onChange` so a test can type into the autosave surface. Monaco
+    // itself cannot run in jsdom and is not what these tests are about; the
+    // seam under test is the host's onChange-to-write path.
+    const onChange = props["onChange"] as ((next: string) => void) | undefined;
+    return (
+      <textarea
+        data-testid="monaco-document-editor"
+        aria-label={String(props["ariaLabel"])}
+        value={String(props["value"])}
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+    );
+  },
 }));
 
 vi.mock("@renderer/editor/monaco-runtime", () => ({
@@ -245,5 +258,64 @@ describe("FileView — Preview only ever reads", () => {
     expect(lastEditorProps()?.["revision"]).toBe(7);
     expect(read.mock.calls.length).toBe(readsBefore);
     expect(onDirtyChange.mock.calls).toEqual([[true]]);
+  });
+});
+
+/**
+ * VC-385 — the file half of "an unsaved edit saves to the ticket that wrote
+ * it". The Ticket Body half lives in `ticket-body-editor.test.tsx`; this is the
+ * same guarantee for a Ticket Files tab, which writes to a per-ticket worktree
+ * and so can send bytes to the wrong CHECKOUT rather than merely the wrong row.
+ *
+ * A switch is an unmount today: `home-surface.tsx` keys the whole ticket
+ * workspace on `ticket.id`, so leaving a ticket destroys its file tabs. The
+ * debounced autosave flushes on unmount, and this pins that it flushes to the
+ * ticket whose worktree the draft was typed against.
+ */
+describe("FileView autosave ownership across a ticket switch", () => {
+  it("flushes a pending file edit to the ticket that authored it", async () => {
+    // A ticket ARTIFACT, which is the autosave surface: it lives in the
+    // ticket's own worktree, so a draft flushed to the wrong ticket lands in
+    // the wrong checkout. A repository file takes the explicit-save path and is
+    // a different guarantee.
+    read.mockImplementation(async () => ({
+      ok: true as const,
+      source: "ticket" as const,
+      kind: "markdown" as const,
+      size: 10,
+      mtime: 7,
+      content: { type: "text" as const, text: PLAIN, truncated: false },
+    }));
+    await act(async () => {
+      root?.render(
+        <FileView projectId={PROJECT} ticketId="ticket-a" relPath=".volli/artifacts/notes.md" />,
+      );
+    });
+
+    const editor = container?.querySelector<HTMLTextAreaElement>(
+      '[data-testid="monaco-document-editor"]',
+    );
+    if (!editor) throw new Error("the autosave surface did not mount");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      setter?.call(editor, "typed against ticket-a\n");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(write).not.toHaveBeenCalled(); // still inside the debounce
+
+    // The switch: this workspace goes away, taking its file tabs with it.
+    await act(async () => {
+      root?.render(null);
+    });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: PROJECT,
+        ticketId: "ticket-a",
+        relPath: ".volli/artifacts/notes.md",
+        content: "typed against ticket-a\n",
+      }),
+    );
   });
 });

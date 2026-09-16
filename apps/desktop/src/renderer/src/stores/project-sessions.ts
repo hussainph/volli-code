@@ -148,6 +148,36 @@ function rowSessionId(row: SessionListingRow): string {
   return row.kind === "terminal" ? row.record.id : row.record.sessionId;
 }
 
+/**
+ * Every named project's rows as one global listing.
+ *
+ * The command palette is the app's one cross-project Session surface, and it
+ * used to build this list from its own `sessions.list` call per project on
+ * every single open (VC-385). That is the question this store already holds
+ * the answer to, pushed and kept fresh, so the palette reads the cache and
+ * folds it here instead.
+ *
+ * A project with no entry contributes nothing rather than an empty project:
+ * "not read yet" and "has no Sessions" stay different, exactly as
+ * `listingState` keeps them apart for every other consumer.
+ */
+export function mergedProjectSessionRows(
+  byProject: Readonly<Record<string, ProjectSessionRows>>,
+  projectIds: readonly string[],
+): ProjectSessionRows {
+  const terminal: SessionRecord[] = [];
+  const chat: ChatSessionRecord[] = [];
+  const provenance: Record<string, SessionProvenance> = {};
+  for (const projectId of projectIds) {
+    const rows = byProject[projectId];
+    if (rows === undefined) continue;
+    terminal.push(...rows.terminal);
+    chat.push(...rows.chat);
+    Object.assign(provenance, rows.provenance);
+  }
+  return { terminal, chat, provenance };
+}
+
 interface ProjectSessionsState {
   byProject: Readonly<Record<string, ProjectSessionRows>>;
   /** Baseline outcome by project; absent means no listing has been requested. */

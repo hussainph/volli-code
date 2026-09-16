@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   childSessionIds,
   createProjectSessionsStore,
+  mergedProjectSessionRows,
   listableChats,
   projectSessionListingPending,
   sessionTitleOf,
@@ -515,5 +516,46 @@ describe("childSessionIds", () => {
     expect(sessionTitleOf(rows, "child-a")).toBe("Explore the seam");
     expect(sessionTitleOf(rows, "nobody")).toBeNull();
     expect(sessionTitleOf(undefined, "child-a")).toBeNull();
+  });
+});
+
+/**
+ * VC-385 — the command palette used to read every tracked project's Session
+ * listing itself, on every open, and keep the answer in component state. That
+ * is the same question this store already answers from cache, and the fetch
+ * behind it folds a project's whole roster in one blocking main-process
+ * transaction (VC-388). The palette now reads the cache; this is the fold that
+ * turns per-project rows back into the one global list it draws.
+ */
+describe("mergedProjectSessionRows", () => {
+  it("merges every named project's rows into one global listing", () => {
+    const byProject: Record<string, ProjectSessionRows> = {
+      p1: {
+        terminal: [record({ id: "t-one", projectId: "p1" })],
+        chat: [chatRecord({ sessionId: "c-one", projectId: "p1" })],
+        provenance: { "c-one": { kind: "automation", automationName: "Nightly" } },
+      },
+      p2: {
+        terminal: [record({ id: "t-two", projectId: "p2" })],
+        chat: [chatRecord({ sessionId: "c-two", projectId: "p2" })],
+        provenance: { "t-two": { kind: "session", parentSessionId: "c-one", parentTitle: null } },
+      },
+      // Never asked for: a project the palette does not track contributes
+      // nothing, rather than leaking into the global list.
+      p3: {
+        terminal: [record({ id: "t-three", projectId: "p3" })],
+        chat: [chatRecord({ sessionId: "c-three", projectId: "p3" })],
+        provenance: {},
+      },
+    };
+
+    const merged = mergedProjectSessionRows(byProject, ["p1", "p2", "unread"]);
+
+    expect(merged.terminal.map((row) => row.id)).toEqual(["t-one", "t-two"]);
+    expect(merged.chat.map((row) => row.sessionId)).toEqual(["c-one", "c-two"]);
+    expect(merged.provenance).toEqual({
+      "c-one": { kind: "automation", automationName: "Nightly" },
+      "t-two": { kind: "session", parentSessionId: "c-one", parentTitle: null },
+    });
   });
 });

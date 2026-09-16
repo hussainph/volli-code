@@ -9,13 +9,7 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
-import {
-  sessionProvenanceHoverLine,
-  type ChatSessionRecord,
-  type SessionListingRow,
-  type SessionProvenance,
-  type SessionRecord,
-} from "@volli/shared";
+import { sessionProvenanceHoverLine } from "@volli/shared";
 
 import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
 import {
@@ -46,6 +40,12 @@ import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
+import {
+  EMPTY_PROJECT_SESSION_ROWS,
+  mergedProjectSessionRows,
+  useProjectSessionsStore,
+} from "@renderer/stores/project-sessions";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -135,7 +135,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const projects = useProjectsStore((state) => state.projects);
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const ticketsByProject = useBoardStore((state) => state.ticketsByProject);
-  const planningChangeVersion = useBoardStore((state) => state.lastPlanningChange.version);
   const sessionsByOwner = useSessionsStore((state) => state.byOwner);
   const residentChatTitles = useChatSessionsStore(
     useShallow((state) => {
@@ -147,32 +146,45 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       return titles;
     }),
   );
-  const [chatSessions, setChatSessions] = React.useState<readonly ChatSessionRecord[]>([]);
   /**
-   * Durable TERMINAL rows from the same listing fetch (VC-290).
+   * Every tracked project's durable Session rows, read from the shared cache
+   * (VC-385).
    *
-   * They were being fetched and thrown away: the effect below read every
-   * project's Session listing, kept the chat records and the provenance map,
-   * and dropped the terminal half — so a terminal you closed an hour ago could
-   * not be found in the app's one global search, while the row that would have
-   * found it was already in the response.
+   * This used to be three pieces of component state filled by the palette's
+   * own `sessions.list` call per project on EVERY open. That fetch is one
+   * blocking main-process transaction over a project's whole roster (VC-388) —
+   * 1,198 Sessions in the benchmark's `real` fixture — and it sat inside the
+   * window VC-385 was measuring a ticket switch in, repeated every time ⌘K was
+   * pressed. `project-sessions` already holds this answer, seeded once per
+   * project and kept current by the `volli:session-activity` push channel, so
+   * the palette reads it instead of asking again.
+   *
+   * The three shapes are what the palette draws: chat rows, durable TERMINAL
+   * rows (VC-290 — a terminal closed an hour ago is a destination too), and
+   * the sparse provenance map (VC-131) that marks who started each Session.
    */
-  const [terminalSessions, setTerminalSessions] = React.useState<readonly SessionRecord[]>([]);
-  /**
-   * Who started each listed Session, across every tracked project (VC-131).
-   *
-   * Held beside the chat rows rather than folded into them because provenance
-   * rides on the listing ROW — it is a fact about the Session, not about the
-   * record shape the palette keeps — and because the palette's OTHER source of
-   * Sessions is the open-terminal store, which has no row to carry it. One map
-   * keyed by Session id answers for both halves of the list.
-   *
-   * Sparse: only a Session with something to say takes a slot, so the ordinary
-   * palette holds an empty object and adds nothing to any row.
-   */
-  const [sessionProvenance, setSessionProvenance] = React.useState<
-    Readonly<Record<string, SessionProvenance>>
-  >({});
+  const projectIds = React.useMemo(() => projects.map((project) => project.id), [projects]);
+  // Subscribed to the store's `byProject` map, then merged in a memo — NOT
+  // merged inside the selector. The fold allocates fresh arrays every call, so
+  // a selector returning it is never equal to its own previous result, and
+  // `useShallow` over it re-renders forever. The map's identity changes exactly
+  // when a project's rows change, which is the dependency this actually has.
+  const byProject = useProjectSessionsStore((state) => state.byProject);
+  const {
+    chat: chatSessions,
+    terminal: terminalSessions,
+    provenance: sessionProvenance,
+  } = React.useMemo(
+    // `open` is load-bearing, not decoration. `applyActivity` allocates a new
+    // `byProject` for every `volli:session-activity` push, and this palette is
+    // always mounted — so without the gate each push would wake it and fold
+    // every project's whole roster while the palette is closed and nobody is
+    // looking. It is the same rule the items memo below states ("Gating on
+    // `open` keeps the closed palette free") and the same one every other
+    // consumer of this store keeps by narrowing to a single project.
+    () => (open ? mergedProjectSessionRows(byProject, projectIds) : EMPTY_PROJECT_SESSION_ROWS),
+    [open, byProject, projectIds],
+  );
   const [query, setQuery] = React.useState("");
   // The `@` scope chip (VC-205): a completed `@sessions` narrows the palette
   // to one section. It is state beside the query, not text inside it, so the
@@ -187,9 +199,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   );
   const automationsByProject = useAutomationsStore((state) => state.byProject);
 
-  // The automations the selected project lists, re-read per open — same
-  // staleness stance as the chat rows below: the palette's open IS the moment
-  // a stale list would show.
+  // The palette is on screen (VC-385). A ticket switch driven from ⌘K spends
+  // everything between this and the switch's commit on finding the row, and
+  // that stretch was inside the old one-number measurement with no way to see
+  // it.
+  React.useEffect(() => {
+    if (!open) return;
+    markPerfPhase(PERF_PHASE.commandPaletteOpen);
+  }, [open]);
+
+  // The automations the selected project lists, re-read on every open: this
+  // list has no push channel, so the palette's open IS the moment a stale one
+  // would show. The Session rows no longer work this way — they come from a
+  // pushed cache (VC-385) and are read once per project, not once per open.
   React.useEffect(() => {
     if (!open || selectedProjectId === null) return;
     void useAutomationsStore.getState().refresh(selectedProjectId);
@@ -301,52 +323,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const showSessions = scope === null || scope === "sessions";
   const showAutomations = scope === null || scope === "automations";
 
-  // The palette is a global destination surface, so it reads durable chat rows
-  // for every tracked project while open. Resident titles overlay those rows in
-  // the model, making a just-auto-titled tab searchable before a later refresh.
+  // The palette is a global destination surface, so every tracked project's
+  // baseline has to exist before it can draw one list over all of them.
+  // `ensure` is at-most-once per project and never twice at a time, so a
+  // project already seeded by the sidebar or Home costs nothing here and the
+  // second ⌘K of a session issues no reads at all — the push channel has been
+  // carrying the changes since the first one. Resident titles still overlay
+  // these rows in the model, so a just-auto-titled tab is searchable before
+  // any refresh.
   React.useEffect(() => {
-    if (!open) {
-      setChatSessions([]);
-      setTerminalSessions([]);
-      setSessionProvenance({});
-      return;
-    }
-    let current = true;
-    void Promise.all(projects.map((project) => window.api.sessions.list({ projectId: project.id })))
-      .then((results) => {
-        if (!current) return;
-        const failed = results.find((result) => !result.ok);
-        if (failed !== undefined && !failed.ok) {
-          toastError(`Couldn't load sessions: ${failed.error}`);
-          return;
-        }
-        const rows = results.flatMap<SessionListingRow>((result) =>
-          result.ok ? result.sessions : [],
-        );
-        setChatSessions(rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])));
-        setTerminalSessions(rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])));
-        // Both kinds of row contribute: a terminal Session reaches the list
-        // through the open-tab store, which carries no provenance of its own,
-        // so dropping the terminal rows here would leave exactly those rows
-        // unmarkable.
-        const provenance: Record<string, SessionProvenance> = {};
-        for (const row of rows) {
-          if (row.provenance.kind === "user") continue;
-          provenance[row.kind === "terminal" ? row.record.id : row.record.sessionId] =
-            row.provenance;
-        }
-        setSessionProvenance(provenance);
-      })
-      .catch((error: unknown) => {
-        if (current) {
-          const message = error instanceof Error ? error.message : String(error);
-          toastError(`Couldn't load sessions: ${message}`);
-        }
-      });
-    return () => {
-      current = false;
-    };
-  }, [open, planningChangeVersion, projects]);
+    if (!open) return;
+    const ensure = useProjectSessionsStore.getState().ensure;
+    void Promise.all(projectIds.map((projectId) => ensure(projectId))).then(() => {
+      markPerfPhase(PERF_PHASE.commandPaletteSessionsListed);
+    });
+  }, [open, projectIds]);
 
   const finishNavigation = React.useCallback(() => {
     useUiStore.getState().setSettingsOpen(false);
