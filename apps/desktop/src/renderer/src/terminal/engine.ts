@@ -10,7 +10,7 @@
  * subscribes via `onResize` and forwards the reported grid to the PTY. `write`
  * feeds PTY output IN; `onData` reports user keystrokes to forward OUT.
  */
-import type { GhosttyTheme } from "restty";
+import type { GhosttyTheme } from "@volli/shared";
 
 /**
  * Which renderer a live terminal actually got. A closed union because callers
