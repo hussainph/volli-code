@@ -853,32 +853,21 @@ export const CHECKPOINT_REFRESH_EVENTS = 64;
 export const SESSION_LISTING_FOLD_CHUNK = 8;
 
 /**
- * A macrotask turn, on the best primitive the host actually has.
+ * A macrotask turn on the one primitive every host this package runs in has.
  *
- * `setImmediate` runs in the check phase with no floor. `setTimeout(0)` is
- * clamped to a millisecond by Node and to four by browsers after nesting, and
- * that clamp is the single largest term in a chunked listing's wall time — it
- * is paid once per chunk and has nothing to do with the work. Feature-detected
- * rather than injected because every host benefits and none of them should
- * have to know this; a host whose only macrotask has a floor (a browser, where
- * `MessageChannel` is the no-clamp spelling) can still pass
- * {@link SessionEnginePorts.yieldToHost}.
+ * `setTimeout(0)` is clamped to a millisecond by Node and to four by browsers
+ * after nesting, and that clamp is the single largest term in a chunked
+ * listing's wall time — it is paid once per chunk and has nothing to do with
+ * the work. The better spellings are host-specific (`setImmediate` on Node,
+ * `MessageChannel` in a browser), and this package owns no host API, so it
+ * does not feature-detect them: a host that has one injects it through
+ * {@link SessionEnginePorts.yieldToHost}, which is what the desktop
+ * composition root does. The default is the portable floor, not the fast path.
  */
-const hostSetImmediate = (globalThis as { setImmediate?: (callback: () => void) => unknown })
-  .setImmediate;
-
-const defaultYieldToHost: () => Promise<void> =
-  typeof hostSetImmediate === "function"
-    ? () =>
-        new Promise<void>((resolve) => {
-          hostSetImmediate(() => {
-            resolve();
-          });
-        })
-    : () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
+const defaultYieldToHost = (): Promise<void> =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 /**
  * How many Sessions keep a folded listing row in memory (VC-388).

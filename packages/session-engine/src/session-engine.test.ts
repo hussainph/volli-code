@@ -5,7 +5,11 @@ import {
   createSessionEngine,
   createInMemorySessionLedger,
 } from "./index";
-import { CHECKPOINT_REFRESH_EVENTS, SESSION_LISTING_CACHE_LIMIT } from "./session-engine";
+import {
+  CHECKPOINT_REFRESH_EVENTS,
+  SESSION_LISTING_CACHE_LIMIT,
+  SESSION_LISTING_FOLD_CHUNK,
+} from "./session-engine";
 import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
@@ -3760,6 +3764,36 @@ describe("listSessions over a project roster (VC-388)", () => {
     expect(hostRanMidListing).toBe(true);
   });
 
+  it("yields through the host's own primitive when one is injected", async () => {
+    // The engine owns no host API, so its default yield is the portable
+    // `setTimeout(0)`; a host with a better spelling hands it in here. This
+    // proves the port is the seam the listing goes through, and that it is
+    // taken once between chunks rather than once per Session.
+    let yields = 0;
+    const yieldToHost = () =>
+      new Promise<void>((resolve) => {
+        yields += 1;
+        setTimeout(resolve, 0);
+      });
+    let now = 100;
+    const plane = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => now++ },
+      ids: ids(),
+      yieldToHost,
+    });
+    const count = SESSION_LISTING_FOLD_CHUNK * 2 + 1;
+    for (let index = 0; index < count; index += 1) {
+      await plane.createSession(createRequest(`command-yield-${index}`));
+    }
+
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toHaveLength(count);
+    // Three chunks, and the yield is between them, not before the first.
+    expect(yields).toBe(2);
+  });
+
   /**
    * A ledger that reports which Sessions each read actually folded.
    *
@@ -3783,8 +3817,7 @@ describe("listSessions over a project roster (VC-388)", () => {
             new Proxy(transaction, {
               get(target, property, receiver) {
                 if (property === "listSessions") {
-                  return (query: ListSessionsQuery) =>
-                    visibleRows(transaction.listSessions(query));
+                  return (query: ListSessionsQuery) => visibleRows(transaction.listSessions(query));
                 }
                 if (property !== "listProjectionEvents") {
                   return Reflect.get(target, property, receiver);
