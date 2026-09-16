@@ -12,7 +12,7 @@
  * described here. A local stand-in: when VC-353's background-load generator
  * lands, this should call that instead of rolling its own busy loop.
  *
- *   pnpm -C apps/desktop run build
+ *   pnpm run build
  *   node apps/desktop/e2e/sidebar-transition-bench.mjs --label after --busy 0
  *   node apps/desktop/e2e/sidebar-transition-bench.mjs --label after --busy 2
  *

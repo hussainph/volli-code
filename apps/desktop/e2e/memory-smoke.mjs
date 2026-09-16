@@ -16,7 +16,7 @@
  *      scrollback limit caps residency (delta2 ≈ 0) or keeps growing.
  *
  *   Run:
- *     pnpm -C apps/desktop run build
+ *     pnpm run build
  *     node apps/desktop/e2e/memory-smoke.mjs [N_SESSIONS]
  */
 import { execFileSync } from "node:child_process";

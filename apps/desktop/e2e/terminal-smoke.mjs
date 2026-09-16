@@ -13,11 +13,12 @@
  * text is for is the other half: that a terminal is still PAINTED, and painted
  * with the same content, after something moved it.
  *
- * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
- * wired into `vp test`.
+ * Needs a display and the built app; it is not part of `vp test`. CI runs it
+ * through `apps/desktop/scripts/run-smokes.mjs` (boot tier), and the same
+ * script runs it locally.
  *
  *   Run:
- *     pnpm -C apps/desktop run build      # produce dist/ + dist-electron/
+ *     pnpm run build                     # produce dist/ + dist-electron/
  *     node apps/desktop/e2e/terminal-smoke.mjs
  *
  *   Requires: playwright-core (devDependency of @volli/desktop).

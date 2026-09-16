@@ -27,7 +27,7 @@
  *
  * Like terminal-smoke.mjs this is a MANUALLY-RUN smoke (display + built app):
  *
- *   pnpm -C apps/desktop run build
+ *   pnpm run build
  *   node apps/desktop/e2e/ghostty-config-smoke.mjs
  */
 import { promises as fs } from "node:fs";

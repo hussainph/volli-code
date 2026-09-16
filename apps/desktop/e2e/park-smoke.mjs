@@ -16,7 +16,7 @@
  *      re-parks once the work is done — no silent failure while frozen.
  *
  *   Run:
- *     pnpm -C apps/desktop run build
+ *     pnpm run build
  *     node apps/desktop/e2e/park-smoke.mjs
  */
 import { execFileSync } from "node:child_process";
