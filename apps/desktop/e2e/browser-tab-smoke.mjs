@@ -668,15 +668,46 @@ async function main() {
       if (parentTitle === undefined) throw new Error("active second-fixture tab has no title");
       const expectedParentTitle = `${parentTitle};popup:false`;
       const windowsBefore = await osWindowCount(app);
-      const click = await clickRemoteLink(app, secondUrl, "Open managed popup");
+
+      // The fixture's handler rewrites document.title on EVERY landed click,
+      // before it ever looks at what window.open returned. That makes the
+      // parent's ";popup:" receipt the one honest witness that the synthetic
+      // press reached the page at all — and CDP input can be dropped outright
+      // on a loaded runner, where the plane is mid-attach when the press
+      // dispatches. That is how this check went red in CI with NEITHER label
+      // ever changing: not a product fault, a press that never arrived.
+      //
+      // So re-press only while the receipt is missing. A press that landed is
+      // never replayed, so the product still gets exactly one popup to open and
+      // the by-title tab lookups below stay unambiguous. Each attempt gives a
+      // landed press far longer to surface its receipt than a loopback title
+      // update needs, so replaying one would take a pathological stall.
+      let click;
+      let receipted = false;
+      for (let press = 1; press <= 3 && !receipted; press += 1) {
+        click = await clickRemoteLink(app, secondUrl, "Open managed popup");
+        receipted = await waitUntil(
+          `parent null receipt after press ${press}`,
+          async () => (await browserTabLabels(page)).includes(expectedParentTitle),
+          { timeout: 8000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+      }
+      if (!receipted) {
+        throw new Error(
+          `fixture never receipted the popup-link press — tabs=${JSON.stringify(
+            await browserTabLabels(page),
+          )}`,
+        );
+      }
+
+      // Only now the product's own half of the claim: the denied popup became a
+      // managed Browser Tab. Waiting for it separately is what makes a future
+      // red name which half broke, instead of one opaque compound timeout.
       await waitUntil(
-        "managed popup tab and parent null receipt",
-        async () => {
-          const labels = await browserTabLabels(page);
-          return labels.includes(expectedParentTitle) && labels.includes(POPUP_TITLE)
-            ? labels
-            : null;
-        },
+        "managed popup tab",
+        async () => (await browserTabLabels(page)).includes(POPUP_TITLE),
         { timeout: 20000 },
       );
       const windowsAfter = await osWindowCount(app);
