@@ -26,6 +26,7 @@ import {
 import { readSessionProvenance } from "./db/session-provenance-repo";
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
+import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
@@ -761,6 +762,7 @@ export function registerDataIpcHandlers(
     "volli:mcp-list": (input: McpProjectInput) => ({
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
+      operations: listMcpOperations(db, input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
     "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),

@@ -12,11 +12,22 @@ const estTokens = (text: string): number => Math.floor(text.length / 4);
 const PUBLISHED_COMMANDS = REFERENCE_VERBS.map((entry) => cliVerbName(entry.key));
 
 describe("bareHelpText", () => {
-  it("is a complete, grouped, footered reference under the 2,800-char budget", () => {
+  it("is a complete, grouped, footered reference under the 3,400-char budget", () => {
     const text = bareHelpText();
     // Budget is a tested contract (spec section 6): fail fast on drift.
-    expect(text.length).toBeLessThanOrEqual(2800);
-    expect(estTokens(text)).toBeLessThanOrEqual(700);
+    //
+    // Raised from 2,800 by VC-380, which adds eight MCP management verbs to
+    // the Agent Tool Surface section. The raise is deliberate and is the same
+    // ruling VC-329 made for `automation.run`: an agent that cannot DISCOVER a
+    // verb does not do nothing, it substitutes something worse — here, editing
+    // configuration files or shelling out to install an MCP server, which is
+    // precisely the behaviour these verbs exist to replace. The alternative
+    // considered was leaving the family unlisted (as `ticket.await` is, with
+    // the tool schema as its only discovery surface); it was rejected because
+    // a Ticket Session does NOT hold these verbs and so has no schema to read,
+    // which is exactly the reader "a wrong door beats no door" is written for.
+    expect(text.length).toBeLessThanOrEqual(3400);
+    expect(estTokens(text)).toBeLessThanOrEqual(850);
     for (const group of ["Read", "Write", "Session", "App"]) {
       expect(text).toContain(`${group}\n`);
     }

@@ -337,8 +337,17 @@ export interface RuntimeRecoveryRef {
  * counter, so they never advance either {@link AuthorityFallback} threshold:
  * the person already answered, and counting that answer as friction would
  * escalate twice over one decision.
+ *
+ * `confirm` is the fourth, and it is not a refusal at all (VC-380). Nothing
+ * denied the call and no allowance ran out: the operation is simply one that
+ * asks before it acts, because it starts a process as the user or breaks
+ * reattachment for older Sessions. It shares `budget`'s standing with the
+ * escalation counter — it advances no threshold — but it must not borrow
+ * `budget`'s name, or the denial ledger would count a confirmation as a spent
+ * allowance and escalate a Session that was never refused anything. The same
+ * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget";
+export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
 
 /**
  * One escalation: a question the runtime blocks on because its own policy keeps

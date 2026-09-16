@@ -75,6 +75,19 @@ import type {
   TicketSessionDelegation,
   TicketSessionDelegationClaims,
 } from "./session-runtime/delegation-policy";
+import {
+  mcpDisableTool,
+  mcpEnableTool,
+  mcpInstallTool,
+  mcpListTool,
+  mcpPreviewTool,
+  mcpRefreshTool,
+  mcpRemoveTool,
+  mcpToolsTool,
+} from "./mcp/verbs";
+import type { McpSettingsService } from "./mcp/settings";
+import type { McpVerbOptions } from "./mcp/verbs";
+import { optionalVerbText as optionalText, requiredVerbText as requiredText } from "./verb-input";
 import { sessionCreateCommandId } from "./session-runtime/sessions";
 import { startSessionModelOverride, startSessionOperation } from "./session-runtime/start-session";
 import type { StartSessionModelChoice, StartSessionPorts } from "./session-runtime/start-session";
@@ -150,6 +163,12 @@ export interface AgentToolDoorOptions extends Omit<
    * the process's live subagent registry and is composed after this door.
    */
   delegate: () => Delegations | null;
+  /**
+   * The MCP settings owner (VC-380), resolved per call like every other host
+   * here. `null` reads as "no MCP settings this launch" — the database never
+   * opened — and each MCP verb refuses in words rather than throwing.
+   */
+  mcp: () => McpSettingsService | null;
 }
 
 /** A refusal the model reads and can act on. Never a thrown error. */
@@ -174,19 +193,6 @@ export type VerbBudgetAsk = (
 /** The wire name the model called this verb by, read off the registry's own projection. */
 function wireToolName(verb: VerbToolKey): string {
   return VERB_TOOLS.find((entry) => entry.key === verb)?.tool.name ?? verb;
-}
-
-/** One optional string field, trimmed, or a refusal naming the field. */
-function optionalText(
-  input: Readonly<Record<string, unknown>>,
-  field: string,
-): { ok: true; value: string | undefined } | { ok: false; text: string } {
-  const raw = input[field];
-  if (raw === undefined || raw === null) return { ok: true, value: undefined };
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    return { ok: false, text: `\`${field}\` must be a non-empty string when given.` };
-  }
-  return { ok: true, value: raw };
 }
 
 /**
@@ -650,25 +656,6 @@ function sendWithdrawal(signal: AbortSignal): {
 }
 
 /**
- * One required string field, trimmed, or a refusal naming the field.
- *
- * Separate from {@link optionalText} rather than a flag on it: a required field
- * that is absent and one that is blank are the same mistake to the model, and
- * both have to be told in a sentence rather than by a schema error.
- */
-function requiredText(
-  input: Readonly<Record<string, unknown>>,
-  field: string,
-  hint: string,
-): { ok: true; value: string } | { ok: false; text: string } {
-  const raw = input[field];
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    return { ok: false, text: `\`${field}\` is required: ${hint}` };
-  }
-  return { ok: true, value: raw.trim() };
-}
-
-/**
  * One saved Automation, found the way a person finds one: by what it is called.
  *
  * Matched case-insensitively, and by id as well, so an id read out of a Run
@@ -943,7 +930,32 @@ const VERB_TOOL_HANDLERS: VerbToolHandlers = {
       request,
       signal,
     ),
+  // The MCP management family (VC-380), appended after everything already
+  // frozen. Each reaches `mcp/verbs.ts`, which owns the preview/apply shape,
+  // the confirmation and the durable record; this table only binds the ports.
+  //
+  // `budgetAsk` is lent to the two destructive verbs under its real job here:
+  // the attachment's parked-question machinery, which the door already carries
+  // for every verb call. The cause it raises is a `confirm.*` one, so the
+  // ledger counts a confirmation apart from a spent budget.
+  "mcp.list": (options, session) => mcpListTool(mcpPorts(options), session),
+  "mcp.preview": (options, session, request, signal) =>
+    mcpPreviewTool(mcpPorts(options), session, request, signal),
+  "mcp.install": (options, session, request, signal, budgetAsk) =>
+    mcpInstallTool(mcpPorts(options), session, request, signal, budgetAsk),
+  "mcp.refresh": (options, session, request, signal) =>
+    mcpRefreshTool(mcpPorts(options), session, request, signal),
+  "mcp.enable": (options, session, request) => mcpEnableTool(mcpPorts(options), session, request),
+  "mcp.disable": (options, session, request) => mcpDisableTool(mcpPorts(options), session, request),
+  "mcp.tools": (options, session, request) => mcpToolsTool(mcpPorts(options), session, request),
+  "mcp.remove": (options, session, request, signal, budgetAsk) =>
+    mcpRemoveTool(mcpPorts(options), session, request, signal, budgetAsk),
 };
+
+/** The MCP family's slice of this door's options, narrowed at the binding. */
+function mcpPorts(options: AgentToolDoorOptions): McpVerbOptions {
+  return { db: options.db, mcp: options.mcp, now: options.now };
+}
 
 /**
  * The one closure the Pi adapter hands every attachment that holds a verb.

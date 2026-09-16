@@ -138,6 +138,31 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
     "automation.run",
     "session.delegate",
     "session.await",
+    // The MCP management family (VC-380), in the `project` bundle ALONE.
+    //
+    // The decision is about blast radius, not about danger. Installing an MCP
+    // server changes what every Session created in this project afterwards is
+    // handed — a project-wide, durable act whose effect outlives the Session
+    // that performed it. That is a Board Session's business by definition. A
+    // Ticket Session is scoped to executing one Ticket; letting it rewrite the
+    // project's tool supply would be the same category error as letting it
+    // start work on another Ticket, which `session.start` already refuses.
+    //
+    // A Ticket Session that genuinely needs one receives it as a durable grant
+    // (VC-183's mechanism, the `grants` parameter below), which is a decision a
+    // person records rather than a default this map hands out.
+    //
+    // `subagent` is not a judgment call at all: its bundle is empty, and
+    // {@link ROLE_CAPABILITY_POLICY} withholds `ask_user`, so a child could not
+    // put the install warning in front of anybody even if it held the verb.
+    "mcp.list",
+    "mcp.preview",
+    "mcp.install",
+    "mcp.refresh",
+    "mcp.enable",
+    "mcp.disable",
+    "mcp.tools",
+    "mcp.remove",
   ]) as readonly VerbToolKey[],
   // `session.delegate` in the Ticket bundle is deliberate (VC-9): an executor
   // needs "go look at this and tell me" as much as an orchestrator does, and

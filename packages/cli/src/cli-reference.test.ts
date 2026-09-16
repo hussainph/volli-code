@@ -32,6 +32,16 @@ import { parseCliArgs } from "./parser";
  * answers WRONG_DOOR with the surface that does hold it, instead of a usage
  * error about options the caller was never going to get to use.
  *
+ * **VC-380 moves them again, on VC-163's own terms.** Eight MCP management
+ * verbs join the registry as tool-only control-tier entries, and every line
+ * below followed without a character of `help.ts` changing: the family renders
+ * under the Agent Tool Surface heading, each detail page names its real door
+ * and its derived tier, `volli help mcp` answers with the subcommand list, and
+ * typing `volli mcp install` at a shell answers WRONG_DOOR with the surface
+ * that does hold it. The bare reference's character budget was raised to match
+ * (see `help.test.ts` for why that raise is the discoverability ruling rather
+ * than drift).
+ *
  * The command list, group words and topics below are LITERAL on purpose. If
  * they were derived from whatever table currently backs help, a verb silently
  * dropped from that table would drop out of the oracle with it and the
@@ -92,6 +102,18 @@ const REFERENCE_COMMANDS = [
   "doctor",
   "help",
   "automation run",
+  // The MCP management family (VC-380). Tool-only like the agent-control
+  // family above it, so each renders its real door and its derived tier, and
+  // typing one at a shell answers WRONG_DOOR rather than a usage error about
+  // options the caller was never going to reach.
+  "mcp list",
+  "mcp preview",
+  "mcp install",
+  "mcp refresh",
+  "mcp enable",
+  "mcp disable",
+  "mcp tools",
+  "mcp remove",
 ] as const;
 
 /** The commands whose first `rest` token is consumed as `<id>`. */
@@ -126,6 +148,7 @@ const GROUP_WORDS = [
   "session",
   "app",
   "prompt",
+  "mcp",
 ] as const;
 
 /** The local reference topics (not commands). */
