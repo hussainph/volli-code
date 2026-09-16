@@ -126,6 +126,15 @@ export interface SessionEngine {
    * asking `getSession` for it makes that caller fold the same log twice.
    */
   getBaseSession(query: GetSessionQuery): Promise<Session | null>;
+  /**
+   * Every Session in scope, projected.
+   *
+   * Each row is folded atomically, but the listing as a whole is not one
+   * snapshot across Sessions: rows are members as of one instant, and their
+   * histories are folded at or after it (VC-388). The implementation states
+   * why that is sound; callers only need to know not to read a cross-Session
+   * invariant out of two rows of one listing.
+   */
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   /**
@@ -709,6 +718,35 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.getSession(query.sessionId));
     },
 
+    /**
+     * Every Session in scope, folded — in chunks, releasing the ledger and the
+     * host's event loop between them (VC-388).
+     *
+     * ── WHAT THIS DELIBERATELY GIVES UP ───────────────────────────────────
+     * A listing is NO LONGER a single point-in-time snapshot across Sessions.
+     * It is membership and every base row as of ONE instant, and each
+     * Session's EVENTS folded at or after that instant. Two rows in one
+     * listing may therefore reflect logs read microseconds apart.
+     *
+     * That is a real weakening of what a single transaction promised, so it
+     * is stated rather than left to be discovered. What makes it sound:
+     *
+     *  - Sessions are independent aggregates. No Session's projection reads
+     *    another's log, so there is no cross-Session invariant for the skew
+     *    to break. A caller that ever needs two Sessions to agree about one
+     *    fact needs a different read, and needed one before this too.
+     *  - Each Session's own fold is still atomic: it happens inside one
+     *    transaction, so no projection is ever half-applied.
+     *  - Base rows are carried from the membership transaction, not re-read
+     *    per chunk. The one field that moves under the insert-only contract
+     *    (`ticketId`, cleared by a Ticket delete) is therefore uniform across
+     *    the listing — MORE consistent than re-reading would be, not less.
+     *  - A row cannot disappear mid-listing except by project delete, which
+     *    takes the entire project with it.
+     *
+     * What it buys: the main process and every writer get a turn in between,
+     * instead of waiting out a fold whose length is the project's roster.
+     */
     async listSessions(query) {
       // Membership is decided once, in its own transaction, and the rows it
       // returns are carried to the folds below rather than re-read there.
