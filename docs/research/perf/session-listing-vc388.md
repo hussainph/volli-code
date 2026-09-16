@@ -42,13 +42,24 @@ was not about.
 60 Sessions × 453 events each, checkpoints seeded (largest checkpoint row
 54,685 bytes):
 
-| arm | p50 | p95 | longest block |
-|---|---|---|---|
-| one transaction, no yield (the old shape) | 12.5 ms | 14.4 ms | **15.7 ms** |
-| chunked + yielding, cold | 13.1 ms | — | **3.6 ms** |
-| chunked + yielding, warm (fold cache) | 3.9 ms | 16.8 ms | 4.5 ms |
-| chunked + yielding, warm, cache defeated | 16.3 ms | 21.3 ms | 6.0 ms |
-| no checkpoint rows at all | 52.5 ms | 66.2 ms | 19.3 ms |
+| arm | folds? | p50 | p95 | longest block |
+|---|---|---|---|---|
+| one transaction, no yield (the old shape) | no — reads checkpoint + tail only | 12.5 ms | 14.4 ms | **15.7 ms** |
+| chunked + yielding, cold | yes (`listSessions`) | 13.1 ms | — | **3.6 ms** |
+| chunked + yielding, warm (fold cache) | yes (`listSessions`) | 3.9 ms | 16.8 ms | 4.5 ms |
+| chunked + yielding, warm, cache defeated | yes (`listSessions`) | 16.3 ms | 21.3 ms | 6.0 ms |
+| no checkpoint rows at all | yes (`listSessions`) | 52.5 ms | 66.2 ms | 19.3 ms |
+
+**Read the `folds?` column before comparing rows.** The three `listSessions`
+arms run the shipped code, which projects each Session from its checkpoint
+and tail. The "old shape" arm does not: it re-reads the checkpoint row and
+the tail inside one transaction and stops there, so its number is the old
+code's *read* cost without the old code's *fold* cost. The real pre-VC-388
+block was therefore longer than 15.7 ms, not shorter — the comparison
+understates the improvement rather than overstating it, but it is not the
+like-for-like it looks like. (Flagged in review; re-measuring the old arm
+through `projectStoredSession` on a quiet machine is the honest fix, and it is
+listed under "Still open".)
 
 The old shape's 15.7 ms is a dropped frame at 60 Hz, and it grows with the
 roster — the fold is O(Sessions) with nothing in between. The chunked shape's
@@ -57,7 +68,12 @@ block is bounded by the chunk, not by the roster.
 ## Chunk size × yield primitive
 
 This is the sweep that set both constants. Same roster, memo defeated, each
-pairing measured through the same transaction verb.
+pairing measured through the same transaction verb. **Like the "old shape"
+arm above, this sweep reads each Session's checkpoint and tail but does not
+fold them** — it isolates the cost of the chunk boundary and the yield
+primitive, which is what it was choosing between. Its chunk-8 `setImmediate`
+row (3.6 ms) agrees with the shipped listing's cold block (3.6 ms, which does
+fold), so the conclusion holds; the absolute numbers are a floor.
 
 | primitive | chunk | p50 | longest block |
 |---|---|---|---|
@@ -89,8 +105,9 @@ Two results, and they pull in opposite directions:
    work. At chunk 1 that is 59 clamped timers and it takes the listing from
    14.3 ms to **84.3 ms** — six times slower, to save 0.7 ms of blocking.
 
-So the primitive was fixed first: the default yield feature-detects
-`setImmediate`, which runs in the check phase with no floor. Then the chunk was
+So the primitive was fixed first: the desktop composition root injects
+`setImmediate` through `SessionEnginePorts.yieldToHost` (the engine owns no
+Node API, so its own default is the portable `setTimeout(0)`). Then the chunk was
 chosen for robustness rather than for the optimum — **8** is the size whose
 longest block stays inside a frame on *both* primitives (3.6 ms with
 `setImmediate`, 9.8 ms without). A host with a coarse timer degrades instead of
@@ -160,3 +177,10 @@ nobody is looking at, each costing one re-read when dropped.
   not investigated here. It means Sessions driven only by commands, never by
   observations, carry an unbounded fold until something else writes a
   checkpoint. Worth its own ticket.
+- The "old shape" arm and the chunk-size sweep read but do not fold (see the
+  `folds?` column). Re-measure both through `projectStoredSession` on a quiet
+  machine before quoting their absolute numbers anywhere else.
+- The `volli:session-list` IPC handler still runs `sessionListingRows` after
+  the chunked fold, and `readSessionProvenance` inside it is up to three
+  synchronous SQLite queries per Session in one unbroken block. The fold's
+  block is gone; this one is not measured here and is filed as VC-392.
