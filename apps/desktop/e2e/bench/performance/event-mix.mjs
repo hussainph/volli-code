@@ -301,13 +301,18 @@ export const EVENT_FAMILIES = Object.freeze(
       id: "context.reasoning_dropped",
       weight: 10,
       eventCount: 1,
-      // One path per dropped block, because that is the relationship the host
-      // writes: `paths` is the diagnostic coordinate of each thing `count`
-      // counts. The paths never cross to the renderer — the scrub drops them —
-      // so this family is also what keeps the fixture honest about a payload
-      // that is bigger on disk than it is on screen.
+      // One path per dropped block is the upper bound: the host collects
+      // `paths` into a Set, so duplicates collapse and `paths.length` can be
+      // smaller than `count`. The fixture writes the bound. `causes` is a Set
+      // too, unioned across messages, so a notice can name one cause or
+      // several — the renderer copy has a separate branch for the plural, and
+      // the fixture draws both. The paths never cross to the renderer — the
+      // scrub drops them — so this family is also what keeps the fixture
+      // honest about a payload that is bigger on disk than it is on screen.
       build: (context) => {
         const count = 1 + context.pick(2);
+        const causeCount = 1 + context.pick(REASONING_CAUSES.length);
+        const causes = REASONING_CAUSES.slice(0, causeCount);
         return [
           {
             attachment: true,
@@ -316,7 +321,7 @@ export const EVENT_FAMILIES = Object.freeze(
               attachmentId: context.attachmentId,
               turnId: context.turnId,
               count,
-              causes: [REASONING_CAUSES[context.pick(REASONING_CAUSES.length)]],
+              causes,
               paths: Array.from({ length: count }, () => context.body(BODY_BYTES.reasoningPath)),
             },
           },

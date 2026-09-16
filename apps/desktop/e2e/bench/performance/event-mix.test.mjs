@@ -74,6 +74,20 @@ describe("performance fixture event mix", () => {
     expect([...kinds]).toContain("context.reasoning_dropped");
   });
 
+  // The host unions `causes` across messages, so a notice can name several;
+  // the renderer copy has its own branch for that plural. `pick: () => 0`
+  // above only ever draws one, so this arm draws the top of every range and
+  // proves the multi-cause shape crosses the edge as well.
+  it("ships a multi-cause reasoning drop across the renderer edge", () => {
+    const family = EVENT_FAMILIES.find((entry) => entry.id === "context.reasoning_dropped");
+    const [item] = family.build({ ...buildContext, pick: (bound) => bound - 1 });
+    expect(item.payload.causes.length).toBeGreaterThan(1);
+    expect(new Set(item.payload.causes).size).toBe(item.payload.causes.length);
+    const shipped = JSON.parse(JSON.stringify(scrubSessionEventPayload(item.payload)));
+    const read = decodeRendererSessionEventPayload(shipped, `${family.id}.payload`);
+    expect(read.causes).toEqual(item.payload.causes);
+  });
+
   it("builds payloads accepted by the production write gate", () => {
     const context = buildContext;
     let sequence = 1;
