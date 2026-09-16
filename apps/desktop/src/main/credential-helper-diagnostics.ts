@@ -11,10 +11,7 @@
  * (`worktree/net.ts`), never on a settings pane that renders whether or not
  * anything is wrong.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runGitCapturingAsync } from "./worktree/git";
 
 /**
  * A GUI-capable credential helper Git itself reported for a project. Main-local
@@ -49,8 +46,10 @@ interface CredentialHelperConfigEntry {
 function processDeps(): CredentialHelperDiagnosticsDeps {
   return {
     async readCredentialHelperConfig(cwd) {
-      const { stdout } = await execFileAsync(
-        "git",
+      // This is asked only after a network verb has already failed, so it is a
+      // rare call — but it is still a git child in the main process and belongs
+      // inside the same bound.
+      return runGitCapturingAsync(
         [
           "config",
           "--includes",
@@ -60,9 +59,8 @@ function processDeps(): CredentialHelperDiagnosticsDeps {
           "--get-all",
           "credential.helper",
         ],
-        { cwd, encoding: "utf8" },
+        cwd,
       );
-      return stdout;
     },
   };
 }

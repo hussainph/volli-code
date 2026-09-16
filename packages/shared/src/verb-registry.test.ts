@@ -10,6 +10,7 @@ import {
   REFERENCE_VERBS,
   referenceVerbsFrom,
   VERB_REGISTRY,
+  VERB_TOOLS,
   verbEntry,
   verbTier,
 } from "./verb-registry";
@@ -177,6 +178,20 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   // — tool-only, Role-gated, never on the socket, because a CLI verb must
   // never wait.
   "session.await": "control",
+  // MCP management (VC-380). Control tier for the reason the whole family is
+  // tool-only: an install starts a process as the user or opens a network
+  // relationship on the project's behalf, which is exactly the misuse a
+  // same-uid process must not be able to reach through the socket. Even
+  // `mcp.list` stays off it — a project's configured servers and their
+  // provenance are the map an attacker would want first.
+  "mcp.list": "control",
+  "mcp.preview": "control",
+  "mcp.install": "control",
+  "mcp.refresh": "control",
+  "mcp.enable": "control",
+  "mcp.disable": "control",
+  "mcp.tools": "control",
+  "mcp.remove": "control",
   // The supervision pair (VC-86), born control tier the same way: control
   // over OTHER agents is only safe where the caller is unspoofable, so
   // neither has ever had a socket door to shut.
@@ -569,7 +584,15 @@ describe("the registry table", () => {
     const defaultPreviews = (VERB_REGISTRY as readonly VerbEntry[]).filter(
       (entry) => entry.previewsByDefault === true,
     );
-    expect(defaultPreviews.map((entry) => entry.key)).toEqual(["label.merge"]);
+    // VC-380 adds the two MCP writes on the same ground `label.merge` earned
+    // it: both are destructive and not usefully reversible — an install starts
+    // a process or opens a network relationship, and a removal breaks
+    // reattachment for older Sessions that cannot be put back.
+    expect(defaultPreviews.map((entry) => entry.key)).toEqual([
+      "label.merge",
+      "mcp.install",
+      "mcp.remove",
+    ]);
     for (const entry of defaultPreviews) {
       expect(
         entry.options.some((option) => option.name === "--dry-run"),
@@ -762,6 +785,9 @@ describe("REFERENCE_VERBS", () => {
     // — start (VC-163), stop, send (VC-86) and delegate — plus the
     // orchestrator's `automation.run` (VC-134, listed by VC-329), each listed
     // so a wrong door teaches instead of reading as no door.
+    // The MCP family joins them (VC-380), listed for `automation.run`'s reason:
+    // an agent that cannot discover a verb substitutes something worse — here,
+    // hand-editing configuration or shelling out.
     expect(discoverable.filter((key) => !reference.has(key))).toEqual([
       "ticket.archive",
       "session.start",
@@ -769,6 +795,14 @@ describe("REFERENCE_VERBS", () => {
       "session.send",
       "session.delegate",
       "automation.run",
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 
@@ -777,5 +811,130 @@ describe("REFERENCE_VERBS", () => {
     const socket = new Set<string>(AGENT_COMMANDS);
     expect([...socket].filter((key) => !reference.has(key))).toEqual(["session.harness", "hook"]);
     expect([...reference].filter((key) => !socket.has(key))).toEqual(["app.launch", "help"]);
+  });
+});
+
+/**
+ * The MCP management family (VC-380).
+ *
+ * VC-8 drew the line these tests keep: an MCP server's own tools are NOT Volli
+ * verbs and never enter this registry — they are dynamic, settings-backed, and
+ * frozen into a Session's surface by id. The verbs that MANAGE those servers
+ * are ordinary Volli verbs and belong here like any other.
+ */
+const MCP_VERBS = [
+  "mcp.list",
+  "mcp.preview",
+  "mcp.install",
+  "mcp.refresh",
+  "mcp.enable",
+  "mcp.disable",
+  "mcp.tools",
+  "mcp.remove",
+] as const;
+
+describe("the MCP management verbs (VC-380)", () => {
+  it("declares all eight as control tier: tool-only, Role-gated, off the socket", () => {
+    for (const key of MCP_VERBS) {
+      const entry = verbEntry(key);
+      expect(entry, key).toBeDefined();
+      expect(entry!.accessModes, key).toEqual(["tool"]);
+      expect(entry!.actor, key).toBe("role");
+      expect(verbTier(entry!), key).toBe("control");
+      expect(AGENT_COMMANDS as readonly string[], key).not.toContain(key);
+      expect(entry!.handler, key).toEqual({ site: "main", id: key });
+    }
+  });
+
+  it("projects a wire name a provider accepts, with no caller field in any schema", () => {
+    for (const key of MCP_VERBS) {
+      const tool = verbEntry(key)!.tool;
+      expect(tool?.name, key).toBe(key.replace(".", "_"));
+      expect(tool!.description.length, key).toBeGreaterThan(0);
+      for (const field of tool!.input) {
+        expect(field.name, `${key}.${field.name}`).not.toMatch(/^-/);
+      }
+      // The door binds the Session and its project. Nothing in the input could
+      // name another, because there is no field for one.
+      const names = tool!.input.map((field) => field.name);
+      for (const forbidden of ["project", "projectId", "session", "actor"]) {
+        expect(names, key).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("makes the two destructive verbs preview unless explicitly told to apply", () => {
+    for (const key of ["mcp.install", "mcp.remove"] as const) {
+      const entry = verbEntry(key)!;
+      expect(entry.previewsByDefault, key).toBe(true);
+      const confirm = entry.tool!.input.find((field) => field.name === "confirm");
+      expect(confirm, key).toBeDefined();
+      expect(confirm?.required, key).toBeUndefined();
+      expect(confirm?.type === "enum" ? confirm.values : [], key).toEqual(["preview", "apply"]);
+    }
+    // Every other MCP verb is an ordinary call: previewing a listing or a
+    // toggle would be ceremony over an act that is already reversible.
+    for (const key of MCP_VERBS.filter((candidate) => !/install|remove/.test(candidate))) {
+      expect(verbEntry(key)!.previewsByDefault, key).toBeUndefined();
+    }
+  });
+
+  it("warns in the schema itself about the two hazards a caller cannot see", () => {
+    const install = verbEntry("mcp.install")!.tool!.description;
+    expect(install).toMatch(/runs .*as you|as you, with your/i);
+    expect(install).toMatch(/remote/i);
+    // The frozen-surface fact, told where a model will read it before calling.
+    expect(install).toMatch(/next Session|new Session/i);
+
+    const remove = verbEntry("mcp.remove")!.tool!.description;
+    expect(remove).toMatch(/reattach/i);
+    expect(remove).toContain("mcp_disable");
+  });
+
+  it("spells args as the array the whole MCP ecosystem spells it as", () => {
+    // Claude Code, Claude Desktop, Cursor, VS Code and Zed all use
+    // `{ command, args: string[] }`. A model that has read any MCP
+    // documentation sends an array, and a schema declaring `string` would meet
+    // the ecosystem's own idiom with a provider-level type error.
+    for (const key of ["mcp.preview", "mcp.install"] as const) {
+      const args = verbEntry(key)!.tool!.input.find((field) => field.name === "args");
+      expect(args?.type, key).toBe("array");
+      expect(args?.required, key).toBeUndefined();
+    }
+  });
+
+  it("offers provenance as recorded metadata, never as a promise to fetch or verify", () => {
+    const install = verbEntry("mcp.install")!;
+    const names = install.tool!.input.map((field) => field.name);
+    expect(names).toContain("source");
+    expect(names).toContain("version");
+    expect(names).toContain("digest");
+    const digest = install.tool!.input.find((field) => field.name === "digest");
+    expect(digest!.description).toMatch(/record|not verif|never verif/i);
+    // Volli downloads nothing: the notes must not imply a package manager.
+    expect(JSON.stringify(install.notes)).toMatch(/already on PATH|downloads nothing/i);
+  });
+
+  it("declares what each write does and what it explicitly does not", () => {
+    for (const key of ["mcp.install", "mcp.remove"] as const) {
+      const effects = verbEntry(key)!.effects;
+      expect(
+        effects?.durableWrites.map((write) => write.resource),
+        key,
+      ).toContain("mcp-operation");
+      expect(effects?.humanVisible.length, key).toBeGreaterThan(0);
+      expect(effects?.nonEffects.length, key).toBeGreaterThan(0);
+      // The one non-effect every MCP write shares, and the one a model most
+      // needs: the Session making the call does not gain the tools.
+      expect(JSON.stringify(effects?.nonEffects), key).toMatch(/frozen|current Session/i);
+    }
+  });
+
+  it("appends the family after every previously frozen tool position", () => {
+    const keys = VERB_TOOLS.map((entry) => entry.key);
+    expect(keys.slice(-MCP_VERBS.length)).toEqual([...MCP_VERBS]);
+    // `session.await` was the last tool before this family; nothing may be
+    // inserted ahead of it, because declaration order IS the frozen tool order.
+    expect(keys.at(-(MCP_VERBS.length + 1))).toBe("session.await");
   });
 });

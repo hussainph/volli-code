@@ -25,6 +25,7 @@ import {
   isUnderDeletion,
   resetDeletionLeasesForTest,
 } from "./deletion-lease";
+import { resetRepositoryTurnsForTest, withRepositoryWorktreeTurn } from "./repository-turn";
 import { scriptedGit } from "./scripted-git";
 import type { WorktreeDeps } from "./types";
 
@@ -51,11 +52,13 @@ beforeEach(() => {
     nextId: () => `id-${(minted += 1)}`,
   });
   resetDeletionLeasesForTest();
+  resetRepositoryTurnsForTest();
 });
 
 afterEach(() => {
   ctx.cleanup();
   resetDeletionLeasesForTest();
+  resetRepositoryTurnsForTest();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
 });
@@ -64,6 +67,13 @@ function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `volli-${prefix}-`));
   tempDirs.push(dir);
   return dir;
+}
+
+/** Lets real macrotasks run, so "it has not changed anything yet" is evidence. */
+async function settleCleanup(): Promise<void> {
+  for (let turn = 0; turn < 6; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function ageDir(dir: string, days: number): void {
@@ -742,6 +752,88 @@ describe("cleanupOrphans", () => {
     expect(acquireWorktreeStartLease(join(path, "src"))).toBeNull();
     deleting?.release();
     expect(acquireWorktreeStartLease(join(path, "src"))).not.toBeNull();
+  });
+
+  it("waits for the repository's turn before removing a confirmed orphan", async () => {
+    // The deletion lease orders this cleanup against work starting in one
+    // DIRECTORY; this orders its git command against other changes to the same
+    // REPOSITORY. Both mutations here run on the synchronous runner, so while
+    // one blocks no new async git child can start — but an async `worktree add`
+    // already running keeps going, which is the overlap the turn closes.
+    const f = fixture();
+    let releaseTurn!: () => void;
+    const turn = withRepositoryWorktreeTurn(
+      f.projectPath,
+      () => new Promise<void>((resolve) => (releaseTurn = resolve)),
+    );
+
+    const cleanup = cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath)]),
+    );
+    await settleCleanup();
+    expect(f.removed).toEqual([]);
+
+    releaseTurn();
+    await turn;
+    const { run } = await cleanup;
+
+    // It queued rather than skipping the item: a confirmed removal that lost a
+    // race to a Session start must still happen, just later.
+    expect(f.removed).toEqual([f.paths[0]]);
+    expect(run.items[0]).toEqual(expect.objectContaining({ state: "completed" }));
+  });
+
+  it("removes within the same settle budget when no turn is held", async () => {
+    // The negative control for the two turn tests here. Without it,
+    // `expect(f.removed).toEqual([])` proves only that `settleCleanup()` is too
+    // short for the pipeline to have reached its mutation — which would still
+    // pass with the repository turn deleted.
+    const f = fixture();
+    const cleanup = cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath)]),
+    );
+    await settleCleanup();
+    expect(f.removed).toEqual([f.paths[0]]);
+    await cleanup;
+  });
+
+  it("waits for the repository's turn before pruning stale records", async () => {
+    const f = fixture();
+    let releaseTurn!: () => void;
+    const turn = withRepositoryWorktreeTurn(
+      f.projectPath,
+      () => new Promise<void>((resolve) => (releaseTurn = resolve)),
+    );
+
+    const cleanup = cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([metadataItem(f.stale[0]!, f.projectPath)]),
+    );
+    await settleCleanup();
+    // `prune` acts on the whole repository and deletes admin records whose
+    // directory is missing — the last thing that may run beside an `add`.
+    expect(f.pruned).toEqual([]);
+
+    releaseTurn();
+    await turn;
+    const { run } = await cleanup;
+
+    expect(f.pruned).toEqual([f.projectPath]);
+    expect(run.items[0]).toEqual(expect.objectContaining({ state: "completed" }));
+  });
+
+  it("prunes within the same settle budget when no turn is held", async () => {
+    // The negative control for the prune path, on the same argument.
+    const f = fixture();
+    const cleanup = cleanupOrphans(
+      { worktree: f.deps, engine },
+      request([metadataItem(f.stale[0]!, f.projectPath)]),
+    );
+    await settleCleanup();
+    expect(f.pruned).toEqual([f.projectPath]);
+    await cleanup;
   });
 
   it("refuses to remove a checkout whose agent binding would not close", async () => {

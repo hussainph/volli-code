@@ -51,6 +51,7 @@ function record(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
         error: 'input schema root type must be "object"',
       },
     ],
+    provenance: { source: null, registryType: null, version: null, digest: null },
     stale: false,
     error: null,
     refreshedAt: 100,
@@ -132,5 +133,55 @@ describe("MCP server repository", () => {
     putMcpServer(ctx.db, record());
     ctx.db.prepare("DELETE FROM projects WHERE id = ?").run("p1");
     expect(listMcpServers(ctx.db, "p1")).toEqual([]);
+  });
+});
+
+describe("MCP server provenance (VC-380)", () => {
+  it("round-trips where a configuration came from, beside the catalog it discovered", () => {
+    const provenance = {
+      source: "registry.modelcontextprotocol.io/io.github.acme/files",
+      registryType: "npm" as const,
+      version: "1.4.2",
+      digest: "sha256:2f0c1d",
+    };
+
+    putMcpServer(ctx.db, record({ provenance }));
+
+    expect(getMcpServer(ctx.db, "server-1")?.provenance).toEqual(provenance);
+    expect(listMcpServers(ctx.db, "p1")[0]?.provenance).toEqual(provenance);
+  });
+
+  it("refuses to store provenance it could not read back honestly", () => {
+    expect(() =>
+      putMcpServer(
+        ctx.db,
+        record({
+          provenance: {
+            source: "tail\nsecret",
+            registryType: null,
+            version: null,
+            digest: null,
+          },
+        }),
+      ),
+    ).toThrow(/provenance source is invalid/);
+  });
+
+  it("keeps recorded provenance across a failed refresh, which changed nothing about origin", () => {
+    putMcpServer(
+      ctx.db,
+      record({
+        provenance: { source: "npm", registryType: "npm", version: "1.0.0", digest: null },
+      }),
+    );
+
+    const failed = markMcpServerRefreshFailure(ctx.db, "server-1", "Handshake failed.", 200);
+
+    expect(failed?.provenance).toEqual({
+      source: "npm",
+      registryType: "npm",
+      version: "1.0.0",
+      digest: null,
+    });
   });
 });

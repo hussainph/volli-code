@@ -38,6 +38,7 @@
  */
 
 import { REASONING_LEVELS } from "./agent-runtime";
+import { MCP_REGISTRY_TYPES } from "./mcp";
 import { HELP_TOPIC_NAMES } from "./agent-product";
 import { COLUMN_VOCABULARY } from "./agent-surface";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
@@ -108,7 +109,16 @@ export type VerbTier = "read" | "coordination" | "control";
 /** One durable write a voluntary verb intends. */
 export interface VerbDurableWrite {
   readonly resource: string;
-  readonly operation: "create" | "update" | "append";
+  /**
+   * What the write does to the resource.
+   *
+   * `delete` is here because `mcp.remove` genuinely deletes a row (VC-380), and
+   * the three softer words all misdescribe that. This is the canonical
+   * side-effect contract that detailed help and previews render verbatim, so a
+   * delete announced as an "update" would understate the one verb in the family
+   * a caller cannot undo by calling something else.
+   */
+  readonly operation: "create" | "update" | "append" | "delete";
   readonly summary: string;
 }
 
@@ -181,6 +191,14 @@ export const VERB_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
  * compiles these into the runtime's schema types; keeping the vocabulary
  * closed is what makes that compilation total rather than best-effort, and
  * keeps `@volli/shared` free of any schema library.
+ *
+ * `array` is a list of strings and nothing else (VC-380). It was added for one
+ * reason worth stating, because the vocabulary is meant to grow reluctantly:
+ * an MCP server's `args` is spelled `string[]` by every client in the
+ * ecosystem, so a model that has read any MCP documentation will send an array
+ * whatever our schema says. A `string` declaration would not have made those
+ * calls arrive as strings; it would have made them arrive as provider-level
+ * type errors.
  */
 export type VerbToolField = {
   /** The field name the model supplies. Never an argv token. */
@@ -192,6 +210,7 @@ export type VerbToolField = {
 } & (
   | { readonly type: "string" }
   | { readonly type: "number" }
+  | { readonly type: "array" }
   | { readonly type: "enum"; readonly values: readonly string[] }
   | { readonly type: "object"; readonly fields: readonly VerbToolField[] }
 );
@@ -317,6 +336,80 @@ const MODEL_TIER_DESCRIPTION = [
   "The tier's stored reasoning level comes with it unless `reasoning` is given.",
   ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
 ].join(" ");
+
+/**
+ * The confirmation field the two destructive MCP verbs share (VC-380).
+ *
+ * An enum rather than a boolean because the registry's field vocabulary is
+ * closed at `string | number | enum | object`, and widening it for one flag
+ * would change how every tool schema is compiled. The two values also read
+ * better than a boolean would at the call site: `confirm: "apply"` says what
+ * the call does, where `apply: true` only says that something is true.
+ *
+ * Optional, and its absence IS the preview. A required field would make the
+ * safe form the one a caller has to remember, which is the arrangement
+ * `previewsByDefault` exists to invert.
+ */
+const MCP_CONFIRM_FIELD: VerbToolField = {
+  name: "confirm",
+  type: "enum",
+  values: ["preview", "apply"],
+  description:
+    'Omit it, or pass "preview", to see the warning and what would happen while writing nothing. Pass "apply" only after reading that warning, to actually perform the operation.',
+};
+
+/** The id field every verb that names an already-configured server shares. */
+const MCP_SERVER_ID_FIELD: VerbToolField = {
+  name: "server",
+  type: "string",
+  required: true,
+  description: "The server's id, as mcp_list prints it.",
+};
+
+/**
+ * How a caller SPELLS one MCP server, shared by preview and install.
+ *
+ * Two transports and one flat field set, rather than a nested object per
+ * transport: `command` and `url` are alternatives the door refuses to take
+ * together, and stating that in one sentence a model reads is more reliable
+ * than a schema union it has to infer. The absent fields are the point of the
+ * ticket's scope — there is no `headers`, no `env` and no `token`, because
+ * authenticated servers are still deferred from VC-8 and a field would promise
+ * something the transport layer will not do.
+ */
+const MCP_SERVER_FIELDS: readonly VerbToolField[] = [
+  {
+    name: "id",
+    type: "string",
+    required: true,
+    description:
+      "A short stable id for this server, letters, digits, dashes and underscores only. Installing the same id twice updates that server rather than adding a second one.",
+  },
+  {
+    name: "name",
+    type: "string",
+    required: true,
+    description: "The display name a person will see in Settings, for example 'Acme Files'.",
+  },
+  {
+    name: "command",
+    type: "string",
+    description:
+      "For a LOCAL server: the executable to run, which must already be on PATH, for example 'npx' or 'uvx'. Volli installs nothing. Give this or url, never both.",
+  },
+  {
+    name: "args",
+    type: "array",
+    description:
+      'Arguments for the local command, one per entry, exactly as an MCP config spells them: ["-y", "@acme/files-mcp"]. An entry may contain spaces. Ignored for a remote server.',
+  },
+  {
+    name: "url",
+    type: "string",
+    description:
+      "For a REMOTE server: its streamable HTTP endpoint, http or https, with no credentials in the URL. Give this or command, never both.",
+  },
+];
 
 /**
  * Every agent-facing verb, in the order the socket projection has always had.
@@ -2216,6 +2309,411 @@ export const VERB_REGISTRY = [
             "Wake immediately on the first matching event after this opaque cursor. Start with the cursor returned by session_start, session_send or session_delegate, then copy each wake or timeout cursor unchanged; omit it only to start watching from now.",
         },
       ],
+    },
+    options: [],
+  },
+  // ── The MCP management family (VC-380) ───────────────────────────────────
+  //
+  // Appended after `session.await` for the reason that entry states about
+  // itself: registry declaration order IS the frozen tool order, so anything
+  // inserted earlier shifts every verb after it inside every already-frozen
+  // surface record, and a shifted tool array throws away the Cache Prefix.
+  //
+  // Eight verbs and not one `mcp` verb with a `command` field, deliberately.
+  // A model choosing between `mcp_preview` and `mcp_install` is choosing
+  // between "look" and "change", which is the distinction the whole family
+  // exists to make legible; a single verb with a mode string would put that
+  // choice inside an argument, where no schema, no preview and no Role bundle
+  // could see it.
+  //
+  // What is NOT here is as deliberate: an MCP server's own tools are dynamic
+  // settings data, frozen into a Session's surface by id (VC-8), and they never
+  // become registry entries. These verbs manage the servers; they are not the
+  // servers' tools.
+  {
+    key: "mcp.list",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.list" },
+    listed: true,
+    referenceOrder: 37,
+    group: "App",
+    summary: "List this project's configured MCP servers, their tools, and where each came from.",
+    example: "volli mcp list",
+    notes: [
+      "Reads the project's own configuration; nothing is connected and no server process is started.",
+      "Provenance is what an install RECORDED, never what Volli verified: a version is what was asked for and a digest is what was claimed.",
+      "A server marked stale kept its last working tool list after a failed refresh; mcp_refresh retries it.",
+    ],
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "Nothing changes: this reads the same configuration Settings → Configure → MCP Servers shows.",
+      ],
+      nonEffects: [
+        "No server is connected, no process is started, and no Session's tool list changes.",
+      ],
+    },
+    tool: {
+      name: "mcp_list",
+      description: [
+        "List the MCP servers configured for this project: each server's transport, whether it is on, which of its tools are selected, whether its catalog went stale, and the provenance recorded when it was installed.",
+        "Read this before installing anything, so an install that already exists becomes a refresh instead of a duplicate.",
+        "It connects to nothing and starts no process.",
+      ].join(" "),
+      input: [],
+    },
+    options: [],
+  },
+  {
+    // Connect and look, with nothing written. Separate from `mcp.install`'s
+    // own preview because the two answer different questions: this one asks
+    // "what does this server offer", and an install preview asks "what would
+    // change here". A caller exploring a server it may not want should not
+    // have to phrase the question as an install it then declines.
+    key: "mcp.preview",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.preview" },
+    listed: true,
+    referenceOrder: 38,
+    group: "App",
+    summary: "Connect to an MCP server and show its tools without saving anything.",
+    example: "volli mcp preview",
+    notes: [
+      "Starts the local command or opens the remote connection for as long as the handshake takes, then closes it.",
+      "Nothing is stored: no server row, no tool selection, no provenance.",
+      "Bounded by the 10-second connection limit, and by this turn's own cancellation.",
+    ],
+    effects: {
+      durableWrites: [],
+      humanVisible: [
+        "A local server's process is started for the length of the handshake, and a remote server sees one connection.",
+      ],
+      nonEffects: [
+        "Nothing is saved: the project's MCP configuration is exactly as it was, and no Session gains a tool.",
+      ],
+    },
+    tool: {
+      name: "mcp_preview",
+      description: [
+        "Connect to one MCP server you already have the configuration for, read its tool list, and save nothing.",
+        "Use it to see what a server offers before deciding what to install and which of its tools to turn on.",
+        "It does not search a registry or look a server up by name: you supply the command or URL.",
+        "A local command runs on this machine as you, with your file access, for as long as the handshake takes; a remote URL receives a connection from this machine.",
+      ].join(" "),
+      input: MCP_SERVER_FIELDS,
+    },
+    options: [],
+  },
+  {
+    // The one verb in the family that both previews and writes, and the reason
+    // it previews by default is `label.merge`'s: the write is destructive in a
+    // way a caller cannot undo by calling something else. Starting a process
+    // as the user, or handing a third party every argument its tools are
+    // given, is not a step back from.
+    key: "mcp.install",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.install" },
+    listed: true,
+    referenceOrder: 39,
+    group: "App",
+    previewsByDefault: true,
+    summary: "Add or update one MCP server for this project, after previewing what it would do.",
+    example: "volli mcp install",
+    notes: [
+      "Previews by default: without confirm=apply nothing is connected for real and nothing is written.",
+      "Volli downloads nothing. A local server is a command that must already be on PATH — usually run through npx or uvx — and source, version and digest are recorded as provenance, never fetched or verified.",
+      "Saving the same server id twice updates that row in place, so repeating an install cannot create a duplicate.",
+      "Settings are written only after discovery succeeds. A first-time failure writes nothing at all; a failed update keeps the last working tool list and marks the server stale.",
+      "Authenticated servers are not supported yet: no header, no secret environment value, so a server needing an API key cannot be installed here.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "mcp-server",
+          operation: "update",
+          summary:
+            "Store the server's transport, its discovered tool catalog, the tools selected from it, and the provenance supplied with the request, keyed on the server id so a repeat updates rather than duplicates.",
+        },
+        {
+          resource: "mcp-operation",
+          operation: "append",
+          summary:
+            "Append one durable audit record naming the request, its source, its outcome, and what to do if it failed.",
+        },
+      ],
+      humanVisible: [
+        "The server appears in Settings → Configure → MCP Servers with its provenance and selected tools, and the install shows in that project's MCP history.",
+      ],
+      nonEffects: [
+        "The calling Session gains nothing: its tool list was frozen at birth and is byte-identical afterwards. The selected tools reach the next Session created.",
+        "No package is downloaded, unpacked or verified, and no existing Session's tool list changes.",
+      ],
+    },
+    tool: {
+      name: "mcp_install",
+      description: [
+        "Add or update one MCP server for this project.",
+        'Called plainly it PREVIEWS: it connects, reports the tools it found and the exact warning for this kind of server, and writes nothing. Call it again with confirm="apply" to perform it.',
+        "Read the warning before applying. A local (stdio) server is a command Volli starts on this machine as you, with your files and your network; a remote (http) server receives whatever arguments its tools are given, and Volli cannot see what it does with them.",
+        "The tools you select do NOT appear in this Session. A Session's tool list is frozen when it is created, so they become usable in the next Session created after the install.",
+        "Installing the same id twice updates that server in place. Volli downloads nothing: source, version and digest are recorded as provenance only.",
+      ].join(" "),
+      input: [
+        ...MCP_SERVER_FIELDS,
+        {
+          name: "tools",
+          type: "string",
+          description:
+            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.",
+        },
+        {
+          name: "source",
+          type: "string",
+          description:
+            "Where this configuration came from, recorded so a person can audit it later: a registry entry, a URL, or a document. Recorded as given; Volli fetches nothing from it.",
+        },
+        {
+          name: "registryType",
+          type: "enum",
+          values: MCP_REGISTRY_TYPES,
+          description:
+            "The ecosystem the source named, as an MCP server.json spells it. Recorded metadata; Volli resolves nothing in that ecosystem.",
+        },
+        {
+          name: "version",
+          type: "string",
+          description:
+            "The version string this install asked for. Recorded as asked; nothing pins the command that actually runs to it.",
+        },
+        {
+          name: "digest",
+          type: "string",
+          description:
+            "A digest the source published, such as an mcpb fileSha256. Recorded so a person can see what was pinned; it is never verified, because Volli downloads nothing to verify.",
+        },
+        MCP_CONFIRM_FIELD,
+      ],
+    },
+    options: [],
+  },
+  {
+    key: "mcp.refresh",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.refresh" },
+    listed: true,
+    referenceOrder: 40,
+    group: "App",
+    summary: "Reconnect to a configured MCP server and re-read its tool catalog.",
+    example: "volli mcp refresh",
+    notes: [
+      "Keeps the current tool selection; a selected tool the server no longer offers fails the refresh rather than being silently dropped.",
+      "A failed refresh leaves the last working catalog in place and marks the server stale, so nothing that worked stops working.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "mcp-server",
+          operation: "update",
+          summary:
+            "Replace the stored tool catalog with the one just discovered, or mark the server stale with the failure while keeping the last working catalog.",
+        },
+      ],
+      humanVisible: [
+        "The server's tool list and status update in Settings → Configure → MCP Servers.",
+      ],
+      nonEffects: [
+        "No existing Session changes: a Session's MCP tools are frozen at birth, and a refreshed catalog reaches the next Session created.",
+      ],
+    },
+    tool: {
+      name: "mcp_refresh",
+      description: [
+        "Reconnect to a server this project already has and re-read its tools, keeping the current selection.",
+        "Use it after a server is upgraded, or to clear a stale marker left by an earlier failure.",
+        "A failure leaves the last working tool list exactly as it was.",
+      ].join(" "),
+      input: [MCP_SERVER_ID_FIELD],
+    },
+    options: [],
+  },
+  {
+    key: "mcp.enable",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.enable" },
+    listed: true,
+    referenceOrder: 41,
+    group: "App",
+    summary: "Turn a configured MCP server on for Sessions created from now on.",
+    example: "volli mcp enable",
+    notes: [
+      "Adding a server and turning it on are separate acts; this is the second one.",
+      "Nothing is connected: enablement is a stored flag read when a Session is created.",
+    ],
+    effects: {
+      durableWrites: [
+        { resource: "mcp-server", operation: "update", summary: "Set the server's enabled flag." },
+      ],
+      humanVisible: ["The server's On checkbox in Settings → Configure → MCP Servers."],
+      nonEffects: [
+        "No existing Session gains a tool: a frozen tool list never changes. The next Session created sees the change.",
+      ],
+    },
+    tool: {
+      name: "mcp_enable",
+      description: [
+        "Turn a configured MCP server on, so its selected tools are offered to Sessions created after this call.",
+        "It connects to nothing, and it does not change any Session that already exists.",
+      ].join(" "),
+      input: [MCP_SERVER_ID_FIELD],
+    },
+    options: [],
+  },
+  {
+    // The safe counterpart to `mcp.remove`, and the reason removal's warning
+    // can name an alternative rather than just refusing: disabling leaves the
+    // row — and therefore the transport an older Session's frozen tool needs —
+    // exactly where it was.
+    key: "mcp.disable",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.disable" },
+    listed: true,
+    referenceOrder: 42,
+    group: "App",
+    summary: "Turn a configured MCP server off without deleting it.",
+    example: "volli mcp disable",
+    notes: [
+      "The reversible alternative to mcp_remove: the configuration stays, so older Sessions using this server can still reattach.",
+      "Nothing is connected, and no running Session loses a tool it was born with.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "mcp-server",
+          operation: "update",
+          summary: "Clear the server's enabled flag.",
+        },
+      ],
+      humanVisible: ["The server's On checkbox in Settings → Configure → MCP Servers."],
+      nonEffects: [
+        "No existing Session loses a tool: a frozen tool list never changes, and the server's configuration is kept so reattachment keeps working.",
+      ],
+    },
+    tool: {
+      name: "mcp_disable",
+      description: [
+        "Turn a configured MCP server off, keeping its configuration.",
+        "Sessions created after this call are not offered its tools; Sessions that already exist keep the tools they were born with and can still reattach.",
+        "Prefer this to mcp_remove whenever the intent is only to stop offering the tools.",
+      ].join(" "),
+      input: [MCP_SERVER_ID_FIELD],
+    },
+    options: [],
+  },
+  {
+    key: "mcp.tools",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.tools" },
+    listed: true,
+    referenceOrder: 43,
+    group: "App",
+    summary: "Choose which of a configured server's discovered tools are on.",
+    example: "volli mcp tools",
+    notes: [
+      "The selection replaces the current one: a discovered tool not named here is turned off.",
+      "Only tools the last successful discovery found can be selected; an unknown name is refused rather than ignored.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "mcp-server",
+          operation: "update",
+          summary: "Replace which of the stored catalog's tools are marked on.",
+        },
+      ],
+      humanVisible: ["The per-tool checkboxes in Settings → Configure → MCP Servers."],
+      nonEffects: [
+        "No existing Session changes: its MCP tools are frozen at birth. The selection reaches the next Session created.",
+      ],
+    },
+    tool: {
+      name: "mcp_tools",
+      description: [
+        "Set exactly which of a configured server's tools are on, replacing the current selection.",
+        "Anything the server offers that you do not name is turned off. Sessions created after this call get the new selection; existing Sessions are unchanged.",
+      ].join(" "),
+      input: [
+        MCP_SERVER_ID_FIELD,
+        {
+          name: "tools",
+          type: "string",
+          required: true,
+          description:
+            "The complete set of tool names to leave on, separated by spaces or commas. Pass an empty string to turn every tool off.",
+        },
+      ],
+    },
+    options: [],
+  },
+  {
+    // Previews by default for a reason `mcp.disable` does not share, and the
+    // reason is a property of the frozen tool surface rather than of this
+    // table: `serversForFrozenMcpTools` THROWS when a frozen tool's server is
+    // gone, so deleting a row breaks reattachment for older Sessions that were
+    // using it — an effect on Sessions the caller has never heard of.
+    key: "mcp.remove",
+    accessModes: ["tool"],
+    actor: "role",
+    handler: { site: "main", id: "mcp.remove" },
+    listed: true,
+    referenceOrder: 44,
+    group: "App",
+    previewsByDefault: true,
+    summary: "Delete a configured MCP server, after previewing what it breaks.",
+    example: "volli mcp remove",
+    notes: [
+      "Previews by default: without confirm=apply nothing is deleted.",
+      "Older Sessions born holding one of this server's tools will fail to reattach once it is gone, because the transport their frozen tool needs no longer exists.",
+      "mcp_disable is the reversible alternative and keeps reattachment working.",
+    ],
+    effects: {
+      durableWrites: [
+        {
+          resource: "mcp-server",
+          operation: "delete",
+          summary: "Delete the server row, its stored catalog, and its tool selection.",
+        },
+        {
+          resource: "mcp-operation",
+          operation: "append",
+          summary:
+            "Append one durable audit record naming what was removed, by which Session, and what it may have broken.",
+        },
+      ],
+      humanVisible: [
+        "The server leaves Settings → Configure → MCP Servers, and the removal shows in that project's MCP history.",
+      ],
+      nonEffects: [
+        "The calling Session's frozen tool list does not change, and no Session currently attached loses a tool mid-run.",
+        "Session history is not edited: transcripts still name the tools that were called.",
+      ],
+    },
+    tool: {
+      name: "mcp_remove",
+      description: [
+        "Delete one MCP server's configuration from this project.",
+        'Called plainly it PREVIEWS: it reports what would be deleted and what that breaks, and removes nothing. Call it again with confirm="apply" to perform it.',
+        "This is more destructive than it looks. Any older Session that was born holding one of this server's tools will fail to reattach afterwards, because the transport its frozen tool needs is gone.",
+        "Re-adding the server under the SAME id restores those Sessions; re-adding it under a different id does not.",
+        "If the intent is only to stop offering the tools to new Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+      ].join(" "),
+      input: [MCP_SERVER_ID_FIELD, MCP_CONFIRM_FIELD],
     },
     options: [],
   },

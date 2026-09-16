@@ -266,6 +266,21 @@ export function budgetAskInteractionId(toolCallId: string): string {
 }
 
 /**
+ * The interaction id one confirmation question is asked under (VC-380).
+ *
+ * A fourth frozen segment on exactly {@link budgetAskInteractionId}'s
+ * reasoning. An MCP install already confirms itself structurally — the plain
+ * call previews and only `confirm: "apply"` writes — and this is the question
+ * that rides on top of the apply, so a person in front of the Session sees the
+ * warning before the command runs. That means one tool call can raise a gate
+ * ask and this one, and a shared prefix would let either answer settle the
+ * other's wait.
+ */
+export function confirmAskInteractionId(toolCallId: string): string {
+  return `confirm-ask:${toolCallId}`;
+}
+
+/**
  * The interaction id one `ask_user` call is asked under.
  *
  * Durable on the same terms as {@link askInteractionId}, and a second derivation

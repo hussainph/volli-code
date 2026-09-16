@@ -1090,6 +1090,22 @@ describe("createVerbTool", () => {
     expect((properties.cursor as { type?: string }).type).toBe("string");
   });
 
+  it("compiles mcp.install's string array into a real array schema (VC-380)", () => {
+    const tool = createVerbTool({
+      verb: "mcp.install",
+      port: async () => ({ text: "" }),
+    });
+
+    expect(tool.name).toBe("mcp_install");
+    const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
+    // `args` is the ecosystem's own shape — every MCP client spells a local
+    // server's arguments `string[]` — so it must reach the provider as an array
+    // of strings, not as a string the model has to pack itself.
+    expect(properties.args).toMatchObject({ type: "array", items: { type: "string" } });
+    expect((properties.id as { type?: string }).type).toBe("string");
+    expect((tool.parameters as { required?: string[] }).required).toEqual(["id", "name"]);
+  });
+
   it("refuses to build a tool for a verb this build does not project", () => {
     // Unreachable from a resolved surface, which is why it is a throw rather
     // than a fallback: the alternative is a nameless tool reaching a provider,

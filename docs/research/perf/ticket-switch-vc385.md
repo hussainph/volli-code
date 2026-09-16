@@ -26,7 +26,7 @@ One machine, one fixture, nothing else running.
 
 | | |
 |---|---|
-| Tree | `13312a74` (today's `main`) plus this branch's instrumentation |
+| Tree | `13312a74` plus this branch's instrumentation |
 | Machine | MacBookPro17,1 · Apple M1 · 8 cores · 16 GB · macOS 26.5.1 (25F80) |
 | Fixture | `real` preset, seed 353259855 — 1,198 Sessions, 392 tickets, 373 MB |
 | Arms | idle, and loaded at 2 busy cores |
@@ -45,6 +45,15 @@ Reports, all four under `docs/performance-baselines/`:
 | idle, after | `vc-385-ticket-switch-after/` |
 | loaded, before | `vc-385-ticket-switch-loaded-before/` |
 | loaded, after | `vc-385-ticket-switch-loaded-after/` |
+
+All four runs were taken at `13312a74`, before this branch was synced with
+`main`. The nine commits it picked up include two on neighbouring paths —
+VC-387 (the board no longer re-reads on every data change, and the ticket body
+is now a per-open read) and VC-389 (the async git runner's concurrency is
+bounded). Neither touches the palette's Session read or the phases measured
+here, and the split is unchanged in shape by them, but the absolute numbers
+belong to the tree they were taken on. A re-measure on the merged tree would be
+the honest input to any future comparison.
 
 One caveat on the loaded arm: a narrowed run stops its busy workers once the
 measurements are done rather than holding the exposure open for the configured

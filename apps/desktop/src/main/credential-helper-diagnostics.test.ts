@@ -1,10 +1,44 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   credentialHelperExplanation,
   credentialHelperIssues,
   type CredentialHelperIssue,
 } from "./credential-helper-diagnostics";
+import {
+  GIT_MAX_CONCURRENT_CHILDREN,
+  resetGitChildSlotsForTest,
+  withGitChildSlot,
+} from "./worktree/git";
+
+describe("the diagnosis and the shared git bound", () => {
+  afterEach(() => resetGitChildSlotsForTest());
+
+  it("runs its config read inside the bound", async () => {
+    // Rare — only asked after a network verb already failed — but still a git
+    // child in the main process, so it goes through the shared runner rather
+    // than a private `execFileAsync` of its own (VC-389).
+    const release: Array<() => void> = [];
+    const holding = Array.from({ length: GIT_MAX_CONCURRENT_CHILDREN }, () =>
+      withGitChildSlot(() => new Promise<void>((resolve) => release.push(resolve))),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    let settled = false;
+    // No deps argument, so this is the PRODUCTION reader, not a fake.
+    const asked = credentialHelperIssues(process.cwd()).then((issues) => {
+      settled = true;
+      return issues;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    expect(settled).toBe(false);
+
+    for (const resolve of release) resolve();
+    await asked;
+    expect(settled).toBe(true);
+    await Promise.allSettled(holding);
+  });
+});
 
 function gitConfigOutput(
   entries: ReadonlyArray<readonly [scope: string, origin: string, helper: string]>,

@@ -2100,6 +2100,58 @@ describe("Pi native adapter escalation", () => {
     });
   });
 
+  /**
+   * The same seam carrying VC-380's confirmation, under its OWN frozen segment.
+   * Nothing has been refused here: the verb is permitted and its arguments are
+   * fine. What is being asked is whether a person wants this MCP server
+   * installed at all, before the command is run for real.
+   */
+  it("asks an MCP confirmation under the confirm-ask segment (VC-380)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "mcp.install"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "previewed" };
+      },
+    });
+
+    await runtime.spec.callVerb?.(
+      { verb: "mcp.install", input: { id: "files" }, toolCallId: "call-11" },
+      new AbortController().signal,
+    );
+    if (lent === undefined) throw new Error("The binding lent no ask");
+    const choice = lent(
+      {
+        cause: "confirm.mcp-install",
+        tool: "mcp_install",
+        toolCallId: "call-11",
+        turnId: null,
+        reason: "Files is a local MCP server: Volli starts `npx -y files` and it runs as you.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      // Distinct from both `ask:` and `budget-ask:`, so neither answer can
+      // settle this question's wait.
+      interaction: { id: "confirm-ask:call-11", kind: "permission" },
+    });
+
+    const receipt = await binding.dispatch(answerCommand("confirm-ask:call-11", ["reject"]));
+
+    expect(receipt).toMatchObject({ status: "accepted" });
+    expect(await choice).toBe("refuse");
+  });
+
   it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {
     const { binding, runtime, sink } = await attached();
 

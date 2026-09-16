@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { WORKTREE_MISSING_ON_DISK } from "@volli/shared";
 
 import {
+  checkIgnoredPathsWithGit,
   WATCH_DEBOUNCE_MS,
   WATCH_MAX_WAIT_MS,
   WATCH_REWATCH_GRACE_MS,
@@ -13,7 +14,51 @@ import {
   type WorktreeChangeWatchOptions,
   type WorktreeWatchFn,
 } from "./change-set-watch";
-import { runGitCapturingAsync } from "./git";
+import {
+  GIT_MAX_CONCURRENT_CHILDREN,
+  resetGitChildSlotsForTest,
+  runGitCapturingAsync,
+  withGitChildSlot,
+} from "./git";
+
+describe("the lazy ignore probe and the shared git bound", () => {
+  afterEach(() => resetGitChildSlotsForTest());
+
+  it("takes a slot, so its child is inside the bound like every other", async () => {
+    // This probe keeps its own `execFile` — it writes NUL-delimited paths to
+    // stdin and reads exit 1 as a successful classification — so it is the one
+    // door into git that the capturing runner cannot hold. It must still take a
+    // slot, or a watcher firing across many worktrees escapes the bound
+    // entirely (VC-389).
+    const release: Array<() => void> = [];
+    const holding = Array.from({ length: GIT_MAX_CONCURRENT_CHILDREN }, () =>
+      withGitChildSlot(() => new Promise<void>((resolve) => release.push(resolve))),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const dir = mkdtempSync(join(tmpdir(), "volli-ignore-slot-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, ".gitignore"), "ignored.txt\n");
+
+      let settled = false;
+      const probe = checkIgnoredPathsWithGit(dir, ["ignored.txt"]).then((paths) => {
+        settled = true;
+        return paths;
+      });
+      // Long enough that a probe outside the bound would have finished.
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      expect(settled).toBe(false);
+
+      release[0]!();
+      await expect(probe).resolves.toEqual(["ignored.txt"]);
+    } finally {
+      for (const resolve of release) resolve();
+      await Promise.allSettled(holding);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 interface FakeWatcher {
   close: ReturnType<typeof vi.fn<() => void>>;
