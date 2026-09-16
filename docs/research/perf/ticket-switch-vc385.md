@@ -173,6 +173,36 @@ switch: **707.5 ms → 278.5 ms (−61%)**; p95 846.0 → 414.1 ms (−51%).
 The residual 10.3 ms is the first ⌘K of a window, which still has to seed any
 project no other surface has visited. Every later open is a cache read.
 
+### What the palette gave up: its correction path
+
+The palette previously re-read on every open and on every `lastPlanningChange`.
+Both are gone. It now calls `ensure`, which is at-most-once per project and
+trusts an existing entry for the life of the window, and the
+`volli:session-activity` channel carries everything after that. **The palette
+no longer has any way to correct a listing that has drifted.**
+
+This is safe today, for two reasons that are worth stating because the safety
+depends on them rather than on the design:
+
+1. **Rows are never removed.** `listSessions` is a plain
+   `SELECT … FROM sessions WHERE project_id = ?`, and there is no
+   `DELETE FROM sessions` anywhere in the main process — a Session ends by
+   getting an `ended_at`, not by disappearing. The push channel upserts, so a
+   listing can gain rows and change them but cannot be left holding one that no
+   longer exists. Drift in the direction that would show a person a destination
+   that is not there is therefore not reachable.
+2. **The selected project keeps a correction path anyway.** The sidebar's
+   `ActiveSessions` calls `refresh` on its own `refreshTick` — notably when a
+   throttled window becomes visible again — and writes through the same shared
+   store, so the palette sees the corrected rows for free.
+
+What is genuinely gone is coverage for a project that neither the sidebar nor
+Home ever renders: for that project the palette's first `ensure` is the only
+read of the window's life. Nothing can go wrong with it while (1) holds. If a
+Session ever becomes deletable, or the listing gains a filter that can flip a
+row out of it, this is the surface that will not notice — and the fix is a
+`refresh` on a coarse trigger, not a return to reading per open.
+
 ### Overlap with VC-388
 
 This is a renderer-side cache in front of a main-process problem VC-388 owns:
