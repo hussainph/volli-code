@@ -864,9 +864,17 @@ export const SESSION_LISTING_FOLD_CHUNK = 8;
  * `MessageChannel` is the no-clamp spelling) can still pass
  * {@link SessionEnginePorts.yieldToHost}.
  */
+const hostSetImmediate = (globalThis as { setImmediate?: (callback: () => void) => unknown })
+  .setImmediate;
+
 const defaultYieldToHost: () => Promise<void> =
-  typeof setImmediate === "function"
-    ? () => new Promise<void>((resolve) => void setImmediate(resolve))
+  typeof hostSetImmediate === "function"
+    ? () =>
+        new Promise<void>((resolve) => {
+          hostSetImmediate(() => {
+            resolve();
+          });
+        })
     : () =>
         new Promise<void>((resolve) => {
           setTimeout(resolve, 0);

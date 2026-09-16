@@ -9,6 +9,7 @@ import { CHECKPOINT_REFRESH_EVENTS } from "./session-engine";
 import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type {
   AcceptedCommandReceipt,
+  ListSessionsQuery,
   Session,
   SessionAttachment,
   SessionCommand,
@@ -3722,7 +3723,10 @@ describe("listSessions over a project roster (VC-388)", () => {
 
     const listing = plane
       .listSessions({ projectId: "project-1", scope: "all" })
-      .then((rows) => void settled.push("listing") ?? rows);
+      .then((rows) => {
+        settled.push("listing");
+        return rows;
+      });
     const write = plane
       .submit({
         commandId: "command-roster-write",
@@ -3730,7 +3734,10 @@ describe("listSessions over a project roster (VC-388)", () => {
         intent: { kind: "session.retitle", title: "Wrote mid-listing" },
         provenance: userProvenance,
       })
-      .then((result) => void settled.push("write") ?? result);
+      .then((result) => {
+        settled.push("write");
+        return result;
+      });
 
     const [rows] = await Promise.all([listing, write]);
     // The whole point: the roster's fold is not one indivisible hold on the
