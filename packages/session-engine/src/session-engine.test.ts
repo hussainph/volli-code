@@ -3710,9 +3710,7 @@ describe("listSessions over a project roster (VC-388)", () => {
     const { plane } = composition();
     const sessions = [];
     for (let index = 0; index < count; index += 1) {
-      sessions.push(
-        (await plane.createSession(createRequest(`command-roster-${index}`))).session,
-      );
+      sessions.push((await plane.createSession(createRequest(`command-roster-${index}`))).session);
     }
     return { plane, sessions };
   }
@@ -3721,12 +3719,10 @@ describe("listSessions over a project roster (VC-388)", () => {
     const { plane, sessions } = await roster(40);
     const settled: string[] = [];
 
-    const listing = plane
-      .listSessions({ projectId: "project-1", scope: "all" })
-      .then((rows) => {
-        settled.push("listing");
-        return rows;
-      });
+    const listing = plane.listSessions({ projectId: "project-1", scope: "all" }).then((rows) => {
+      settled.push("listing");
+      return rows;
+    });
     const write = plane
       .submit({
         commandId: "command-roster-write",
@@ -3801,7 +3797,8 @@ describe("listSessions over a project roster (VC-388)", () => {
     const { plane, folded } = foldWatchingComposition();
     const quiet = (await plane.createSession(createRequest("command-cache-quiet"))).session;
     const busy = (await plane.createSession(createRequest("command-cache-busy"))).session;
-    const alsoQuiet = (await plane.createSession(createRequest("command-cache-also-quiet"))).session;
+    const alsoQuiet = (await plane.createSession(createRequest("command-cache-also-quiet")))
+      .session;
 
     folded.length = 0;
     await expect(
@@ -3839,6 +3836,14 @@ describe("listSessions over a project roster (VC-388)", () => {
   it("re-folds a Session whose row moved even though its log did not", async () => {
     const stored = createInMemorySessionLedger();
     let ticketDeleted = false;
+    // Copy-on-write, as the store's own decoder is: the rows the ledger holds
+    // must not be edited in place by a reader pretending a Ticket went away.
+    const afterTicketDelete = (rows: readonly Session[]): readonly Session[] => {
+      if (!ticketDeleted) return rows;
+      const moved: Session[] = [];
+      for (const session of rows) moved.push({ ...session, ticketId: null });
+      return moved;
+    };
     const ledger: SessionLedger = {
       transaction: (work) =>
         stored.transaction((transaction) =>
@@ -3847,11 +3852,7 @@ describe("listSessions over a project roster (VC-388)", () => {
               get(target, property, receiver) {
                 if (property !== "listSessions") return Reflect.get(target, property, receiver);
                 return (query: ListSessionsQuery) =>
-                  transaction
-                    .listSessions(query)
-                    .map((session) =>
-                      ticketDeleted ? { ...session, ticketId: null } : session,
-                    );
+                  afterTicketDelete(transaction.listSessions(query));
               },
             }),
           ),
@@ -3860,13 +3861,13 @@ describe("listSessions over a project roster (VC-388)", () => {
     const plane = createSessionEngine({ ledger, clock: { now: () => 100 }, ids: ids() });
     const created = await plane.createSession(createRequest("command-cache-ticket-delete"));
 
-    await expect(plane.listSessions({ projectId: "project-1", scope: "all" })).resolves.toMatchObject(
-      [{ session: { id: created.session.id, ticketId: "ticket-1" } }],
-    );
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: "ticket-1" } }]);
 
     ticketDeleted = true;
-    await expect(plane.listSessions({ projectId: "project-1", scope: "all" })).resolves.toMatchObject(
-      [{ session: { id: created.session.id, ticketId: null } }],
-    );
+    await expect(
+      plane.listSessions({ projectId: "project-1", scope: "all" }),
+    ).resolves.toMatchObject([{ session: { id: created.session.id, ticketId: null } }]);
   });
 });
