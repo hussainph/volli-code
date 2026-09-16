@@ -97,6 +97,8 @@ export class XtermEngine implements TerminalEngine {
   private fitAddon: FitAddon | null = null;
   /** The DECSET filter installed while `mouse-reporting = false`; see below. */
   private mouseFilter: IDisposable | null = null;
+  /** Watches the host's box; see `createInstance`. */
+  private resizeObserver: ResizeObserver | null = null;
   /** Coalesced follow-up fit — every fit() re-measures once more next frame. */
   private settleFitFrame: number | null = null;
   /** A fit arrived while hidden (zero-size) or paused; flushed on unpause. */
@@ -141,6 +143,10 @@ export class XtermEngine implements TerminalEngine {
   private createInstance(): void {
     const appearance = getCurrentAppearance();
     const term = new Terminal({
+      // Required by the Unicode 11 addon below: `term.unicode` is marked
+      // experimental, and reading it throws without this. Nothing else here
+      // uses a proposed API.
+      allowProposedApi: true,
       // The app paints the terminal's background itself; a transparent grid
       // would cost a compositing pass per cell for nothing.
       allowTransparency: false,
@@ -160,7 +166,8 @@ export class XtermEngine implements TerminalEngine {
     term.loadAddon(new Unicode11Addon());
     // Unicode 11 widths — the addon only REGISTERS the table; this line is what
     // selects it, and without it a terminal drawing modern emoji and CJK puts
-    // the cursor one cell off for the rest of the line.
+    // the cursor one cell off for the rest of the line. `term.unicode` is the
+    // proposed API `allowProposedApi` above is set for.
     term.unicode.activeVersion = "11";
 
     term.onData((data) => {
@@ -183,6 +190,19 @@ export class XtermEngine implements TerminalEngine {
     this.term = term;
     this.fitAddon = fitAddon;
     this.applyMouseReporting(appearance.mouseReporting);
+    // xterm has NO auto-resize of its own — unlike the renderer this replaces,
+    // which observed its own root. Most of the ways a terminal's box changes
+    // raise no other signal the app can hear: dragging a split divider,
+    // toggling the sidebar, resizing the window, revealing a pane. Without this
+    // the grid stays whatever it was first fit to, the PTY keeps the size it
+    // was born with, and every TUI in it draws to the wrong width.
+    //
+    // Safe against a feedback loop: the host is 100%x100% of its container, so
+    // nothing xterm draws inside it can change the box being observed.
+    this.resizeObserver = new ResizeObserver(() => {
+      this.fit();
+    });
+    this.resizeObserver.observe(this.hostEl);
 
     // In order, then dropped: from here on xterm's own buffer is the history.
     // Chunks can split an escape sequence at a trim boundary — the VT parser
@@ -366,6 +386,8 @@ export class XtermEngine implements TerminalEngine {
     this.settleFitFrame = null;
     this.mouseFilter?.dispose();
     this.mouseFilter = null;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     // Disposes the addons too (xterm owns their lifetime once loaded) and
     // removes the DOM it built inside hostEl.
     this.term?.dispose();
