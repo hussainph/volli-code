@@ -50,6 +50,8 @@ const INTERACTIONS = Object.freeze([
   ["board_render", "Board render"],
   ["rpc_round_trip", "Session RPC projection round trip"],
 ]);
+/** Every interaction id, in order — what a run with no `--interactions` covers. */
+export const INTERACTION_IDS = Object.freeze(INTERACTIONS.map(([id]) => id));
 
 export function parseArgs(argv) {
   const args = {
@@ -1439,6 +1441,19 @@ export function summaryReport(report) {
 }
 
 export function markdown(report) {
+  // What this run covered and how its load really ended. Both belong in the
+  // Markdown rather than only in the JSON, because the JSON is not committed
+  // (`docs/performance-benchmark.md`) and the Markdown is therefore the whole
+  // of what a later reader gets. A report that does not say it measured one
+  // interaction reads as a full matrix; a loaded report that quotes the
+  // fixed-duration contract it did not meet is simply wrong.
+  const measuredIds = report.config.interactions ?? INTERACTION_IDS;
+  const everyInteraction = measuredIds.length === INTERACTION_IDS.length;
+  const interactionsLine = everyInteraction
+    ? `Interactions measured: all nine (no \`--interactions\` filter).`
+    : `Interactions measured: ${measuredIds.map((id) => `\`${id}\``).join(", ")} — a narrowed run (\`--interactions\`); every other interaction was skipped and is absent from the table below.`;
+  const loadedArms = report.arms.filter((arm) => arm.busyCores > 0);
+  const loadEndings = [...new Set(loadedArms.map((arm) => arm.load?.completion ?? "unknown"))];
   const lines = [
     "# Desktop performance baseline",
     "",
@@ -1452,6 +1467,12 @@ export function markdown(report) {
     `Sampling: ${report.config.repetitions} repetitions per interaction and arm; arms: ${report.arms.map((arm) => arm.name).join(", ")}.`,
     `Each arm discards ${report.config.warmupIterationsPerArm ?? 0} warm-up iteration(s) first, so the arms differ by load rather than by which met a cold cache.`,
     `Loaded-arm contract: ${report.config.busyCores} busy cores for a fixed ${report.config.loadDurationSeconds.toLocaleString()} seconds.`,
+    ...(loadedArms.length === 0
+      ? []
+      : [
+          `Loaded-arm ending: ${loadEndings.join(", ")}. \`fixed-duration-complete\` is the only one that met the contract above; every other value means the load stopped when its measurements did, so the exposure was sized to the run rather than to the configured duration.`,
+        ]),
+    interactionsLine,
     "",
     "## Results",
     "",
@@ -1516,7 +1537,7 @@ export function markdown(report) {
     `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
     `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
-    `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline and otherwise holds the load until the configured exposure is complete; quick stream-only smoke runs stop early and say so in JSON.`,
+    `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline. What happens otherwise depends on the run, and the "Loaded-arm ending" line above states which of these this one did: a full arm holds the load until the configured exposure is complete (\`fixed-duration-complete\`), a quick stream-only smoke stops early (\`quick-smoke-early-stop\`), and a run narrowed with \`--interactions\` stops as soon as its measurements are done (\`narrowed-interactions-early-stop\`) — that last exposure is sized to the measurements, so it is comparable to another narrowed run but not to a full matrix.`,
     "- Ticket switching first makes both workspaces usable, returns to the first, then times selection and focus-readiness of the already-open second workspace.",
     "- RSS is Electron `app.getAppMetrics()` renderer working-set size. RPC is the native tRPC `session.projection` request through the preload IPC bridge.",
     "",

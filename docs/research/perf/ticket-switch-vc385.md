@@ -46,8 +46,36 @@ Reports, all four under `docs/performance-baselines/`:
 | loaded, before | `vc-385-ticket-switch-loaded-before/` |
 | loaded, after | `vc-385-ticket-switch-loaded-after/` |
 
-All four runs were taken at `13312a74`, before this branch was synced with
-`main`. The nine commits it picked up include two on neighbouring paths —
+### What the git stamps in those reports mean
+
+Each report is stamped with a SHA and a dirty working tree, and within a pair
+both reports carry the SAME SHA — so the stamp cannot tell a "before" from an
+"after". That is a property of how the pairs were taken, not an accident, and
+each report now says so in its own Provenance section:
+
+| Run | Stamp | What the tree actually was |
+|---|---|---|
+| idle, before | `13312a74` dirty | instrumentation only, palette fix not applied |
+| idle, after | `13312a74` dirty | same tree, palette fix applied |
+| loaded, before | `2f0f55c2` dirty | fix commit with the palette fix reverted in the working tree |
+| loaded, after | `2f0f55c2` dirty | fix commit as committed |
+
+The loaded pair is stamped with the fix commit itself, which would otherwise
+read as "both runs include the fix". The before run does not. In both loaded
+runs the dirty flag also covers one uncommitted harness change — the validation
+that lets a narrowed loaded arm end early, later `92e0643d` — which changes
+what the harness accepts, never what the app does, and was identical across
+both runs.
+
+The consequence worth stating plainly: **none of the four reports is
+reproducible from its SHA alone.** This write-up is the record of what each arm
+ran. On a ticket opened because earlier numbers had bad provenance, that is
+exactly the kind of thing that has to be said rather than left for a reader to
+discover.
+
+All four runs were taken before this branch was synced with `main` — the idle
+pair at `13312a74`, the loaded pair at `2f0f55c2`, both ancestors of the merge.
+The nine commits the sync picked up include two on neighbouring paths —
 VC-387 (the board no longer re-reads on every data change, and the ticket body
 is now a per-open read) and VC-389 (the async git runner's concurrency is
 bounded). Neither touches the palette's Session read or the phases measured

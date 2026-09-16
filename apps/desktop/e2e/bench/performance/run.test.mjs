@@ -9,6 +9,7 @@ import {
   addNullableMeasurements,
   aggregateInteraction,
   backgroundLoadGap,
+  INTERACTION_IDS,
   markdown,
   parseArgs,
   summarize,
@@ -429,6 +430,61 @@ describe("whole-report validation and Markdown", () => {
     expect(output).toContain("Loaded-arm contract: 2 busy cores for a fixed 60 seconds.");
     expect(output).toContain("Simultaneous streaming and scrolling");
     expect(output).toContain("N-busy-core-for-60s");
+  });
+
+  /**
+   * VC-385 — `docs/performance-benchmark.md` makes the Markdown the only
+   * committed artifact, so it has to be self-describing: none of the JSON is
+   * kept. A narrowed run's report was not. It named neither the interaction
+   * filter it ran under nor the way its load actually ended, and its Method
+   * section asserted a full fixed-duration exposure that a narrowed arm never
+   * receives — three claims a reader had no way to check and one that was
+   * simply false.
+   */
+  it("states the interaction filter and the real load ending on a narrowed run", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["ticket_switch"];
+    report.config.arms = ["loaded"];
+    const name = busyLoadName(2, 60_000);
+    report.arms[0] = {
+      ...report.arms[0],
+      name,
+      busyCores: 2,
+      interactions: [
+        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+          streamSample({ latencyMs: 120 }),
+          streamSample({ latencyMs: 140 }),
+        ]),
+      ],
+      chatWindow: null,
+      load: {
+        configuredDurationMs: 60_000,
+        exposureDurationMs: 9_000,
+        measurementsDurationMs: 8_500,
+        completion: "narrowed-interactions-early-stop",
+      },
+    };
+
+    const output = markdown(report);
+
+    // The filter, so a reader knows this report covers one interaction.
+    expect(output).toContain("Interactions measured: `ticket_switch`");
+    // How the load really ended, rather than the contract it did not meet.
+    expect(output).toContain("narrowed-interactions-early-stop");
+    // And the Method must stop ASSERTING a complete exposure for this run. It
+    // may still describe one as the ending a full arm has — that is the point
+    // of naming which ending happened — but not as what happened here.
+    expect(output).not.toContain("otherwise holds the load until the configured exposure");
+    expect(output).toContain("stops as soon as its measurements are done");
+    expect(output).toContain("sized to the measurements");
+  });
+
+  it("says so plainly when a run measured every interaction", () => {
+    const report = benchmarkReport();
+    report.config.interactions = INTERACTION_IDS;
+
+    expect(markdown(report)).toContain("Interactions measured: all nine");
   });
 
   it("rejects missing arms, console errors, zero samples, and null latency", () => {
