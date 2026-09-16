@@ -3928,51 +3928,60 @@ describe("listSessions over a project roster (VC-388)", () => {
    * at the limit must survive a repeat listing whole, and the first row over
    * it must cost exactly one entry — the least recently listed one — and not
    * the whole cache.
+   *
+   * Budgeted like the other roster-sized tests: it creates one Session more
+   * than the cache holds and folds that roster four times, which is under a
+   * second here and several under coverage instrumentation on a shared CI
+   * runner. The default five seconds timed out on main.
    */
-  it("evicts the least recently listed Session once the cache is full", async () => {
-    // One roster, listed through a moving window: at the cache's size, then
-    // one over it, then one row at a time to ask which entry survived.
-    let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
-    const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
-    for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
-      await plane.createSession(createRequest(`command-evict-${index}`));
-    }
-    const query = { projectId: "project-1", scope: "all" } as const;
+  it(
+    "evicts the least recently listed Session once the cache is full",
+    { timeout: 30_000 },
+    async () => {
+      // One roster, listed through a moving window: at the cache's size, then
+      // one over it, then one row at a time to ask which entry survived.
+      let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
+      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-evict-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "all" } as const;
 
-    folded.length = 0;
-    const full = await plane.listSessions(query);
-    expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      folded.length = 0;
+      const full = await plane.listSessions(query);
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
 
-    // A roster that exactly fills the cache is served entirely from it: the
-    // limit holds this many, not this many minus one.
-    folded.length = 0;
-    await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
-    expect(folded).toEqual([]);
+      // A roster that exactly fills the cache is served entirely from it: the
+      // limit holds this many, not this many minus one.
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      expect(folded).toEqual([]);
 
-    // One Session more than the cache can hold. Only the newcomer is folded,
-    // and storing it pushes out the head of the insertion order — which is
-    // the first row of the listing, since a hit re-inserts in listing order.
-    visible = (rows) => rows;
-    folded.length = 0;
-    const overflowing = await plane.listSessions(query);
-    expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
-    expect(folded).toEqual([overflowing.at(-1)?.session.id]);
+      // One Session more than the cache can hold. Only the newcomer is folded,
+      // and storing it pushes out the head of the insertion order — which is
+      // the first row of the listing, since a hit re-inserts in listing order.
+      visible = (rows) => rows;
+      folded.length = 0;
+      const overflowing = await plane.listSessions(query);
+      expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+      expect(folded).toEqual([overflowing.at(-1)?.session.id]);
 
-    // Which entry went, asked one row at a time so a miss cannot cascade into
-    // the next row and blur the answer. The middle of the roster is still
-    // memoized...
-    const middle = full[SESSION_LISTING_CACHE_LIMIT >> 1].session;
-    visible = (rows) => rows.filter((row) => row.id === middle.id);
-    folded.length = 0;
-    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
-    expect(folded).toEqual([]);
+      // Which entry went, asked one row at a time so a miss cannot cascade into
+      // the next row and blur the answer. The middle of the roster is still
+      // memoized...
+      const middle = full[SESSION_LISTING_CACHE_LIMIT >> 1].session;
+      visible = (rows) => rows.filter((row) => row.id === middle.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([]);
 
-    // ...and the row listed longest ago is not: it has to be folded again,
-    // which is the eviction, observed.
-    const listedLongestAgo = full[0].session;
-    visible = (rows) => rows.filter((row) => row.id === listedLongestAgo.id);
-    folded.length = 0;
-    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
-    expect(folded).toEqual([listedLongestAgo.id]);
-  });
+      // ...and the row listed longest ago is not: it has to be folded again,
+      // which is the eviction, observed.
+      const listedLongestAgo = full[0].session;
+      visible = (rows) => rows.filter((row) => row.id === listedLongestAgo.id);
+      folded.length = 0;
+      await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+      expect(folded).toEqual([listedLongestAgo.id]);
+    },
+  );
 });
