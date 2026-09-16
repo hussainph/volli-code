@@ -564,6 +564,47 @@ describe("whole-report validation and Markdown", () => {
     report.arms[0].load.completion = "fixed-duration-complete";
     expect(() => validateBenchmarkReport(report)).toThrow("load ended as");
   });
+
+  /**
+   * VC-385 — the loaded arm of a narrowed run.
+   *
+   * `runArm` stops the busy workers as soon as the wanted interactions are
+   * done rather than holding the exposure open for the full configured
+   * duration, because a narrowed run has no streaming bench left to cover.
+   * Validation only knew the two completions a FULL run can end with, so the
+   * loaded arm of `--interactions ticket_switch` measured correctly and then
+   * failed on its own load metadata — the same shape of bug as the interaction
+   * list and the chat-window report.
+   */
+  it("accepts a loaded arm that stopped its load early because the run was narrowed", () => {
+    const report = benchmarkReport();
+    const name = busyLoadName(2, 60_000);
+    report.config.streamOnly = false;
+    report.config.arms = ["loaded"];
+    report.config.interactions = ["ticket_switch"];
+    report.arms[0] = {
+      ...report.arms[0],
+      name,
+      busyCores: 2,
+      interactions: [
+        aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+          streamSample({ latencyMs: 120 }),
+          streamSample({ latencyMs: 140 }),
+        ]),
+      ],
+      chatWindow: null,
+      load: {
+        configuredDurationMs: 60_000,
+        // Both shorter than the configured exposure: the arm ended when the
+        // measurements did, which is the whole point of narrowing it.
+        exposureDurationMs: 9_000,
+        measurementsDurationMs: 8_500,
+        completion: "narrowed-interactions-early-stop",
+      },
+    };
+
+    expect(validateBenchmarkReport(report)).toBe(report);
+  });
 });
 
 describe("interaction selection", () => {

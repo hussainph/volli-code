@@ -1166,20 +1166,40 @@ export function validateBenchmarkReport(report) {
       ) {
         throw new Error(`${arm.name} load metadata differs from the configured load arm`);
       }
+      // A run that measured every interaction holds its exposure open for the
+      // whole configured duration; the two narrowed shapes stop as soon as
+      // their measurements are done, and each says so in its own words.
+      // `--interactions` is the ordinary way to measure one interaction, so
+      // its early stop is an expected ending, not a broken arm.
+      const narrowed = !expectedInteractions.includes("stream_scroll");
       const expectedCompletion = report.config.streamOnly
         ? "quick-smoke-early-stop"
-        : "fixed-duration-complete";
+        : narrowed
+          ? "narrowed-interactions-early-stop"
+          : "fixed-duration-complete";
       if (arm.load.completion !== expectedCompletion) {
         throw new Error(`${arm.name} load ended as ${String(arm.load.completion)}`);
       }
+      // Only a full arm can be asked whether it received one COMPLETE
+      // fixed-duration exposure. A narrowed arm deliberately did not, and
+      // holding it to that bar would fail every run the flag exists to enable.
       if (
         !report.config.streamOnly &&
+        !narrowed &&
         (!Number.isFinite(arm.load.exposureDurationMs) ||
           arm.load.exposureDurationMs < expectedDurationMs ||
           !Number.isFinite(arm.load.measurementsDurationMs) ||
           arm.load.measurementsDurationMs >= expectedDurationMs)
       ) {
         throw new Error(`${arm.name} did not receive one complete fixed-duration exposure`);
+      }
+      if (
+        narrowed &&
+        (!Number.isFinite(arm.load.exposureDurationMs) ||
+          !Number.isFinite(arm.load.measurementsDurationMs) ||
+          arm.load.measurementsDurationMs > arm.load.exposureDurationMs)
+      ) {
+        throw new Error(`${arm.name} load did not cover its own measurements`);
       }
     }
   }

@@ -4,8 +4,9 @@ Scope: switching from one already-open ticket workspace to another, measured
 end to end, then broken into its parts so a fix could be chosen on evidence
 rather than on the shape of the code.
 
-The headline: **the switch was 707.5 ms p50 and is now 278.5 ms p50, a 61%
-cut.** None of it came from the thing this ticket was opened about.
+The headline: **the switch was 707.5 ms p50 and is now 278.5 ms p50 idle, a
+61% cut; 771.9 → 287.8 ms loaded, a 63% cut.** None of it came from the thing
+this ticket was opened about.
 
 ## The premise this ticket started from, and why it was wrong
 
@@ -28,14 +29,29 @@ One machine, one fixture, nothing else running.
 | Tree | `13312a74` (today's `main`) plus this branch's instrumentation |
 | Machine | MacBookPro17,1 · Apple M1 · 8 cores · 16 GB · macOS 26.5.1 (25F80) |
 | Fixture | `real` preset, seed 353259855 — 1,198 Sessions, 392 tickets, 373 MB |
-| Arms | idle only |
-| Repetitions | 20, after one discarded warm-up |
-| Command | `--preset real --interactions ticket_switch --arms idle --repetitions 20` |
+| Arms | idle, and loaded at 2 busy cores |
+| Repetitions | 20 per arm, after one discarded warm-up |
+| Command | `--preset real --interactions ticket_switch --arms <arm> --repetitions 20` |
 
-The loaded arm was not run. Both arms at 20 repetitions is the publishable
-pair this ticket ultimately wants; what is here is the idle arm, taken twice on
-the same quiet machine, which is enough to choose a fix and to show what it
-moved. Reports: `docs/performance-baselines/vc-385-ticket-switch-{before,after}/`.
+Four runs in all: before and after, on each arm, same machine, same fixture,
+nothing else running. Each "before" build is this branch's instrumentation on
+top of the unfixed palette, so a pair differs by the fix and by nothing else.
+
+Reports, all four under `docs/performance-baselines/`:
+
+| Run | Directory |
+|---|---|
+| idle, before | `vc-385-ticket-switch-before/` |
+| idle, after | `vc-385-ticket-switch-after/` |
+| loaded, before | `vc-385-ticket-switch-loaded-before/` |
+| loaded, after | `vc-385-ticket-switch-loaded-after/` |
+
+One caveat on the loaded arm: a narrowed run stops its busy workers once the
+measurements are done rather than holding the exposure open for the configured
+hour, and records that as `narrowed-interactions-early-stop`. So it is a
+2-busy-core exposure sized to the measurements, not a complete fixed-duration
+one. The two loaded runs here are comparable to each other; neither is
+comparable to a full nine-interaction matrix.
 
 ### How the split was taken
 
@@ -56,6 +72,8 @@ measurement instead of a phase that silently reads as zero.
 
 ## The split
 
+### Idle arm
+
 | Phase | Before p50 | After p50 | Before p95 | After p95 |
 |---|---:|---:|---:|---:|
 | **Whole switch** | **707.5 ms** | **278.5 ms** | **846.0 ms** | **414.1 ms** |
@@ -66,7 +84,30 @@ measurement instead of a phase that silently reads as zero.
 | settle | 81.8 ms | 85.1 ms | 105.1 ms | 190.0 ms |
 | ↳ of which `sessions.list` | 470.3 ms | 10.3 ms | 542.1 ms | 13.2 ms |
 
-Read the "before" column as the answer to the question the ticket asked:
+### Loaded arm (2 busy cores)
+
+| Phase | Before p50 | After p50 | Before p95 | After p95 |
+|---|---:|---:|---:|---:|
+| **Whole switch** | **771.9 ms** | **287.8 ms** | **1185.2 ms** | **351.3 ms** |
+| open palette | 37.3 ms | 39.3 ms | 51.7 ms | 53.5 ms |
+| find row | 615.3 ms | 120.9 ms | 941.5 ms | 146.9 ms |
+| rebuild workspace | 1.1 ms | 1.0 ms | 1.4 ms | 1.2 ms |
+| description editor | 30.1 ms | 27.1 ms | 37.8 ms | 30.9 ms |
+| settle | 103.4 ms | 88.5 ms | 157.6 ms | 140.0 ms |
+| ↳ of which `sessions.list` | 496.8 ms | 8.9 ms | 760.6 ms | 9.6 ms |
+
+The loaded arm is where this change matters most, and the tail is the reason.
+Contention does almost nothing to the switch's renderer work — the rebuild is
+1.1 ms on both arms, the description editor moves by a millisecond — but it
+punishes a blocking main-process transaction badly: `sessions.list` p95 was
+542 ms idle and 761 ms loaded before the fix. Removing the repeat read takes
+the loaded p95 from 1185.2 ms to 351.3 ms (−70%) and collapses its variance
+from 35,415 ms² to 1,308 ms², 27× tighter. The switch is not only faster, it
+is far more predictable under load — which is the state a person's machine is
+actually in while agents are running, and the state the original "feels slow"
+report came from.
+
+Read the idle "before" column as the answer to the question the ticket asked:
 
 - **66% of the switch was `sessions.list`.** Opening the command palette read
   every tracked project's whole Session listing, every time, with no cache.
@@ -108,7 +149,8 @@ does every other caller.
 ## What was considered and dropped
 
 **Stop rebuilding the workspace on every switch** — dropped. The rebuild is
-1.1 ms p50, 1.3 ms p95. `<Activity mode="hidden">` would keep the subtree's
+1.1 ms p50 and ≤ 1.4 ms p95, and it is 1.1 ms on the loaded arm too: it does
+not even degrade under contention. `<Activity mode="hidden">` would keep the subtree's
 DOM and state alive across switches at the cost of holding every open ticket's
 tree resident, and it still tears down effects when hiding — so the Monaco
 editor, which is created in an effect, would be destroyed and rebuilt anyway.
@@ -141,24 +183,37 @@ measure that.
 
 ## A budget, now that a clean "before" exists
 
-**Ticket switch, idle arm, `real` fixture: p50 ≤ 300 ms, p95 ≤ 450 ms.**
+`real` fixture, `--interactions ticket_switch`, 20 repetitions:
 
-Set from the measured "after" (278.5 / 414.1) with a little headroom, not from
-an aspiration. It is a ratchet against regression, not a target to optimise
-toward; the next honest reduction needs the loaded arm and a look at settle.
+| Arm | p50 | p95 |
+|---|---:|---:|
+| idle | ≤ 300 ms | ≤ 450 ms |
+| loaded, 2 busy cores | ≤ 320 ms | ≤ 400 ms |
+
+Set from the measured "after" (278.5 / 414.1 idle, 287.8 / 351.3 loaded) with a
+little headroom, not from an aspiration. A ratchet against regression, not a
+target to optimise toward.
+
+The loaded p95 budget is *tighter* than the idle one, which looks wrong and is
+not: the idle "after" p95 carries a settle outlier the loaded run did not (see
+below). If the settle noise turns out to be real rather than drift, the idle
+p95 budget is the one to revisit.
 
 ## Loose ends
 
-- **The loaded arm has never been run for this interaction.** Everything above
-  is idle-arm only.
-- **Settle got noisier.** p50 is unchanged (81.8 → 85.1 ms) but p95 went 105.1
-  → 190.0 ms and its variance rose eightfold. Two 20-repetition runs on one
-  machine cannot separate that from thermal drift, and the same caution the
-  ticket applied to the dropped-frame jump applies here: treat it as noise
-  until it repeats. Dropped frames p95 went 2 → 3 and long tasks 1 → 2, both
-  within the same doubt.
+- **Settle is the noisy one now.** On the idle arm its p50 is unchanged (81.8
+  → 85.1 ms) but p95 went 105.1 → 190.0 ms with variance up eightfold. The
+  loaded arm shows the opposite — settle p50 103.4 → 88.5 ms and p95 157.6 →
+  140.0 ms, both improving. A phase that gets worse on the quiet arm and better
+  on the busy one is not a regression the fix caused; it is two 20-repetition
+  runs on one machine failing to separate a tail from thermal drift. Same
+  caution the ticket applied to the dropped-frame jump: treat it as noise until
+  it repeats. Dropped frames p95 went 2 → 3 idle and stayed at 2 loaded, within
+  the same doubt.
 - **`sessions.list` is still slow, just rarer.** VC-388.
-- The description editor is now the largest phase after settle.
+- **The loaded arm is a narrowed exposure**, not a full fixed-duration one —
+  see the method note. Comparable within this pair only.
+- The description editor is now the largest phase after settle, on both arms.
 
 ## Harness fixes that came with this
 
@@ -172,3 +227,9 @@ Two bugs in `--interactions`, the flag this work depends on:
   the run was asked for, so a filtered run measured everything correctly and
   then refused to write its report. The filter is now recorded in
   `config.interactions` and validation honours it.
+- The loaded arm of a narrowed run stops its busy workers as soon as the
+  measurements are done, but validation only knew the two completions a full
+  run can end with, so it rejected its own arm as `load ended as
+  narrowed-interactions-early-stop`. Narrowed is now an expected ending, held
+  to a bar it can actually meet: the exposure has to cover its measurements,
+  rather than fill the configured hour.
