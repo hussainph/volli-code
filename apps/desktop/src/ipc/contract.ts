@@ -54,6 +54,7 @@ import type {
   LegacyProject,
   ManifestError,
   McpServerDraft,
+  McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
   DeliberateMoveChoice,
@@ -188,7 +189,19 @@ export interface McpSetToolsInput extends McpServerIdInput {
 }
 
 export type McpServersResult =
-  | { ok: true; servers: readonly McpServerRecord[] }
+  | {
+      ok: true;
+      servers: readonly McpServerRecord[];
+      /**
+       * This project's MCP management history, newest first (VC-380).
+       *
+       * Carried by the same read that fetches the servers rather than by a
+       * channel of its own: it is the same project scope, wanted at the same
+       * moment, and a removal's record is the one a person most needs to see
+       * precisely when its server is no longer in the list beside it.
+       */
+      operations: readonly McpOperationRecord[];
+    }
   | { ok: false; error: string };
 export type McpServerResult =
   | { ok: true; server: McpServerRecord }

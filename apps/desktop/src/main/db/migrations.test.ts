@@ -3578,3 +3578,107 @@ describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", ()
     db.close();
   });
 });
+
+describe("migrate — 050, MCP provenance and the management audit trail (VC-380)", () => {
+  it("adds provenance columns to an existing catalog without disturbing its rows", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 49 });
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO mcp_servers (id, project_id, name, enabled, transport, catalog, stale, error,
+                                refreshed_at, created_at, updated_at)
+       VALUES ('s1', 'p1', 'Fixture', 1, '{"type":"stdio"}', '[]', 0, NULL, NULL, 1, 1)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "mcp_servers")).toEqual([
+      "id",
+      "project_id",
+      "name",
+      "enabled",
+      "transport",
+      "catalog",
+      "stale",
+      "error",
+      "refreshed_at",
+      "created_at",
+      "updated_at",
+      "source",
+      "registry_type",
+      "version",
+      "digest",
+    ]);
+    // A server configured before provenance existed says so, rather than
+    // claiming an origin nobody recorded.
+    expect(
+      db.prepare("SELECT source, registry_type, version, digest FROM mcp_servers").get(),
+    ).toEqual({ source: null, registry_type: null, version: null, digest: null });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("adds an append-only operations table that outlives the server it names", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 49 });
+    expect(tableExists(db, "mcp_operations")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "mcp_operations")).toEqual([
+      "id",
+      "project_id",
+      "server_id",
+      "server_name",
+      "operation",
+      "outcome",
+      "summary",
+      "detail",
+      "source",
+      "registry_type",
+      "version",
+      "digest",
+      "session_id",
+      "ticket_id",
+      "created_at",
+    ]);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO mcp_operations (id, project_id, server_id, server_name, operation, outcome,
+                                   summary, detail, source, registry_type, version, digest,
+                                   session_id, ticket_id, created_at)
+       VALUES ('op1', 'p1', 'gone', 'Fixture', 'remove', 'applied', 'Removed Fixture.', NULL,
+               NULL, NULL, NULL, NULL, NULL, NULL, 5)`,
+    ).run();
+
+    // The whole point of the record: it survives the thing it is about, so a
+    // person can read what was removed after the row is gone.
+    expect(db.prepare("SELECT server_id FROM mcp_operations").pluck().get()).toBe("gone");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims 050", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.pragma("user_version = 49");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(columnNames(db, "mcp_servers")).toContain("registry_type");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});

@@ -78,7 +78,9 @@ import {
   askInteractionId,
   askUserInteractionId,
   budgetAskInteractionId,
+  confirmAskInteractionId,
   isBudgetCause,
+  isConfirmCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
@@ -1371,14 +1373,17 @@ class PiBinding implements BindingHandle {
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
     const offer = askOffer(request);
-    // Two frozen derivations, chosen by cause: a budget question keeps its own
-    // `budget-ask:` segment so that a gate ask and a budget ask about ONE tool
-    // call can never mint one interaction id — under a shared prefix the
-    // second `opened` emit would dedupe against the first and park a question
-    // nobody was shown. See `budgetAskInteractionId` in @volli/shared.
+    // Three frozen derivations, chosen by cause: a budget question keeps its
+    // own `budget-ask:` segment and a confirmation its `confirm-ask:` one, so
+    // that a gate ask and either of them about ONE tool call can never mint one
+    // interaction id — under a shared prefix the second `opened` emit would
+    // dedupe against the first and park a question nobody was shown. See
+    // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
     const interactionId = isBudgetCause(request.cause)
       ? budgetAskInteractionId(request.toolCallId)
-      : askInteractionId(request.toolCallId);
+      : isConfirmCause(request.cause)
+        ? confirmAskInteractionId(request.toolCallId)
+        : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",

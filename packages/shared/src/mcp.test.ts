@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   MCP_DESCRIPTION_MAX_CHARS,
+  MCP_PROVENANCE_VALUE_MAX_CHARS,
+  MCP_REGISTRY_TYPES,
   MCP_SCHEMA_MAX_CHARS,
   MCP_SCHEMA_MAX_DEPTH,
   MCP_SCHEMA_MAX_NODES,
@@ -9,8 +11,13 @@ import {
   MCP_SERVER_NAME_MAX_CHARS,
   MCP_TOOL_COUNT_MAX,
   MCP_TOOL_NAME_MAX_CHARS,
+  UNKNOWN_MCP_PROVENANCE,
   isMcpToolId,
+  mcpEndpointSecretRefusal,
+  mcpInstallWarning,
   mcpProviderToolName,
+  mcpRemovalWarning,
+  sanitizeMcpProvenance,
   sanitizeMcpServerDraft,
   sanitizeMcpToolDefinition,
   validateMcpToolDefinitions,
@@ -323,5 +330,139 @@ describe("validateMcpToolDefinitions", () => {
       validateMcpToolDefinitions([{ ...base, providerName: "mcp__not valid" as McpToolId }]),
     ).toThrow(/invalid MCP provider name/i);
     expect(validateMcpToolDefinitions([base])).toEqual([base]);
+  });
+});
+
+describe("sanitizeMcpProvenance", () => {
+  it("records where a config came from, as asked, without pretending to verify it", () => {
+    const result = sanitizeMcpProvenance({
+      source: "registry.modelcontextprotocol.io/io.github.acme/files",
+      registryType: "npm",
+      version: "1.4.2",
+      digest: "sha256:2f0c1d",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      provenance: {
+        source: "registry.modelcontextprotocol.io/io.github.acme/files",
+        registryType: "npm",
+        version: "1.4.2",
+        digest: "sha256:2f0c1d",
+      },
+    });
+  });
+
+  it("reads absence as unknown provenance rather than as a failure", () => {
+    expect(sanitizeMcpProvenance(undefined)).toEqual({
+      ok: true,
+      provenance: UNKNOWN_MCP_PROVENANCE,
+    });
+    expect(sanitizeMcpProvenance(null)).toEqual({ ok: true, provenance: UNKNOWN_MCP_PROVENANCE });
+    expect(UNKNOWN_MCP_PROVENANCE).toEqual({
+      source: null,
+      registryType: null,
+      version: null,
+      digest: null,
+    });
+  });
+
+  it("names the registry vocabulary the MCP server.json carries, and refuses anything else", () => {
+    expect(MCP_REGISTRY_TYPES).toEqual(["npm", "pypi", "nuget", "cargo", "oci", "mcpb"]);
+    for (const registryType of MCP_REGISTRY_TYPES) {
+      expect(sanitizeMcpProvenance({ registryType }).ok, registryType).toBe(true);
+    }
+    expect(sanitizeMcpProvenance({ registryType: "homebrew" })).toEqual({
+      ok: false,
+      reason: "registry type must be one of: npm, pypi, nuget, cargo, oci, mcpb",
+    });
+  });
+
+  it("refuses control characters and oversized values rather than storing them", () => {
+    expect(sanitizeMcpProvenance({ source: "line\nbreak" })).toEqual({
+      ok: false,
+      reason: "provenance source is invalid",
+    });
+    expect(
+      sanitizeMcpProvenance({ version: "v".repeat(MCP_PROVENANCE_VALUE_MAX_CHARS + 1) }),
+    ).toEqual({ ok: false, reason: "provenance version is invalid" });
+    expect(sanitizeMcpProvenance({ digest: "not a digest" })).toEqual({
+      ok: false,
+      reason: "provenance digest is invalid",
+    });
+    expect(sanitizeMcpProvenance({ source: 12 })).toEqual({
+      ok: false,
+      reason: "provenance source is invalid",
+    });
+    expect(sanitizeMcpProvenance("registry")).toEqual({
+      ok: false,
+      reason: "provenance must be an object",
+    });
+  });
+
+  it("trims each value and reads a blank one as unknown", () => {
+    expect(sanitizeMcpProvenance({ source: "  npm  ", version: "   " })).toEqual({
+      ok: true,
+      provenance: { source: "npm", registryType: null, version: null, digest: null },
+    });
+  });
+});
+
+describe("mcpInstallWarning", () => {
+  it("tells a caller a local server runs as them, with the command it will run", () => {
+    const warning = mcpInstallWarning({
+      id: "files",
+      name: "Files",
+      enabled: true,
+      transport: { type: "stdio", command: "npx", args: ["-y", "@acme/files-mcp"] },
+    });
+
+    expect(warning).toContain("npx -y @acme/files-mcp");
+    expect(warning).toContain("runs on this machine as you");
+    expect(warning).toContain("your files");
+    expect(warning).not.toContain("remote server");
+  });
+
+  it("tells a caller a remote server receives whatever its tools are given", () => {
+    const warning = mcpInstallWarning({
+      id: "search",
+      name: "Search",
+      enabled: true,
+      transport: { type: "streamable-http", url: "https://mcp.example.com/mcp?k=1" },
+    });
+
+    expect(warning).toContain("https://mcp.example.com");
+    expect(warning).toContain("receives whatever arguments its tools are given");
+    // The origin, never the query string: a path or parameter can carry a token.
+    expect(warning).not.toContain("k=1");
+    expect(warning).not.toContain("runs on this machine as you");
+    // Volli adds none of its own AND supports none, which is the whole truth
+    // now that a query-string credential is refused rather than tolerated.
+    expect(warning).toContain("Volli adds no credentials of its own");
+    expect(warning).toMatch(/supports no authentication/i);
+  });
+});
+
+describe("mcpEndpointSecretRefusal", () => {
+  it("says what was refused, why, and the one way through", () => {
+    const refusal = mcpEndpointSecretRefusal();
+
+    expect(refusal).toContain("query string");
+    // Why the SHAPE is refused rather than the value judged: Volli cannot tell
+    // a token from an ordinary parameter, and has nowhere safe to keep either.
+    expect(refusal).toMatch(/cannot tell a token from an ordinary parameter/i);
+    expect(refusal).toMatch(/plain text/i);
+    // A refusal with no way forward is a dead end, and the person path is real.
+    expect(refusal).toContain("Settings");
+  });
+});
+
+describe("mcpRemovalWarning", () => {
+  it("names the reattachment older Sessions lose, and offers disabling instead", () => {
+    const warning = mcpRemovalWarning("Files");
+
+    expect(warning).toContain("Files");
+    expect(warning).toContain("fail to reattach");
+    expect(warning).toContain("mcp_disable");
   });
 });

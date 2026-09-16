@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { McpCatalogTool, McpServerRecord, Project } from "@volli/shared";
+import type { McpCatalogTool, McpOperationRecord, McpServerRecord, Project } from "@volli/shared";
 import { mcpProviderToolName } from "@volli/shared";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -41,12 +41,31 @@ function record(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
     name: "Fixture",
     enabled: true,
     transport: { type: "stdio", command: "node", args: ["fixture.mjs"] },
+    provenance: { source: null, registryType: null, version: null, digest: null },
     catalog,
     stale: true,
     error: "Could not refresh Fixture.",
     refreshedAt: 1,
     createdAt: 1,
     updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function operation(overrides: Partial<McpOperationRecord> = {}): McpOperationRecord {
+  return {
+    id: "session-9:tc-1",
+    projectId: project.id,
+    serverId: "server-1",
+    serverName: "Fixture",
+    operation: "install",
+    outcome: "applied",
+    summary: "Installed Fixture (id server-1) with 1 of 2 tools on.",
+    detail: null,
+    provenance: { source: null, registryType: null, version: null, digest: null },
+    sessionId: "session-9",
+    ticketId: null,
+    createdAt: Date.now() - 3_600_000,
     ...overrides,
   };
 }
@@ -94,7 +113,7 @@ afterEach(async () => {
 
 describe("McpPane", () => {
   it("tests a direct argv configuration, defaults discovered tools off, and saves only an explicit choice", async () => {
-    const list = vi.fn(async () => ({ ok: true as const, servers: [] }));
+    const list = vi.fn(async () => ({ ok: true as const, servers: [], operations: [] }));
     const test = vi.fn(async () => ({ ok: true as const, catalog }));
     const save = vi.fn(async (input: { server: McpServerRecord }) => ({
       ok: true as const,
@@ -134,7 +153,7 @@ describe("McpPane", () => {
 
   it("loads an existing server for editing and explains both execution trust boundaries", async () => {
     const initial = record({ catalog: [{ ...catalog[0]!, enabled: true }] });
-    const list = vi.fn(async () => ({ ok: true as const, servers: [initial] }));
+    const list = vi.fn(async () => ({ ok: true as const, servers: [initial], operations: [] }));
     const save = vi.fn(async (input: { server: McpServerRecord }) => ({
       ok: true as const,
       server: record({ ...input.server, stale: false, error: null }),
@@ -170,7 +189,7 @@ describe("McpPane", () => {
     const initial = record();
     const selected = record({ catalog: [{ ...catalog[0]!, enabled: true }] });
     const refreshed = record({ stale: false, error: null });
-    const list = vi.fn(async () => ({ ok: true as const, servers: [initial] }));
+    const list = vi.fn(async () => ({ ok: true as const, servers: [initial], operations: [] }));
     const setTools = vi.fn(async () => ({ ok: true as const, server: selected }));
     const refresh = vi.fn(async () => ({ ok: true as const, server: refreshed }));
     const setEnabled = vi.fn(async () => ({
@@ -210,5 +229,125 @@ describe("McpPane", () => {
     );
     expect(remove).toHaveBeenCalledWith({ projectId: project.id, serverId: "server-1" });
     expect(container!.textContent).toContain("No MCP servers yet.");
+  });
+});
+
+describe("McpPane provenance (VC-380)", () => {
+  it("shows where a server came from, and says Volli did not verify it", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [
+        record({
+          stale: false,
+          error: null,
+          provenance: {
+            source: "registry.modelcontextprotocol.io/io.github.acme/files",
+            registryType: "npm",
+            version: "1.4.2",
+            digest: "sha256:2f0c1d",
+          },
+        }),
+      ],
+      operations: [],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    const text = container!.textContent ?? "";
+    expect(text).toContain("registry.modelcontextprotocol.io/io.github.acme/files");
+    expect(text).toContain("1.4.2");
+    expect(text).toContain("sha256:2f0c1d");
+    // A version and a digest shown without this read as a guarantee Volli
+    // never made: nothing is downloaded, so nothing is checked against them.
+    expect(text).toMatch(/not verified/i);
+  });
+
+  it("says nothing at all about origin when nobody recorded one", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [record({ stale: false, error: null })],
+      operations: [],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    // A server a person typed in by hand has no origin, and an empty
+    // "Source: —" row would be a control talking about nothing.
+    expect(container!.textContent ?? "").not.toMatch(/not verified/i);
+  });
+});
+
+describe("McpPane freshness (VC-380)", () => {
+  it("says when a catalog was last read, so a healthy row can be judged", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [record({ stale: false, error: null, refreshedAt: Date.now() - 7_200_000 })],
+      operations: [],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    expect(container!.textContent ?? "").toContain("2h ago");
+  });
+
+  it("says a catalog was never read rather than showing a stamp it does not have", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [record({ stale: false, error: null, refreshedAt: null })],
+      operations: [],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    expect(container!.textContent ?? "").toContain("Never refreshed");
+  });
+});
+
+describe("McpPane activity (VC-380)", () => {
+  it("shows a person what an agent Session installed, and when", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      servers: [record({ stale: false, error: null })],
+      operations: [operation()],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Recent activity");
+    expect(text).toContain("Installed Fixture (id server-1) with 1 of 2 tools on.");
+    expect(text).toContain("1h ago");
+    // Which agent matters less than THAT an agent did it rather than a person.
+    expect(text).toContain("by an agent Session");
+  });
+
+  it("keeps a removal and its recovery line, after the server row is gone", async () => {
+    const list = vi.fn(async () => ({
+      ok: true as const,
+      // The server is gone. Its record is the only place the transport survives,
+      // which is exactly the case a person needs the list for.
+      servers: [],
+      operations: [
+        operation({
+          operation: "remove",
+          summary: "Removed Fixture (id server-1) and its 2-tool catalog.",
+          detail: "Configuration recorded here so it can be re-added: local: node fixture.mjs.",
+        }),
+      ],
+    }));
+    await render({ list });
+    await act(async () => undefined);
+
+    const text = container!.textContent ?? "";
+    expect(text).toContain("Removed Fixture (id server-1) and its 2-tool catalog.");
+    expect(text).toContain("local: node fixture.mjs");
+  });
+
+  it("says nothing at all when this project has no history", async () => {
+    const list = vi.fn(async () => ({ ok: true as const, servers: [], operations: [] }));
+    await render({ list });
+    await act(async () => undefined);
+
+    expect(container!.textContent ?? "").not.toContain("Recent activity");
   });
 });

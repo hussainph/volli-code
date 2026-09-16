@@ -201,7 +201,9 @@ import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { createDesktopSessionEngine } from "./session-control";
 import { insertSession } from "./session-control/test-support";
-import { openTestDb, testSession } from "./db/test-helpers";
+import { recordMcpOperation } from "./db/mcp-operations-repo";
+import { insertProject } from "./db/projects-repo";
+import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { getProjectById } from "./db/projects-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
@@ -401,9 +403,13 @@ describe("MCP settings IPC", () => {
     const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
 
+    // One read carries both halves of what the pane shows: the servers, and
+    // the management history beside them (VC-380). Empty here because no
+    // operation has been recorded against this project.
     expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
       ok: true,
       servers: [{ id: "server-1" }],
+      operations: [],
     });
     await expect(
       invoke<Promise<unknown>>("volli:mcp-save" as never, {
@@ -418,6 +424,40 @@ describe("MCP settings IPC", () => {
       server: { id: "server-1" },
       enabledTools: ["echo"],
     });
+  });
+
+  it("carries this project's management history on the same read, scoped to it", () => {
+    insertProject(ctx.db, testProject({ id: "project-1", name: "One", path: "/repo/one" }));
+    insertProject(ctx.db, testProject({ id: "project-2", name: "Two", path: "/repo/two" }));
+    const entry = {
+      serverId: "server-1",
+      serverName: "Fixture",
+      operation: "install" as const,
+      outcome: "applied" as const,
+      detail: null,
+      provenance: { source: null, registryType: null, version: null, digest: null },
+      sessionId: "session-1",
+      ticketId: null,
+    };
+    recordMcpOperation(
+      ctx.db,
+      { ...entry, id: "session-1:a", projectId: "project-1", summary: "Installed Fixture." },
+      100,
+    );
+    recordMcpOperation(
+      ctx.db,
+      { ...entry, id: "session-1:b", projectId: "project-2", summary: "Elsewhere." },
+      200,
+    );
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list: () => [] } as never });
+
+    const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
+      projectId: "project-1",
+    });
+
+    // The pane reads one project. Another project's history appearing here
+    // would be a leak between projects, not merely untidy.
+    expect(result.operations.map((row) => row.summary)).toEqual(["Installed Fixture."]);
   });
 });
 

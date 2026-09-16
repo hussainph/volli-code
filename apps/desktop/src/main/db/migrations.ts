@@ -2069,6 +2069,65 @@ CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, 
 `;
 
 /**
+ * Migration 050: where a server came from, and what was done to it (VC-380).
+ *
+ * Two additions that answer two different questions a person asks after an
+ * agent has been managing MCP servers.
+ *
+ * `mcp_servers` gains four nullable provenance columns. They are RECORDED, not
+ * enforced: Volli fetches no package and checks no digest, so a stored
+ * `version` is what an install asked for and a stored `digest` is what it
+ * claimed, never what ran. Verifying either needs the download step, which is
+ * VC-379's. Nullable because the honest answer for a server a person typed in
+ * by hand is that nobody said.
+ *
+ * `mcp_operations` is an append-only log of MANAGEMENT operations — VC-8's
+ * activity path records MCP tool CALLS inside a transcript and nothing records
+ * installs. It deliberately holds `server_id` as plain text with NO foreign
+ * key: the record that matters most is the removal, and a row that cascaded
+ * away with the server it named would delete exactly the evidence a person
+ * came looking for. The project reference does cascade, because a record
+ * belonging to no project is unreachable by construction.
+ */
+const MIGRATION_050_MCP_PROVENANCE = `
+ALTER TABLE mcp_servers ADD COLUMN source TEXT;
+ALTER TABLE mcp_servers ADD COLUMN registry_type TEXT;
+ALTER TABLE mcp_servers ADD COLUMN version TEXT;
+ALTER TABLE mcp_servers ADD COLUMN digest TEXT;
+`;
+
+const MIGRATION_050_MCP_OPERATIONS = `
+CREATE TABLE IF NOT EXISTS mcp_operations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id     TEXT NOT NULL,
+  server_name   TEXT NOT NULL,
+  operation     TEXT NOT NULL CHECK (operation IN ('install', 'remove')),
+  outcome       TEXT NOT NULL CHECK (outcome IN ('applied', 'failed')),
+  summary       TEXT NOT NULL,
+  detail        TEXT,
+  source        TEXT,
+  registry_type TEXT,
+  version       TEXT,
+  digest        TEXT,
+  session_id    TEXT,
+  ticket_id     TEXT,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_operations_project_order ON mcp_operations(project_id, created_at DESC, id DESC);
+`;
+
+/**
+ * Migration 050 as one from-scratch statement.
+ *
+ * `Migration.sql` is what a from-scratch test fixture may exec directly, so it
+ * has to be the WHOLE migration, not the half that needs no probe. 040 and 041
+ * compose their two pieces the same way; `apply` below then re-runs the column
+ * half only when the schema does not already carry it.
+ */
+const MIGRATION_050 = `${MIGRATION_050_MCP_PROVENANCE}${MIGRATION_050_MCP_OPERATIONS}`;
+
+/**
  * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
  *
  * The immutable event log remains canonical. This table is an additive cache:
@@ -2383,7 +2442,40 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "session projection checkpoints — invalidate on canonical-prefix repair",
     sql: MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
   },
+  {
+    version: 50,
+    name: "mcp — recorded provenance and an append-only management audit trail",
+    sql: MIGRATION_050,
+    apply: applyMigration050McpProvenance,
+  },
 ];
+
+/**
+ * Migration 050's column additions, probe-gated like 040's and 041's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. All four
+ * columns are added together or not at all, so one probe covers the block.
+ *
+ * The audit table is executed here too rather than left to `sql`, because
+ * `migrate` treats `apply` as a REPLACEMENT for the declared statement, not as
+ * a step beside it. `CREATE TABLE IF NOT EXISTS` needs no probe of its own.
+ *
+ * `MIGRATION_050` still composes both halves, because `sql` is also what a
+ * from-scratch fixture execs directly; this function and that constant must
+ * describe the same migration, and a fixture that got only the audit table
+ * would build an `mcp_servers` with no provenance columns and fail far from
+ * here.
+ */
+function applyMigration050McpProvenance(db: Database.Database): void {
+  const columns = db.pragma("table_info(mcp_servers)") as { name: string }[];
+  if (!columns.some(({ name }) => name === "registry_type")) {
+    db.exec(MIGRATION_050_MCP_PROVENANCE);
+  }
+  db.exec(MIGRATION_050_MCP_OPERATIONS);
+}
 
 /**
  * Migration 044's reconciler, probe-gated like 040's and 041's.

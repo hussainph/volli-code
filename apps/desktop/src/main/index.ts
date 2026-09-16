@@ -1982,6 +1982,12 @@ app.whenReady().then(async () => {
               ? { sessionEngine, runtime: sessionRuntime }
               : null,
           delegate: delegationsFor,
+          // The MCP management family's host (VC-380): the SAME settings owner
+          // the Configure pane writes through and `resolveMcp` reads for a new
+          // Session's surface. One owner, so a server an agent installs and one
+          // a person adds by hand are the same row — not a resemblance this
+          // door maintains, but the same code.
+          mcp: () => mcpSettings,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),
