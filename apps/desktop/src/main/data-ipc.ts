@@ -93,8 +93,10 @@ import type {
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
+  ProjectRosterResult,
   UsageReportInput,
   UsageReportResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -138,7 +140,7 @@ import type {
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
 import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
-import { listAllLabels, setLabelColor } from "./db/labels-repo";
+import { listAllLabels, listLabelsByProject, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
   deleteProject,
@@ -158,9 +160,11 @@ import { createDesktopSessionEngine, sessionListingRows } from "./session-contro
 import { prepared } from "./db/prepared";
 import {
   getTicket,
+  getTicketBody,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
+  listTicketRosterByProject,
   listWorktreePaths,
   setTicketRetentionKeep,
 } from "./db/tickets-repo";
@@ -544,6 +548,28 @@ export function registerDataIpcHandlers(
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
+    },
+
+    /**
+     * The steady-state refresh read (VC-387): one project's live board, no
+     * bodies. `volli:data-bootstrap` remains what a WINDOW boots from — it
+     * carries every project, the app_state rows, and the bodies that make an
+     * opened Body editor instant — and this is what a targeted
+     * `volli:data-changed` re-reads instead of all of it.
+     *
+     * An unknown project is refused rather than answered with an empty board:
+     * an empty list is indistinguishable from "this project has no tickets",
+     * and hydrating that would clear a live slice off the board.
+     */
+    "volli:data-project-roster": (input: ProjectIdInput): ProjectRosterResult => {
+      if (getProjectById(db, input.projectId) === undefined) {
+        return { ok: false, error: "Unknown project" };
+      }
+      return {
+        ok: true,
+        tickets: listTicketRosterByProject(db, input.projectId),
+        labels: listLabelsByProject(db, input.projectId),
+      };
     },
 
     "volli:database": async (action?: DatabaseAction): Promise<DatabaseResult> => {
@@ -967,6 +993,17 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-events": (input: TicketIdInput): TicketEventsResult => {
       return { ok: true, events: listTicketEvents(db, input.ticketId) };
+    },
+
+    /**
+     * One ticket's body — what the refresh roster stopped carrying (VC-387).
+     * Read by the ticket that is OPEN, on arrival and on each planning change
+     * that names it, which is the only place a body is ever rendered.
+     */
+    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => {
+      const body = getTicketBody(db, input.ticketId);
+      if (body === undefined) return { ok: false, error: "Unknown ticket" };
+      return { ok: true, body };
     },
 
     "volli:ticket-latest-signals": async (

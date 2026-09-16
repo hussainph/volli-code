@@ -10,7 +10,13 @@ import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-import { boot, refreshPlanningData, type BootGateway, type BootStorage } from "./boot";
+import {
+  boot,
+  refreshPlanningData,
+  resetPlanningRecoveryForTest,
+  type BootGateway,
+  type BootStorage,
+} from "./boot";
 import { takeBootNotice } from "./boot-notice";
 
 /** A full BootstrapPayload, defaulting to the "nothing here yet" shape. */
@@ -27,12 +33,17 @@ function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
 /** A fake in-memory gateway implementing BootGateway's result unions, controllable per test. */
 function fakeGateway(overrides: Partial<BootGateway> = {}): BootGateway {
   const bootstrap = vi.fn<BootGateway["bootstrap"]>(async () => ({ ok: true, data: payload() }));
+  const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+    ok: true,
+    tickets: [],
+    labels: [],
+  }));
   const importLegacy = vi.fn<BootGateway["importLegacy"]>(async () => ({
     ok: true,
     data: payload(),
     imported: 0,
   }));
-  return { bootstrap, importLegacy, ...overrides };
+  return { bootstrap, projectRoster, importLegacy, ...overrides };
 }
 
 /** A fake localStorage-shaped BootStorage, Map-backed so `key`/`length` behave like the real thing. */
@@ -491,6 +502,13 @@ describe("boot", () => {
 });
 
 describe("refreshPlanningData", () => {
+  // The "a read failed, heal wholesale next time" bit is module state and
+  // outlives a test: drained here so a failing-read test cannot decide how the
+  // NEXT test's targeted change is read.
+  beforeEach(() => {
+    resetPlanningRecoveryForTest();
+  });
+
   it("replaces planning stores from a fresh bootstrap while preserving the live selection", async () => {
     const project = {
       id: "p1",
@@ -533,6 +551,149 @@ describe("refreshPlanningData", () => {
     expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
     expect(useProjectsStore.getState().selectedProjectId).toBe("p1");
     expect(useBoardStore.getState().ticketsByProject.p1).toEqual([ticket]);
+  });
+
+  it("refreshes only a known project's roster", async () => {
+    const existingTicket = {
+      id: "t1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "Before",
+      body: "Keep this body",
+      status: "backlog" as const,
+      priority: "medium" as const,
+      labels: [],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code" as const,
+      order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      prUrl: null,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    const refreshedTicket = {
+      id: "t1",
+      projectId: "p1",
+      ticketNumber: 1,
+      title: "After",
+      status: "doing" as const,
+      priority: "medium" as const,
+      labels: ["bug"],
+      usesWorktree: true,
+      preferredHarnessId: "claude-code" as const,
+      order: 0,
+      worktreePath: null,
+      branch: null,
+      baseBranch: null,
+      prUrl: null,
+      createdAt: 0,
+      updatedAt: 1,
+    };
+    const label = { id: "l1", projectId: "p1", name: "bug", color: null };
+    useBoardStore.getState().hydrate({ p1: [existingTicket], p2: [] }, { p1: [], p2: [] });
+    const untouchedTickets = useBoardStore.getState().ticketsByProject.p2;
+    const beforeChange = useBoardStore.getState().lastPlanningChange.version;
+    const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+      ok: true,
+      tickets: [refreshedTicket],
+      labels: [label],
+    }));
+    const gateway = fakeGateway({ projectRoster });
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+
+    expect(projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
+    expect(gateway.bootstrap).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().ticketsByProject.p1).toEqual([
+      { ...refreshedTicket, body: "Keep this body" },
+    ]);
+    expect(useBoardStore.getState().labelsByProject.p1).toEqual([label]);
+    expect(useBoardStore.getState().ticketsByProject.p2).toBe(untouchedTickets);
+    expect(useBoardStore.getState().lastPlanningChange).toEqual({
+      version: beforeChange + 1,
+      ticketId: null,
+      projectId: "p1",
+    });
+  });
+
+  it("refreshes wholesale when the change names a project the board does not hold", async () => {
+    const project = {
+      id: "p1",
+      name: "P1",
+      path: "/p1",
+      ticketPrefix: "P1",
+      colorIndex: 0,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    useProjectsStore.getState().hydrate([project], "p1");
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const gateway = fakeGateway();
+
+    expect(await refreshPlanningData({ projectId: "p-new", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+
+    expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects).toEqual([]);
+    expect(useBoardStore.getState().ticketsByProject).toEqual({});
+  });
+
+  it("forces the next refresh wholesale after a scoped failure", async () => {
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => ({
+      ok: false,
+      error: "db gone",
+    }));
+    const gateway = fakeGateway({ projectRoster });
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: false,
+      error: "db gone",
+    });
+    projectRoster.mockClear();
+
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(gateway.bootstrap).toHaveBeenCalledTimes(1);
+    expect(projectRoster).not.toHaveBeenCalled();
+  });
+
+  it("forces the next refresh wholesale after a wholesale failure, then clears recovery", async () => {
+    useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+    let firstCall = true;
+    const bootstrap = vi.fn<BootGateway["bootstrap"]>(async () => {
+      if (firstCall) {
+        firstCall = false;
+        return { ok: false, error: "db gone" };
+      }
+      return {
+        ok: true,
+        data: payload({ ticketsByProject: { p1: [] }, labelsByProject: { p1: [] } }),
+      };
+    });
+    const gateway = fakeGateway({ bootstrap });
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: false, error: "db gone" });
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(bootstrap).toHaveBeenCalledTimes(2);
+    expect(gateway.projectRoster).not.toHaveBeenCalled();
+
+    bootstrap.mockClear();
+    expect(await refreshPlanningData({ projectId: "p1", kind: "ticket" }, gateway)).toEqual({
+      ok: true,
+    });
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(gateway.projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
   });
 
   it("publishes lastPlanningChange so per-ticket surfaces refetch, but only on a successful refresh", async () => {
@@ -593,6 +754,30 @@ describe("refreshPlanningData", () => {
         });
       });
       expect(snapshot).toHaveBeenLastCalledWith("p1", "t1");
+    });
+
+    it("keeps the venue boundary around a scoped roster refresh", async () => {
+      const snapshot = stubVenueSnapshot({ state: "measured", venue: venue() });
+      await seedVenues();
+      useBoardStore.getState().hydrate({ p1: [] }, { p1: [] });
+      const seen: unknown[] = [];
+      const projectRoster = vi.fn<BootGateway["projectRoster"]>(async () => {
+        seen.push(useVenueStore.getState().byScope[venueKey("p1", "t1")]);
+        seen.push(snapshot.mock.calls.length);
+        return { ok: true, tickets: [], labels: [] };
+      });
+      const gateway = fakeGateway({ projectRoster });
+
+      await refreshPlanningData({ ticketId: "t1", projectId: "p1", kind: "worktree" }, gateway);
+
+      expect(seen).toEqual([{ status: "loading" }, 2]);
+      expect(gateway.bootstrap).not.toHaveBeenCalled();
+      expect(projectRoster).toHaveBeenCalledWith({ projectId: "p1" });
+      await vi.waitFor(() => {
+        expect(useVenueStore.getState().byScope[venueKey("p1", "t1")]).toMatchObject({
+          status: "ready",
+        });
+      });
     });
 
     it("leaves Home's project venue card measuring the main checkout", async () => {
@@ -682,6 +867,28 @@ describe("refreshPlanningData", () => {
       expect(result).toEqual({ ok: false, error: "db gone" });
       await vi.waitFor(() => {
         expect(snapshot).toHaveBeenCalledWith("p1", "t1");
+      });
+    });
+  });
+
+  describe("a comment", () => {
+    it("re-reads nothing: no row the board holds can have moved", async () => {
+      const gateway = fakeGateway();
+      const before = useBoardStore.getState().lastPlanningChange.version;
+
+      const result = await refreshPlanningData(
+        { ticketId: "t1", projectId: "p1", kind: "comment" },
+        gateway,
+      );
+
+      expect(result).toEqual({ ok: true });
+      expect(gateway.bootstrap).not.toHaveBeenCalled();
+      // The per-ticket surfaces still hear about it — the Activity feed IS how
+      // a comment reaches the screen.
+      expect(useBoardStore.getState().lastPlanningChange).toEqual({
+        version: before + 1,
+        ticketId: "t1",
+        projectId: "p1",
       });
     });
   });

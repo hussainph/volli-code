@@ -31,6 +31,7 @@ import type {
   LabelResult,
   Result,
   TicketResult,
+  TicketRosterRow,
   TicketsResult,
 } from "../../../ipc/contract";
 import { create } from "zustand";
@@ -178,6 +179,35 @@ interface BoardState {
     ticketsByProject: Record<string, Ticket[]>,
     labelsByProject: Record<string, Label[]>,
   ): void;
+  /**
+   * Seeds ONE project's tickets/labels from the steady-state refresh read
+   * (`volli:data-project-roster`, VC-387) — the scoped sibling of
+   * {@link BoardState.hydrate}, and the path a socket-originated change that
+   * names its project arrives on.
+   *
+   * Two things it does that a wholesale hydrate cannot. Every OTHER project's
+   * slice keeps its identity, so an agent commenting in one project no longer
+   * re-renders the boards of the others. And the roster carries no `body`, so
+   * each row is completed with the body this store already holds — a ticket
+   * this renderer has never seen gets `""` until {@link BoardState.adoptTicketBody}
+   * fills it, which is what opening that ticket does.
+   *
+   * A no-op for a project this renderer does not hold: bringing one back needs
+   * the projects store too, which only a wholesale hydrate carries.
+   */
+  hydrateProjectRoster(
+    projectId: string,
+    tickets: readonly TicketRosterRow[],
+    labels: Label[],
+  ): void;
+  /**
+   * Adopts one ticket's body, read on its own because the refresh roster no
+   * longer carries it (VC-387). A no-op for a ticket the board does not hold
+   * (archived, deleted, or in a project this renderer forgot) and for a body
+   * that already matches — an unchanged body must not mint a new ticket object,
+   * or every planning change would re-render the open ticket for nothing.
+   */
+  adoptTicketBody(projectId: string, ticketId: string, body: string): void;
   /**
    * Seeds empty `ticketsByProject`/`labelsByProject` slices for a project that
    * didn't exist at boot — mirroring the wholesale seed `hydrate` does from
@@ -561,6 +591,39 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
             projectId: change?.projectId ?? null,
           },
         });
+      },
+
+      hydrateProjectRoster(projectId, tickets, labels) {
+        // Never resurrect a forgotten project, the rule every ticket mutation
+        // reconciles under: a scoped read answers about one project, and a
+        // project this renderer has dropped must come back through a wholesale
+        // hydrate (which carries the projects store with it) or not at all.
+        const previous = get().ticketsByProject[projectId];
+        if (previous === undefined) return;
+        const bodyById = new Map(previous.map((ticket) => [ticket.id, ticket.body]));
+        const next = tickets.map((row) => ({ ...row, body: bodyById.get(row.id) ?? "" }));
+        set({
+          ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
+          labelsByProject: { ...get().labelsByProject, [projectId]: labels },
+        });
+        // The same re-home a wholesale hydrate does, for the same reason: a CLI
+        // archive or another window's mutation drops a ticket here with no local
+        // action to hang owner reconciliation off.
+        reconcileTicketChatTabOwners(projectId, previous, next);
+      },
+
+      adoptTicketBody(projectId, ticketId, body) {
+        const slice = get().ticketsByProject[projectId];
+        if (slice === undefined) return;
+        const index = slice.findIndex((ticket) => ticket.id === ticketId);
+        const current = slice[index];
+        if (current === undefined || current.body === body) return;
+        // One replaced entry in a copied array, rather than a mapped rebuild:
+        // every OTHER ticket keeps its object identity, so adopting one body
+        // cannot re-render the cards beside it.
+        const next = [...slice];
+        next[index] = { ...current, body };
+        set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: next } });
       },
 
       hydrate(ticketsByProject, labelsByProject) {

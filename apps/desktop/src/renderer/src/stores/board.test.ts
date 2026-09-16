@@ -48,6 +48,17 @@ function ticket(overrides: Partial<Ticket> & { status: TicketStatus }): Ticket {
   };
 }
 
+/** One roster row — a ticket as the steady-state refresh carries it, i.e. without its body (VC-387). */
+function rosterRow(overrides: Partial<Ticket> & { status: TicketStatus }): Omit<Ticket, "body"> {
+  const { body: _body, ...rest } = ticket(overrides);
+  return rest;
+}
+
+/** One label, named. */
+function labelNamed(name: string): Label {
+  return { id: `l-${name}`, projectId: "p1", name, color: null };
+}
+
 /** An archived ticket fixture: a live ticket plus its `archivedAt` stamp. */
 function archivedTicket(
   overrides: Partial<ArchivedTicket> & { status: TicketStatus },
@@ -133,6 +144,114 @@ describe("hydrate", () => {
 
     expect(store.getState().ticketsByProject.p1).toBe(tickets);
     expect(store.getState().labelsByProject.p1).toBe(labels);
+  });
+});
+
+describe("hydrateProjectRoster", () => {
+  it("replaces one project's board and leaves every other project's slice untouched", () => {
+    const store = createBoardStore(fakeGateway());
+    const others = [ticket({ id: "o1", projectId: "p2", status: "todo" })];
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog" })], p2: others }, {});
+
+    store
+      .getState()
+      .hydrateProjectRoster("p1", [rosterRow({ id: "a", status: "doing" })], [labelNamed("bug")]);
+
+    expect(store.getState().ticketsByProject.p1?.map(({ id, status }) => ({ id, status }))).toEqual(
+      [{ id: "a", status: "doing" }],
+    );
+    expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
+    // Identity, not equality: a project the change did not name must not
+    // re-render because another project's agent posted something.
+    expect(store.getState().ticketsByProject.p2).toBe(others);
+  });
+
+  it("carries forward the body the roster no longer carries", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "backlog", body: "# Scope" })] }, {});
+
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "a", status: "doing" })], []);
+
+    expect(store.getState().ticketsByProject.p1?.[0]).toMatchObject({
+      id: "a",
+      status: "doing",
+      body: "# Scope",
+    });
+  });
+
+  it("gives a ticket it has never seen an empty body until that ticket is opened", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [] }, {});
+
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "new", status: "todo" })], []);
+
+    expect(store.getState().ticketsByProject.p1?.[0]).toMatchObject({ id: "new", body: "" });
+  });
+
+  it("refuses to resurrect a project the board no longer holds", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [] }, { p1: [] });
+
+    store
+      .getState()
+      .hydrateProjectRoster("forgotten", [rosterRow({ id: "a", status: "todo" })], []);
+
+    // Same rule every ticket mutation reconciles under: a slice that is gone is
+    // gone, and a scoped read must never bring its project back.
+    expect(store.getState().ticketsByProject.forgotten).toBeUndefined();
+    expect(store.getState().labelsByProject.forgotten).toBeUndefined();
+  });
+
+  it("re-homes the chat tabs of a ticket the roster no longer names", () => {
+    resetChatTabs();
+    const store = createBoardStore(fakeGateway());
+    store
+      .getState()
+      .hydrate(
+        { p1: [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "doing" })] },
+        {},
+      );
+    useChatSessionsStore.setState({ openTabs: { a: ["c1"], b: ["c2"] } });
+
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ id: "b", status: "doing" })], []);
+
+    expect(useChatSessionsStore.getState().openTabs).toEqual({ b: ["c2"], p1: ["c1"] });
+  });
+});
+
+describe("adoptTicketBody", () => {
+  it("fills in the body the roster did not carry", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    store.getState().adoptTicketBody("p1", "a", "# Scope\n\nDo the thing.");
+
+    expect(store.getState().ticketsByProject.p1?.[0]?.body).toBe("# Scope\n\nDo the thing.");
+  });
+
+  it("mints nothing when the body it read is the one already held", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing", body: "# Scope" })] }, {});
+    const before = store.getState().ticketsByProject.p1;
+
+    store.getState().adoptTicketBody("p1", "a", "# Scope");
+
+    // Identity: an unchanged body arriving on every planning change must not
+    // re-render the open ticket.
+    expect(store.getState().ticketsByProject.p1).toBe(before);
+  });
+
+  it("ignores a body for a ticket the board no longer holds", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, {});
+
+    store.getState().adoptTicketBody("p1", "archived-since", "# Gone");
+    store.getState().adoptTicketBody("forgotten-project", "a", "# Gone");
+
+    expect(store.getState().ticketsByProject.p1?.map(({ id, body }) => ({ id, body }))).toEqual([
+      { id: "a", body: "" },
+    ]);
+    expect(store.getState().ticketsByProject["forgotten-project"]).toBeUndefined();
   });
 });
 

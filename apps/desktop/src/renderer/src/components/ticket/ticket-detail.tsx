@@ -51,6 +51,7 @@ import {
 } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
+import { useTicketBody } from "@renderer/components/ticket/use-ticket-body";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
   createTicketRecencyWatchOwner,
@@ -205,6 +206,7 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
+  useTicketBody(ticket);
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
   const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);

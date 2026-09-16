@@ -13,6 +13,7 @@ import type {
   DataChangeKind,
   LegacyImportRequest,
   LegacyImportResult,
+  ProjectRosterResult,
 } from "../../../ipc/contract";
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
@@ -39,13 +40,55 @@ const LEGACY_PREFIX = "volli:";
 /** The subset of the preload API boot() needs — narrow and fake-able for tests. */
 export interface BootGateway {
   bootstrap(): Promise<BootstrapResult>;
+  projectRoster(input: { projectId: string }): Promise<ProjectRosterResult>;
   importLegacy(req: LegacyImportRequest): Promise<LegacyImportResult>;
 }
 
 const defaultGateway: BootGateway = {
   bootstrap: () => window.api.data.bootstrap(),
+  projectRoster: (input) => window.api.data.projectRoster(input),
   importLegacy: (req) => window.api.data.importLegacy(req),
 };
+
+/**
+ * Whether a change of this kind can have moved a row the board store holds.
+ *
+ * `comment` is the one kind that provably cannot: a comment is a row in
+ * `ticket_comments`, the board holds `tickets`, and nothing on a card is
+ * derived from either the comment feed or its count. Every other kind either
+ * writes the ticket row (`ticket`, `worktree`, `retention`) or can move it
+ * (`session` starts a Session, which moves the ticket into Doing) — and an
+ * ABSENT kind is the conservative arm, because the caller could not name what
+ * it changed.
+ *
+ * This is the VC-387 read that used to happen anyway: an agent posting one
+ * comment per turn cost a full board re-read per turn, and a dozen of them
+ * made a dozen. The change is still published (see the caller) — what stops is
+ * the SQLite read behind it.
+ */
+function movesBoardData(kind: DataChangeKind | undefined): boolean {
+  return kind !== "comment";
+}
+
+/**
+ * A failed snapshot may have missed the mutation that triggered it, so the next
+ * board-moving signal must replace every planning slice rather than trust scope.
+ *
+ * Window-global because the staleness is: one renderer has one board, and the
+ * scoped read is exactly the read that cannot repair a slice it does not name.
+ */
+let planningRefreshNeedsRecovery = false;
+
+/**
+ * Forget that a refresh failed, so one test's failed read cannot make the next
+ * test's targeted change go wholesale. The isolation half of the flag above,
+ * on `broadcast.ts`'s `resetDataChangedForTest` pattern — module state that
+ * outlives a test has to have a door, or the suite silently depends on its own
+ * order.
+ */
+export function resetPlanningRecoveryForTest(): void {
+  planningRefreshNeedsRecovery = false;
+}
 
 /** The minimal localStorage surface boot() needs — narrow enough to fake in tests. */
 export interface BootStorage {
@@ -60,10 +103,22 @@ export type BootResult = { ok: true } | { ok: false; error: string };
 /**
  * Rehydrates only server-owned planning data after a socket-originated mutation.
  * `change` is the `volli:data-changed` payload's scope (the affected ticket/
- * project, or `{}` for an untargeted refresh): the board hydrate below is always
- * wholesale (the recovery guarantee), but the scope is published so per-ticket
- * surfaces can skip a refetch when the change provably targets a different
- * ticket — see `useBoardStore().lastPlanningChange`.
+ * project, or `{}` for an untargeted refresh). A change naming a project the
+ * board already holds reads and replaces only that project's ticket/label
+ * roster. An untargeted change, one naming a project this window does not yet
+ * hold, or the first board-moving change after a failed read uses bootstrap to
+ * replace projects and every board slice wholesale. That successful wholesale
+ * read clears recovery, so a stale board always has a healing path. Every
+ * successful path still publishes the scope for per-ticket surfaces — see
+ * `useBoardStore().lastPlanningChange`.
+ *
+ * THE RECOVERY GUARANTEE IS RESTATED, NOT PRESERVED (VC-387). It used to be
+ * "always wholesale", so any broadcast repaired any drift; what is given up is
+ * that a comment no longer repairs it, because a comment no longer reads at
+ * all. That repair was a side effect of the read this ticket removed — a dozen
+ * agents commenting once a turn cost a dozen whole-board reads a turn — and the
+ * three rules above replace it. The measurements are in
+ * `docs/research/perf/board-refresh-vc387.md`.
  *
  * IT IS ALSO THE VENUE BOUNDARY (VC-286). A `worktree` change is the one kind
  * that moves WHERE a ticket's Session runs — materialized, removed, recreated,
@@ -77,13 +132,40 @@ export type BootResult = { ok: true } | { ok: false; error: string };
  */
 export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
-  gateway: Pick<BootGateway, "bootstrap"> = defaultGateway,
+  gateway: Pick<BootGateway, "bootstrap" | "projectRoster"> = defaultGateway,
 ): Promise<BootResult> {
   const movedCheckout = change.kind === "worktree";
   if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
+  if (!movesBoardData(change.kind)) {
+    // Nothing the board holds can have moved, so there is no read to make. The
+    // signal still goes out: a comment reaches the screen through the Activity
+    // feed, which refetches off `lastPlanningChange`.
+    useBoardStore.getState().notePlanningChange(change);
+    return { ok: true };
+  }
   try {
+    const projectId = change.projectId;
+    if (
+      !planningRefreshNeedsRecovery &&
+      projectId !== undefined &&
+      projectId in useBoardStore.getState().ticketsByProject
+    ) {
+      const result = await gateway.projectRoster({ projectId });
+      if (!result.ok) {
+        planningRefreshNeedsRecovery = true;
+        return result;
+      }
+      useBoardStore.getState().hydrateProjectRoster(projectId, result.tickets, result.labels);
+      useBoardStore.getState().notePlanningChange(change);
+      return { ok: true };
+    }
+
     const result = await gateway.bootstrap();
-    if (!result.ok) return result;
+    if (!result.ok) {
+      planningRefreshNeedsRecovery = true;
+      return result;
+    }
+    planningRefreshNeedsRecovery = false;
     const { projects, ticketsByProject, labelsByProject } = result.data;
     const previousSelection = useProjectsStore.getState().selectedProjectId;
     const selectedProjectId = projects.some(({ id }) => id === previousSelection)
@@ -99,6 +181,9 @@ export async function refreshPlanningData(
     // mount fresh there).
     useBoardStore.getState().notePlanningChange(change);
     return { ok: true };
+  } catch (error) {
+    planningRefreshNeedsRecovery = true;
+    throw error;
   } finally {
     // In a `finally` because a failed hydrate is not a reason to leave a
     // discarded venue waiting on a read nobody will make: the checkout moved

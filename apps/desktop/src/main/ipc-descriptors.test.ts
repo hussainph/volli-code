@@ -2022,9 +2022,13 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 74 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(74);
+    it("covers all 76 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(76);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      // The steady-state refresh pair (VC-387): one project's board without
+      // bodies, and one ticket's body for the ticket that is open.
+      expect(DATA_CHANNELS).toContain("volli:data-project-roster");
+      expect(DATA_CHANNELS).toContain("volli:ticket-body");
       expect(DATA_CHANNELS).toContain("volli:usage-report");
       // The authority policy write (VC-172). App-only on purpose: there is no
       // agent verb behind it, because the agent must not author the policy that

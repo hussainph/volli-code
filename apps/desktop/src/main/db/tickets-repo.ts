@@ -17,6 +17,7 @@ import {
   type TicketPriority,
   type TicketStatus,
 } from "@volli/shared";
+import type { TicketRosterRow } from "../../ipc/contract";
 import { prepared } from "./prepared";
 
 export interface TicketRow {
@@ -57,11 +58,37 @@ export interface TicketRow {
  * so a row that fails this check is dropped rather than mapped, with one
  * `console.warn` identifying the ticket id and the bad status for
  * visibility at the dev level.
+ *
+ * Takes the two columns it reads rather than a whole {@link TicketRow}, so the
+ * body-less roster read (VC-387) runs the same guard as every other read path
+ * instead of needing one of its own.
  */
-function hasKnownStatus(row: TicketRow): boolean {
+function hasKnownStatus(row: Pick<TicketRow, "id" | "status">): boolean {
   if (isTicketStatus(row.status)) return true;
   console.warn(`[volli] dropping ticket ${row.id} with unknown status "${row.status}"`);
   return false;
+}
+
+/** The board-facing half of a row — everything {@link mapTicket} maps except the body. */
+function mapTicketRosterRow(row: Omit<TicketRow, "body">, labels: string[]): TicketRosterRow {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    ticketNumber: row.ticket_number,
+    title: row.title,
+    status: row.status as TicketStatus,
+    priority: row.priority as TicketPriority,
+    labels,
+    usesWorktree: row.uses_worktree !== 0,
+    preferredHarnessId: row.preferred_harness_id as Ticket["preferredHarnessId"],
+    order: row.position,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
+    baseBranch: row.base_branch,
+    prUrl: row.pr_url,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 function mapTicket(row: TicketRow, labels: string[]): Ticket {
@@ -217,6 +244,46 @@ export function listAllTickets(db: Database.Database): Ticket[] {
   ).all();
   const labelsByTicket = labelNamesByTicketAll(db);
   return rows.filter(hasKnownStatus).map((row) => mapTicket(row, labelsByTicket.get(row.id) ?? []));
+}
+
+/**
+ * Every LIVE ticket in a project WITHOUT its body, labels attached — the
+ * steady-state refresh read (VC-387).
+ *
+ * The column list is spelled out rather than `SELECT *` because the omission IS
+ * the feature: the body is ~90% of a board's bytes and no board surface draws
+ * it, so a refresh that re-read it was paying for a column it then ignored. The
+ * order and the live-only predicate match {@link listTicketsByProject} exactly,
+ * because a refresh must produce the same board the boot payload did.
+ */
+export function listTicketRosterByProject(
+  db: Database.Database,
+  projectId: string,
+): TicketRosterRow[] {
+  const rows = prepared<[string], Omit<TicketRow, "body">>(
+    db,
+    `SELECT id, project_id, ticket_number, title, status, priority, uses_worktree,
+            preferred_harness_id, position, worktree_path, branch, base_branch, pr_url,
+            created_at, updated_at
+       FROM tickets
+      WHERE project_id = ? AND archived_at IS NULL
+      ORDER BY status, position`,
+  ).all(projectId);
+  const labelsByTicket = labelNamesByTicket(db, projectId, "live");
+  return rows
+    .filter(hasKnownStatus)
+    .map((row) => mapTicketRosterRow(row, labelsByTicket.get(row.id) ?? []));
+}
+
+/**
+ * One ticket's body, or `undefined` when no row matches — the per-ticket read
+ * that replaces the body the roster stopped carrying (VC-387). A corrupt status
+ * is irrelevant here: a body is a body whatever column the row claims to be in.
+ */
+export function getTicketBody(db: Database.Database, ticketId: string): string | undefined {
+  return prepared<[string], { body: string }>(db, "SELECT body FROM tickets WHERE id = ?").get(
+    ticketId,
+  )?.body;
 }
 
 /**
