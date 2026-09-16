@@ -93,8 +93,10 @@ import type {
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
+  ProjectRosterResult,
   UsageReportInput,
   UsageReportResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketCreateInput,
@@ -138,7 +140,7 @@ import type {
 import { getAllAppState, setAppState } from "./db/app-state-repo";
 import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
 import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
-import { listAllLabels, setLabelColor } from "./db/labels-repo";
+import { listAllLabels, listLabelsByProject, setLabelColor } from "./db/labels-repo";
 import {
   countProjects,
   deleteProject,
@@ -158,9 +160,11 @@ import { createDesktopSessionEngine, sessionListingRows } from "./session-contro
 import { prepared } from "./db/prepared";
 import {
   getTicket,
+  getTicketBody,
   getTicketRow,
   listAllTickets,
   listArchivedTicketsByProject,
+  listTicketRosterByProject,
   listWorktreePaths,
   setTicketRetentionKeep,
 } from "./db/tickets-repo";
@@ -250,6 +254,21 @@ function recordInterruptFailure(error: unknown): void {
 }
 
 // ---- bootstrap payload --------------------------------------------------
+
+/**
+ * The `projectId` a ticket-scoped invalidation should carry, or nothing when the
+ * ticket is unknown (VC-387).
+ *
+ * A broadcast that names only a `ticketId` costs every window a WHOLE-BOARD
+ * re-read, because a scoped refresh cannot ask "which project?" without a
+ * second round trip. Main already has the row, so it answers here — one indexed
+ * primary-key read, against the bootstrap it saves. Spread it into the scope so
+ * an unknown ticket simply omits the key rather than asserting `undefined`.
+ */
+function ticketScope(db: Database.Database, ticketId: string): { projectId?: string } {
+  const projectId = getTicketRow(db, ticketId)?.project_id;
+  return projectId === undefined ? {} : { projectId };
+}
 
 function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
   const projects = listProjects(db);
@@ -544,6 +563,28 @@ export function registerDataIpcHandlers(
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
       return { ok: true, data: buildBootstrapPayload(db) };
+    },
+
+    /**
+     * The steady-state refresh read (VC-387): one project's live board, no
+     * bodies. `volli:data-bootstrap` remains what a WINDOW boots from — it
+     * carries every project, the app_state rows, and the bodies that make an
+     * opened Body editor instant — and this is what a targeted
+     * `volli:data-changed` re-reads instead of all of it.
+     *
+     * An unknown project is refused rather than answered with an empty board:
+     * an empty list is indistinguishable from "this project has no tickets",
+     * and hydrating that would clear a live slice off the board.
+     */
+    "volli:data-project-roster": (input: ProjectIdInput): ProjectRosterResult => {
+      if (getProjectById(db, input.projectId) === undefined) {
+        return { ok: false, error: "Unknown project" };
+      }
+      return {
+        ok: true,
+        tickets: listTicketRosterByProject(db, input.projectId),
+        labels: listLabelsByProject(db, input.projectId),
+      };
     },
 
     "volli:database": async (action?: DatabaseAction): Promise<DatabaseResult> => {
@@ -967,6 +1008,17 @@ export function registerDataIpcHandlers(
 
     "volli:ticket-events": (input: TicketIdInput): TicketEventsResult => {
       return { ok: true, events: listTicketEvents(db, input.ticketId) };
+    },
+
+    /**
+     * One ticket's body — what the refresh roster stopped carrying (VC-387).
+     * Read by the ticket that is OPEN, on arrival and on each planning change
+     * that names it, which is the only place a body is ever rendered.
+     */
+    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => {
+      const body = getTicketBody(db, input.ticketId);
+      if (body === undefined) return { ok: false, error: "Unknown ticket" };
+      return { ok: true, body };
     },
 
     "volli:ticket-latest-signals": async (
@@ -1745,7 +1797,11 @@ export function registerDataIpcHandlers(
       // ticket. Targeting it is what lets the Details rail's git summary refresh
       // promptly (the CLI/rail-side commit → rail guarantee, issue #80) instead
       // of riding the debounced untargeted arm.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "worktree",
+      });
       return { ok: true, committed: true, message: result.value.message };
     },
 
@@ -1760,7 +1816,11 @@ export function registerDataIpcHandlers(
       getWorktreeSnapshots().invalidate(input.ticketId);
       // `pr_url` was written (and a `pr_opened` event recorded) on THIS ticket —
       // target it so its rail refreshes promptly, same as the commit path.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "worktree" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "worktree",
+      });
       return { ok: true, url: result.value.url, existing: result.value.existing };
     },
 
@@ -1781,14 +1841,22 @@ export function registerDataIpcHandlers(
       setTicketRetentionKeep(db, input.ticketId, input.keep, Date.now());
       // The pin exempts both retention paths for THIS ticket — target it so its
       // retention surface updates promptly.
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "retention",
+      });
       return { ok: true, keep: input.keep };
     },
 
     "volli:retention-dismiss": (input: TicketIdInput): RetentionDismissResult => {
       // In-memory, launch-scoped: the prompt is re-offered next launch.
       getRetentionWatcher(db).dismiss(input.ticketId);
-      broadcastDataChanged({ ticketId: input.ticketId, kind: "retention" });
+      broadcastDataChanged({
+        ticketId: input.ticketId,
+        ...ticketScope(db, input.ticketId),
+        kind: "retention",
+      });
       return { ok: true };
     },
 

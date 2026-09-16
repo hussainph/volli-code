@@ -7,13 +7,16 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectRosterResult,
   ProjectUpdateResult,
   Result,
   RetentionArchiveCleanResult,
+  RetentionKeepResult,
   RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
   SessionStopResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -595,6 +598,113 @@ describe("volli:project-session-defaults — Chat model", () => {
     expect(
       ctx.db.prepare("SELECT session_harness FROM projects WHERE id = ?").get(projectId),
     ).toEqual({ session_harness: "codex" });
+  });
+});
+
+describe("ticket-scoped invalidations carry their project (VC-387)", () => {
+  it("names the project on a retention pin, so windows re-read one board not all of them", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    dataChangedSends.length = 0;
+
+    const kept = invoke<RetentionKeepResult>("volli:retention-keep", {
+      ticketId: ticket.id,
+      keep: true,
+    });
+
+    expect(kept.ok).toBe(true);
+    // Without the projectId the renderer cannot scope its refresh and falls
+    // back to a whole-board bootstrap — the exact read this ticket removes.
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "retention",
+    });
+  });
+
+  // `volli:retention-dismiss` and the two worktree publish paths take the same
+  // `ticketScope` helper this pins; they are not asserted separately because the
+  // retention watcher is a process-wide singleton that broadcasts on its own
+  // schedule, and a second assertion here would be pinning the coalescer's merge
+  // rather than the scope.
+});
+
+describe("volli:data-project-roster — the steady-state refresh read (VC-387)", () => {
+  it("answers one project's live board, carrying no ticket bodies", () => {
+    const projectId = createProject();
+    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Other",
+    });
+    const mine = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Mine",
+      body: "# A body long enough to be worth not re-reading",
+      labels: ["perf"],
+    });
+    if (!mine.ok) throw new Error(mine.error);
+    createTicket(other.project.id);
+
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", { projectId });
+
+    if (!roster.ok) throw new Error(roster.error);
+    expect(roster.tickets).toEqual([
+      expect.objectContaining({ id: mine.ticket.id, title: "Mine", labels: ["perf"] }),
+    ]);
+    // The point of the read: the column the whole-board re-read spends its
+    // bytes on never crosses.
+    expect(roster.tickets[0]).not.toHaveProperty("body");
+    expect(roster.labels).toEqual([expect.objectContaining({ name: "perf", projectId })]);
+  });
+
+  it("names the same live tickets, in the same order, as the boot payload it replaces", () => {
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+    archiveTicket(second.id);
+
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", { projectId });
+    if (!roster.ok) throw new Error(roster.error);
+
+    expect(roster.tickets.map(({ id }) => id)).toEqual(
+      boot.data.ticketsByProject[projectId]?.map(({ id }) => id),
+    );
+    expect(roster.tickets.map(({ id }) => id)).toEqual([first.id]);
+  });
+
+  it("refuses an unknown project rather than answering an empty board for it", () => {
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", {
+      projectId: "no-such-project",
+    });
+
+    expect(roster).toEqual({ ok: false, error: "Unknown project" });
+  });
+});
+
+describe("volli:ticket-body — the per-ticket body read (VC-387)", () => {
+  it("answers the body the roster no longer carries", () => {
+    const projectId = createProject();
+    const created = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "With a body",
+      body: "# Scope\n\nDo the thing.",
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: created.ticket.id });
+
+    expect(read).toEqual({ ok: true, body: "# Scope\n\nDo the thing." });
+  });
+
+  it("refuses a ticket that is gone rather than answering an empty body", () => {
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: "no-such-ticket" });
+
+    expect(read).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
 

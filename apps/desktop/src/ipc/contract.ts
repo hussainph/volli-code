@@ -103,6 +103,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  TicketSummary,
   ValidAutomationRuntime,
   VenueReading,
   WorkspaceDependenciesStatus,
@@ -666,6 +667,11 @@ export interface ArtifactCreateInput {
  */
 export interface VolliDataIpcContract {
   "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  /**
+   * One project's live tickets (bodies excluded) and labels — the read a
+   * targeted refresh makes in place of a whole-board bootstrap (VC-387).
+   */
+  "volli:data-project-roster": { args: [input: ProjectIdInput]; result: ProjectRosterResult };
   /** Main owns the database path; an omitted action reads its size. */
   "volli:database": { args: [action?: DatabaseAction]; result: DatabaseResult };
   /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
@@ -729,6 +735,8 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
+  /** One ticket's Markdown body — read by the ticket that is OPEN, since the refresh roster no longer carries it (VC-387). */
+  "volli:ticket-body": { args: [input: TicketIdInput]; result: TicketBodyResult };
   /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
   "volli:ticket-latest-signals": {
     args: [input: ProjectIdInput];
@@ -2953,6 +2961,23 @@ export interface BootstrapPayload {
 }
 
 export type BootstrapResult = Result<{ data: BootstrapPayload }>;
+
+/**
+ * One project's live board — the read a targeted `volli:data-changed` makes
+ * instead of re-reading every project (VC-387). The rows are
+ * {@link TicketSummary}: bodies are ~90% of a board's bytes (measured: 1056 KiB
+ * of payload becomes 123 KiB without them) and no board surface renders one, so
+ * a body rides in once on the boot payload and after that only the OPEN ticket
+ * reads its own through {@link TicketBodyResult}.
+ *
+ * `labels` is the project's label set, which a label rename/retire moves in step
+ * with the tickets that carry it, so the two travel together exactly as they do
+ * in the boot payload.
+ */
+export type ProjectRosterResult = Result<{ tickets: TicketSummary[]; labels: Label[] }>;
+
+/** One ticket's Markdown body — what the roster no longer carries (VC-387). */
+export type TicketBodyResult = Result<{ body: string }>;
 
 export interface LegacyImportRequest {
   projects: LegacyProject[];
