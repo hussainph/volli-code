@@ -95,30 +95,30 @@ async function shellPidFromMarker(markerPath, timeoutMs = 15000) {
 
 async function focusTerminal(page) {
   const box = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll("canvas"));
-    const visible = canvases.find(
+    const terminals = Array.from(document.querySelectorAll(".xterm"));
+    const visible = terminals.find(
       (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
     );
     if (!visible) return null;
     const r = visible.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
-  if (!box) throw new Error("no visible terminal canvas to focus");
+  if (!box) throw new Error("no visible terminal to focus");
   await page.mouse.click(box.x, box.y);
   await sleep(200);
 }
 
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
+      const c = Array.from(document.querySelectorAll(".xterm")).find(
         (el) => el.offsetParent !== null,
       );
       return c && c.clientWidth > 0 && c.clientHeight > 0;
     },
     { timeout: timeoutMs },
   );
-  await sleep(2200); // let restty boot the shell and paint
+  await sleep(2200); // let the shell boot and paint
 }
 
 // ---- main --------------------------------------------------------------------
@@ -187,7 +187,7 @@ async function main() {
       undefined,
       { timeout: 10000 },
     );
-    await waitForLiveCanvas(page);
+    await waitForLiveTerminal(page);
 
     const marker1 = join(SCRATCH, "tab-1.pid");
     await focusTerminal(page);
@@ -205,7 +205,7 @@ async function main() {
       undefined,
       { timeout: 10000 },
     );
-    await waitForLiveCanvas(page);
+    await waitForLiveTerminal(page);
     const marker2 = join(SCRATCH, "tab-2.pid");
     await focusTerminal(page);
     await page.keyboard.type(`echo $$ > ${marker2}`);

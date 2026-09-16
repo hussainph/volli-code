@@ -2,7 +2,7 @@
 /**
  * Sidebar pin/unpin performance bench (VC-359) — manually run, not part of `vp test`.
  *
- * Runs the real built app with four visible restty panes in an isolated profile,
+ * Runs the real built app with four visible terminal panes in an isolated profile,
  * observes the terminal hosts while the ordinary Cmd+B path closes and opens the
  * sidebar, and records renderer frame intervals plus Electron process CPU.
  *
@@ -91,7 +91,7 @@ const scratchState = await makeScratch("volli-sidebar-transition-bench-");
 const { scratch, userDataDir, dbPath, cleanup } = scratchState;
 await fs.mkdir(scratch, { recursive: true });
 console.log(`scratch: ${scratch}`);
-console.log(`fixture: real app, ${PANES} visible restty panes; load arm: ${LOAD}`);
+console.log(`fixture: real app, ${PANES} visible terminal panes; load arm: ${LOAD}`);
 
 /** Summarize the rAF timestamps recorded during one sample window. */
 function frameSummary(timestamps) {
@@ -179,12 +179,12 @@ try {
   await page.getByRole("button", { name: "Home", exact: true }).click();
   await startTerminalSession(page);
   await waitUntil(
-    "the first terminal canvas",
+    "the first terminal",
     () =>
       page.evaluate(
         () =>
-          Array.from(document.querySelectorAll("canvas")).filter(
-            (canvas) => canvas.offsetParent !== null && canvas.clientWidth > 0,
+          Array.from(document.querySelectorAll(".xterm")).filter(
+            (element) => element.offsetParent !== null && element.clientWidth > 0,
           ).length === 1,
       ),
     { timeout: 20_000 },
@@ -193,25 +193,25 @@ try {
 
   for (let count = 2; count <= PANES; count += 1) {
     const focusPoint = await page.evaluate(() => {
-      const canvases = Array.from(document.querySelectorAll("canvas")).filter(
-        (canvas) => canvas.offsetParent !== null && canvas.clientWidth > 0,
+      const terminals = Array.from(document.querySelectorAll(".xterm")).filter(
+        (element) => element.offsetParent !== null && element.clientWidth > 0,
       );
-      const canvas = canvases.at(-1);
-      if (canvas === undefined) return null;
-      const rect = canvas.getBoundingClientRect();
+      const terminal = terminals.at(-1);
+      if (terminal === undefined) return null;
+      const rect = terminal.getBoundingClientRect();
       return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     });
-    if (focusPoint === null) throw new Error("no visible terminal canvas to focus before split");
+    if (focusPoint === null) throw new Error("no visible terminal to focus before split");
     await page.mouse.click(focusPoint.x, focusPoint.y);
     await sleep(100);
     await page.keyboard.press("Meta+d");
     await waitUntil(
-      `${count} visible terminal canvases`,
+      `${count} visible terminales`,
       () =>
         page.evaluate(
           (expected) =>
-            Array.from(document.querySelectorAll("canvas")).filter(
-              (canvas) => canvas.offsetParent !== null && canvas.clientWidth > 0,
+            Array.from(document.querySelectorAll(".xterm")).filter(
+              (element) => element.offsetParent !== null && element.clientWidth > 0,
             ).length === expected,
           count,
         ),
@@ -484,7 +484,7 @@ try {
     busyWorkers: BUSY,
     machine: `${process.platform}/${process.arch}`,
     // Named for what it actually builds, not for VC-353's `real` fixture: this
-    // is the built app with ONE Session and `PANES` live restty canvases, on a
+    // is the built app with ONE Session and `PANES` live terminals, on a
     // fresh database. It is the expensive-sibling half of that fixture and not
     // its migrated 1,200-Session/260k-event half.
     fixture: { kind: "live-app", sessions: 1, terminalPanes: PANES },

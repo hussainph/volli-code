@@ -146,15 +146,20 @@ const DENY = new Map([
     "QUARANTINED: checks 2/3/4 — Settings Mode control never becomes clickable",
   ],
   ["park-smoke.mjs", "QUARANTINED: tab strip shows no parked badge (count=0)"],
-  // Distinct from the rest: this one is FLAKY, not consistently failing.
-  // Observed 3 failures in 5 runs, including twice with nothing else running,
-  // always as check 1 reading bg=rgb(0,0,0) — i.e. it samples the window
-  // background BEFORE first paint rather than disagreeing about the colour.
-  // A flaky probe in a required gate is worse than an absent one: it teaches
-  // readers that red means nothing. Needs a paint barrier before it samples.
+  // The flake this was quarantined for is FIXED: check 1 used to screenshot the
+  // terminal and average the pixels, which read the window background before
+  // first paint in 3 of 5 runs. VC-107's DOM renderer puts the theme colours on
+  // the elements themselves, so the check now reads them and cannot be early.
+  //
+  // What keeps the entry is check 2, the live-reload half: it edits a config
+  // inside an isolated $HOME and waits for main's `fs.watch` to notice. That is
+  // the same directory-watch behaviour `monaco-reconciliation-smoke` is denied
+  // for, and it does not fire under a temp-dir $HOME on every machine — the
+  // check cannot wait its way out of a notification that never arrives. Checks
+  // 1 and 3 pass locally.
   [
     "ghostty-config-smoke.mjs",
-    "QUARANTINED (flaky): check 1 samples window bg before first paint (3 of 5 runs)",
+    "check 2 needs main's fs.watch to fire under an isolated $HOME (see monaco-reconciliation)",
   ],
   [
     "quit-window-lifecycle-smoke.mjs",

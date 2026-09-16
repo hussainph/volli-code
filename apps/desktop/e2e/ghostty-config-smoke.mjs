@@ -5,17 +5,25 @@
  * touched) and asserts the three acceptance criteria:
  *
  *   1. `theme = "Front End Delight"` in the config → a fresh session renders
- *      in that theme's colors (canvas pixels, not DOM — the terminal is a
- *      WebGPU canvas, so we screenshot a patch of empty background).
+ *      in that theme's colors.
  *   2. Editing the config file re-themes LIVE terminals without a restart
- *      (fs.watch → IPC push → applyTheme).
+ *      (fs.watch → IPC push → applyAppearance).
  *   3. `macos-option-as-alt = left` → Option-left+b produces ESC-prefixed
  *      input, proven by piping raw stdin through `od -c` into a probe file.
  *
- * Plus one check beyond issue #18: GPU device-loss recovery. A hidden window
- * loading chrome://gpucrash kills the shared GPU process for real; the app
- * must rotate its restty session, rebuild the renderer (a fresh WebGPU
- * context), toast the user, and keep both the pixels and the shell alive.
+ * The colors are READ OFF THE DOM (VC-107): xterm's DOM renderer writes the
+ * theme background onto the `.xterm` element and the foreground onto
+ * `.xterm-rows`, so the assertion is the exact color the theme names. It used
+ * to screenshot a patch of the GPU canvas and average the pixels, which is why
+ * this probe was quarantined as flaky — a sample taken before first paint read
+ * the window's own background and failed for reasons that had nothing to do
+ * with the config chain. A DOM read cannot be early: the attribute is either
+ * the theme's color or it is not there yet.
+ *
+ * A fourth check went with that renderer: GPU device-loss recovery, which
+ * crashed the shared GPU process and asserted the session rotation that
+ * rebuilt every terminal. The DOM renderer has no device to lose, and the
+ * rotation machinery is deleted.
  *
  * Like terminal-smoke.mjs this is a MANUALLY-RUN smoke (display + built app):
  *
@@ -24,7 +32,6 @@
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
-import zlib from "node:zlib";
 import { join } from "node:path";
 
 import { launch as launchSmokeApp } from "./lib/smoke-kit.mjs";
@@ -34,12 +41,11 @@ const SCRATCH =
 await fs.mkdir(SCRATCH, { recursive: true });
 console.log("scratch:", SCRATCH, "\n");
 
-// Front End Delight's background per restty's builtin catalog.
-const FED_BG = { r: 27, g: 28, b: 29 };
-// The app's token fallback background (--background #111111).
-const TOKEN_BG = { r: 17, g: 17, b: 17 };
-// The loud live-reload override, unmistakable against both of the above.
-const LIVE_BG = { r: 0x77, g: 0x22, b: 0xaa };
+// Front End Delight, from the vendored Ghostty theme catalog (@volli/shared).
+const FED_BG = "rgb(27, 28, 29)";
+const FED_FG = "rgb(173, 173, 173)";
+// The loud live-reload override, unmistakable against the theme above.
+const LIVE_BG = "rgb(119, 34, 170)";
 
 const results = [];
 function check(n, label, ok, detail = "") {
@@ -49,126 +55,78 @@ function check(n, label, ok, detail = "") {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---- minimal PNG decode (Playwright screenshots: 8-bit RGBA, no interlace) --
-
-/** Average color of every pixel in a small screenshot PNG buffer. */
-function averagePngColor(buffer) {
-  let pos = 8; // skip signature
-  let width = 0;
-  let height = 0;
-  let bpp = 4;
-  const idat = [];
-  while (pos < buffer.length) {
-    const length = buffer.readUInt32BE(pos);
-    const type = buffer.toString("ascii", pos + 4, pos + 8);
-    const data = buffer.subarray(pos + 8, pos + 8 + length);
-    if (type === "IHDR") {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
-      const bitDepth = data[8];
-      const colorType = data[9];
-      const interlace = data[12];
-      // 6 = RGBA, 2 = RGB — Playwright emits either depending on the surface.
-      if (bitDepth !== 8 || (colorType !== 6 && colorType !== 2) || interlace !== 0) {
-        throw new Error(`unexpected PNG format: depth=${bitDepth} color=${colorType}`);
-      }
-      bpp = colorType === 6 ? 4 : 3;
-    } else if (type === "IDAT") {
-      idat.push(data);
-    }
-    pos += 12 + length;
-  }
-  const raw = zlib.inflateSync(Buffer.concat(idat));
-  const stride = width * bpp;
-  const prior = Buffer.alloc(stride);
-  let sumR = 0;
-  let sumG = 0;
-  let sumB = 0;
-  for (let y = 0; y < height; y++) {
-    const filter = raw[y * (stride + 1)];
-    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
-    // Unfilter in place (per PNG spec).
-    for (let x = 0; x < stride; x++) {
-      const a = x >= bpp ? line[x - bpp] : 0;
-      const b = prior[x];
-      const c = x >= bpp ? prior[x - bpp] : 0;
-      let value = line[x];
-      if (filter === 1) value = (value + a) & 0xff;
-      else if (filter === 2) value = (value + b) & 0xff;
-      else if (filter === 3) value = (value + ((a + b) >> 1)) & 0xff;
-      else if (filter === 4) {
-        const p = a + b - c;
-        const pa = Math.abs(p - a);
-        const pb = Math.abs(p - b);
-        const pc = Math.abs(p - c);
-        value = (value + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
-      }
-      line[x] = value;
-    }
-    line.copy(prior);
-    for (let x = 0; x < stride; x += bpp) {
-      sumR += line[x];
-      sumG += line[x + 1];
-      sumB += line[x + 2];
-    }
-  }
-  const count = width * height;
-  return { r: sumR / count, g: sumG / count, b: sumB / count };
-}
-
-const colorDistance = (a, b) =>
-  Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
-const fmt = (c) => `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
-
 // ---- terminal helpers (mirrors terminal-smoke.mjs) ---------------------------
 
 async function focusTerminal(page) {
-  const box = await visibleCanvasBox(page);
+  const box = await visibleTerminalBox(page);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(200);
 }
 
-async function visibleCanvasBox(page) {
+async function visibleTerminalBox(page) {
   const box = await page.evaluate(() => {
-    const visible = Array.from(document.querySelectorAll("canvas")).find(
-      (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
+    const visible = Array.from(document.querySelectorAll(".xterm")).find(
+      (element) =>
+        element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
     );
     if (!visible) return null;
-    const r = visible.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    const rect = visible.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
   });
-  if (!box) throw new Error("no visible terminal canvas");
+  if (!box) throw new Error("no visible terminal");
   return box;
 }
 
 /**
- * Average color of an empty-background patch of the visible terminal: a
- * square inset from the bottom-right corner, far from prompt text (top-left)
- * and from the scrollbar edge.
+ * The colors the visible terminal is actually rendering with. xterm's DOM
+ * renderer puts the theme background on the `.xterm` element itself and the
+ * theme foreground on `.xterm-rows`, so these are the theme's own values as
+ * the browser resolved them — not an average of whatever happened to be
+ * painted when a screenshot was taken.
  */
-async function terminalBackgroundColor(page, shotPath) {
-  const box = await visibleCanvasBox(page);
-  const clip = {
-    x: box.x + box.width - 120,
-    y: box.y + box.height - 120,
-    width: 80,
-    height: 80,
-  };
-  const buffer = await page.screenshot({ clip, path: shotPath });
-  return averagePngColor(buffer);
+async function terminalColors(page) {
+  return page.evaluate(() => {
+    const terminal = Array.from(document.querySelectorAll(".xterm")).find(
+      (element) =>
+        element.offsetParent !== null && element.clientWidth > 0 && element.clientHeight > 0,
+    );
+    if (!terminal) return null;
+    const rows = terminal.querySelector(".xterm-rows");
+    return {
+      background: getComputedStyle(terminal).backgroundColor,
+      foreground: rows === null ? null : getComputedStyle(rows).color,
+    };
+  });
 }
 
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+/** Poll until the terminal's background is `expected`; returns the last read. */
+async function waitForTerminalBackground(page, expected, timeoutMs = 8000) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await terminalColors(page);
+    if (last?.background === expected) return last;
+    await sleep(250);
+  }
+  return last;
+}
+
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
-        (el) => el.offsetParent !== null,
+      const element = Array.from(document.querySelectorAll(".xterm")).find(
+        (candidate) => candidate.offsetParent !== null,
       );
-      return c && c.clientWidth > 0 && c.clientHeight > 0;
+      return (
+        element &&
+        element.clientWidth > 0 &&
+        element.clientHeight > 0 &&
+        element.querySelector(".xterm-rows") !== null
+      );
     },
     { timeout: timeoutMs },
   );
-  await sleep(2200); // let restty boot the shell, resolve fonts, and paint
+  await sleep(2200); // let the shell boot, resolve fonts, and paint
 }
 
 async function waitForFileContains(path, needle, timeoutMs = 8000) {
@@ -252,17 +210,6 @@ async function main() {
         }),
       );
     }, wsDir);
-    // Spy on canvas context acquisition from the next load onward, so the
-    // device-loss check can prove a NEW webgpu context was created on rebuild.
-    await page.addInitScript(() => {
-      window.volliCtxSpy = [];
-      const orig = HTMLCanvasElement.prototype.getContext;
-      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
-        const ctx = orig.call(this, type, ...rest);
-        window.volliCtxSpy.push({ type, ok: ctx != null });
-        return ctx;
-      };
-    });
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
@@ -275,23 +222,13 @@ async function main() {
     await page.getByText("Home", { exact: true }).click();
     await page.getByLabel("Other things to open").first().click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
-    await waitForLiveCanvas(page);
-    // The color sample reads the canvas's bottom-right corner — the exact
-    // patch sonner toasts hover over, and this boot raises two (the refused
-    // auto-chat above, plus any leftover-worktree notice). Sample only once
-    // they are gone.
-    await page.waitForFunction(
-      () => document.querySelectorAll("[data-sonner-toast]").length === 0,
-      undefined,
-      { timeout: 15000 },
-    );
-    const bootColor = await terminalBackgroundColor(page, join(SCRATCH, "01-fed.png"));
-    const fedDistance = colorDistance(bootColor, FED_BG);
+    await waitForLiveTerminal(page);
+    const bootColors = await waitForTerminalBackground(page, FED_BG);
     check(
       1,
       'theme = "Front End Delight" applied on boot',
-      fedDistance <= 5 && fedDistance < colorDistance(bootColor, TOKEN_BG),
-      `bg=${fmt(bootColor)} expected≈${fmt(FED_BG)} (token fallback ${fmt(TOKEN_BG)})`,
+      bootColors?.background === FED_BG && bootColors.foreground === FED_FG,
+      `bg=${bootColors?.background ?? "n/a"} fg=${bootColors?.foreground ?? "n/a"} expected bg=${FED_BG} fg=${FED_FG}`,
     );
 
     // === 2. Config edit re-themes the LIVE terminal, no restart =============
@@ -299,25 +236,13 @@ async function main() {
       configPath,
       'theme = "Front End Delight"\nbackground = #7722aa\nmacos-option-as-alt = left\n',
     );
-    // fs.watch debounce is 250ms; poll the pixels rather than sleeping blind.
-    let liveColor = null;
-    let rethemed = false;
-    const start = Date.now();
-    while (Date.now() - start < 8000) {
-      liveColor = await terminalBackgroundColor(page, join(SCRATCH, "02-live.png"));
-      // Runtime applyTheme paints through restty's linear-space blend, which
-      // rounds a few units off the exact sRGB value — unlike the init path.
-      if (colorDistance(liveColor, LIVE_BG) <= 16) {
-        rethemed = true;
-        break;
-      }
-      await sleep(400);
-    }
+    // fs.watch debounces 250ms; poll the rendered color rather than sleeping.
+    const liveColors = await waitForTerminalBackground(page, LIVE_BG);
     check(
       2,
-      "config edit re-themes the live terminal (fs.watch → push → applyTheme)",
-      rethemed,
-      `bg=${liveColor ? fmt(liveColor) : "n/a"} expected≈${fmt(LIVE_BG)}`,
+      "config edit re-themes the live terminal (fs.watch → push → applyAppearance)",
+      liveColors?.background === LIVE_BG,
+      `bg=${liveColors?.background ?? "n/a"} expected=${LIVE_BG}`,
     );
 
     // === 3. Option-left+b emits ESC b (macos-option-as-alt = left) ==========
@@ -337,65 +262,6 @@ async function main() {
       "Option-left+b produces ESC-prefixed input (od sees 033 b)",
       odText !== null && odText.includes("033") && /033\s+b/.test(odText),
       `od=${JSON.stringify(odText?.split("\n")[0] ?? null)}`,
-    );
-
-    // === 4. GPU device loss: session rotates, renderer rebuilds, shell lives =
-    const webgpuCtxCount = () =>
-      page.evaluate(() => window.volliCtxSpy.filter((e) => e.type === "webgpu" && e.ok).length);
-    const ctxBefore = await webgpuCtxCount();
-    // Crash the REAL shared GPU process from a throwaway hidden window.
-    await app.evaluate(({ BrowserWindow }) => {
-      const crasher = new BrowserWindow({ show: false });
-      void crasher.loadURL("chrome://gpucrash");
-    });
-
-    let toastSeen = false;
-    try {
-      await page
-        .getByText("Display driver reset", { exact: false })
-        .first()
-        .waitFor({ timeout: 15000 });
-      toastSeen = true;
-    } catch {
-      // fall through — the ctx/pixel/shell assertions below still report
-    }
-    let rebuilt = false;
-    try {
-      await page.waitForFunction(
-        (n) => window.volliCtxSpy.filter((e) => e.type === "webgpu" && e.ok).length > n,
-        ctxBefore,
-        { timeout: 15000 },
-      );
-      rebuilt = true;
-    } catch {
-      // reported below
-    }
-    // Poll the pixels: the rebuilt renderer re-resolves fonts via Local Font
-    // Access and repaints over a few seconds after the GPU process restarts.
-    let postCrashColor = { r: -1, g: -1, b: -1 };
-    let pixelsAlive = false;
-    const crashStart = Date.now();
-    while (Date.now() - crashStart < 12000) {
-      postCrashColor = await terminalBackgroundColor(page, join(SCRATCH, "04-post-crash.png"));
-      if (colorDistance(postCrashColor, LIVE_BG) <= 16) {
-        pixelsAlive = true;
-        break;
-      }
-      await sleep(500);
-    }
-
-    // The shell (main-process PTY) must be untouched: run a fresh probe.
-    const crashProbe = join(SCRATCH, "crash-probe.txt");
-    await fs.rm(crashProbe, { force: true });
-    await focusTerminal(page);
-    await page.keyboard.type(`echo alive > ${crashProbe}`);
-    await page.keyboard.press("Enter");
-    const crashText = await waitForFileContains(crashProbe, "alive");
-    check(
-      4,
-      "GPU crash: toast + renderer rebuilt (new WebGPU ctx) + pixels + shell alive",
-      toastSeen && rebuilt && pixelsAlive && crashText !== null,
-      `toast=${toastSeen} rebuilt=${rebuilt} bg=${fmt(postCrashColor)} shell=${crashText !== null}`,
     );
 
     await page.screenshot({ path: join(SCRATCH, "03-final.png") });
