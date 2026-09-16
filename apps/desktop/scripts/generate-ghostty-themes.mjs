@@ -100,6 +100,16 @@ function format(path) {
   }
 }
 
+/** The current generated file, or null when this checkout has none yet. */
+function readExistingOutput() {
+  try {
+    return readFileSync(OUTPUT, "utf8");
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 const argv = process.argv.slice(2);
 const isCheck = argv.includes("--check");
 const themesDir = resolveThemesDir(argv);
@@ -107,7 +117,9 @@ const themesDir = resolveThemesDir(argv);
 const themes = readThemes(themesDir);
 const body = render(themes, themesDir);
 
-const before = existsSync(OUTPUT) ? readFileSync(OUTPUT, "utf8") : null;
+// Read-or-null in one call rather than exists-then-read: the file is only
+// ever absent on a fresh checkout, and a single read cannot race a check.
+const before = readExistingOutput();
 writeFileSync(OUTPUT, body);
 
 let moved = before !== body;
