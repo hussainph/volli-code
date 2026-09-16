@@ -17,6 +17,7 @@ import {
 } from "./deletion-lease";
 import { getPhase, resetPhasesForTest, setPhase } from "./phase";
 import { remove } from "./remove";
+import { resetRepositoryTurnsForTest, withRepositoryWorktreeTurn } from "./repository-turn";
 import { scriptedGit } from "./scripted-git";
 
 let ctx: TestDb;
@@ -26,13 +27,116 @@ beforeEach(() => {
   ctx = openTestDb();
   resetPhasesForTest();
   resetDeletionLeasesForTest();
+  resetRepositoryTurnsForTest();
 });
 
 afterEach(() => {
   resetDeletionLeasesForTest();
+  resetRepositoryTurnsForTest();
   ctx.cleanup();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
   tempDirs = [];
+});
+
+/** Lets real macrotasks run, so "it has not removed anything yet" is evidence. */
+async function settleRemoval(): Promise<void> {
+  for (let turn = 0; turn < 4; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+describe("remove — the repository's turn", () => {
+  it("waits for the repository's turn before running git worktree remove", async () => {
+    // The deletion lease orders this against work starting in THIS DIRECTORY.
+    // The turn orders its git command against every other change to the same
+    // REPOSITORY — a different hazard with a different key, because git does
+    // not promise concurrent `worktree add`/`remove`/`prune` are safe.
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
+    const removedYet = (): boolean => calls.some((call) => call.args[1] === "remove");
+
+    let releaseTurn!: () => void;
+    const turn = withRepositoryWorktreeTurn(
+      "/repo",
+      () => new Promise<void>((resolve) => (releaseTurn = resolve)),
+    );
+
+    const removal = remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+    await settleRemoval();
+    expect(removedYet()).toBe(false);
+
+    releaseTurn();
+    await turn;
+    await expect(removal).resolves.toMatchObject({ ok: true });
+
+    // It waited rather than failing, and then did the whole job.
+    expect(removedYet()).toBe(true);
+    expect(getTicketRow(ctx.db, "ticket-1")?.worktree_path).toBeNull();
+  });
+
+  it("reaches git worktree remove within the same settle budget when no turn is held", async () => {
+    // The negative control. Without it, the assertion above proves only that
+    // `settleRemoval()` is too short for the pipeline to have got there — which
+    // would still pass with the repository turn deleted.
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
+
+    const removal = remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+    await settleRemoval();
+
+    expect(calls.some((call) => call.args[1] === "remove")).toBe(true);
+    await expect(removal).resolves.toMatchObject({ ok: true });
+  });
+
+  it("waits for the repository's turn before pruning a directory that is already gone", async () => {
+    // The other mutation site here is `worktree prune`, which drops admin
+    // records across the WHOLE repository — the last command that may run
+    // beside another ticket's `worktree add`.
+    seed(join(tempDir("gone"), "missing"));
+    const { git, gitAsync, calls } = scriptedGit(() => "");
+    const prunedYet = (): boolean => calls.some((call) => call.args[1] === "prune");
+
+    let releaseTurn!: () => void;
+    const turn = withRepositoryWorktreeTurn(
+      "/repo",
+      () => new Promise<void>((resolve) => (releaseTurn = resolve)),
+    );
+
+    const removal = remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
+      force: false,
+    });
+    await settleRemoval();
+    expect(prunedYet()).toBe(false);
+
+    releaseTurn();
+    await turn;
+    await expect(removal).resolves.toMatchObject({ ok: true });
+
+    expect(prunedYet()).toBe(true);
+    // Best-effort metadata: the identity clear happens either way.
+    expect(getTicketRow(ctx.db, "ticket-1")?.worktree_path).toBeNull();
+  });
+
+  it("still clears identity when the queued prune rejects", async () => {
+    // The turn must not turn a best-effort prune into a dead-ended ticket.
+    seed(join(tempDir("gone"), "missing"));
+    const { git, gitAsync } = scriptedGit(() => {
+      throw new Error("prune exploded");
+    });
+
+    await expect(
+      remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", { force: false }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(getTicketRow(ctx.db, "ticket-1")?.worktree_path).toBeNull();
+  });
 });
 
 function tempDir(prefix: string): string {

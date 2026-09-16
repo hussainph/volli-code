@@ -34,6 +34,18 @@
  * terminal or an agent inside it, and while something is starting there,
  * cleanup will not take it.
  *
+ * A second serialization sits INSIDE those awaits, and it is about a different
+ * hazard (VC-389): the lease orders this cleanup against work starting in one
+ * DIRECTORY, while the repository turn (`repository-turn.ts`) orders its git
+ * commands against other changes to the same REPOSITORY. Both mutations here
+ * run on the synchronous runner, which is what makes the second one necessary
+ * rather than incidental: while `execFileSync` blocks, no NEW async git child
+ * can start, but one that is already running keeps going — so a confirmed
+ * cleanup's `worktree remove` could overlap a Session start's `worktree add`
+ * in the same repository. The gate-and-mutation region of each path is
+ * therefore handed to the turn as ONE SYNCHRONOUS CALLBACK, which orders it
+ * and preserves the no-await promise below at the same time.
+ *
  * What it may do, in order: prune one project's stale git metadata, and remove
  * a worktree directory with `git worktree remove` — no `--force`, ever, so
  * git's own refusals stand — which keeps the branch and every commit on it. A
@@ -74,6 +86,7 @@ import { homeDir } from "./home";
 import { canonicalize, isInside } from "./paths";
 import { lastTouchedAt, metadataKeptReason, readOnlyGit } from "./scan";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
+import { withRepositoryWorktreeTurn } from "./repository-turn";
 import type { WorktreeDeps } from "./types";
 
 /** What a cleanup was asked to do: a command id, a scan revision, and its items. */
@@ -401,34 +414,46 @@ export async function cleanupOrphans(
       await engine.beginItem({ commandId: request.commandId, itemId: item.id });
       // The last asynchronous act of this item: what is live inside it.
       const sites = await busySitesFor(deps, item.path);
-      // ---- no `await` from here to the mutation -----------------------------
-      const confirmed = finalGate(deps, item, request, sites);
-      if (confirmed.skip !== null) {
-        await settle(item.id, "skipped", confirmed.skip, confirmed.branch);
-        continue;
-      }
-      let removal: { ok: true } | { ok: false; error: string };
-      try {
-        worktree.git(
-          ["worktree", "remove", confirmed.gitPath],
-          confirmed.projectPath ?? confirmed.gitPath,
-        );
-        removal = { ok: true };
-      } catch (caught) {
-        removal = { ok: false, error: errorText(caught) };
-      }
+      // Then the repository's turn, and the gate-plus-mutation region is what
+      // it is given — so the region is still one synchronous turn and is now
+      // ordered against every other change to this repository (VC-389).
+      //
+      // Taken HERE rather than earlier on purpose: the activity supplier above
+      // has no deadline of its own, and a turn held across it would refuse
+      // every Session start in this project for as long as it hung — the same
+      // failure AGENT_RELEASE_TIMEOUT_MS exists to prevent for the lease. The
+      // gate re-reads everything else from scratch; `sites` is the one input
+      // measured a moment ago, and the deletion lease taken above is what stops
+      // anything new from starting inside the path while this waits in line.
+      const removal = await withRepositoryWorktreeTurn(item.projectPath, () => {
+        // ---- no `await` from here to the mutation ---------------------------
+        const confirmed = finalGate(deps, item, request, sites);
+        if (confirmed.skip !== null)
+          return { kind: "skipped" as const, detail: confirmed.skip, branch: confirmed.branch };
+        try {
+          worktree.git(
+            ["worktree", "remove", confirmed.gitPath],
+            confirmed.projectPath ?? confirmed.gitPath,
+          );
+          return { kind: "completed" as const, branch: confirmed.branch };
+        } catch (caught) {
+          return { kind: "failed" as const, error: errorText(caught), branch: confirmed.branch };
+        }
+      });
       // ---- the mutation is over; recording it may await again ---------------
-      if (removal.ok) {
+      if (removal.kind === "completed") {
         await settle(
           item.id,
           "completed",
-          confirmed.branch === null
+          removal.branch === null
             ? "Removed the folder. No branch was checked out here."
-            : `Removed the folder. Branch ${confirmed.branch} is still in git.`,
-          confirmed.branch,
+            : `Removed the folder. Branch ${removal.branch} is still in git.`,
+          removal.branch,
         );
+      } else if (removal.kind === "failed") {
+        await settle(item.id, "failed", removal.error, removal.branch);
       } else {
-        await settle(item.id, "failed", removal.error, confirmed.branch);
+        await settle(item.id, "skipped", removal.detail, removal.branch);
       }
     } finally {
       lease.release();
@@ -461,6 +486,17 @@ async function releaseWithin(
     if (timer !== undefined) clearTimeout(timer);
   }
 }
+
+/**
+ * What one project's metadata prune decided, carried out of the repository's
+ * turn so every durable `settle` happens outside the synchronous region.
+ */
+type PruneVerdict =
+  | { kind: "pruned" }
+  | { kind: "skip-all"; detail: string }
+  | { kind: "fail-all"; detail: string }
+  /** The prunable set moved since the confirmation; `current` names it now. */
+  | { kind: "drift"; current: ReadonlySet<string> };
 
 /** A metadata verdict for one project's confirmed records, and where to run git. */
 interface MetadataGate {
@@ -541,24 +577,44 @@ async function pruneProject(
   for (const item of items) {
     await deps.engine.beginItem({ commandId: request.commandId, itemId: item.id });
   }
-  // ---- no `await` from here to the prune ----------------------------------
-  const gate = metadataEligibility(deps, items, first);
-  if (gate.skip !== null) return skipAll(gate.skip);
-  const git = readOnlyGit(worktree.git);
-  let current: Set<string>;
-  try {
-    current = new Set(
-      parseWorktreeList(git(["worktree", "list", "--porcelain"], gate.projectPath))
-        .filter((entry) => entry.prunable !== null)
-        .map((entry) => canonicalize(entry.path)),
-    );
-  } catch (caught) {
-    const detail = errorText(caught);
-    for (const item of items) await settle(item.id, "failed", detail);
-    return;
-  }
-  const confirmed = confirmedRecordPaths(request.items, first.projectId);
-  if (!sameSet(current, confirmed)) {
+  // The repository's turn is taken around the WHOLE gate-and-prune region, not
+  // just the prune (VC-389). Two things at once: it orders this prune against
+  // any `worktree add` or `worktree remove` running in the same repository, and
+  // — because the region is one synchronous callback — it keeps the promise the
+  // region already made, that nothing awaits between the set-equality answer
+  // and the irreversible command. Awaiting the turn INSIDE the region would
+  // have re-opened exactly the window the region exists to close.
+  // Keyed on the CONFIRMED project path rather than on whatever the database
+  // reads now: the gate inside refuses outright if the project's folder has
+  // moved since the confirmation, so a prune that runs at all runs in exactly
+  // this repository.
+  const verdict = await withRepositoryWorktreeTurn(first.projectPath, (): PruneVerdict => {
+    // ---- no `await` from here to the prune --------------------------------
+    const gate = metadataEligibility(deps, items, first);
+    if (gate.skip !== null) return { kind: "skip-all", detail: gate.skip };
+    const git = readOnlyGit(worktree.git);
+    let current: Set<string>;
+    try {
+      current = new Set(
+        parseWorktreeList(git(["worktree", "list", "--porcelain"], gate.projectPath))
+          .filter((entry) => entry.prunable !== null)
+          .map((entry) => canonicalize(entry.path)),
+      );
+    } catch (caught) {
+      return { kind: "fail-all", detail: errorText(caught) };
+    }
+    const confirmed = confirmedRecordPaths(request.items, first.projectId);
+    if (!sameSet(current, confirmed)) return { kind: "drift", current };
+    try {
+      worktree.git(["worktree", "prune"], gate.projectPath);
+      return { kind: "pruned" };
+    } catch (caught) {
+      return { kind: "fail-all", detail: errorText(caught) };
+    }
+  });
+  // ---- the mutation is over; recording it may await again ------------------
+  if (verdict.kind === "skip-all") return skipAll(verdict.detail);
+  if (verdict.kind === "drift") {
     // Two different truths, so two different sentences: a record that is simply
     // gone was already pruned by something else, while a set that grew or moved
     // means this prune would take records nobody confirmed.
@@ -566,24 +622,16 @@ async function pruneProject(
       await settle(
         item.id,
         "skipped",
-        current.has(canonicalize(item.path)) ? SKIP_METADATA_DRIFT : SKIP_METADATA_GONE,
+        verdict.current.has(canonicalize(item.path)) ? SKIP_METADATA_DRIFT : SKIP_METADATA_GONE,
       );
     }
     return;
   }
-  let pruned: { ok: true } | { ok: false; error: string };
-  try {
-    worktree.git(["worktree", "prune"], gate.projectPath);
-    pruned = { ok: true };
-  } catch (caught) {
-    pruned = { ok: false, error: errorText(caught) };
-  }
-  // ---- the mutation is over; recording it may await again ------------------
   for (const item of items) {
-    if (pruned.ok) {
+    if (verdict.kind === "pruned") {
       await settle(item.id, "completed", "Pruned this stale git record; nothing on disk changed.");
     } else {
-      await settle(item.id, "failed", pruned.error);
+      await settle(item.id, "failed", verdict.detail);
     }
   }
 }

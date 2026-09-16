@@ -40,6 +40,7 @@ import { resolveWorktreeIdentity } from "./identity";
 import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
+import { withRepositoryWorktreeTurn } from "./repository-turn";
 import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 /**
@@ -163,7 +164,17 @@ async function runEnsure(
       ? [identity.path, identity.branch]
       : ["-b", identity.branch, identity.path, base!.startPoint];
     try {
-      await addWorktree(git, project.path, addArgs, reconciled.value.prune);
+      // The repository's turn wraps the MUTATION, not the decision (VC-389).
+      // `reconcile` read the listing outside it, so `prune` can be one tick
+      // stale by the time the turn comes — deliberately: holding the turn
+      // across the reads would serialize every Session start in a project on
+      // work that changes nothing. Staleness is safe in both directions here,
+      // because `addWorktree` prunes and retries once when the add fails on a
+      // record it did not expect, and a prune nobody needed is a no-op.
+      const prune = reconciled.value.prune;
+      await withRepositoryWorktreeTurn(project.path, () =>
+        addWorktree(git, project.path, addArgs, prune),
+      );
     } catch (caught) {
       const message =
         caught instanceof GitError && caught.stderr.trim()
