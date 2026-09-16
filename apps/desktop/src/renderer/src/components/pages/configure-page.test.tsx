@@ -157,21 +157,21 @@ describe("Configure → Sessions", () => {
 });
 
 describe("Configure → MCP", () => {
-  it("offers app-owned stdio and Streamable HTTP configuration without a shell command field", () => {
+  it("opens on the servers it has, with the editor summoned rather than standing open", () => {
     const html = renderConfigure("mcp");
 
     expect(html).not.toContain("aren&#x27;t available yet");
     expect(html).not.toContain("inert");
     expect(html).toContain("No MCP servers yet.");
     expect(html).toContain("Add server");
-    expect(html).toContain("Standard input/output");
-    expect(html).toContain("Streamable HTTP");
-    expect(html).toContain("Executable");
-    expect(html).toContain("Arguments (one per line)");
     expect(html).not.toContain("Shell command");
     // The one line the pane says without being asked: a trust boundary the
     // controls cannot show. Everything else about MCP is a summoned hint.
     expect(html).toContain("A local MCP command runs as you");
+    // The form is a REQUEST now (VC-397): an always-open editor under a
+    // catalog of 34 tools is what made this page unreadable. The transports it
+    // offers are asserted where a click can open it — `mcp-pane.test.tsx`.
+    expect(html).not.toContain("Arguments (one per line)");
   });
 });
 
