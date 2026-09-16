@@ -246,6 +246,8 @@ export interface GlyphProps {
   animate?: boolean;
   /** How the figure in the middle is set. See {@link NumberStyle}. */
   numberStyle?: NumberStyle;
+  /** Thin the stroke as the glyph grows. See {@link opticalStroke}. */
+  optical?: boolean;
 }
 
 /**
@@ -270,10 +272,23 @@ export interface NumberStyle {
   weight: number;
 }
 
-export const DEFAULT_NUMBER: NumberStyle = { size: 12, weight: 600 };
+/**
+ * 12 box units, and the weight is the finding rather than a taste.
+ *
+ * At the glyph size this is now drawn at, 12 units renders at 11 CSS px —
+ * `--text-label` exactly, the system's smallest rung. A figure standing ON the
+ * ladder does not need to compensate for anything, so it is set at the weight
+ * the rest of the chrome uses instead of the 700 it wanted at 14px. That drop,
+ * from bold to medium, is most of the rest of the difference between a badge
+ * and an instrument: the earlier weight was never style, it was a figure 36%
+ * under the floor shouting to stay legible.
+ */
+export const DEFAULT_NUMBER: NumberStyle = { size: 12, weight: 500 };
 
 /** `--text-label`, 0.6875rem. The smallest type this design system admits. */
 export const TYPE_FLOOR_PX = 11;
+/** `--text-ui`, 0.8125rem — what the ⌘K pill beside the glyph sets its own text in. */
+export const TYPE_UI_PX = 13;
 
 export interface FigureFit {
   /** What the figure actually renders at, in CSS px. */
@@ -301,11 +316,11 @@ export interface FigureFit {
  * of margin inside the stroke, without which the figure kisses the ring and
  * both stop being legible.
  */
-export function figureFit(glyphPx: number, style: NumberStyle): FigureFit {
+export function figureFit(glyphPx: number, style: NumberStyle, optical = true): FigureFit {
   const k = glyphPx / BOX;
   const px = style.size * k;
   const digits = 2 * 0.56 * px;
-  const clear = CENTRE_CLEAR * k;
+  const clear = centreClear(glyphPx, optical) * k;
   return { px, fromFloor: px / TYPE_FLOOR_PX - 1, digits, clear, fits: digits <= clear * 0.86 };
 }
 
@@ -496,36 +511,60 @@ function DotRow({
  * worth keeping: the dots sit IN the ring's band rather than floating inside
  * it. A bead can be as fat as the ring's own stroke because it stands where
  * the stroke would have been; a dot hung inside the circle is a fifth of that
- * and vanishes at 14px.
+ * and vanishes.
  *
- * THE GEOMETRY IS TUNED FOR THE MIDDLE rather than inherited. The stroke thins
- * from 2.4 to 2.0 and the radius grows to take up the slack, which buys the
- * figure an 18-unit inner diameter instead of 17.2 — about half a device pixel
- * of extra cap height at 14px. That sounds like nothing, and it is most of the
- * difference between two digits reading and two digits smudging.
+ * THE GEOMETRY IS A FUNCTION OF THE RENDERED SIZE, not a set of constants. The
+ * stroke thins as the glyph grows ({@link opticalStroke}) and the radius takes
+ * up the slack, so the ring's OUTER edge stays where it is while its middle
+ * opens up. Both of those are load-bearing: the outer edge is what meets the
+ * ⌘K pill's height at 22px, and the middle is what the figure is spending.
  *
  * At 100% the number is dropped: three digits will not fit, and a ring drawn
  * full already says the only thing "100" would add.
  */
 const CENTRE_SW = 2;
-const CENTRE_R = EDGE - CENTRE_SW / 2;
 
 /**
- * What the ring actually leaves the figure, in box units, so the fit can be
- * COMPUTED rather than eyeballed: the clear diameter between the inner edges
- * of the stroke. Multiply by `glyphPx / BOX` for CSS pixels.
+ * The size {@link CENTRE_SW} was drawn for. Above it the stroke thins.
  *
- * This is the number the whole design turns on. At the shipping 14px glyph it
- * is 10.5 CSS px of clear space, and two digits of `--text-label` (11px) are
- * about 12.3px wide — so the app's SMALLEST type does not fit inside the app's
- * icon, and no choice of weight changes that. {@link figureFit} is the honest
- * version of the arithmetic.
+ * A stroke written in box units scales LINEARLY with the glyph, which is the
+ * one thing a mark must not do across this range. 2 units is 1.17 CSS px at
+ * 14px — chosen to survive a 14px glyph, where anything finer greys out. Carry
+ * that ratio to 22px and the same stroke lands at 1.83px: 57% more ink,
+ * holding a shape that no longer needs any of it. That is most of what makes a
+ * big version of a small icon look like a BADGE rather than an instrument. The
+ * ring gets heavier exactly as it stops needing to be.
+ *
+ * So absolute weight grows as the square root of the size instead of with it:
+ * still thickening, because a larger mark does want a little more presence,
+ * but nothing like in step. At 22px the stroke lands at 1.46px rather than
+ * 1.83 — a fine circle instead of a fat one — and the middle it gives back is
+ * room the figure spends.
  */
-export const CENTRE_CLEAR = 2 * (CENTRE_R - CENTRE_SW / 2);
+const REFERENCE_PX = 14;
+
+/** {@link CENTRE_SW}, corrected for optical scale, in box units at `glyphPx`. */
+export function opticalStroke(glyphPx: number): number {
+  if (glyphPx <= REFERENCE_PX) return CENTRE_SW;
+  const wanted = (CENTRE_SW * REFERENCE_PX) / BOX; // CSS px at the reference
+  return ((wanted * Math.sqrt(glyphPx / REFERENCE_PX)) / glyphPx) * BOX;
+}
+
+/**
+ * What the ring actually leaves the figure, in box units: the clear diameter
+ * between the inner edges of the stroke. Multiply by `glyphPx / BOX` for CSS
+ * pixels. This is the number the whole design turns on — it is a fixed
+ * FRACTION of the box, so the figure's size and the glyph's size are locked
+ * together and the only free variable is the box. {@link figureFit} is the
+ * honest version of the arithmetic.
+ */
+export function centreClear(glyphPx: number, optical = true): number {
+  const sw = optical ? opticalStroke(glyphPx) : CENTRE_SW;
+  return 2 * (EDGE - sw);
+}
+
 /** Wide enough for four beads with clearance; the arc keeps the other 290°. */
 const CENTRE_NOTCH = 70;
-const CENTRE_DOT_D = 1.7;
-const CENTRE_DOT_PITCH = ((CENTRE_DOT_D + 0.9) / circumference(CENTRE_R)) * 360;
 
 export function RingCentre({
   reading,
@@ -533,9 +572,18 @@ export function RingCentre({
   label,
   animate,
   numberStyle,
+  optical = true,
   dots = "none",
 }: GlyphProps & { dots?: "none" | "accounts" | "windows" }) {
   const reported = reading.reported;
+  // Geometry is a function of the rendered size, not a set of constants: see
+  // {@link opticalStroke}. The radius takes up the slack so the ring's OUTER
+  // edge stays put as the stroke thins — at 22px that outer diameter is 22px,
+  // which is the ⌘K pill's height to the pixel.
+  const sw = optical ? opticalStroke(size) : CENTRE_SW;
+  const r = EDGE - sw / 2;
+  const dotD = Math.min(1.7, sw * 0.85);
+  const pitch = ((dotD + 0.9) / circumference(r)) * 360;
   const beads =
     dots === "none" ? [] : dots === "accounts" ? accountDots(reading, 4) : windowDots(reading);
   // The notch is only cut when something stands in it. A ring with a gap and
@@ -545,17 +593,17 @@ export function RingCentre({
   const notch = beads.length === 0 ? 0 : CENTRE_NOTCH;
   const from = 180 + notch / 2;
   const span = 360 - notch;
-  const spread = (beads.length - 1) * CENTRE_DOT_PITCH;
+  const spread = (beads.length - 1) * pitch;
   return (
     <Glyph size={size} label={label}>
       {reported === null ? (
         <QuietRing dashed={reading.kind === "unread"} />
       ) : (
         <>
-          <Track r={CENTRE_R} sw={CENTRE_SW} from={from} span={span} />
+          <Track r={r} sw={sw} from={from} span={span} />
           <Arc
-            r={CENTRE_R}
-            sw={CENTRE_SW}
+            r={r}
+            sw={sw}
             from={from}
             span={span}
             fill={share(reported)}
@@ -563,13 +611,13 @@ export function RingCentre({
             className={cn("stroke-current", TONE_STROKE[reported.tone])}
           />
           {beads.map((bead, index) => {
-            const point = ringPoint(CENTRE_R, 180 - spread / 2 + index * CENTRE_DOT_PITCH);
+            const point = ringPoint(r, 180 - spread / 2 + index * pitch);
             return (
               <circle
                 key={bead.key}
                 cx={point.x}
                 cy={point.y}
-                r={CENTRE_DOT_D / 2}
+                r={dotD / 2}
                 fill={bead.solid ? "currentColor" : "none"}
                 stroke="currentColor"
                 strokeWidth={bead.solid ? 0 : 0.6}
