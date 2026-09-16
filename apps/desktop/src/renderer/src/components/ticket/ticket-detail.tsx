@@ -100,6 +100,7 @@ import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -205,6 +206,20 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
+  // The moment this workspace starts existing for THIS ticket (VC-385). In the
+  // render body rather than in an effect on purpose: effects run after the
+  // whole subtree has committed, so an effect here would bill the rail and
+  // every panel to the "rebuild" phase and leave nothing for the phases after
+  // it. Guarded by ticket id rather than by a bare `once` flag so it stays
+  // correct if this view ever stops being remounted per ticket — a re-render
+  // is not a new workspace, and stamping one would shorten the editor phase by
+  // exactly the time it was late.
+  const markedWorkspaceForRef = React.useRef<string | null>(null);
+  if (markedWorkspaceForRef.current !== ticket.id) {
+    markedWorkspaceForRef.current = ticket.id;
+    markPerfPhase(PERF_PHASE.ticketWorkspaceMount);
+  }
+
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
   const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);

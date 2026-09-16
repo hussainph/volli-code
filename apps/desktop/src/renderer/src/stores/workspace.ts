@@ -74,6 +74,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { appStateStorage } from "@renderer/lib/app-state-storage";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import {
   HOME_BOARD_TAB_ID,
   closeHomeTabHistory,
@@ -1768,6 +1769,11 @@ export function createWorkspaceStore(
         },
 
         openTicketWorkspace(projectId, ticketId, opts) {
+          // The switch's commit point, wherever it was asked for (VC-385): the
+          // palette, a board card, nav history. Stamped in the store rather
+          // than at each caller so the measured boundary cannot depend on
+          // which door the person came through.
+          markPerfPhase(PERF_PHASE.ticketSwitchCommit);
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const tabId = opts?.tabId;

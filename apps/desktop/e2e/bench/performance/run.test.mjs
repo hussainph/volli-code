@@ -393,6 +393,28 @@ describe("ChatPlane report validation", () => {
 });
 
 describe("whole-report validation and Markdown", () => {
+  /**
+   * VC-385 — `--interactions` is the supported way to measure one interaction
+   * without paying for the other eight (about nineteen minutes an arm). The
+   * run itself honoured the flag; validation did not, and rejected the report
+   * it had just produced for containing exactly what was asked for. A filtered
+   * run that cannot write its report is a flag that does not work.
+   */
+  it("accepts a run that measured only the interactions it was asked for", () => {
+    const report = benchmarkReport();
+    report.config.streamOnly = false;
+    report.config.interactions = ["ticket_switch"];
+    report.arms[0].interactions = [
+      aggregateInteraction("ticket_switch", "Switch between ticket workspaces", [
+        streamSample({ latencyMs: 120 }),
+        streamSample({ latencyMs: 140 }),
+      ]),
+    ];
+    report.arms[0].chatWindow = null;
+
+    expect(validateBenchmarkReport(report)).toBe(report);
+  });
+
   it("accepts zero latency samples and renders the report contract", () => {
     const report = benchmarkReport();
     report.arms[0].interactions[0] = aggregateInteraction(
