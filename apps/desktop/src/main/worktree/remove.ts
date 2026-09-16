@@ -53,6 +53,7 @@ import { GitError, parseWorktreeList } from "./git";
 import { homeDir } from "./home";
 import { canonicalize } from "./paths";
 import { clearPhase } from "./phase";
+import { withRepositoryWorktreeTurn } from "./repository-turn";
 import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 // System-driven, no session: these mutations are attributed to automation.
@@ -192,7 +193,11 @@ export async function remove(
 
     try {
       const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
-      await git(args, project.path);
+      // The repository's turn, not just the directory's lease (VC-389). The
+      // lease above orders this against work starting in THIS directory; this
+      // orders the git command against every other change to the same
+      // REPOSITORY, which is a different hazard with a different key.
+      await withRepositoryWorktreeTurn(project.path, () => git(args, project.path));
     } catch (caught) {
       const message =
         caught instanceof GitError && caught.stderr.trim()
@@ -213,10 +218,16 @@ export async function remove(
   }
 }
 
-/** Metadata cleanup is best-effort; the identity clear that follows still runs. */
+/**
+ * Metadata cleanup is best-effort; the identity clear that follows still runs.
+ *
+ * Takes the repository's turn like every other worktree change (VC-389):
+ * `prune` drops admin records across the WHOLE repository, so it is the last
+ * command that may run beside another ticket's `worktree add`.
+ */
 async function pruneBestEffort(git: RunGitAsync, projectPath: string): Promise<void> {
   try {
-    await git(["worktree", "prune"], projectPath);
+    await withRepositoryWorktreeTurn(projectPath, () => git(["worktree", "prune"], projectPath));
   } catch {
     // Best-effort by contract — see the caller.
   }

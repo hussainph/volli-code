@@ -17,7 +17,13 @@ import type {
   WorktreeChangedEvent,
   WorktreeWatchErrorEvent,
 } from "../../ipc/contract";
-import { GIT_COMMAND_TIMEOUT_MS, GIT_MAX_BUFFER, runGitCapturingAsync, stderrOf } from "./git";
+import {
+  GIT_COMMAND_TIMEOUT_MS,
+  GIT_MAX_BUFFER,
+  runGitCapturingAsync,
+  stderrOf,
+  withGitChildSlot,
+} from "./git";
 import type { RunGitAsync } from "./types";
 
 /** Same debounce as FileWatchManager / DirWatchManager (volli-fs.ts). */
@@ -165,34 +171,43 @@ function statPathIsDirectory(worktreePath: string, relativePath: string): boolea
 /**
  * Runs the lazy path probe with NUL-delimited stdin. Exit 1 means none of the
  * supplied paths are ignored, which is a successful classification rather
- * than a failed git command.
+ * than a failed git command. This borrows the shared gate rather than the
+ * capturing runner because it must write NUL-delimited paths to stdin and
+ * treats exit code 1 as a successful classification.
+ *
+ * Exported for the suite alone: it is the production default below, and the
+ * claim that it takes a slot is otherwise unreachable behind an option every
+ * test overrides.
  */
-function checkIgnoredPathsWithGit(
+export function checkIgnoredPathsWithGit(
   worktreePath: string,
   paths: readonly string[],
 ): Promise<readonly string[]> {
   if (paths.length === 0) return Promise.resolve([]);
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      "git",
-      ["check-ignore", "--stdin", "-z"],
-      {
-        cwd: worktreePath,
-        encoding: "utf8",
-        maxBuffer: GIT_MAX_BUFFER,
-        timeout: GIT_COMMAND_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-      },
-      (error, stdout, stderr) => {
-        if (error === null || error.code === 1) {
-          resolve(splitNul(stdout));
-          return;
-        }
-        reject(new Error(stderr.trim() || error.message));
-      },
-    );
-    child.stdin?.end(`${paths.join("\0")}\0`);
-  });
+  return withGitChildSlot(
+    () =>
+      new Promise((resolve, reject) => {
+        const child = execFile(
+          "git",
+          ["check-ignore", "--stdin", "-z"],
+          {
+            cwd: worktreePath,
+            encoding: "utf8",
+            maxBuffer: GIT_MAX_BUFFER,
+            timeout: GIT_COMMAND_TIMEOUT_MS,
+            killSignal: "SIGKILL",
+          },
+          (error, stdout, stderr) => {
+            if (error === null || error.code === 1) {
+              resolve(splitNul(stdout));
+              return;
+            }
+            reject(new Error(stderr.trim() || error.message));
+          },
+        );
+        child.stdin?.end(`${paths.join("\0")}\0`);
+      }),
+  );
 }
 
 /** Slash-normalizes a watch/git path and rejects paths outside the watch root. */
