@@ -714,14 +714,27 @@ async function main() {
     // === 12. Normal-screen wheel scrolls the terminal's own scrollback ======
     // xterm scrolls through its own scrollable element rather than a native
     // `scrollTop`, so the honest reading is the one the user has: which lines
-    // are DRAWN. 500 lines in, the last one is on screen; a wheel up has to put
-    // an earlier one there instead.
+    // are DRAWN. 500 lines in, the last one is on screen; wheeling up has to
+    // put an earlier one there instead.
+    //
+    // Several wheel events, not one. xterm's viewport moves a fixed few rows
+    // per synthetic wheel regardless of its pixel delta, and the shell prompt
+    // sits between the last line and the bottom edge: on a runner whose
+    // hostname wraps that prompt across five 20-column rows, one wheel
+    // scrolled three rows and left "line-500" on screen (CI, VC-107). The
+    // claim is that wheeling reaches earlier output, not how far one event
+    // travels, so keep wheeling until the last line has left the viewport.
     await runInTerminal(page, 'seq -f "line-%g" 1 500');
     const rowsAtBottom = await waitForRowsContaining(page, "line-500", { timeoutMs: 10000 });
     await page.mouse.move(mouseBox.x, mouseBox.y);
-    await page.mouse.wheel(0, -600);
-    await sleep(400);
-    const rowsScrolledBack = await visibleRowsText(page, 0);
+    let rowsScrolledBack = rowsAtBottom;
+    let wheels = 0;
+    while (wheels < 12 && (rowsScrolledBack === null || rowsScrolledBack.includes("line-500"))) {
+      await page.mouse.wheel(0, -600);
+      wheels += 1;
+      await sleep(200);
+      rowsScrolledBack = await visibleRowsText(page, 0);
+    }
     check(
       12,
       "Wheel scrolls ordinary terminal scrollback",
@@ -730,7 +743,7 @@ async function main() {
         rowsScrolledBack !== null &&
         !rowsScrolledBack.includes("line-500") &&
         /line-\d+/.test(rowsScrolledBack),
-      `bottom=${JSON.stringify(rowsAtBottom?.slice(-40) ?? null)} scrolled=${JSON.stringify(rowsScrolledBack?.slice(-40) ?? null)}`,
+      `wheels=${wheels} bottom=${JSON.stringify(rowsAtBottom?.slice(-40) ?? null)} scrolled=${JSON.stringify(rowsScrolledBack?.slice(-40) ?? null)}`,
     );
 
     // Manual visual diagnostic for Claude-style status symbols. The codepoints
