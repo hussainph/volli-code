@@ -42,6 +42,7 @@ import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import {
+  EMPTY_PROJECT_SESSION_ROWS,
   mergedProjectSessionRows,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
@@ -173,7 +174,17 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     chat: chatSessions,
     terminal: terminalSessions,
     provenance: sessionProvenance,
-  } = React.useMemo(() => mergedProjectSessionRows(byProject, projectIds), [byProject, projectIds]);
+  } = React.useMemo(
+    // `open` is load-bearing, not decoration. `applyActivity` allocates a new
+    // `byProject` for every `volli:session-activity` push, and this palette is
+    // always mounted — so without the gate each push would wake it and fold
+    // every project's whole roster while the palette is closed and nobody is
+    // looking. It is the same rule the items memo below states ("Gating on
+    // `open` keeps the closed palette free") and the same one every other
+    // consumer of this store keeps by narrowing to a single project.
+    () => (open ? mergedProjectSessionRows(byProject, projectIds) : EMPTY_PROJECT_SESSION_ROWS),
+    [open, byProject, projectIds],
+  );
   const [query, setQuery] = React.useState("");
   // The `@` scope chip (VC-205): a completed `@sessions` narrows the palette
   // to one section. It is state beside the query, not text inside it, so the
@@ -197,9 +208,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     markPerfPhase(PERF_PHASE.commandPaletteOpen);
   }, [open]);
 
-  // The automations the selected project lists, re-read per open — same
-  // staleness stance as the chat rows below: the palette's open IS the moment
-  // a stale list would show.
+  // The automations the selected project lists, re-read on every open: this
+  // list has no push channel, so the palette's open IS the moment a stale one
+  // would show. The Session rows no longer work this way — they come from a
+  // pushed cache (VC-385) and are read once per project, not once per open.
   React.useEffect(() => {
     if (!open || selectedProjectId === null) return;
     void useAutomationsStore.getState().refresh(selectedProjectId);
