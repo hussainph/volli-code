@@ -49,16 +49,17 @@ export function isNoticeFileName(name) {
 }
 
 /**
- * Normalise licence text for reproducible output: strip a BOM, fold CRLF, drop
- * trailing whitespace at end of file. The body is otherwise untouched —
- * reproducing a licence means reproducing it, not reflowing it.
+ * Normalise licence text for reproducible output: strip a BOM, fold CRLF, and
+ * remove trailing horizontal whitespace from every line. Line breaks and every
+ * other character are otherwise untouched — reproducing a licence means
+ * reproducing it, not reflowing it.
  * @param {string} text
  */
 export function normalizeLicenseText(text) {
   return text
     .replace(/^\uFEFF/, "")
     .replaceAll("\r\n", "\n")
-    .replace(/\s+$/, "");
+    .replace(/[ \t]+(?=\n|$)/g, "");
 }
 
 /**
@@ -721,5 +722,5 @@ export function renderNoticeDocument(model) {
     "",
   );
 
-  return `${out.join("\n").replace(/\n{3,}$/, "\n")}\n`;
+  return out.join("\n").replace(/\n+$/, "\n");
 }

@@ -557,7 +557,11 @@ function selfTestDeclarations() {
   assert.equal(repositoryUrl({ repository: { url: "git+https://x/y.git" } }), "https://x/y");
   assert.equal(repositoryUrl({ homepage: "https://x/y" }), "https://x/y");
   assert.equal(repositoryUrl({}), null);
-  assert.equal(normalizeLicenseText("\uFEFFa\r\nb\n\n  "), "a\nb");
+  assert.equal(
+    normalizeLicenseText("\uFEFFa  \r\nb\t\n\n  c  \n"),
+    "a\nb\n\n  c\n",
+    "only trailing horizontal whitespace is removed; line breaks and other spaces stay",
+  );
   assert.ok(isLicenseFileName("LICENSE") && isLicenseFileName("license.md"));
   assert.ok(isLicenseFileName("LICENSE-MPL") && isLicenseFileName("COPYING.txt"));
   assert.ok(!isLicenseFileName("licensed-code.js") && !isLicenseFileName("index.js"));
@@ -857,6 +861,7 @@ function selfTestRendering() {
     "a package with no licence file is reported as such, with its declaration",
   );
   assert.ok(!document.includes("\n\n\n\n"), "no runaway blank space — the output must be stable");
+  assert.ok(!document.endsWith("\n\n"), "the generated document ends with one newline");
   assert.equal(
     document,
     renderNoticeDocument(renderFixtureModel()),
