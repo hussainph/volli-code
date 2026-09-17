@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { configureGroups } from "@renderer/components/settings/configure-groups";
-import { PrefShell } from "@renderer/components/settings/kit";
+import { PrefShell, type PrefCategory } from "@renderer/components/settings/kit";
 import { ConfigurePage } from "./configure-page";
 
 const project: Project = {
@@ -42,13 +42,44 @@ function sectionTitles(activeKey: string): string[] {
   );
 }
 
+/** Every category the rail draws, in rail order, groups flattened away. */
+function allCategories(): readonly PrefCategory[] {
+  return configureGroups(project).flatMap((group) => group.categories);
+}
+
+/** One category by key, or `undefined` when the rail no longer declares it. */
+function categoryFor(key: string): PrefCategory | undefined {
+  return allCategories().find((category) => category.key === key);
+}
+
+/** Everything the rail's search index holds for one category. */
+function searchTermsFor(category: PrefCategory): readonly string[] {
+  return [category.label, ...(category.keywords ?? [])];
+}
+
 function keywordsFor(key: string): readonly string[] {
-  for (const group of configureGroups(project)) {
-    for (const category of group.categories) {
-      if (category.key === key) return [category.label, ...(category.keywords ?? [])];
-    }
-  }
-  throw new Error(`no configure category ${key}`);
+  const category = categoryFor(key);
+  if (category === undefined) throw new Error(`no configure category ${key}`);
+  return searchTermsFor(category);
+}
+
+/**
+ * Which categories the rail would offer for a typed query.
+ *
+ * The shell's rule, re-stated: a lowercased SUBSTRING of a stored term, where
+ * the stored terms are the label plus the keywords (`kit/pref-shell.tsx`,
+ * the `matches` memo). Mirrored rather than imported because that predicate
+ * lives inside a `useMemo` with no seam — and because `PrefShell` never
+ * renders `keywords` into the DOM at all, so an assertion on rendered HTML is
+ * blind to the half of the index a person actually types against.
+ */
+function railSearch(query: string): readonly string[] {
+  const needle = query.trim().toLowerCase();
+  return allCategories()
+    .filter((category) =>
+      searchTermsFor(category).some((term) => term.toLowerCase().includes(needle)),
+    )
+    .map((category) => category.key);
 }
 
 /**
@@ -84,6 +115,11 @@ describe("Configure rail", () => {
   it("groups agent configuration apart from project settings", () => {
     const html = renderConfigure("skills");
 
+    // The count is in the module header of `configure-groups.tsx` ("two
+    // groups, seven categories"), and that line spent a ticket being wrong
+    // while nothing failed. Pin it here: a category added or removed should
+    // make someone reread the sentence that describes the rail.
+    expect(allCategories()).toHaveLength(7);
     expect(html).toContain("Agent");
     expect(html).toContain("Project");
     for (const category of [
@@ -98,15 +134,30 @@ describe("Configure rail", () => {
     }
   });
 
-  it("never brings back Plugins", () => {
-    const category = configureGroups(project)
-      .flatMap((group) => group.categories)
-      .find((candidate) => candidate.key === "plugins");
-    expect(category).toBeUndefined();
+  /**
+   * The entry, its keywords and its pane left together (VC-378) and only
+   * VC-379 — real Agent Plugins support — brings them back.
+   *
+   * THE KEY CHECK IS THE NARROW ONE: it catches the category returning as it
+   * was. The vocabulary check is the one that matters, because the rail's
+   * search index is not drawn into the DOM — "plugin" restored as a keyword
+   * on some neighbouring category is invisible to any assertion on rendered
+   * HTML, and would put every retired search term back in a person's hands
+   * with no pane behind it. Both halves of the index are checked the way the
+   * shell reads them.
+   */
+  it("keeps the retired Plugins vocabulary out of the rail and its search index", () => {
+    expect(categoryFor("plugins")).toBeUndefined();
 
-    const html = renderConfigure("skills");
-    expect(html).not.toContain("Plugins");
-    expect(html.toLowerCase()).not.toContain("plugin");
+    // The four terms VC-378 named, plus the label itself. Each must find
+    // nothing: a search that lands on a pane which cannot be about plugins is
+    // worse than a search that lands nowhere.
+    for (const query of ["plugin", "plugins", "installed plugins", "bundle", "marketplace"]) {
+      expect(railSearch(query), `rail search for "${query}" should find nothing`).toEqual([]);
+    }
+
+    // And the drawn rail, for the label a person can actually read.
+    expect(renderConfigure("skills")).not.toContain("Plugins");
   });
 });
 
@@ -147,9 +198,7 @@ describe("Configure → Sessions", () => {
   });
 
   it("indexes the visible Chat section and retires the removed Harness vocabulary", () => {
-    const category = configureGroups(project)
-      .flatMap((group) => group.categories)
-      .find((candidate) => candidate.key === "sessions");
+    const category = categoryFor("sessions");
 
     expect(category?.keywords).toContain("chat");
     expect(category?.keywords).not.toContain("harness");

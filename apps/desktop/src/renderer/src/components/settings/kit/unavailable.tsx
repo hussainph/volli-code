@@ -1,14 +1,26 @@
 /**
  * How a surface says "this is designed, and it does not work yet".
  *
- * Some of what this redesign lays out has no plumbing behind it — MCP servers
- * need a config reader, a process spawner, health monitoring and tool
- * injection into the Agent Runtime; plugins have no format decision yet. The
- * choice is between hiding those categories until the day they land, or
- * showing the shape and being honest about the state.
+ * NO CALLER TODAY, AND KEPT ON PURPOSE. MCP was the first preview drawn here
+ * and VC-8 gave it its plumbing; Plugins was the last, and VC-378 removed the
+ * category outright rather than keep previewing it. This file is not dead
+ * weight to be swept: VC-379 brings back a Configure → Plugins pane against
+ * the real Agent Plugins 1.0 package, which Volli will not support in full on
+ * day one, and the component types it cannot run yet are exactly what an
+ * honest preview is for. The rules below are the reason it is worth keeping
+ * — they were learned, not designed, and rewriting them from scratch would
+ * cost more than the fifty lines under this comment.
  *
- * Showing them wins, but ONLY under three rules, because a preview that lies
- * is worse than an absence:
+ * WHEN TO REACH FOR IT. A surface has a shape worth showing and no plumbing
+ * behind it. The alternative is hiding the category until the day it lands,
+ * which is the right call whenever the shape itself is still in doubt — the
+ * Plugins entry was hidden precisely because the pane it drew described a
+ * plugin as "a bundle of skills and commands", and the published standard
+ * covers skills and MCP servers. A preview of the wrong shape teaches the
+ * wrong thing, and no banner above it repairs that.
+ *
+ * So: show the shape only when the shape is settled, and then ONLY under
+ * three rules, because a preview that lies is worse than an absence:
  *
  *  1. **It says so, first and in words.** {@link UnavailableNotice} goes above
  *     the preview, not under it. Someone who reads one thing must read the one
@@ -22,9 +34,9 @@
  *     and someone will screenshot it. Whatever renders inside must be what a
  *     real, correctly-working, unconfigured surface would render.
  *
- * Rule 3 is not enforceable here; it is the caller's discipline, and it is
- * why every pane in `panes/` that uses this passes an empty collection rather
- * than a fixture.
+ * Rule 3 is not enforceable here; it is the caller's discipline, and every
+ * pane that has ever used this passed an empty collection rather than a
+ * fixture. The next one must too.
  */
 import type * as React from "react";
 import { WrenchIcon } from "@phosphor-icons/react/dist/csr/Wrench";
