@@ -145,6 +145,33 @@ jobs:
           vp run --filter @volli/desktop check:design-tokens
           vp run --filter @volli/desktop check:node-version
 
+      # Dependency licenses against the reviewed record (VC-409). Not a lint
+      # rule and not expressible as one: it reads the installed pnpm store, the
+      # workspace manifests, every first-party import, and electron-builder's
+      # packaging lists, and fails when any of them drifts from
+      # scripts/dependency-license-policy.json — a new restricted dependency, a
+      # dependency that relicensed under us, an unreviewed version bump, or a
+      # containment rule a review relied on breaking.
+      #   check:licenses       — the gate, after self-testing its own matchers.
+      #   check:notice-inputs  — docs/licensing/notice-inputs.md still matches
+      #                          the installed tree, so the attribution text
+      #                          handed to the notice tickets cannot go stale.
+      # Two assertions need the darwin-arm64 binaries, which pnpm skips on this
+      # Linux runner by os/cpu: the Mach-O dynamic-linking check and the whole
+      # of check:notice-inputs. Both PRINT that they skipped rather than passing
+      # silently, so this step being green here is not read as having checked
+      # them — a developer Mac and any macOS lane do. The store scan, manifests,
+      # import containment and packaging lists all run on every platform, and
+      # per-platform package families are keyed by pattern in the policy so the
+      # LGPL and MPL binaries are reviewed whichever sibling gets installed.
+      #
+      # GSAP's own gate is not here on purpose: it reads the BUILT site, so it
+      # runs as the last step of `vp run --filter @volli/website build` below.
+      - name: Check dependency licenses
+        run: |
+          vp run --filter @volli/desktop check:licenses
+          vp run --filter @volli/desktop check:notice-inputs
+
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
       - name: Typecheck

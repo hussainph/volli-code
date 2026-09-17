@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
-    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs",
+    "check:licenses": "node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-code --branch main",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "brand": "node scripts/generate-brand-assets.mjs",

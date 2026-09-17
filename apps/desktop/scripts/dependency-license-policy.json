@@ -1,0 +1,246 @@
+{
+  "$comment": [
+    "The reviewed inventory of every installed dependency whose license is not plainly permissive (VC-409).",
+    "check-dependency-licenses.mjs reads this file and fails when reality and this record disagree:",
+    "a new restricted dependency appears, a reviewed one changes version or relicenses, or a",
+    "containment rule that a review depended on stops holding.",
+    "",
+    "Adding an entry here is a claim that someone READ the license. Do not add one to make CI green.",
+    "docs/licensing/dependency-license-review.md carries the reasoning and the open legal questions.",
+    "",
+    "A key ending in `*` covers a family of per-platform packages. pnpm installs only the sibling",
+    "matching the current os/cpu, so `@img/sharp-libvips-darwin-arm64` on a developer Mac is",
+    "`@img/sharp-libvips-linux-x64` on CI. Three families need it; every other platform-specific",
+    "package in this tree is MIT or Apache-2.0."
+  ],
+
+  "permissive": {
+    "$comment": [
+      "Licenses that place no restriction on how Volli Code is used, shipped or charged for, beyond",
+      "attribution and warranty disclaimers. Attribution is still owed for these — that obligation",
+      "belongs to the centralized notice files, not to this gate.",
+      "A license is NOT listed here merely because it is common: copyleft (any GPL/LGPL/AGPL), the",
+      "weak-copyleft MPL, and every bespoke or unreadable license must be reviewed individually."
+    ],
+    "ids": [
+      "0BSD",
+      "AFL-2.1",
+      "Apache-2.0",
+      "BlueOak-1.0.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "CC-BY-4.0",
+      "CC0-1.0",
+      "ISC",
+      "MIT",
+      "MIT-0",
+      "OFL-1.1",
+      "Python-2.0",
+      "Unlicense",
+      "WTFPL",
+      "Zlib"
+    ]
+  },
+
+  "reviewed": {
+    "@img/sharp-libvips-*": {
+      "license": "LGPL-3.0-or-later",
+      "versions": ["1.3.1", "1.3.3"],
+      "disposition": "shipped",
+      "summary": [
+        "Prebuilt libvips and its dependency stack, as one dylib. LGPLv3 applies to libvips itself and",
+        "to seven bundled components (fribidi, glib, libexif, libheif, librsvg, pango, proxy-libintl);",
+        "the rest of the table in the package README is permissive.",
+        "1.3.3 is what apps/desktop ships. 1.3.1 is build-time only: astro's own sharp@0.35.2 pulls it",
+        "into the store while building the website, and nothing in a distributed artifact loads it.",
+        "The package ships NO license text of its own — only the README's table of component licenses —",
+        "so the full LGPLv3 and GPLv3 texts LGPLv3 section 4(b) requires must come from elsewhere."
+      ],
+      "obligations": [
+        "LGPLv3 4(a): prominent notice that the library is used and is covered by the LGPL.",
+        "LGPLv3 4(b): accompany the work with a copy of the GNU GPL and of the LGPL.",
+        "LGPLv3 4(c): name libvips among any copyright notices shown during execution.",
+        "LGPLv3 4(d): let the user relink the application against a modified libvips.",
+        "LGPLv3 4(e): Installation Information, where GPLv3 section 6 would require it."
+      ],
+      "direct": { "@volli/desktop": "optionalDependencies" },
+      "nativeLibrary": {
+        "$comment": [
+          "The 4(d) half this gate can actually verify: the addon must reach libvips as a SEPARATE",
+          "shared library, so a user can substitute their own build of it. A statically linked libvips",
+          "would move us from 4(d)(1) to 4(d)(0)'s much heavier obligation without anything saying so."
+        ],
+        "consumerPackage": "@img/sharp-darwin-arm64",
+        "addonPath": "lib/sharp-darwin-arm64-{consumerVersion}.node",
+        "dynamicLoadPathContains": "@rpath/libvips-cpp",
+        "electronBuilderAsarUnpackPattern": "**/node_modules/@img/**",
+        "electronBuilderFilesToken": "@img"
+      },
+      "blocked": "docs/licensing/dependency-license-review.md#lgpl-libvips"
+    },
+
+    "apca-w3": {
+      "license": "Limited W3 License",
+      "versions": ["0.1.9"],
+      "disposition": "development-only",
+      "summary": [
+        "Bespoke license, not an SPDX one. It permits use only for predicting contrast for WEB content",
+        "on self-illuminated displays, prohibits commercial use without a signed agreement except under",
+        "the W3 cooperative agreement, forbids altering the algorithm's constants, and obliges a",
+        "licensee to track the latest non-breaking version.",
+        "Volli uses it in exactly one role: the independent oracle that packages/shared's own APCA math",
+        "is cross-checked against in tests, plus the desktop canvas-theming smoke. No source under any",
+        "src/ imports it, and nothing distributed contains it."
+      ],
+      "obligations": [
+        "Stay development-only: the commercial-use prohibition and the AGPL fallback below only bite on",
+        "distribution or commercial use.",
+        "Keep current: the range must stay a caret range so the latest non-breaking 0.1.x is installable."
+      ],
+      "direct": {
+        "@volli/desktop": "devDependencies",
+        "@volli/shared": "devDependencies"
+      },
+      "rangeMustBeCaret": true,
+      "imports": ["packages/shared/src/theme/*.test.ts", "apps/desktop/e2e/*.mjs"],
+      "blocked": "docs/licensing/dependency-license-review.md#apca-w3"
+    },
+
+    "colorparsley": {
+      "license": "AGPL v3",
+      "versions": ["0.1.8"],
+      "disposition": "development-only",
+      "summary": [
+        "apca-w3's only runtime dependency, and the sharpest license in the tree: AGPL v3, whose",
+        "source-offer obligation is triggered by conveying the work OR by letting users interact with",
+        "it over a network.",
+        "Neither happens. It arrives transitively under a devDependency, and the containment rule below",
+        "is what keeps it that way — this is the entry that makes apca-w3's dev-only status load-bearing",
+        "rather than merely true today."
+      ],
+      "obligations": ["Never becomes a direct dependency and never enters a distributed artifact."],
+      "direct": {},
+      "imports": [],
+      "blocked": null
+    },
+
+    "gsap": {
+      "license": "Standard 'no charge' license: https://gsap.com/standard-license.",
+      "versions": ["3.15.0"],
+      "disposition": "shipped",
+      "summary": [
+        "GreenSock Standard License (Webflow), effective 2025-04-30, read at gsap.com/standard-license.",
+        "Permitted Uses cover any website, web application or digital interface, commercial included and",
+        "at no charge. The one restriction that could reach Volli is Prohibited Uses: GSAP may not be",
+        "used in tools that let users build visual animations WITHOUT CODE in a way that competes with",
+        "Webflow's visual animation building. The licensor's own FAQ places AI code-generation tools",
+        "outside that prohibition.",
+        "Section III.3 additionally forbids removing GSAP's proprietary notices — which the production",
+        "website build was doing until this ticket; see apps/website/scripts/check-bundled-license-notices.mjs."
+      ],
+      "obligations": [
+        "Keep the /*! legal banners in the deployed bundles (III.3).",
+        "Stay out of the desktop product, where the no-code-animation-builder question would arise.",
+        "Re-read the terms on a version bump: section VI.2 lets Webflow revise them, and using a version",
+        "released after a revision is what accepts it."
+      ],
+      "direct": { "@volli/website": "dependencies" },
+      "imports": ["apps/website/src/components/*"],
+      "blocked": "docs/licensing/dependency-license-review.md#gsap"
+    },
+
+    "lightningcss*": {
+      "license": "MPL-2.0",
+      "versions": ["1.32.0", "1.33.0"],
+      "disposition": "build-only",
+      "summary": [
+        "Tailwind's CSS transformer, and astro's, plus its per-platform native binary. Weak copyleft at",
+        "FILE level: the reciprocity obligation attaches to modified MPL-covered files, and we modify",
+        "none — it is consumed as a published package and runs only while building.",
+        "No MPL-covered code reaches a distributed artifact; what ships is the CSS it emitted, which is",
+        "our own content."
+      ],
+      "obligations": [
+        "Do not fork or patch it without taking on MPL 2.0 section 3.2 source availability.",
+        "Attribution in the notice files, as for any dependency."
+      ],
+      "direct": {},
+      "blocked": null
+    },
+
+    "dompurify": {
+      "license": "(MPL-2.0 OR Apache-2.0)",
+      "versions": ["3.4.8", "3.4.14"],
+      "disposition": "shipped",
+      "summary": [
+        "Dual-licensed, so the choice is ours. Volli elects Apache-2.0, which is already the dominant",
+        "license in this tree and carries no reciprocity. Recorded because the elected half must appear",
+        "in the notices — an entry reading only \"MPL-2.0 OR Apache-2.0\" leaves the reader guessing."
+      ],
+      "obligations": ["Notices must state Apache-2.0 as the elected license."],
+      "electedLicense": "Apache-2.0",
+      "blocked": null
+    },
+
+    "node-forge": {
+      "license": "(BSD-3-Clause OR GPL-2.0)",
+      "versions": ["1.4.0"],
+      "disposition": "development-only",
+      "summary": [
+        "Dual-licensed; Volli elects BSD-3-Clause, so the GPL-2.0 half is never exercised. Reaches the",
+        "store under @anthropic-ai/sandbox-runtime and electron-builder's signing tooling."
+      ],
+      "obligations": ["Notices must state BSD-3-Clause as the elected license."],
+      "electedLicense": "BSD-3-Clause",
+      "blocked": null
+    },
+
+    "json-schema": {
+      "license": "(AFL-2.1 OR BSD-3-Clause)",
+      "versions": ["0.4.0"],
+      "disposition": "development-only",
+      "summary": ["Dual-licensed; Volli elects BSD-3-Clause."],
+      "obligations": ["Notices must state BSD-3-Clause as the elected license."],
+      "electedLicense": "BSD-3-Clause",
+      "blocked": null
+    },
+
+    "khroma": {
+      "license": "MIT",
+      "versions": ["2.1.0"],
+      "disposition": "shipped",
+      "licenseSource": "license-file",
+      "summary": [
+        "No `license` field in its manifest, so automated scans report it as unknown. Its `license` file",
+        "is the plain MIT text, copyright 2019-present Fabio Spampinato and Andrew Maney. Arrives under",
+        "mermaid, which the desktop renderer bundles."
+      ],
+      "obligations": ["MIT attribution, from the license file rather than the manifest."],
+      "blocked": null
+    },
+
+    "@yuku-codegen/binding-*": {
+      "license": "MIT",
+      "versions": ["0.5.48"],
+      "disposition": "build-only",
+      "licenseSource": "parent-package",
+      "summary": [
+        "A generated napi platform package with no `license` field and no license file — the shape most",
+        "native-binding sub-packages ship in. Its parent `yuku-codegen@0.5.48` declares MIT, and the",
+        "binding is published from the same repository (yuku-toolchain/yuku) in the same release."
+      ],
+      "obligations": ["MIT attribution, inherited from the parent package."],
+      "blocked": null
+    },
+
+    "@yuku-parser/binding-*": {
+      "license": "MIT",
+      "versions": ["0.5.48"],
+      "disposition": "build-only",
+      "licenseSource": "parent-package",
+      "summary": ["As @yuku-codegen/binding-*; parent `yuku-parser@0.5.48` declares MIT."],
+      "obligations": ["MIT attribution, inherited from the parent package."],
+      "blocked": null
+    }
+  }
+}
