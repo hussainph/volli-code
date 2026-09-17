@@ -98,6 +98,10 @@ class InMemorySessionLedger implements SessionLedger {
         assertOpen();
         return this.#countSessions(query);
       },
+      listAttachedSessions: () => {
+        assertOpen();
+        return this.#listAttachedSessions();
+      },
       listSessionStarts: (query) => {
         assertOpen();
         return this.#listSessionStarts(query);
@@ -235,6 +239,32 @@ class InMemorySessionLedger implements SessionLedger {
           right.createdAt - left.createdAt || compareSqliteBinaryText(right.id, left.id),
       )
       .map(clone);
+  }
+
+  /**
+   * Every Session holding at least one open attachment, across every project.
+   *
+   * Derived straight from the events rather than from an index: this store is
+   * a test double whose whole content fits in memory, so the cheap answer and
+   * the true answer are the same walk. The SQLite ledger keeps a projected
+   * closure mark instead — same meaning, different cost — and
+   * `session-engine.test.ts` holds the two to the same answers.
+   */
+  #listAttachedSessions(): readonly Session[] {
+    const attached: Session[] = [];
+    for (const session of this.#sessions.values()) {
+      const open = new Set<string>();
+      for (const event of this.#eventsFor(session.id)) {
+        // `attachment.failed` never opens one, so only these two move the set.
+        if (event.payload.kind === "attachment.opened") open.add(event.payload.attachment.id);
+        if (event.payload.kind === "attachment.closed") open.delete(event.payload.attachmentId);
+      }
+      if (open.size > 0) attached.push(clone(session));
+    }
+    return attached.toSorted(
+      (left, right) =>
+        right.createdAt - left.createdAt || compareSqliteBinaryText(right.id, left.id),
+    );
   }
 
   #countSessions(query: ListSessionsQuery): number {

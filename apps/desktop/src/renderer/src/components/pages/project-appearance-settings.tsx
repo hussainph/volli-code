@@ -2,7 +2,7 @@ import * as React from "react";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { resolveAppearance, type Project } from "@volli/shared";
+import { getGhosttyTheme, resolveAppearance, type Project } from "@volli/shared";
 
 import {
   fallbackTerminalThemeLabel,
@@ -28,7 +28,6 @@ import { Button } from "@renderer/components/ui/button";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
 import { previewTerminalTheme } from "@renderer/terminal/appearance";
-import { getBuiltinTheme } from "restty";
 
 /**
  * Configure → Appearance: one project's per-surface theming (#69).
@@ -205,7 +204,7 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
 }
 
 /** Repaints every live terminal in `name`'s palette, writing nothing. */
-const previewTerminal = (name: string): void => previewTerminalTheme(getBuiltinTheme(name));
+const previewTerminal = (name: string): void => previewTerminalTheme(getGhosttyTheme(name));
 
 /** Puts the resolved palette back, ending a preview. */
 const endTerminalPreview = (): void => previewTerminalTheme(null);

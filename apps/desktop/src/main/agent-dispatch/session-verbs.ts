@@ -127,7 +127,7 @@ export async function sessionListVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, sessions, envSession, sessionEngine, now } = context;
+  const { options, projects, envSession, sessionEngine, now } = context;
   const ticketSelector = request.args["ticket"];
   const ticketResolution =
     ticketSelector === undefined
@@ -155,11 +155,15 @@ export async function sessionListVerb(
   }
   const project = "id" in resolvedProject ? resolvedProject : resolvedProject.project;
   const projectById = new Map(projects.map((entry) => [entry.id, entry]));
-  // What each Session consumed, off the fold the dispatch already made. Keyed
-  // by full id because that is what both halves of the listing hold; the short
-  // handle is only ever an output.
+  // `session.list` is one of the verbs that actually reads the fleet fold
+  // (VC-403): both loaders share the one memoized listing this pays for.
+  const projections = await context.loadProjections();
+  const sessions = await context.loadSessions();
+  // What each Session consumed, off the fold above. Keyed by full id because
+  // that is what both halves of the listing hold; the short handle is only
+  // ever an output.
   const usageById = new Map(
-    context.projections.map((projection) => [projection.session.id, projection.usage]),
+    projections.map((projection) => [projection.session.id, projection.usage]),
   );
   const projectSessions = sessions
     .filter((session) => session.projectId === project.id)
@@ -297,8 +301,12 @@ export async function sessionPeekVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projections, sessions, sessionEngine, now } = context;
-  const resolved = sessionForPublicId(sessions, request.args["id"]);
+  const { options, sessionEngine, now } = context;
+  // The terminal half first — most peeks are of a live terminal, and this
+  // costs only `loadSessions` (which itself shares `loadProjections`'s memo
+  // with the chat fallback below, so a peek that falls through pays for the
+  // fold once, not twice — VC-403).
+  const resolved = sessionForPublicId(await context.loadSessions(), request.args["id"]);
   if (resolved.ok) {
     const lines = positiveIntOr(request.args["lines"], 60);
     const observation = options.observeSession?.(resolved.session.id, lines);
@@ -323,7 +331,7 @@ export async function sessionPeekVerb(
   // caller's mistake either way, and answering it from the other half of
   // the id space would hide the collision rather than report it.
   if (!isSessionNotFound(resolved.response)) return resolved.response;
-  const chat = chatProjectionForPublicId(projections, request.args["id"]);
+  const chat = chatProjectionForPublicId(await context.loadProjections(), request.args["id"]);
   if (!chat.ok) return chat.response;
   const record = chatSessionRecord(chat.projection);
   const tail = await readSessionTranscriptTail(
@@ -378,8 +386,8 @@ export async function sessionAnswerVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projections, sessionEngine } = context;
-  const chat = chatProjectionForPublicId(projections, request.args["id"]);
+  const { options, sessionEngine } = context;
+  const chat = chatProjectionForPublicId(await context.loadProjections(), request.args["id"]);
   if (!chat.ok) return chat.response;
   const record = chatSessionRecord(chat.projection);
   const answer = await readSessionAnswer(

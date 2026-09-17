@@ -59,7 +59,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence"
+  "sessionId" | "receipt" | "throughSequence" | "refusal"
 >;
 
 /**
@@ -1007,6 +1007,9 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     sessionId: result.sessionId,
     receipt: result.receipt,
     throughSequence: result.throughSequence,
+    // Nullable rather than optional, so the field survives every transport
+    // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
+    refusal: result.refusal,
   };
 }
 
@@ -1024,7 +1027,12 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   throughSequence: number;
 } {
   const source = snapshot.projection;
-  const projection: Partial<SessionPresentationProjection> = {};
+  // A builder, filled field by field from whichever ones the snapshot carried,
+  // so it drops the `readonly` the published type wears (VC-393). The value
+  // leaves here as that type and nothing mutates it afterwards.
+  const projection: {
+    -readonly [K in keyof SessionPresentationProjection]?: SessionPresentationProjection[K];
+  } = {};
   if (source.session !== undefined) projection.session = source.session;
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {

@@ -119,7 +119,7 @@ export async function identifyVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, sessions, envSession, sessionEngine } = context;
+  const { options, projects, envSession, envSessionTerminal, sessionEngine } = context;
   const envSessionId = request.ctx.env.session;
   if (envSessionId) {
     if (!envSession) {
@@ -147,8 +147,9 @@ export async function identifyVerb(
       : undefined;
     // A PTY session's directory is its terminal's cwd; a structured
     // Session has no PTY, so its workspace is the ticket worktree — or
-    // the project root a ticketless Session was pointed at.
-    const terminal = sessions.find((candidate) => candidate.id === envSessionId);
+    // the project root a ticketless Session was pointed at. Resolved from
+    // this one Session's own record (VC-403), never a fold of the fleet.
+    const terminal = envSessionTerminal;
     const displayId = ticket ? displayTicketId(project.ticketPrefix, ticket.ticketNumber) : null;
     const warning =
       ticket && displayId
