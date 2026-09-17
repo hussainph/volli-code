@@ -1,5 +1,25 @@
 "use client";
 
+/**
+ * Vendored from AI Elements, and MODIFIED.
+ *
+ *   upstream  https://github.com/vercel/ai-elements
+ *   file      packages/elements/src/prompt-input.tsx
+ *   revision  9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)
+ *   license   Apache-2.0 — Copyright 2023 Vercel, Inc.
+ *
+ * Most of this file is still upstream's: the attachment state machine, the
+ * accept/size/count validation and its error codes, the drop handlers, and the
+ * blob→data-URL submit path. Changed here: imports repointed at `@renderer/*`,
+ * lucide icons replaced with Phosphor, the unused surface deleted (provider and
+ * controller hooks, attachment chips, menu actions, action-menu/select/
+ * hover-card families), and the shell reshaped around Volli's composer.
+ *
+ * That last paragraph is not decoration — Apache-2.0 §4(b) requires a modified
+ * file to say it was modified. `./PROVENANCE.md` records how the revision above
+ * was established, what else changed, and where §4(a) and §4(d) are discharged.
+ */
+
 import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
 import { SquareIcon } from "@phosphor-icons/react/dist/csr/Square";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";

@@ -1,6 +1,7 @@
 /**
  * Minimal hex-color parsing for reading design tokens (globals.css custom
- * properties) into restty's 0-255 RGB theme records. Pure — no DOM.
+ * properties) into the 0-255 RGB theme records a Ghostty theme is built from.
+ * Pure — no DOM.
  */
 
 export interface RgbColor {
