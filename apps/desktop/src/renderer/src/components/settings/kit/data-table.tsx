@@ -2,7 +2,7 @@
  * A bounded, scrollable, sticky-headed table — the one object this app did not
  * already have. `grep` finds no other `<table>` in the renderer.
  *
- * WHY IT EXISTS. Models, Skills, Commands, MCP servers and Plugins are all
+ * WHY IT EXISTS. Models, Skills, Commands and MCP servers are all
  * *homogeneous collections with shared attributes*, and every one of them was
  * drawn as an unbounded stack of two-line rows. Two things went wrong. The
  * page grew without limit, so a catalogue of a hundred models buried every
@@ -132,9 +132,11 @@ export function DataTable<T>({
    *
    * A number is right whenever something follows the table — the cap is what
    * stops a hundred models burying the sections under them. `"fill"` is for a
-   * pane where the table IS the page (Skills, Commands, MCP, Plugins): capping
-   * at eight there just draws a short table against a tall empty column and
-   * makes people scroll a box that had room to show them the rows.
+   * pane where the table IS the page (Skills and Commands, and only those two:
+   * capping at eight there just draws a short table against a tall empty
+   * column and makes people scroll a box that had room to show them the rows).
+   * MCP is a table, an editor and an audit list, so it takes a number instead
+   * — see the two laws in `configure/mcp-pane.tsx` (VC-397).
    */
   rows?: number | "fill";
   /** How many rows may render at once. The rest are withheld, and said so. */
