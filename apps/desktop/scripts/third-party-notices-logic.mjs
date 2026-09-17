@@ -348,6 +348,36 @@ export function packagingFailures({
 }
 
 /**
+ * Return one failure for every vendored registry path that is absent.
+ *
+ * The registry is reviewed input, but a typo there would otherwise leave the
+ * document claiming to cover source that the bundle does not contain. Keep the
+ * filesystem lookup injected so the self-test can exercise the rule without
+ * touching this checkout.
+ *
+ * @param {{ title: string, paths: unknown }[]} entries
+ * @param {(path: string) => boolean} pathExists
+ * @returns {string[]}
+ */
+export function vendoredPathFailures(entries, pathExists) {
+  const failures = [];
+  for (const entry of entries) {
+    if (!Array.isArray(entry.paths) || entry.paths.length === 0) {
+      failures.push(`vendored source "${entry.title}" has no paths recorded.`);
+      continue;
+    }
+    for (const path of entry.paths) {
+      if (typeof path !== "string" || path.trim() === "") {
+        failures.push(`vendored source "${entry.title}" has an invalid path.`);
+      } else if (!pathExists(path)) {
+        failures.push(`vendored source "${entry.title}" names a missing path: ${path}`);
+      }
+    }
+  }
+  return [...new Set(failures)];
+}
+
+/**
  * What to do with a notice this repository expects to exist but does not own:
  * today, the shared terminal theme catalog's iTerm2-Color-Schemes attribution,
  * which is being written on another ticket's branch (VC-407 coordination).

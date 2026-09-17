@@ -63,6 +63,7 @@ import {
   renderNoticeDocument,
   repositoryUrl,
   unpackedPackages,
+  vendoredPathFailures,
   wrapText,
 } from "./third-party-notices-logic.mjs";
 
@@ -218,6 +219,16 @@ function readSourcesRegistry() {
     text: entry.text === undefined ? null : readText(entry.text),
     unresolved: entry.unresolved ?? null,
   }));
+  const pathFailures = vendoredPathFailures(vendored, (path) =>
+    existsSync(resolve(REPO_ROOT, path)),
+  );
+  if (pathFailures.length > 0) {
+    throw new Error(
+      `notices/sources.json has vendored paths that are not present:\n${pathFailures
+        .map((failure) => `  - ${failure}`)
+        .join("\n")}`,
+    );
+  }
 
   const fragments = registry.fragments.map((entry) => ({
     title: entry.title,
@@ -609,6 +620,23 @@ function selfTestPackagingRules() {
     resourceExists: () => true,
   });
   assert.deepEqual(ok, [], "a config that ships both files and covers every package passes");
+
+  assert.deepEqual(
+    vendoredPathFailures(
+      [
+        { title: "present", paths: ["one", "two"] },
+        { title: "missing", paths: ["gone"] },
+      ],
+      (path) => path !== "gone",
+    ),
+    ['vendored source "missing" names a missing path: gone'],
+    "a vendored path that disappears fails the notice check",
+  );
+  assert.deepEqual(
+    vendoredPathFailures([{ title: "malformed", paths: [] }], () => true),
+    ['vendored source "malformed" has no paths recorded.'],
+    "a vendored entry without paths fails the notice check",
+  );
 
   const missingResource = packagingFailures({
     builderConfig: { ...builderConfig, extraResources: [] },
