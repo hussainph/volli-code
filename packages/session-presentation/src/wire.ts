@@ -13,6 +13,7 @@ import type {
   TranscriptDelta,
 } from "@volli/session-engine";
 import { COMPACTION_WORK_REASONS, parseRendererSessionEvent } from "@volli/shared";
+import type { CommandRefusalSeverity } from "@volli/shared";
 import type { UIMessage } from "ai";
 
 import type { ChatSessionFrame } from "./transcript";
@@ -203,11 +204,73 @@ function isKeyedPartArray(value: unknown): boolean {
  * a refusal. Null means nothing refused it.
  */
 export function rejectedReceipt(result: unknown): string | null {
+  const receipt = receiptOf(result);
+  if (receipt === null || receipt.status !== "rejected") return null;
+  return refusalMessage(receipt);
+}
+
+/** A refused command, in the words and the weight the host gave it. */
+export interface CommandRefusal {
+  severity: CommandRefusalSeverity;
+  message: string;
+}
+
+/**
+ * The same read as {@link rejectedReceipt}, for the callers that report a
+ * refusal to a person rather than latching it onto the Session (VC-141).
+ *
+ * Two things it knows that the plain message does not:
+ *
+ * **The weight.** `refusal` rides beside the receipt as the adapter's own
+ * judgement, and `"failure"` is what absence means — a refusal nobody vouched
+ * for is not one this client may call harmless. Nothing here reads a code:
+ * which refusals are benign is the host's answer, so a second runtime with an
+ * entirely different vocabulary needs no change on this side.
+ *
+ * **`unreconciled`.** A receipt whose status is neither accepted nor rejected
+ * is the harness saying it does not know what happened (CONTEXT.md lists it
+ * as one of the four outcomes). Reporting that as success would be the very
+ * claim BOUNDARIES.md rule 4 refuses — "Leave reconciliation semantics
+ * undecided rather than assumed absent" — so it comes back as a failure a
+ * person can see, in the harness's words when it left any.
+ *
+ * Read structurally for {@link rejectedReceipt}'s reason: this crosses the RPC
+ * edge as JSON, where a key that is absent and a key that is `undefined` are
+ * the same key, and a value's declared type is a promise the transport never
+ * made.
+ */
+export function commandRefusal(result: unknown): CommandRefusal | null {
+  const receipt = receiptOf(result);
+  if (receipt === null) return null;
+  if (receipt.status === "rejected") {
+    return { severity: refusalSeverity(result), message: refusalMessage(receipt) };
+  }
+  if (receipt.status === "unreconciled") {
+    const detail = typeof receipt.detail === "string" ? receipt.detail : "";
+    return {
+      severity: "failure",
+      message: detail.length > 0 ? detail : UNRECONCILED_MESSAGE,
+    };
+  }
+  return null;
+}
+
+/** What a person is told when the harness cannot say whether the command ran. */
+const UNRECONCILED_MESSAGE = "the runtime could not confirm whether this ran";
+
+function receiptOf(result: unknown): Record<string, unknown> | null {
   if (!isRecord(result) || !isRecord(result.receipt)) return null;
-  const receipt = result.receipt;
-  if (receipt.status !== "rejected") return null;
+  return result.receipt;
+}
+
+/** The harness's own sentence, its code when it left none, or the bare fact. */
+function refusalMessage(receipt: Record<string, unknown>): string {
   if (typeof receipt.detail === "string" && receipt.detail.length > 0) return receipt.detail;
   return typeof receipt.code === "string" ? receipt.code : "rejected";
+}
+
+function refusalSeverity(result: unknown): CommandRefusalSeverity {
+  return isRecord(result) && result.refusal === "benign" ? "benign" : "failure";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
