@@ -33,6 +33,7 @@ import {
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { LabelEditorCore } from "@renderer/components/ticket/label-editor-core";
+import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +41,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
 /** The fold's one control shape: a 24px chip carrying its glyph and its value. */
@@ -123,7 +125,7 @@ export function TicketProperties({ projectId, ticket }: { projectId: string; tic
     <section
       aria-label="Properties"
       data-testid="ticket-rail-properties"
-      className="flex flex-col gap-1 px-4 pt-4 group-data-[narrow=true]/rail:px-3"
+      className={cn("flex flex-col gap-1", RAIL_PANEL_INSET)}
     >
       <div aria-label="Status and priority" className="flex min-h-6 flex-wrap items-center gap-1">
         <StatusPill projectId={projectId} ticket={ticket} />

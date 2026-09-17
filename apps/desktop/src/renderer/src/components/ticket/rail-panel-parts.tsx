@@ -130,6 +130,25 @@ export const RAIL_CARD_FRAME =
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
 
 /**
+ * The one button recipe a rail page presses: an `outline` Button on the
+ * rail's own border, a resting wash, and the raised tier's lift.
+ *
+ * Spelled here for the reason {@link RAIL_CARD_FRAME} is. The repository
+ * card's publish row wrote it three times inline (the primary, its `⋯`, the
+ * PR link), and the Automations block below it drew its own split button as a
+ * `secondary` pill — flat, filled, full-width — so the two acts the Now page
+ * offers wore two different costumes ten pixels apart, and a reader had to
+ * work out from context which of them was a button (VC-406). One recipe,
+ * composed by every act on the page, is what makes "this is a button" a
+ * fact about the drawing rather than a thing to infer.
+ *
+ * Only the material is here. Size stays with the primitive (`sm` / `icon-sm`,
+ * the toolbar rung), and width is the row's decision: the recipe must work for
+ * a control that truncates its own label and for a bare icon beside it.
+ */
+export const RAIL_CONTROL = "border-sidebar-border bg-background/30 text-ui shadow-raised";
+
+/**
  * Insertions and deletions as one pair — the repository card's changes row, the
  * Diffs header, and the commit gate all wear it.
  *

@@ -1,19 +1,31 @@
 /**
  * The ticket rail's Automations block (VC-129): one split button that runs an
- * Automation on THIS Ticket without leaving the current tab, and this Ticket's
- * Runs under it, each a door back to its Session. VC-234 makes that landing
- * universal: success toasts with an "Open session" action and never navigates.
+ * Automation on THIS Ticket without leaving the current tab. VC-234 makes that
+ * landing universal: success toasts with an "Open session" action and never
+ * navigates.
+ *
+ * **One control, and nothing under it** (VC-406). The block used to stack
+ * three things under its eyebrow: the split button, a visible list of every
+ * column's Automations (each a ghost button with a play glyph), and this
+ * Ticket's Runs. The list repeated, in the open, exactly the grouped rows the
+ * button's own caret menu holds — every name twice in one glance, in two
+ * drawings, and the block grew a row per Automation the project authored. The
+ * Runs were doors back to their Sessions, and every one of those Sessions is
+ * already a row in the Sessions roster above, wearing the bolt that says a Run
+ * started it (`session-provenance-mark.tsx`); a second list of the same doors
+ * under a different heading was the roster drawn twice. Both are gone. What is
+ * left is the one thing the rail exists to offer here: the press.
  *
  * **The rail runs; it does not author.** There is no form here for making an
  * Automation, and that is a ruling rather than an omission (VC-112): an
  * authoring form in a 300px rail would be a worse copy of the Automations page,
  * and the page is the one surface that owns the record's lifecycle. What the
  * empty rail offers instead is ONE door to that page, in the header row beside
- * the eyebrow — where the Sessions block below keeps its own control. It used
- * to be a text link under the empty state's sentence, which put the word
- * "Automations" two lines under the heading AUTOMATIONS (VC-257): the same noun
- * twice in one glance. Moving that existing door fixes the layout without
- * expanding navigation into populated or unread states.
+ * the eyebrow — where the Sessions block keeps its own control. It used to be a
+ * text link under the empty state's sentence, which put the word "Automations"
+ * two lines under the heading AUTOMATIONS (VC-257): the same noun twice in one
+ * glance. Moving that existing door fixes the layout without expanding
+ * navigation into populated or unread states.
  *
  * Four rules the drawing carries:
  *
@@ -37,7 +49,6 @@
  *    Automation BESIDES a person. A switched-off Automation is offered with the
  *    page's own words beside it rather than dimmed or withheld.
  */
-import { TicketAutomationChoices } from "./ticket-automation-choices";
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -50,7 +61,6 @@ import {
   displayTicketId,
   unboundRunProblem,
   UNBOUND_RUN_LABEL,
-  type AutomationRun,
   type ModelSelection,
   type Ticket,
 } from "@volli/shared";
@@ -61,9 +71,8 @@ import {
   useAutomationRunOffer,
   useOfferableModels,
 } from "./automation-run-menu";
-import { runAutomationLabel, runModelLabel, runModelTitle } from "./automations-page-model";
 import { InstructionsTextarea } from "./automation-editor";
-import { openRunSession, runAutomationOnTicket } from "./run-automation";
+import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
   overridePressable,
@@ -80,10 +89,12 @@ import {
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
 import {
+  RAIL_CONTROL,
   RAIL_PANEL_INSET,
   RailSectionHeadingRow,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
+import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -108,15 +119,12 @@ import {
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { ListRow } from "@renderer/components/ui/list-row";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
-import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
-import { selectTicketRuns, useAutomationsStore } from "@renderer/stores/automations";
-import { useBoardStore } from "@renderer/stores/board";
+import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
@@ -124,7 +132,7 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
 
 /** The same block shape the rail's other sections use, at the rail's own inset. */
-const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
+const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
 
 /** Which Runtime a single invocation runs on: the resolved default, or this one pick. */
 type OverrideChoice = "inherit" | "pin";
@@ -153,8 +161,6 @@ export function TicketAutomationsPanel({
   );
   const ticketDisplayId =
     ticketPrefix === undefined ? "this ticket" : displayTicketId(ticketPrefix, ticket.ticketNumber);
-  const runs = useAutomationsStore((state) => selectTicketRuns(state, ticket.id));
-  const refreshTicketRuns = useAutomationsStore((state) => state.refreshTicketRuns);
   const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(null);
   const models = useOfferableModels();
 
@@ -164,13 +170,6 @@ export function TicketAutomationsPanel({
   const rail = useAutomationRunOffer(projectId, ticket.status);
   const empty = rail.ready && !rail.listsAny;
 
-  // The Runs, on the same clock — a Run started from the board's armed window,
-  // the palette or another window lands here without this rail having asked.
-  const planningVersion = useBoardStore((state) => state.lastPlanningChange.version);
-  React.useEffect(() => {
-    void refreshTicketRuns(ticket.id);
-  }, [refreshTicketRuns, ticket.id, planningVersion]);
-
   const run = (action: RailRunAction, modelOverride: ModelSelection | null): void => {
     // Nothing bound starts from an unread rail: the press that reached here
     // named no record, because the rail knew of none to name.
@@ -179,13 +178,15 @@ export function TicketAutomationsPanel({
       setRunOnce({ modelOverride });
       return;
     }
+    // Where the Run lands is the roster's business: its Session arrives there
+    // through the same push every Session does, so nothing here re-reads.
     void runAutomationOnTicket({
       target: { kind: "automation", automationId: action.automation.id },
       automationName: action.automation.name,
       ticketId: ticket.id,
       ticketDisplayId,
       modelOverride,
-    }).finally(() => void refreshTicketRuns(ticket.id));
+    });
   };
 
   return (
@@ -200,10 +201,6 @@ export function TicketAutomationsPanel({
         onRun={run}
         onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
-      <TicketAutomationChoices
-        groups={rail.groups}
-        onRun={(automation) => run({ kind: "automation", automation }, null)}
-      />
       {empty ? (
         // Visible and plain: one line, a report and never an action — the
         // header's own door is 20px above it, and a second copy of the same
@@ -214,7 +211,6 @@ export function TicketAutomationsPanel({
         // about the project, and an unread cache cannot make it.
         <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
       ) : null}
-      <TicketRuns projectId={projectId} runs={runs} />
       <RunOnceDialog
         request={runOnce}
         onClose={() => setRunOnce(null)}
@@ -222,7 +218,6 @@ export function TicketAutomationsPanel({
         ticketId={ticket.id}
         ticketDisplayId={ticketDisplayId}
         models={models}
-        onStarted={() => void refreshTicketRuns(ticket.id)}
       />
     </section>
   );
@@ -264,11 +259,22 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
 /**
  * The split button: `[⚡ Armed automation │ ▾]`.
  *
- * Drawn as `new-session-control.tsx` draws its own — the press-scale on the
- * wrapper so the pill depresses as one object, and the same rows on right-click
- * so turning to the caret is a convenience rather than the only route. Those
- * rows are `automation-run-menu.tsx`'s, which the board card's own
- * `Automations ▸` submenu mounts too.
+ * Drawn as the repository card draws its publish row — a `ButtonGroup` of two
+ * `outline` Buttons in the rail's one control recipe (`RAIL_CONTROL`), sized
+ * to its label and parked at the left under the eyebrow, at the same `px-2`
+ * the eyebrow and the roster's rows share. It used to be a `secondary` pill
+ * stretched across the section, which is the shape of a list row here, not
+ * of a button (VC-406): the one thing a reader must be able to tell at a
+ * glance is which objects on this page are acts, and the rail's acts all
+ * wear one costume now. The same rows come up on right-click, so turning to
+ * the caret is a convenience rather than the only route; those rows are
+ * `automation-run-menu.tsx`'s, which the board card's own `Automations ▸`
+ * submenu mounts too.
+ *
+ * The name truncates rather than the group growing past the rail: the
+ * longest Automation name a project can author is longer than the rail is
+ * wide, and the full label stays in `title` — the card's own primary keeps
+ * the same rule.
  *
  * The per-invocation override VC-112 names is reachable from BOTH deliberate
  * surfaces this control offers: the rail's own caret menu, and the nested item
@@ -300,31 +306,34 @@ function AutomationRunControl({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="inline-flex w-full items-center rounded-full transition-transform duration-100 ease-out active:scale-[0.97] motion-reduce:scale-100!">
+        {/* `max-w-full min-w-0` over the group's own `w-fit`: fit to the
+            label, but never past the column — the primary inside shrinks
+            and truncates before the caret can be pushed off the edge. */}
+        <ButtonGroup
+          aria-label="Run an automation on this ticket"
+          className="max-w-full min-w-0 px-2"
+        >
           <Button
             type="button"
-            variant="secondary"
+            variant="outline"
             size="sm"
             disabled={unread}
+            title={label}
             aria-label={unread ? label : `Run ${label} on this ticket`}
-            className="min-w-0 flex-1 justify-start rounded-r-none pr-1 active:scale-100!"
+            className={cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate")}
             onClick={() => onRun(rail.primary, null)}
           >
             <LightningIcon />
-            <span className="min-w-0 truncate">{label}</span>
+            <span>{label}</span>
           </Button>
-          <span aria-hidden className="h-3 w-px bg-border" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"
-                variant="secondary"
+                variant="outline"
                 size="icon-sm"
                 aria-label="Other automations"
-                // Only the seam and the press are restated: `icon-sm` already
-                // carries this segment's whole geometry, and a width beside it
-                // would be the primitive's own size written twice.
-                className="group rounded-l-none active:scale-100!"
+                className={cn(RAIL_CONTROL, "group")}
               >
                 <CaretDownIcon
                   weight="bold"
@@ -409,7 +418,7 @@ function AutomationRunControl({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </ButtonGroup>
       </ContextMenuTrigger>
       {/* Right-click is the nested context-menu surface VC-112 names, drawn by
           the same component the board card's own `Automations ▸` submenu
@@ -424,44 +433,6 @@ function AutomationRunControl({
         />
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-/**
- * This Ticket's Runs, newest first, each a door back to its Session — the
- * Automations page's own history row at rail width, opened through the same
- * `openRunSession` as a fresh Run's toast action. The two explicit doors use
- * one answer to "where does this Run live".
- */
-function TicketRuns({ projectId, runs }: { projectId: string; runs: readonly AutomationRun[] }) {
-  if (runs.length === 0) return null;
-  return (
-    <ul className="flex flex-col" data-testid="ticket-rail-runs">
-      {runs.map((run) => (
-        <li key={run.id}>
-          <ListRow
-            density="two-line"
-            onActivate={() =>
-              openRunSession({ sessionId: run.sessionId, projectId, ticketId: run.ticketId })
-            }
-            leading={<LightningIcon className="size-4 shrink-0 text-muted-foreground" />}
-            primary={runAutomationLabel(run)}
-            secondary={
-              // The RESOLVED model this Session was born with, printed from the
-              // Run's own row rather than re-labelled through today's catalogue.
-              <span className="block truncate text-ui" title={runModelTitle(run)}>
-                {runModelLabel(run)}
-              </span>
-            }
-            trailing={
-              <span className="shrink-0 text-label text-muted-foreground">
-                {relativeTime(run.createdAt)}
-              </span>
-            }
-          />
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -490,7 +461,6 @@ function RunOnceDialog({
   ticketId,
   ticketDisplayId,
   models,
-  onStarted,
 }: {
   request: RunOnceRequest;
   onClose(): void;
@@ -498,7 +468,6 @@ function RunOnceDialog({
   ticketId: string;
   ticketDisplayId: string;
   models: readonly ComposerModel[];
-  onStarted(): void;
 }) {
   if (request === null) return null;
   return (
@@ -513,7 +482,6 @@ function RunOnceDialog({
       models={models}
       modelOverride={request.modelOverride}
       onClose={onClose}
-      onStarted={onStarted}
     />
   );
 }
@@ -525,7 +493,6 @@ function RunOnceForm({
   models,
   modelOverride,
   onClose,
-  onStarted,
 }: {
   projectId: string;
   ticketId: string;
@@ -533,7 +500,6 @@ function RunOnceForm({
   models: readonly ComposerModel[];
   modelOverride: ModelSelection | null;
   onClose(): void;
-  onStarted(): void;
 }) {
   const [instructions, setInstructions] = React.useState("");
   const [choice, setChoice] = React.useState<OverrideChoice>(
@@ -570,7 +536,7 @@ function RunOnceForm({
       ticketId,
       ticketDisplayId,
       modelOverride: choice === "pin" ? pin : null,
-    }).finally(onStarted);
+    });
   };
 
   return (

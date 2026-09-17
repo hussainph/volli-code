@@ -114,10 +114,29 @@ describe("the usage card's face", () => {
 
   it("shows the figure, the bar and the one caption that reads it", () => {
     const markup = home();
-    expect(markup).toContain("~$0.19");
+    expect(markup).toContain("$0.19");
     expect(markup).toContain("tokens");
     expect(markup).toContain("cached");
     expect(markup).toContain('role="img"');
+  });
+
+  it("hedges an estimate with a muted `est.` after the money, never a tilde before it (VC-406)", () => {
+    const markup = home();
+    // The mark is its own node a step below the figure's rung, so it can be
+    // set muted; the accessible name speaks the same two words.
+    expect(markup).toContain(
+      '$0.19</span><span class="shrink-0 text-label text-muted-foreground">est.</span>',
+    );
+    expect(markup).toContain('aria-label="Project usage $0.19 est. — open breakdown"');
+    expect(markup).not.toContain("~$");
+  });
+
+  it("prints a provider-reported figure bare", () => {
+    const markup = home({
+      summary: summarizeSessionUsage([op({ costBasis: "provider-reported" })]),
+    });
+    expect(markup).not.toContain("est.");
+    expect(markup).not.toContain("unverified");
   });
 });
 
@@ -125,7 +144,7 @@ describe("the Session in front", () => {
   it("is a row of the project card when it has metered something", () => {
     const markup = home({ session: METERED });
     expect(markup).toContain("This session");
-    expect(markup).toContain("~$0.19");
+    expect(markup).toContain("$0.19");
   });
 
   it("is absent, not dashed, for a Session that metered nothing", () => {
@@ -158,7 +177,7 @@ describe("the Ticket card", () => {
     expect(markup).toBe("");
   });
 
-  it("counts its Sessions on the face and ranks them behind it", () => {
+  it("is one row: the figure and the token count on the face, everything else behind it (VC-406)", () => {
     const markup = renderToStaticMarkup(
       <TicketUsageBlock
         summary={METERED}
@@ -166,9 +185,18 @@ describe("the Ticket card", () => {
         topModelLabel="Claude Opus 4.1"
       />,
     );
-    expect(markup).toContain("2 sessions");
+    expect(markup).toContain("$0.19");
+    expect(markup).toContain("tokens");
+    // One trigger, not a hero plus a Sessions row: the ranking closes the same
+    // popover the figure opens.
+    expect(markup.match(/aria-haspopup="dialog"/g)).toHaveLength(1);
+    expect(markup).not.toContain("text-heading");
+    expect(markup).not.toContain("2 sessions");
+    // The bar, the cached share, the ranking and the top model are all answers
+    // to a question, and the face asks none of them.
+    expect(markup).not.toContain('role="img"');
+    expect(markup).not.toContain("cached");
     expect(markup).not.toContain("Wire the projection");
-    // Named nowhere on the face — it is a qualifier on the figure, not a line.
     expect(markup).not.toContain("Claude Opus 4.1");
   });
 });

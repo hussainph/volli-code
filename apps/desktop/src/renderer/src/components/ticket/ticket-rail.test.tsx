@@ -126,6 +126,39 @@ describe("TicketRail's Now page", () => {
     expect(html).toContain("Sessions");
   });
 
+  // The order IS the design (VC-406): attention goes to the roster first, so
+  // it opens the page; the record only grows, so it closes it. Asserted on the
+  // markup's own sequence because a reorder in the composition is a one-line
+  // change that no other test would notice.
+  it("opens with the Sessions roster, then the repository card, then the facts, and keeps the acts last", () => {
+    const html = render();
+    const at = (needle: string) => {
+      const index = html.indexOf(needle);
+      expect(index, needle).toBeGreaterThan(-1);
+      return index;
+    };
+
+    const sessions = at('aria-label="New chat"');
+    const repository = at('data-testid="ticket-repository-summary"');
+    const properties = at('data-testid="ticket-rail-properties"');
+    const automations = at('data-testid="ticket-rail-automations"');
+
+    expect(sessions).toBeLessThan(repository);
+    expect(repository).toBeLessThan(properties);
+    expect(properties).toBeLessThan(automations);
+  });
+
+  it("stacks the page with one gap, so no block pays its own top padding", () => {
+    const html = render();
+    const page = html.slice(html.indexOf('id="ticket-rail-page-now"'));
+
+    expect(page).toContain("gap-4 overflow-y-auto");
+    // A block that carried its own `pt-4` would double the rhythm against its
+    // neighbours and leave a hole when absent.
+    expect(page).not.toContain("pt-4 px-4");
+    expect(page).not.toContain("gap-1 pt-4");
+  });
+
   it("renders no other page's navigator beside it", () => {
     const html = render();
 

@@ -28,6 +28,7 @@ import { StatusDot } from "@renderer/components/ui/status-dot";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
+import { UsageCostFigure } from "@renderer/components/usage/usage-card";
 import { formatTokens } from "@volli/session-presentation";
 import {
   formatCachedShare,
@@ -236,11 +237,11 @@ export default function UsageSurfaces() {
           />
         </Rail>
         <Caption>
-          Two doors, and each one opens what its own line asks about: the face explains the figure
-          (basis, the bar’s legend, the cached share, the top model), the “4 sessions” row is the
-          per-session breakdown — the placement that adds no block and touches no roster row.
-          “Terminal (claude)” stays in that list at `—`: dropping it would make the rows fail to add
-          up to the total above them.
+          One row, one door (VC-406): the figure with its muted <code>est.</code>, the token count,
+          the caret. Everything the hero used to carry — the bar and its legend, the cached share,
+          the basis sentence, the top model, the per-session ranking — is behind that one press.
+          “Terminal (claude)” stays in the ranking at `—`: dropping it would make the rows fail to
+          add up to the total above them.
         </Caption>
       </Group>
 
@@ -248,7 +249,7 @@ export default function UsageSurfaces() {
         <div className="flex flex-wrap gap-4">
           <State label="Estimated · complete" summary={SESSION} />
           <State label="Provider-reported" summary={REPORTED} hint="the only bare $" />
-          <State label="Mixed basis" summary={MIXED} hint="tilde: the weaker claim wins" />
+          <State label="Mixed basis" summary={MIXED} hint="est.: the weaker claim wins" />
           <State label="Partial coverage" summary={PARTIAL} hint="+ means at least" />
           <State label="Unpriced" summary={UNPRICED} hint="— never $0.00" />
           <State label="Nothing metered" summary={EMPTY} hint="absent, not zero" />
@@ -413,7 +414,7 @@ function State({
         <p className="text-ui text-muted-foreground">(renders nothing)</p>
       ) : (
         <>
-          <p className="text-heading tabular-nums text-foreground">{cost}</p>
+          <UsageCostFigure summary={summary} className="text-heading text-foreground" />
           <UsageBar summary={summary} />
           {tokens > 0 ? (
             <p className="text-ui text-muted-foreground tabular-nums">

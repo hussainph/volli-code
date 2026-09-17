@@ -6,28 +6,35 @@
  * are small but none of them is cosmetic: each one exists to stop a specific
  * false sentence reaching a reader.
  *
- * THE HEDGE IS ONE GLYPH. A summary can be estimated, mixed-basis, partially
- * priced, wholly unpriced, or absent — five states that a sentence apiece would
- * turn into a paragraph on a 268px rail. So the trigger carries at most one
- * character of hedge and the popover carries the words:
+ * THE HEDGE IS ONE SMALL WORD, SET BESIDE THE FIGURE. A summary can be
+ * estimated, mixed-basis, partially priced, wholly unpriced, or absent — five
+ * states that a sentence apiece would turn into a paragraph on a 268px rail. So
+ * the figure carries at most one muted qualifier and the popover carries the
+ * words:
  *
- *     $8.42     provider-reported and complete — the only bare case
- *     ~$8.42    a catalogue estimate, a mix of bases, or a basis Volli
- *               cannot vouch for
- *     ~$8.42+   partial: at least this much was priced
- *     —         nothing could be priced
- *     null      nothing was metered at all
+ *     $8.42              provider-reported and complete — the only bare case
+ *     $8.42 est.         a catalogue estimate, or a mix of bases
+ *     $8.42 unverified   a basis Volli cannot vouch for
+ *     $8.42+ est.        partial: at least this much was priced
+ *     —                  nothing could be priced
+ *     null               nothing was metered at all
  *
- * `~` is not new notation. `chat/context-usage-ui.tsx` already marks every
- * estimated count with it, so a reader who has opened the context meter has
- * already learned this glyph.
+ * It used to be a tilde prefix (`~$8.42`), the glyph `chat/context-usage-ui.tsx`
+ * puts on estimated token counts. On a token count the tilde is a small mark
+ * beside a small number; on a cost it became the first and largest character
+ * of the rail's hero figure, and read as the figure's own punctuation rather
+ * than as a hedge on it (VC-406). The word goes AFTER the money and a step
+ * down in size, which is where a qualifier reads as a qualifier — and the
+ * split between {@link usageCostParts} and {@link formatUsageCost} is what
+ * lets a surface set it muted while an accessible name still speaks it.
  *
- * THE GLYPH IS NOT THE CLAIM. Three different bases share the tilde because
- * they share one consequence — do not read this as exact — and the budget is
- * one character. What each of them actually IS gets said in words, in the
- * popover, by {@link usageBasisLine}: an `unavailable` basis is "Unverified
- * basis" there and never "Estimated", because Volli knowing a number and Volli
- * having computed it are different claims.
+ * THE MARK IS NOT THE CLAIM. `est.` is only ever said of a figure this build
+ * priced against a catalogue (wholly, or as part of a `mixed` total, where the
+ * weaker claim wins). An `unavailable` basis says `unverified` instead —
+ * {@link usageBasisLine} makes the same distinction in full sentences, because
+ * Volli knowing a number and Volli having computed it are different claims,
+ * and a mark that called the first one an estimate would assert a provenance
+ * `session-usage.ts` explicitly refused to assert.
  *
  * AND NOTHING HERE SPLITS COST BY TOKEN CLASS, because the ledger cannot: a
  * `costUsd` is recorded per metered operation, not per class, and reconstructing
@@ -134,24 +141,59 @@ export function totalUsageTokens(summary: SessionUsageSummary): number {
   );
 }
 
+/** The qualifier a hedged figure wears — see the module comment for which is said when. */
+export type UsageCostHedge = "est." | "unverified";
+
 /**
- * The hedged cost, or `null` when there is nothing to say.
+ * A cost in its two parts: the money, and the qualifier on it, if any.
  *
- * `null` and `"—"` are different answers and both are needed: null means no
- * model operation was metered, so the surface should render no row at all,
- * while `"—"` means operations happened and none could be priced. Collapsing
- * them would either invent a cost row for a terminal that never called a model,
- * or silently hide a Session whose spend Volli genuinely cannot vouch for.
+ * Two parts rather than one string because they are set differently — the
+ * figure in the row's own ink, the hedge a step smaller and muted — and a
+ * surface that had to split a string to do that would be re-parsing this
+ * module's own notation.
+ */
+export interface UsageCostParts {
+  /** The money, with `+` when only part of the report was priced; `—` when none of it could be. */
+  figure: string;
+  /** `null` for the one bare case: wholly provider-reported. */
+  hedge: UsageCostHedge | null;
+}
+
+/**
+ * The cost in parts, or `null` when there is nothing to say.
+ *
+ * `null` and a `"—"` figure are different answers and both are needed: null
+ * means no model operation was metered, so the surface should render no row at
+ * all, while `"—"` means operations happened and none could be priced.
+ * Collapsing them would either invent a cost row for a terminal that never
+ * called a model, or silently hide a Session whose spend Volli genuinely cannot
+ * vouch for.
+ */
+export function usageCostParts(summary: SessionUsageSummary): UsageCostParts | null {
+  if (summary.requestCount === 0) return null;
+  if (summary.knownCostUsd === null) return { figure: "—", hedge: null };
+  const suffix = summary.costCoverage === "partial" ? "+" : "";
+  // Only a basis that is wholly provider-reported may print bare. `mixed` takes
+  // the estimate's mark because part of it is a catalogue estimate, and the
+  // honest reading of a mixed total is the weaker of its two claims.
+  const hedge: UsageCostHedge | null =
+    summary.costBasis === "provider-reported"
+      ? null
+      : summary.costBasis === "unavailable"
+        ? "unverified"
+        : "est.";
+  return { figure: `${formatUsd(summary.knownCostUsd)}${suffix}`, hedge };
+}
+
+/**
+ * The hedged cost as one string — for an accessible name, a `title`, a toast:
+ * anywhere the figure is spoken rather than set. A drawn figure takes
+ * {@link usageCostParts} so the hedge can be muted.
  */
 export function formatUsageCost(summary: SessionUsageSummary): string | null {
-  if (summary.requestCount === 0) return null;
-  if (summary.knownCostUsd === null) return "—";
-  // Only a basis that is wholly provider-reported may print bare. `mixed` takes
-  // the tilde because part of it is a catalogue estimate, and the honest
-  // reading of a mixed total is the weaker of its two claims.
-  const prefix = summary.costBasis === "provider-reported" ? "" : "~";
-  const suffix = summary.costCoverage === "partial" ? "+" : "";
-  return `${prefix}${formatUsd(summary.knownCostUsd)}${suffix}`;
+  const parts = usageCostParts(summary);
+  if (parts === null) return null;
+  return parts.hedge === null ? parts.figure : `${parts.figure} ${parts.hedge}`;
 }
 
 /**
@@ -199,8 +241,9 @@ export function formatCachedShare(summary: SessionUsageSummary): string | null {
  * Calling that "Estimated" would assert a provenance `session-usage.ts`
  * explicitly refused to assert — it would tell a reader the figure is this
  * build's price catalogue applied to those tokens, which is exactly what
- * `unavailable` denies. The tilde stays, because the figure still may not be
- * printed as exact; only the claim about its origin changes.
+ * `unavailable` denies. The figure still may not print bare (it wears
+ * `unverified`, {@link usageCostParts}); only the claim about its origin
+ * changes.
  */
 function usageBasisWord(basis: SessionUsageSummary["costBasis"]): string {
   if (basis === "provider-reported") return "Provider-reported";

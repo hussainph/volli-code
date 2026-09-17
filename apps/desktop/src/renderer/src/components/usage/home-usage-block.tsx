@@ -48,6 +48,7 @@ import {
   UsageCardEmptyFace,
   UsageCardHero,
   UsageCardRow,
+  UsageCostFigure,
   UsageRankList,
 } from "@renderer/components/usage/usage-card";
 import { cn } from "@renderer/lib/utils";
@@ -151,7 +152,7 @@ function HomeUsageCard({
         <UsageCardRow
           icon={ChatCircleIcon}
           label="This session"
-          trailing={sessionCost}
+          trailing={<UsageCostFigure summary={session} />}
           ariaLabel={`This session ${sessionCost} — open breakdown`}
           testId="home-usage-session"
         >

@@ -389,6 +389,56 @@ file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' 
 No heading, no explanation, and above all no "drag a tab here": every row is a verb that already
 works from the keyboard, and the chord beside it is how the menu teaches itself.
 
+## The ticket rail — the Now page (VC-406)
+
+The rail is the Ticket's hub, and its scope is the line that decides what goes on it: **everything
+on the rail is true of the whole Ticket or its worktree; nothing on it is true of one chat in
+particular.** What one chat is holding — its browser tabs, its subagents, its plan, its background
+shells — belongs to the Activity Island above that chat's composer. So the rail's roster lists no
+Subagent Session and the island lists no sibling chat; the two surfaces split one question by
+scope rather than overlapping on it. A block that would only be true of the front chat is a block
+in the wrong place.
+
+**Now is ordered by attention, not by subject.** The most-used thing on the page is the door to
+the right chat, so it opens the page; the record only grows, so it closes it:
+
+| # | Block | What it is | Object kind |
+|---|---|---|---|
+| 1 | Sessions | the working set — one row per live Session, `+ Chat ▾` in the eyebrow | section |
+| 2 | Repository | what the worktree is doing, and the one act on it (commit / push / PR) | the card |
+| 3 | Properties | status, priority, labels — three editable facts as pills | chip run |
+| 4 | Usage | what it cost, at one row; absent on an unmetered Ticket | the card |
+| 5 | Automations | one act: run something on this Ticket | section |
+| 6 | History | the record; searchable past four rows | section |
+
+**Two object kinds carry the page**, and a block is one or the other. A *section* is an eyebrow
+row (`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
+`ListRow`s at the rows' own `px-2`. *The card* is `RAIL_CARD_FRAME` — seamed rows inside one
+`rounded-xl` frame — and the rail has exactly one recipe for it, so the repository card and the
+usage card are plainly the same kind of thing. The page stacks with **one `gap-4`** and no block
+pays its own top padding: an absent block (usage on a fresh Ticket, History on a new one) then
+leaves no hole behind it, and no block can drift from its neighbours by carrying a different inset.
+
+**Every act wears one costume.** `RAIL_CONTROL` (`outline`, the sidebar's border, a `/30` wash,
+`shadow-raised`) is the recipe for every button a rail page presses — the repository card's publish
+split, its `⋯`, its PR link, and the Automations split button. A control is sized to its label and
+parked at the left under its eyebrow, never stretched across the column: a full-width pill is the
+shape of a row here, and "is this a button" has to be answered by the drawing, not inferred.
+
+**What a block does not draw.** Runs are Sessions, so they are listed once, in the roster, wearing
+the bolt (`SessionProvenanceMark`) — never a second time under Automations. The other columns'
+Automations live behind the caret and the right-click menu, never as a visible list under the
+button. The usage card's face is the figure, the token count and a caret; the bar, its legend, the
+cached share, the basis sentence, the top model and the per-Session ranking are one popover
+behind it, not lines on the page.
+
+**Cost notation.** A hedged figure carries a small word *after* the money, a step down and muted
+(`UsageCostFigure`): `$8.42 est.` for a catalogue estimate or a mixed basis, `$8.42 unverified`
+for a basis Volli cannot vouch for, `$8.42+` when only part of the report was priced, bare only
+when wholly provider-reported. The old tilde prefix read as the figure's own punctuation at hero
+size; the trailing word reads as a qualifier at every size, and `unverified` is never spelled
+`est.` because knowing a number and having computed it are different claims.
+
 ## Vertical rhythm (reading surfaces)
 
 The Ticket Body tab is the reference implementation: generous air above the title (`pt-8` below the

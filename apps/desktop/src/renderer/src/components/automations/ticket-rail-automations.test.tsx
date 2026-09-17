@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 /**
  * The ticket rail's Automations block (VC-129): what one press starts, that the
- * control is there when the project lists nothing, and that this Ticket's Runs
- * are doors back to their Sessions.
+ * control is there when the project lists nothing.
  *
  * A real jsdom ENVIRONMENT rather than a static render, for the reason the
  * Automations page's own test states: the promises here are CLICKS — the split
@@ -15,10 +14,9 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, ColumnArming, Ticket } from "@volli/shared";
+import type { Automation, ColumnArming, Ticket } from "@volli/shared";
 
-import { openRunSession, runAutomationOnTicket } from "./run-automation";
+import { runAutomationOnTicket } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
@@ -27,7 +25,6 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("./run-automation", () => ({
-  openRunSession: vi.fn(),
   runAutomationOnTicket: vi.fn(() => Promise.resolve()),
 }));
 
@@ -80,26 +77,11 @@ function automation(overrides: Partial<Automation> = {}): Automation {
 
 const ARMING: ColumnArming = { projectId: "p1", status: "doing", automationId: "a1", armedAt: 5 };
 
-function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
-  return {
-    id: "run-1",
-    automationId: "a1",
-    automationName: "Review sweep",
-    ticketId: "t1",
-    sessionId: "s1",
-    model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
-    attendance: "attended",
-    createdAt: 10,
-    ...overrides,
-  };
-}
-
 const doors = {
   list: vi.fn(),
   armings: vi.fn(),
   enablement: vi.fn(),
   columnOrders: vi.fn(),
-  runsForTicket: vi.fn(),
 };
 
 /**
@@ -162,13 +144,11 @@ async function render() {
 async function mount(seed: {
   automations?: Automation[];
   armings?: ColumnArming[];
-  runs?: AutomationRun[];
   enabled?: string[];
 }) {
   doors.list.mockResolvedValue({ ok: true, automations: seed.automations ?? [] });
   doors.armings.mockResolvedValue({ ok: true, armings: seed.armings ?? [] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: seed.enabled ?? [] });
-  doors.runsForTicket.mockResolvedValue({ ok: true, runs: seed.runs ?? [] });
   Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
 
   await render();
@@ -176,12 +156,6 @@ async function mount(seed: {
 
 function text(): string {
   return document.body.textContent ?? "";
-}
-
-function hasUiText(needle: string): boolean {
-  return [...document.querySelectorAll(".text-ui")].some((candidate) =>
-    candidate.textContent?.includes(needle),
-  );
 }
 
 function control(label: string): HTMLElement {
@@ -244,7 +218,6 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
   doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
-  vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
@@ -252,7 +225,6 @@ beforeEach(() => {
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     // `ensureLoaded` reads the machine-local set once per launch, so a stale
     // "already read" flag from a previous mount would leave every later case
@@ -275,13 +247,24 @@ afterEach(async () => {
 });
 
 describe("the split button", () => {
-  it("shows and runs another column's saved work without opening any menu", async () => {
+  it("keeps the other columns' work behind the caret, not on the face (VC-406)", async () => {
     await mount({
       automations: [automation({ trigger: { kind: "columns", columns: ["needs_review"] } })],
     });
-    expect(text()).toContain("Needs Review");
+    // The face is the one control: with nothing armed here it presses Run
+    // once, and no column's roster is drawn under it — the rows that used to
+    // repeat the caret's menu in the open are gone.
+    expect(control("Run Run once on this ticket")).not.toBeNull();
+    expect(text()).not.toContain("Needs Review");
+    expect(document.querySelector('[aria-label="Run on this ticket"]')).toBeNull();
     expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
-    await act(async () => control("Run Review sweep on this ticket").click());
+
+    await openMenu();
+    expect(text()).toContain("Needs Review");
+    await act(async () => {
+      menuItem("Review sweep").click();
+    });
+
     expect(runAutomationOnTicket).toHaveBeenCalledWith(
       expect.objectContaining({
         target: { kind: "automation", automationId: "a1" },
@@ -401,7 +384,6 @@ describe("the split button", () => {
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [] });
     doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
-    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
@@ -418,7 +400,6 @@ describe("the split button", () => {
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
     doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
-    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
@@ -453,7 +434,6 @@ describe("the split button", () => {
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [] });
     doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
-    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
@@ -481,7 +461,6 @@ describe("the split button", () => {
     doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
     doors.armings.mockResolvedValue({ ok: false, error: "database is locked" });
     doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
-    doors.runsForTicket.mockResolvedValue({ ok: true, runs: [] });
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
@@ -626,53 +605,5 @@ describe("the per-invocation override", () => {
         reasoningLevel: "high",
       },
     });
-  });
-});
-
-describe("this Ticket's Runs", () => {
-  it("lists them newest first, each naming the model it resolved", async () => {
-    await mount({
-      runs: [
-        run({ id: "run-2", automationName: "Newest", createdAt: 200 }),
-        run({ id: "run-1", automationName: "Oldest", createdAt: 100 }),
-      ],
-    });
-
-    expect(text()).toContain("claude-opus · high");
-    expect(hasUiText("claude-opus · high")).toBe(true);
-    const runtimeLine = [...document.querySelectorAll(".text-ui")].find((candidate) =>
-      candidate.textContent?.includes("claude-opus · high"),
-    );
-    expect(runtimeLine?.classList.contains("block")).toBe(true);
-    expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
-  });
-
-  it("names an Unbound Run rather than leaving its row anonymous", async () => {
-    await mount({ runs: [run({ automationId: null, automationName: null })] });
-
-    expect(text()).toContain("Run once");
-  });
-
-  it("is a door back to the Session the Run opened", async () => {
-    await mount({ runs: [run()] });
-
-    const row = [...document.querySelectorAll("button")].find((candidate) =>
-      candidate.textContent?.includes("claude-opus"),
-    );
-    await act(async () => {
-      row?.click();
-    });
-
-    expect(openRunSession).toHaveBeenCalledWith({
-      sessionId: "s1",
-      projectId: "p1",
-      ticketId: "t1",
-    });
-  });
-
-  it("draws no list before anything has run on this Ticket", async () => {
-    await mount({ automations: [automation({ trigger: NO_AUTOMATION_TRIGGER })] });
-
-    expect(document.querySelector('[data-testid="ticket-rail-runs"]')).toBeNull();
   });
 });

@@ -98,7 +98,6 @@ export function seed(): void {
     armingByProject: {},
     orderByProject: {},
     runsByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     editor: null,
@@ -133,7 +132,7 @@ export default function TicketRailAutomationsScratch() {
       <div className="flex flex-col gap-8">
         <Intro />
 
-        <Group heading="1 · The three states, over the Sessions block">
+        <Group heading="1 · The three states, under the Sessions block">
           <div className="flex flex-wrap items-start gap-4">
             <Rail label="Nothing yet" owner={EMPTY} />
             <Rail label="Doing arms Implement" owner={ARMED} />
@@ -172,13 +171,13 @@ function Intro() {
     <div className="flex flex-col gap-2">
       <SectionHeading as="h2">What this is for</SectionHeading>
       <p className="max-w-content text-ui leading-prose text-muted-foreground">
-        The Now page&rsquo;s Automations block, between what a ticket cost and who is working on it.
-        The rail runs and never authors (VC-112). Its empty-state door used to be a text link under
-        the report, reading &ldquo;Automations&rdquo; two lines beneath the heading AUTOMATIONS.
-        That same door now sits in the empty state&rsquo;s heading row; no other state gains one.
-        Every column is <code className="font-mono text-ui">TicketAutomationsPanel</code> over the
-        real store, so what each button offers is the rail&rsquo;s decision, not this
-        scratch&rsquo;s.
+        The Now page&rsquo;s Automations block: one press, under the Sessions roster and above
+        History, as the page stacks them (VC-406). The rail runs and never authors (VC-112). Its
+        empty-state door used to be a text link under the report, reading &ldquo;Automations&rdquo;
+        two lines beneath the heading AUTOMATIONS. That same door now sits in the empty
+        state&rsquo;s heading row; no other state gains one. Every column is{" "}
+        <code className="font-mono text-ui">TicketAutomationsPanel</code> over the real store, so
+        what each button offers is the rail&rsquo;s decision, not this scratch&rsquo;s.
       </p>
     </div>
   );
@@ -232,11 +231,10 @@ function Rail({
     <div className="flex flex-col gap-2">
       <p className="text-label font-medium uppercase text-muted-foreground">{label}</p>
       <div
-        className="group/rail flex shrink-0 flex-col rounded-container border border-border bg-background pb-4"
+        className="group/rail flex shrink-0 flex-col gap-4 rounded-container border border-border bg-background py-4"
         data-narrow={narrow ? "true" : "false"}
         style={{ width }}
       >
-        <TicketAutomationsPanel projectId={owner.id} ticket={ticket} />
         <TicketSessionsPanel
           projectId={owner.id}
           ticketId={ticket.id}
@@ -245,7 +243,9 @@ function Rail({
           onNewChat={() => {}}
           onActivateSession={() => {}}
           onActivateChat={() => {}}
-        />
+        >
+          <TicketAutomationsPanel projectId={owner.id} ticket={ticket} />
+        </TicketSessionsPanel>
       </div>
     </div>
   );

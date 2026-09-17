@@ -75,8 +75,12 @@ function sessionStatusLabel(status: TicketSessionStatus): string {
   return status === "setup" ? "Setup" : SESSION_ACTIVITY_LABEL[status];
 }
 
-/** Sessions and History are the same block twice — one shape, one inset, no seam. */
-const SECTION = cn("flex flex-col gap-1 pt-4", RAIL_PANEL_INSET);
+/**
+ * Sessions and History are the same block twice — one shape, one inset, no
+ * seam. No top padding of their own: the Now page stacks its blocks with one
+ * `gap`, so a block that is absent leaves no gap behind it (VC-406).
+ */
+const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
 
 /**
  * The inline empty, inside the dashed frame this rail uses for a section that
@@ -423,7 +427,7 @@ function SessionList({
 
 /**
  * The Now page's session content: a "Sessions" working set (one flat row per
- * live session from the unified store) and, under it, a "History" set of the
+ * live session from the unified store) and a "History" set of the
  * ended/closed durable records — searchable past 4 entries.
  *
  * The two are SIBLING SECTIONS of one shape, not a list plus a drawer. History
@@ -433,15 +437,25 @@ function SessionList({
  * Details folded into the repository card and the properties fold, and one
  * caller was left dragging the old icon-mode rail's chrome — a seam the Calm
  * Stack draws nowhere (the retired ticket-right-sidebar scratch had no drawer,
- * no collapsible and no full-bleed rule in the rail at all). Both sections now
+ * no collapsible and no full-bleed rule in the rail at all). Both sections
  * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
  * the rail's edge is one straight line at every width.
  *
+ * THEY ARE NOT ADJACENT ANY MORE (VC-406). The working set is the block a
+ * person reads most — it is the door to the right chat — so it opens the Now
+ * page; History is a record, so it closes the page. Everything the page
+ * stacks between the two (the repository card, the properties fold, usage,
+ * Automations) arrives as `children`, which is why one component still owns
+ * both sections: they are two views of ONE read of the durable roster and one
+ * pair of clocks, and splitting them into two components would either read
+ * the roster twice or hoist its whole state into the page. The slot is the
+ * cheaper seam.
+ *
  * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
- * this owns no scroller of its own and History is simply the last thing in the
- * stack. The durable list (`api.sessions.listForTicket`) is re-read whenever the
- * live set changes so new sessions appear and closed ones fold into History.
- * Rows rename inline (double-click) or via the right-click menu.
+ * this owns no scroller of its own. The durable list
+ * (`api.sessions.listForTicket`) is re-read whenever the live set changes so
+ * new sessions appear and closed ones fold into History. Rows rename inline
+ * (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
   projectId,
@@ -452,6 +466,7 @@ export function TicketSessionsPanel({
   onNewBrowser,
   onActivateSession,
   onActivateChat,
+  children,
 }: {
   /** Whose project this ticket is — half of a row's drag payload (VC-202 §4). */
   projectId: string;
@@ -463,6 +478,8 @@ export function TicketSessionsPanel({
   onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
+  /** What the page stacks between the working set and its History. */
+  children?: React.ReactNode;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const parkState = useSessionsStore((state) => state.parkState);
@@ -696,6 +713,7 @@ export function TicketSessionsPanel({
           <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
         )}
       </section>
+      {children}
       {history.length > 0 ? (
         <section className={SECTION} data-testid="session-history">
           <RailSectionHeadingRow label="History">

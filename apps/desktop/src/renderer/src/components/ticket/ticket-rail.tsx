@@ -9,9 +9,36 @@
  * that used to run down the rail's outer edge is gone, and so is Properties as
  * a page of its own: it folds inline into Now, under the repository card.
  *
- * Now is the resting page and answers the three questions in order: what the
- * worktree is doing (`TicketRepositorySummary`), what the ticket is
- * (`TicketProperties`), and who is working on it (`TicketSessionsPanel`).
+ * WHAT THE RAIL IS FOR, AND WHAT IT IS NOT (VC-406). The rail is the Ticket's
+ * hub: everything on it is true of the whole Ticket or its worktree, and
+ * nothing on it is true of one chat in particular. The chat's own holdings —
+ * its browser tabs, its subagents, its plan, its background shells — belong
+ * to the Activity Island above that chat's composer
+ * (`chat/activity-island-ui.tsx`), which is why the roster here lists no
+ * Subagent Session and the island lists no sibling chat. The two surfaces
+ * split one question by scope: the island answers "what is THIS Session
+ * holding", the rail answers "what is happening on this Ticket". A block that
+ * would be true of only the front chat is a block in the wrong place.
+ *
+ * Now is the resting page, and its order is the order attention goes:
+ *
+ *   1. Sessions — the working set. The most-used thing on the page is the
+ *      door to the right chat, so it is the first thing under the pill and
+ *      never scrolls out from under a long block above it.
+ *   2. The repository card — what the worktree is doing and the one act on it.
+ *   3. Properties — what the ticket is; three editable facts as pills.
+ *   4. Usage — one row: what it cost. Absent on an unmetered Ticket.
+ *   5. Automations — one act: run something on this Ticket.
+ *   6. History — the record. Last, because it only grows, and a record that
+ *      sat above the acts would push every one of them off the screen.
+ *
+ * The page stacks with ONE `gap` and no block pays its own top padding: an
+ * absent block (usage on a fresh Ticket, History on a new one) then leaves no
+ * hole behind it, and a block cannot drift from its neighbours by carrying a
+ * different inset than theirs. Two object kinds carry the page — a section
+ * (an eyebrow row over list rows) and the framed card — and every act on it
+ * wears one control recipe (`RAIL_CONTROL`), so "is this a button" is
+ * answered by the drawing.
  *
  * Nothing in here collapses the rail. That is deliberate, not an omission — a
  * panel cannot reopen itself, so the collapse control lives outside it, in the
@@ -161,25 +188,10 @@ export function TicketRail({
           // `pb-8` here rather than on the last block: the scratch hangs it off
           // its session list, but that list is the one block this file does not
           // own, so the page keeps its own floor.
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
-            <TicketRepositorySummary
-              projectId={projectId}
-              ticket={ticket}
-              onShowChanges={showChanges}
-            />
-            <TicketProperties projectId={projectId} ticket={ticket} />
-            {/* What this Ticket cost, between the facts about it and the
-                Sessions that ran on it (VC-87) — which is where the owner's
-                question sits. It owns its own inset and top padding, so an
-                absent card (cost turned off, or nothing metered on this Ticket)
-                leaves no gap behind it rather than sixteen pixels of dead rail. */}
-            <TicketUsageRailBlock ticketId={ticket.id} />
-            {/* What can be STARTED on this Ticket, between what it cost and who
-                is working on it (VC-129). Above the Sessions roster because it
-                is an act and the roster is a record of acts — and because the
-                Runs it lists are the doors into the Sessions listed under it.
-                The rail never authors: this block runs and links to the page. */}
-            <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
+            {/* The roster opens the page and History closes it; what stands
+                between them is this panel's `children` — see its comment for
+                why one component still owns both ends. */}
             <TicketSessionsPanel
               projectId={projectId}
               ticketId={ticket.id}
@@ -189,7 +201,23 @@ export function TicketRail({
               onNewBrowser={onNewBrowser}
               onActivateSession={onActivateSession}
               onActivateChat={onActivateChat}
-            />
+            >
+              <TicketRepositorySummary
+                projectId={projectId}
+                ticket={ticket}
+                onShowChanges={showChanges}
+              />
+              <TicketProperties projectId={projectId} ticket={ticket} />
+              {/* What this Ticket cost (VC-87), as one row under the facts
+                  about it. Absent — not empty — when cost is turned off or
+                  nothing was metered, and the column's gap closes over it. */}
+              <TicketUsageRailBlock ticketId={ticket.id} />
+              {/* What can be STARTED on this Ticket (VC-129): one press. Its
+                  Runs are Sessions, and they are listed where Sessions are —
+                  in the roster above, wearing the bolt — not under this
+                  block. The rail never authors: it runs and links to the page. */}
+              <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
+            </TicketSessionsPanel>
           </div>
         ) : null}
         {mode === "changes" ? changesContent : null}

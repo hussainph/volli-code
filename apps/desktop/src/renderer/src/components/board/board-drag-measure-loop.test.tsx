@@ -649,7 +649,6 @@ beforeEach(() => {
     byProject: {},
     armingByProject: {},
     orderByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     // A landed rail version from an earlier mount would let this case answer

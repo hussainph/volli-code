@@ -53,6 +53,7 @@ import {
   formatUsageCost,
   totalUsageTokens,
   usageBasisLine,
+  usageCostParts,
   type UsageGroupRow,
 } from "@renderer/usage/usage-format";
 
@@ -81,6 +82,105 @@ export function UsageCard({
     <section data-testid={testId} className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN, className)}>
       {children}
     </section>
+  );
+}
+
+/**
+ * A cost, drawn: the money in the caller's ink, and the hedge after it — a
+ * step smaller, muted, on the same baseline.
+ *
+ * ONE DRAWING FOR EVERY FIGURE the usage surfaces print, hero and row and
+ * ranked line alike, because the hedge is notation and notation that is set
+ * three ways is three notations. The mark is `text-label` rather than a
+ * superscript or a smaller `em`: it is the one rung below `text-ui`, and it is
+ * the size the rail already uses for a qualifier beside a value (a row's
+ * status phrase, a History stamp). Lowercase, since the label rung's caps are
+ * applied per use and a shouted ESTIMATE is the opposite of a hedge.
+ *
+ * Draws nothing for an unmetered summary, which is the same silence
+ * `formatUsageCost` keeps: a caller that wants to know whether there IS a
+ * figure asks the notation, not the drawing.
+ */
+export function UsageCostFigure({
+  summary,
+  className,
+}: {
+  summary: SessionUsageSummary;
+  className?: string;
+}) {
+  const parts = usageCostParts(summary);
+  if (parts === null) return null;
+  return (
+    <span className={cn("inline-flex min-w-0 items-baseline gap-1 tabular-nums", className)}>
+      <span>{parts.figure}</span>
+      {parts.hedge === null ? null : (
+        <span className="shrink-0 text-label text-muted-foreground">{parts.hedge}</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The card's face at ONE ROW: the figure at the left, a caption that gives
+ * way, and the caret (VC-406).
+ *
+ * The Ticket rail's card used to open with the hero below — an 18px figure, the
+ * bar and a caption, then a seamed row for the Sessions — and at ~120px it was
+ * the tallest object on a page whose most-read block is a list of Sessions.
+ * Cost is a fact the owner glances at, not a surface they work in, so the
+ * face is now the height of any other row in the rail and everything the hero
+ * carried (the bar, its legend, the cached share, the basis sentence, the
+ * per-Session ranking) is one press behind it, in one popover rather than two.
+ *
+ * The figure leads and never truncates; the caption is the elastic member and
+ * gives way first — a price losing a digit is a worse loss than a token count
+ * losing its last letters, and at the rail's 240px floor one of them has to.
+ */
+export function UsageCardFace({
+  name,
+  summary,
+  icon: Icon,
+  testId,
+  children,
+}: {
+  /** What the figure is about, for the accessible name — never drawn. */
+  name: string;
+  summary: SessionUsageSummary;
+  icon: PhosphorIcon;
+  testId?: string;
+  /** The popover body: everything the figure is made of. */
+  children: React.ReactNode;
+}) {
+  const cost = formatUsageCost(summary);
+  const tokens = totalUsageTokens(summary);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-testid={testId}
+          aria-label={`${name} ${cost ?? ""} — open breakdown`}
+          className={cn(RAIL_CARD_ROW, "min-h-8 py-2 hover:bg-accent/50")}
+        >
+          <Icon className="size-4 shrink-0 text-muted-foreground" />
+          <UsageCostFigure
+            summary={summary}
+            className="shrink-0 text-ui font-medium text-foreground"
+          />
+          {/* Tokens, never cost — a second dollar figure on the face would be
+              a second total, and the cached share stays behind the row so a
+              reader cannot set it beside the money and read it as a share of
+              spend (`usage/usage-format.ts`). */}
+          <span className="min-w-0 flex-1 truncate text-right text-ui text-muted-foreground tabular-nums">
+            {tokens > 0 ? `${formatTokens(tokens)} tokens` : ""}
+          </span>
+          <CaretDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent aria-label={name} align="start" side="left" className={USAGE_POPOVER}>
+        {children}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -116,6 +216,7 @@ export function UsageCardHero({
 }: {
   /** What the figure is about, for the accessible name — never drawn. */
   name: string;
+  /** The figure as spoken (`formatUsageCost`) — the accessible name's half; the drawing reads `summary`. */
   cost: string;
   summary: SessionUsageSummary;
   testId?: string;
@@ -138,7 +239,7 @@ export function UsageCardHero({
         >
           {/* text-heading, not text-title: the rail's widest content box is
               268px and the ticket title is the only 24px text in the app. */}
-          <span className="text-heading tabular-nums text-foreground">{cost}</span>
+          <UsageCostFigure summary={summary} className="text-heading text-foreground" />
           {tokens > 0 ? <UsageBar summary={summary} /> : null}
           <span className="flex w-full items-center justify-between gap-2">
             {/* Tokens and cache, never cost — the bar divides tokens, and a
@@ -181,8 +282,8 @@ export function UsageCardRow({
 }: {
   icon: PhosphorIcon;
   label: string;
-  /** A figure parked before the caret — a cost, a count. */
-  trailing?: string | null;
+  /** A figure parked before the caret — a cost (drawn, so its hedge is set right), a count. */
+  trailing?: React.ReactNode;
   ariaLabel: string;
   testId?: string;
   children: React.ReactNode;
@@ -228,10 +329,18 @@ export function UsageCardRow({
 export function UsageBreakdown({
   title,
   summary,
+  picture = false,
   children,
 }: {
   title: string;
   summary: SessionUsageSummary;
+  /**
+   * Draw the token bar above its legend. ON where the face does not already
+   * show it (the Ticket rail's one-row card, VC-406), OFF where the popover
+   * opens off a face that does (Home's hero) — the same picture twice, ten
+   * pixels apart, is not a breakdown.
+   */
+  picture?: boolean;
   /** Anything this scope adds under the legend — a ranking, a tally. */
   children?: React.ReactNode;
 }) {
@@ -245,13 +354,14 @@ export function UsageBreakdown({
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-ui font-medium">{title}</span>
           {cost === null ? null : (
-            <span className="text-ui tabular-nums text-foreground">{cost}</span>
+            <UsageCostFigure summary={summary} className="text-ui text-foreground" />
           )}
         </div>
         {basis === null ? null : <p className="text-ui text-muted-foreground">{basis}</p>}
       </div>
 
       <div className="flex flex-col gap-2">
+        {picture ? <UsageBar summary={summary} /> : null}
         <UsageClassRows summary={summary} />
         {tokens > 0 ? (
           <UsageBreakdownFact label="Total tokens" value={formatTokens(tokens)} />
@@ -305,7 +415,9 @@ export function UsageRankRow({ row }: { row: UsageGroupRow }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <dt className="min-w-0 truncate text-ui text-foreground">{row.label}</dt>
-      <dd className="shrink-0 text-ui tabular-nums text-muted-foreground">{cost ?? "—"}</dd>
+      <dd className="shrink-0 text-ui tabular-nums text-muted-foreground">
+        {cost === null ? "—" : <UsageCostFigure summary={row.usage} />}
+      </dd>
     </div>
   );
 }

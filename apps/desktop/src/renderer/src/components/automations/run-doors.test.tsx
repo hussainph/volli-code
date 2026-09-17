@@ -357,7 +357,6 @@ beforeEach(() => {
     armingByProject: {},
     orderByProject: {},
     runsByProject: {},
-    runsByTicket: {},
     skipsByProject: {},
     enabledIds: [],
     enablementRead: false,

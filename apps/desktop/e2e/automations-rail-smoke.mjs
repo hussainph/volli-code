@@ -335,23 +335,28 @@ try {
     },
   );
 
-  await attempt(7, "this Ticket's Runs are drawn from this Ticket's own read", async () => {
-    // A Run needs a live model and spends tokens, so nothing has run here: the
-    // VISIBLE evidence is that the rail draws no run list, and the door it
-    // reads says the same. What the rail DOES with rows once they exist
-    // (newest first, the resolved model, a door back to the Session) is pinned
-    // in `ticket-rail-automations.test.tsx`, which can mint Runs freely.
-    await openTicket();
-    const drawn = await rail().locator('[data-testid="ticket-rail-runs"]').count();
-    const outcome = await page.evaluate(async (ticketId) => {
-      const mine = await window.api.automations.runsForTicket({ ticketId });
-      return mine.ok ? { runs: mine.runs.length } : { refused: mine.error };
-    }, seeded.ticketId);
-    return {
-      ok: drawn === 0 && outcome.runs === 0,
-      detail: `lists=${drawn} ${JSON.stringify(outcome)}`,
-    };
-  });
+  await attempt(
+    7,
+    "the rail draws no Runs list of its own; the Ticket's door still answers",
+    async () => {
+      // Runs are Sessions, and since VC-406 the rail lists them once — in the
+      // Sessions roster, wearing the bolt — never under the Automations block.
+      // So the block draws no run list in ANY state, and this guards that the
+      // list does not quietly come back. The `runsForTicket` door itself is
+      // still read here: a Run needs a live model and spends tokens, so nothing
+      // has run on this Ticket and the door has to say so.
+      await openTicket();
+      const drawn = await rail().locator('[data-testid="ticket-rail-runs"]').count();
+      const outcome = await page.evaluate(async (ticketId) => {
+        const mine = await window.api.automations.runsForTicket({ ticketId });
+        return mine.ok ? { runs: mine.runs.length } : { refused: mine.error };
+      }, seeded.ticketId);
+      return {
+        ok: drawn === 0 && outcome.runs === 0,
+        detail: `lists=${drawn} ${JSON.stringify(outcome)}`,
+      };
+    },
+  );
 
   await attempt(8, "right-clicking the control opens the nested context menu", async () => {
     // The second deliberate surface VC-112 names beside the rail itself. The

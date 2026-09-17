@@ -100,6 +100,7 @@ import {
   RAIL_CARD_FRAME,
   RAIL_CARD_ROW,
   RAIL_CARD_SEAM,
+  RAIL_CONTROL,
   RAIL_PANEL_INSET,
   RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
@@ -1029,8 +1030,7 @@ export function TicketRepositorySummary({
   // button that refuses to shrink pushes its own chevron off the card's clipped
   // edge. It truncates and keeps its full label in `title` instead — a control
   // you can read to the end elsewhere beats one you cannot reach.
-  const primaryClassName =
-    "min-w-0 shrink border-sidebar-border bg-background/30 px-2 text-ui shadow-raised [&>span]:truncate";
+  const primaryClassName = cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate");
 
   const doneFlowPrimaryButton = (
     <Button
@@ -1076,7 +1076,7 @@ export function TicketRepositorySummary({
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 border-sidebar-border bg-background/30 px-2 text-ui shadow-raised"
+            className={cn(RAIL_CONTROL, "shrink-0 px-2")}
             aria-label="Open pull request in GitHub"
             onClick={openPr}
           >
@@ -1228,7 +1228,7 @@ export function TicketRepositorySummary({
                             variant="outline"
                             size="icon-sm"
                             aria-label="More repository actions"
-                            className="border-sidebar-border bg-background/30 shadow-raised"
+                            className={RAIL_CONTROL}
                           >
                             <DotsThreeIcon weight="bold" />
                           </Button>
