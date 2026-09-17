@@ -23,10 +23,22 @@ import {
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 import type { SessionUsageEntry } from "./session-usage-report";
 
+/**
+ * One durable Session row.
+ *
+ * Every field is `readonly` (VC-393). A Session row is a fact the ledger owns:
+ * nothing in Volli edits one in place, and a projection built from one is
+ * handed to callers that must not either — the listing's fold cache shares a
+ * single deep-frozen projection between them, so an assignment that the type
+ * allowed would be a `TypeError` at best and a corrupted cache at worst. The
+ * modifier costs nothing to assignability (TypeScript does not check readonly
+ * properties when it compares object types), so it only ever catches the
+ * mistake it is here to catch.
+ */
 export interface Session {
-  id: string;
-  projectId: string;
-  ticketId: string | null;
+  readonly id: string;
+  readonly projectId: string;
+  readonly ticketId: string | null;
   /**
    * The Role this Session was created under (VC-9). Data, never derived:
    * before this field `ticketId !== null` WAS the Role, which stopped being
@@ -34,7 +46,7 @@ export interface Session {
    * without being a Ticket Session. {@link roleImpliedByTicket} is the one
    * read-side fallback, for rows and events written before the field existed.
    */
-  role: SessionRole;
+  readonly role: SessionRole;
   /**
    * The Session that delegated this one (VC-9): set exactly for a `subagent`,
    * null for the two root Roles. On the Session and on its `session.create`
@@ -43,10 +55,10 @@ export interface Session {
    * (docs/BOUNDARIES.md). Read-tolerant: absent on every record written
    * before the field existed, all of which were root Sessions.
    */
-  parentSessionId: string | null;
-  title: string | null;
+  readonly parentSessionId: string | null;
+  readonly title: string | null;
   /** Epoch milliseconds. Metadata only; ordering comes from `SessionEvent.sequence`. */
-  createdAt: number;
+  readonly createdAt: number;
 }
 
 export const SESSION_ATTACHMENT_CONTINUITIES = [
@@ -1240,12 +1252,12 @@ export interface SessionCommandRequest {
 
 /** Explicit user intent. A command is not evidence that an executor accepted it. */
 export interface SessionCommand {
-  id: string;
-  sessionId: string;
-  createdAt: number;
-  intent: SessionCommandIntent;
+  readonly id: string;
+  readonly sessionId: string;
+  readonly createdAt: number;
+  readonly intent: SessionCommandIntent;
   /** Null only for Session-level commands or deterministically rejected delivery. */
-  route: SessionCommandRoute | null;
+  readonly route: SessionCommandRoute | null;
 }
 
 export type CommandReceiptResult =
@@ -1394,11 +1406,11 @@ export interface ListSessionEventsQuery {
 }
 
 export interface SessionAttachmentProjection extends SessionAttachment {
-  status: "open" | "failed" | "closed";
-  openedAt: number | null;
-  closedAt: number | null;
-  outcome: "completed" | "failed" | "interrupted" | null;
-  failure: SessionAttachmentFailure | null;
+  readonly status: "open" | "failed" | "closed";
+  readonly openedAt: number | null;
+  readonly closedAt: number | null;
+  readonly outcome: "completed" | "failed" | "interrupted" | null;
+  readonly failure: SessionAttachmentFailure | null;
   /**
    * The status the executor's process reported, from `attachment.exited`, or
    * `null` when nothing observed one (VC-290).
@@ -1409,36 +1421,51 @@ export interface SessionAttachmentProjection extends SessionAttachment {
    * SessionAttachmentProjection.outcome}, which is what Volli made of the
    * ending rather than what the process said about it.
    */
-  exitCode: number | null;
+  readonly exitCode: number | null;
 }
 
 export interface SessionAttentionProjection {
-  active: readonly SessionAttention[];
-  primary: SessionAttention | null;
+  readonly active: readonly SessionAttention[];
+  readonly primary: SessionAttention | null;
 }
 
 export interface SessionInteractionProjection {
-  active: readonly SessionInteraction[];
-  resolved: readonly {
-    interaction: SessionInteraction;
-    resolution: SessionInteractionResolution;
-    resolvedAt: number;
+  readonly active: readonly SessionInteraction[];
+  readonly resolved: readonly {
+    readonly interaction: SessionInteraction;
+    readonly resolution: SessionInteractionResolution;
+    readonly resolvedAt: number;
   }[];
 }
 
+/**
+ * UI-ready Session state, folded from the immutable log.
+ *
+ * Every field is `readonly` (VC-393), because a projection is a value rather
+ * than a record anybody edits: it is derived from facts, and the way to change
+ * it is to append a fact and fold again. The listing's fold cache additionally
+ * hands ONE deep-frozen projection to every caller (see `session-engine.ts`),
+ * so a caller that mutated a row would corrupt every later read of it. These
+ * modifiers make that a compile error instead, on both sides of an RPC seam
+ * where a runtime freeze does not survive the copy.
+ */
 export interface SessionProjection {
-  session: Session;
-  status: "open" | "archived";
-  commands: readonly SessionCommand[];
-  receipts: readonly CommandReceipt[];
+  readonly session: Session;
+  readonly status: "open" | "archived";
+  readonly commands: readonly SessionCommand[];
+  readonly receipts: readonly CommandReceipt[];
   /** Latest unresolved executor.start intent; it exists before an attachment is observable. */
-  pendingExecutorStart: SessionCommand | null;
-  attachments: readonly SessionAttachmentProjection[];
-  liveExecutor: SessionAttachmentProjection | null;
-  attention: SessionAttentionProjection;
-  interactions: SessionInteractionProjection;
+  readonly pendingExecutorStart: SessionCommand | null;
+  readonly attachments: readonly SessionAttachmentProjection[];
+  readonly liveExecutor: SessionAttachmentProjection | null;
+  readonly attention: SessionAttentionProjection;
+  readonly interactions: SessionInteractionProjection;
   /** Latest explicit generic outcome signal, independent of planner history. */
-  signal: { signal: "done" | "blocked"; reason: string | null; occurredAt: number } | null;
+  readonly signal: {
+    readonly signal: "done" | "blocked";
+    readonly reason: string | null;
+    readonly occurredAt: number;
+  } | null;
   /**
    * The stop currently in force, or null — set by `session.stopped`, cleared
    * only by a fresh attachment. State rather than history: a listing says
@@ -1446,17 +1473,21 @@ export interface SessionProjection {
    * forever regardless (VC-86). A turn already admitted to the attachment
    * being stopped cannot erase the fact before release catches it.
    */
-  stopped: { at: number; reason: string | null; by: SessionStopActor } | null;
+  readonly stopped: {
+    readonly at: number;
+    readonly reason: string | null;
+    readonly by: SessionStopActor;
+  } | null;
   /** Latest accepted product model policy, durable across attachment and relaunch. */
-  modelSelection: ModelSelection | null;
+  readonly modelSelection: ModelSelection | null;
   /**
    * The tier `modelSelection` resolved from, or null when it was chosen by
    * exact id (VC-259). Follows the selection: a later pick from the composer
    * clears it, because the model then running is no longer the tier's.
    */
-  modelTier: ModelTier | null;
+  readonly modelTier: ModelTier | null;
   /** Whether a turn is open right now — the durable half of "the agent is working". */
-  turnActive: boolean;
+  readonly turnActive: boolean;
   /**
    * How the most recent turn ended, or `null` while one is open or before
    * any has started (VC-269). The durable half of "the agent finished" vs
@@ -1466,7 +1497,7 @@ export interface SessionProjection {
    * `turn.started`, so it is always about the LATEST turn and never a stale
    * verdict on an earlier one.
    */
-  lastTurnOutcome: SessionTurnOutcome | null;
+  readonly lastTurnOutcome: SessionTurnOutcome | null;
   /**
    * How many calls this Session's authority has refused, over its whole life.
    *
@@ -1478,7 +1509,7 @@ export interface SessionProjection {
    * projection and cannot have one — an *allowed* call is not an event, so only
    * the runtime that sees both answers can know a run was broken.
    */
-  authorityDenials: number;
+  readonly authorityDenials: number;
   /**
    * What this Session has consumed, over every model operation it recorded.
    *
@@ -1488,9 +1519,9 @@ export interface SessionProjection {
    * shape, and belong to an indexed projection rather than to a fold of one
    * Session's log.
    */
-  usage: SessionUsageSummary;
+  readonly usage: SessionUsageSummary;
   /** Epoch milliseconds of the newest thing that happened here; seeded from the Session's creation. */
-  lastActivityAt: number;
+  readonly lastActivityAt: number;
   /**
    * Whether this Session was ticketless AT BIRTH — from the immutable
    * `session.created` event's own `ticketId`, not the live `session.ticketId`
@@ -1500,7 +1531,7 @@ export interface SessionProjection {
    * orphan: a Board Session and an orphaned one both read `ticketId: null`
    * today, but only the Board Session was ever meant to.
    */
-  bornTicketless: boolean;
+  readonly bornTicketless: boolean;
 }
 
 /**
