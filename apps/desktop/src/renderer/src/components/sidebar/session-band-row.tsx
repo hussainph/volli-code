@@ -7,10 +7,10 @@
  * were prototyped in relied on to draw them against a scrubbable clock.
  *
  * The two rows are deliberately unequal on every axis at once. Active is two
- * lines, a status dot and full ink; Previous is one line, smaller type, muted,
- * no dot. Previous is where you go looking for something you already remember;
- * Active is where you look without being asked, and only one of them can win
- * that competition.
+ * lines, a status-carrying mark and full ink; Previous is one line, smaller
+ * type, muted, and its mark says only WHOSE Session this is. Previous is where
+ * you go looking for something you already remember; Active is where you look
+ * without being asked, and only one of them can win that competition.
  *
  * **Both are memoised, and `onSelect` takes its row.** These bands are the one
  * list in the app whose length nobody controls — Previous holds every Session a
@@ -22,22 +22,16 @@
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
-import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
-import { CodeIcon } from "@phosphor-icons/react/dist/csr/Code";
-import { CursorIcon } from "@phosphor-icons/react/dist/csr/Cursor";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
-import { HexagonIcon } from "@phosphor-icons/react/dist/csr/Hexagon";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   displayTicketId,
   harnessLabel,
-  isFirstClassHarnessId,
   sessionProvenanceHoverLine,
   TICKET_STATUS_LABELS,
   type ChatWaitingReason,
-  type FirstClassHarnessId,
   type HarnessId,
   type Ticket,
 } from "@volli/shared";
@@ -46,7 +40,6 @@ import type {
   ActiveSessionRow,
   PreviousSessionRow,
   SessionAttention,
-  SessionRowKind,
 } from "@renderer/components/sidebar/active-session-listing";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
@@ -58,7 +51,13 @@ import {
   SESSION_ACTIVITY_LABEL,
   sessionActivityDotState,
 } from "@renderer/components/ui/session-activity-status";
-import { StatusDot } from "@renderer/components/ui/status-dot";
+import { SessionMark } from "@renderer/components/ui/session-mark";
+import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import {
+  harnessVendorMark,
+  providerVendorMark,
+  type VendorMark,
+} from "@renderer/components/ui/vendor-marks";
 import { compactAge } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 
@@ -131,41 +130,46 @@ function RowIdentity({ ticket, ticketPrefix }: { ticket: Ticket | null; ticketPr
 }
 
 /**
- * WHICH CLI a terminal companion is running, one glyph per first-class harness
- * (VC-402).
+ * WHOSE agent a row is running, as the vendor's own mark (VC-402).
  *
- * The band could not say this at all: a companion row names its harness in the
- * hover `title` and nowhere else, so two rows running Claude Code and Codex
- * differed by their titles and by nothing a reader could scan. Herdr draws the
- * same mark beside its status glyph, and it is the right shape for it — the
- * harness is a property of the row, not an errand, so it belongs in the slot
- * that already qualifies identity rather than in a fourth colour or a word.
+ * The band could not say this at all: a row named its harness in the hover
+ * `title` and nowhere else, so two rows running Claude Code and Codex differed
+ * by their titles and by nothing a reader could scan. It is stated once here
+ * and drawn in both bands, because one Session seen at two ages must not be
+ * able to wear two marks.
  *
- * MNEMONIC, NOT BRANDING. None of these is a vendor logo — a 12px trace of one
- * would be both worse artwork and a claim we have no licence to make. Each is
- * the Phosphor glyph whose silhouette a reader can already attach to the name:
- * Claude's radial burst, the hexagonal knot Codex's vendor is drawn as, the
- * pointer that IS Cursor's word, and `</>` for OpenCode. What the set is
- * actually chosen for is being four silhouettes nothing else in this band
- * shares — radial, polygon, arrow, chevrons, against a rounded terminal
- * rectangle and a speech circle — because told apart at a glance is the whole
- * requirement and detail is what a 12px glyph cannot spend.
+ * THE TWO KINDS ASK DIFFERENT QUESTIONS AND GET ONE ANSWER. A terminal
+ * companion is its CLI, so it draws the harness's vendor; a structured Session
+ * runs the Agent Runtime against a model, so it draws that model's PROVIDER —
+ * the account it is billed through, never the family that made the model, so a
+ * Claude model reached through a gateway is the gateway's row. `ui/vendor-marks`
+ * holds both tables for one reason: which vendor stands for `codex` and which
+ * stands for `openai-codex` is the same fact in two vocabularies.
  *
- * A CUSTOM SLUG KEEPS THE TERMINAL. A bring-your-own harness has no artwork we
- * could invent that would mean anything, and inventing a second generic mark
- * would only teach the reader a symbol that says "not one of the four".
- * {@link TerminalWindowIcon} already says exactly what is true of it, and it is
- * the mark that row draws today.
+ * A ROW WITHOUT A MARK IS NORMAL. A bring-your-own harness slug, a bare shell,
+ * a Draft, a provider this build has no artwork for: there is nothing we could
+ * invent for them that would mean anything, and a second generic symbol would
+ * only teach the reader a glyph that says "not one of the known ones". Those
+ * rows keep exactly what they draw today — the status dot in Active, the
+ * chat-circle or terminal-window glyph in Previous.
  */
-const HARNESS_GLYPHS: Record<FirstClassHarnessId, PhosphorIcon> = {
-  "claude-code": AsteriskIcon,
-  codex: HexagonIcon,
-  cursor: CursorIcon,
-  opencode: CodeIcon,
-};
+function sessionVendorMark(row: {
+  harnessId: HarnessId | null;
+  providerId: string | null;
+}): VendorMark | null {
+  return harnessVendorMark(row.harnessId) ?? providerVendorMark(row.providerId);
+}
 
-function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
-  return isFirstClassHarnessId(harnessId) ? HARNESS_GLYPHS[harnessId] : TerminalWindowIcon;
+/**
+ * What the mark stands for, in words: a companion's HARNESS, a chat's PROVIDER.
+ *
+ * The harness label wins where there is one, because "Claude Code" is what the
+ * person launched and "Anthropic" is only who makes it — the row's hover
+ * `title` already says the first, and a mark announcing the second would name
+ * something no other part of the row does.
+ */
+function sessionMarkName(row: { harnessId: HarnessId | null }, mark: VendorMark): string {
+  return row.harnessId === null ? mark.label : harnessLabel(row.harnessId);
 }
 
 /**
@@ -175,9 +179,8 @@ function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
  * glyph in this band, under CLAUDE.md's fifth clause: at 12px regular draws
  * lighter than the row's own title, and a mark that leads the identity cannot
  * be the faintest thing in the row it opens. Emphatically not `fill` — at this
- * size ChatCircle's is a solid disc covering 54% of its box, and a harness mark
- * is not the row's one exception among its neighbours; every companion row has
- * one.
+ * size ChatCircle's is a solid disc covering 54% of its box, and a row that has
+ * no vendor mark is not thereby the band's one exception.
  *
  * The label is out of band because the mark is not a control: a reader who
  * needs the words has them in the row's hover `title`, and a visible one would
@@ -185,43 +188,39 @@ function harnessGlyphOf(harnessId: HarnessId): PhosphorIcon {
  */
 function BandGlyph({ glyph: Glyph, label }: { glyph: PhosphorIcon; label: string }) {
   return (
-    <span className="flex shrink-0 items-center">
+    // The SLOT is 14px, the glyph is 12px, and the difference is deliberate: a
+    // vendor mark stands in this same slot on the row above and below, and a
+    // box sized to whichever drawing happened to land in it would give the band
+    // two left edges. The glyph keeps its own size and centres.
+    <span className="flex size-3.5 shrink-0 items-center justify-center">
       <Glyph weight="bold" aria-label={label} className="size-3" />
     </span>
   );
 }
 
 /**
- * Which execution surface a Previous row speaks for — the axis its filter sorts
- * on. It LEADS the identity it qualifies rather than trailing the title, which
- * is what clears the row's right edge for the age alone.
+ * WHOSE Session a Previous row is, and failing that which execution surface it
+ * speaks for — the axis its filter sorts on. It LEADS the identity it qualifies
+ * rather than trailing the title, which is what clears the row's right edge for
+ * the age alone.
  *
- * A companion spends this one slot on its harness rather than on a second way
- * of saying "terminal": the row's kind is already legible from what the glyph
- * is NOT (a chat's circle), and which CLI it is, is the fact the band could not
- * state anywhere. A companion with no harness to name — a bare shell, a pane
- * whose record has not landed — keeps the generic terminal window.
- */
-function KindGlyph({ kind, harnessId }: { kind: SessionRowKind; harnessId: HarnessId | null }) {
-  if (kind === "chat") return <BandGlyph glyph={ChatCircleIcon} label="Chat" />;
-  if (harnessId === null) return <BandGlyph glyph={TerminalWindowIcon} label="Terminal" />;
-  return <BandGlyph glyph={harnessGlyphOf(harnessId)} label={harnessLabel(harnessId)} />;
-}
-
-/**
- * The Active row's companion mark — the same glyph the Previous band draws,
- * and nothing at all on every other row.
+ * The vendor mark wins the slot wherever there is one, so a Session keeps the
+ * mark it wore in Active as it ages out of it — that continuity is the whole
+ * reason the quiet band draws vendor artwork at all. It draws NO status:
+ * Previous is one uniformly muted tier and the row's ink is its colour, which
+ * is also why nothing here animates (the caret on a group row remains the
+ * band's only motion).
  *
- * ASYMMETRY IS THE POINT, and it is why this is not the {@link KindGlyph} the
- * quiet band uses. Active is not a filtered list sorted by surface, so a mark
- * on every row would be a column that mostly repeats what the row's own shape
- * already says. A structured Session keeps exactly the marks it had — its
- * provenance and nothing beside it (VC-402) — and a shell names no CLI, so the
- * glyph appears precisely where there is a harness to tell apart.
+ * A row with no mark falls back to what it has always drawn — a chat's circle,
+ * a companion's terminal window — because the kind is the only thing left that
+ * is true of it.
  */
-function CompanionGlyph({ harnessId }: { harnessId: HarnessId | null }) {
-  if (harnessId === null) return null;
-  return <BandGlyph glyph={harnessGlyphOf(harnessId)} label={harnessLabel(harnessId)} />;
+function KindGlyph({ row, mark }: { row: PreviousSessionRow; mark: VendorMark | null }) {
+  if (mark !== null) {
+    return <SessionMark mark={mark} name={sessionMarkName(row, mark)} state={null} />;
+  }
+  if (row.kind === "chat") return <BandGlyph glyph={ChatCircleIcon} label="Chat" />;
+  return <BandGlyph glyph={TerminalWindowIcon} label="Terminal" />;
 }
 
 /**
@@ -323,10 +322,12 @@ function stateLine(row: ActiveSessionRow): string {
 /**
  * Two lines: what it is, then who it belongs to and what it is doing.
  *
- * The dot carries the three states worth telling apart at a glance — a human is
- * needed, an agent is running, nothing is happening — and a working row's title
- * SWEEPS rather than growing a fourth colour, so a band of running work still
- * reads as one list. Every dimmed thing in the row promotes together on
+ * The status slot carries the three states worth telling apart at a glance — a
+ * human is needed, an agent is running, nothing is happening — and, since
+ * VC-402, whose agent it is in the same 14px: the vendor's own mark takes the
+ * colour where there is one, the 6px disc keeps it where there is not. A
+ * working row's title SWEEPS rather than growing a fourth colour, so a band of
+ * running work still reads as one list. Every dimmed thing in the row promotes together on
  * hover/selected (decision #74's vibrancy rule): the row's fill is a veil, so
  * at the canvas band's ceiling this text measures under the contrast floor
  * un-promoted and comfortably over it promoted.
@@ -350,6 +351,10 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
 }) {
   const needsYou = row.attention !== null;
   const working = !needsYou && row.activity === "working";
+  // The mapping is `ui/session-activity-status.ts`'s, not this row's: attention
+  // outranks, `interrupted` survives, the rest rest.
+  const dotState: StatusDotState = sessionActivityDotState(row.activity, { attention: needsYou });
+  const mark = sessionVendorMark(row);
 
   return (
     <SidebarMenuItem>
@@ -371,24 +376,47 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
         // band stops out-massing the board it sits beside.
         className="h-auto min-h-9 items-start gap-2 py-1 [&:hover_.session-row-dim]:text-foreground [&[data-active=true]_.session-row-dim]:text-foreground"
       >
-        {/* The third copy of the status→tone map was written out right here,
+        {/* THE STATUS SLOT — 14px wide, whatever stands in it. One mark, two
+            facts: WHOSE agent this is and what it is doing. Where the Session's
+            vendor is known the vendor's own artwork carries the state's colour
+            (VC-402); where it is not, the 6px disc this band has always drawn
+            carries it alone, CENTRED in the same box. The box is what makes
+            those one column: sized to the dot, a shell row's title would start
+            8px left of its neighbour's and the band would have two left edges.
+
+            The third copy of the status→tone map was written out right here,
             which is how this band could paint a Session amber while the ticket
             strip painted the same one with the accent. The row states the STATE
-            and `ui/status-dot.tsx` owns what colour that is. */}
-        {/* THE TWO HALF-STEPS HERE ARE DELIBERATE, and they are the recorded
-            exception to the 0/4/8/16/24 spacing collapse. `mt-1.5` is optical
-            alignment — it drops the dot onto the title's cap height, which is a
-            measurement of the type, not a rung of the rhythm. `gap-0.5` is what
-            binds the title to its meta line: at 4px the pair spaces the same as
-            the gap BETWEEN rows and the two lines stop reading as one entity,
-            which is the whole shape of this band. Screenshot-verified against
-            the collapse; anything that moves them has to look at the band. */}
-        <StatusDot
-          // The mapping is `ui/session-activity-status.ts`'s, not this row's:
-          // attention outranks, `interrupted` survives, the rest rest.
-          state={sessionActivityDotState(row.activity, { attention: needsYou })}
-          className="mt-1.5"
-        />
+            and `ui/status-dot.tsx` owns what colour that is — for both
+            drawings, from one table.
+
+            THE HALF-STEP IS DELIBERATE, and it is the recorded exception to the
+            0/4/8/16/24 spacing collapse. `mt-[3px]` is optical alignment — it
+            drops the slot onto the title's cap height, which is a measurement
+            of the type, not a rung of the rhythm: `text-ui` is 13px on a 20px
+            line box, so its cap band centres ~10px down and a 14px box lands
+            there from 3px. The dot rides 1px lower than the `mt-1.5` it used to
+            take alone, which is the cost of sharing an axis with the marks and
+            is the right side of that trade. `gap-0.5` is what binds the title
+            to its meta line: at 4px the pair spaces the same as the gap BETWEEN
+            rows and the two lines stop reading as one entity, which is the
+            whole shape of this band. Screenshot-verified; anything that moves
+            them has to look at the band. */}
+        <span className="mt-[3px] flex size-3.5 shrink-0 items-center justify-center">
+          {mark === null ? (
+            <StatusDot state={dotState} />
+          ) : (
+            <SessionMark
+              mark={mark}
+              // The state's own words, from the map the meta line reads — never
+              // a second vocabulary invented for the a11y tree. Attention
+              // outranks here exactly as it does in the colour, so the two
+              // agree.
+              name={`${sessionMarkName(row, mark)}, ${SESSION_ACTIVITY_LABEL[needsYou ? "waiting" : row.activity]}`}
+              state={dotState}
+            />
+          )}
+        </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           {working ? (
             <span className="session-row-dim session-title-sweep text-ui">
@@ -403,10 +431,6 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
             </span>
           )}
           <span className="session-row-dim flex min-w-0 items-center gap-1 text-label text-muted-foreground transition-colors">
-            {/* Leading the identity, the same place the Previous band puts
-                its kind glyph, so a Session keeps its mark where it was as it
-                ages out of one band and into the other. */}
-            <CompanionGlyph harnessId={row.harnessId} />
             <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} />
             {/* Right of the identity and left of the state: the mark qualifies
                 WHOSE Session this is, which sits with the id rather than with
@@ -482,6 +506,18 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
    */
   showIdentity?: boolean;
 }) {
+  const mark = sessionVendorMark(row);
+  // What the row's LEADING drawing stands for, whichever it turned out to be:
+  // the vendor mark's subject where there is one, and otherwise the custom
+  // harness slug the generic terminal window is standing in for. `null` is a
+  // row whose glyph says only what kind of Session it is, which the title
+  // already says better.
+  const markName =
+    mark !== null
+      ? sessionMarkName(row, mark)
+      : row.harnessId === null
+        ? null
+        : harnessLabel(row.harnessId);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -496,14 +532,14 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         // The band's second listing surface gets the same provenance line the
         // Active row gets, from the same function — a Session that dropped its
         // mark on ageing out of Active would be a Run hiding in the quiet band.
-        // The glyph's own words, in the one place this row can afford them.
+        // The mark's own words, in the one place this row can afford them.
         // The Active row has said its harness in its `title` since the meta
         // line stopped naming one (see `placeLine`); this band never did, which
-        // left its new mark with nothing anywhere to decode it.
-        title={rowTitleAttribute(
-          row,
-          row.harnessId === null ? [row.title] : [row.title, harnessLabel(row.harnessId)],
-        )}
+        // left its mark with nothing anywhere to decode it. It names whatever
+        // the mark actually IS, so a chat's provider is decoded on the same
+        // terms a companion's harness is — the rule was written for the mark,
+        // not for the harness that happened to be the first thing in it.
+        title={rowTitleAttribute(row, markName === null ? [row.title] : [row.title, markName])}
       >
         {/* No `session-row-dim` here: this band is uniformly muted, with no
             dim/promote pairing to join — and that class also names the Active
@@ -519,7 +555,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
             <StatusDot state="interrupted" />
           </>
         ) : null}
-        <KindGlyph kind={row.kind} harnessId={row.harnessId} />
+        <KindGlyph row={row} mark={mark} />
         {showIdentity ? <RowIdentity ticket={row.ticket} ticketPrefix={ticketPrefix} /> : null}
         {/* Same slot as the Active row's — after the identity, before the title
             — so a Session keeps its mark in the same place as it ages out of
@@ -664,8 +700,9 @@ export const TicketGroupRow = React.memo(function TicketGroupRow({
  * (VC-383).
  *
  * The same two-line shape at the same `min-h-9` and the same half-step
- * alignments the row above records — the dot on the cap height, the meta line
- * bound to its title — so the rows that replace this land where it stood.
+ * alignments the row above records — the 14px status slot on the cap height,
+ * the meta line bound to its title — so the rows that replace this land where
+ * it stood.
  * VC-383 also records this skeleton's own `pt-0.5` and `gap-1.5`: its shorter
  * 14px/12px bars need the 2px nudge and 6px join to sit in that measured
  * two-line box before real text replaces them. Widths are per row and fixed:
@@ -677,7 +714,13 @@ export function SessionBandRowSkeleton({ primaryWidth }: { primaryWidth: Loading
   return (
     <SidebarMenuItem aria-hidden>
       <div className="flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-1">
-        <Skeleton className="mt-1.5 size-2 shrink-0 rounded-full" />
+        {/* The status SLOT, not the dot: 14px is what the row's left edge is,
+            whether a vendor mark or a disc ends up standing in it, so the
+            placeholder has to reserve the box rather than the blob. The blob
+            itself stays small and quiet inside it. */}
+        <span className="mt-[3px] flex size-3.5 shrink-0 items-center justify-center">
+          <Skeleton className="size-2 rounded-full" />
+        </span>
         <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
           <Skeleton className={cn("h-3.5", primaryWidth)} />
           <Skeleton className="h-3 w-1/3" />

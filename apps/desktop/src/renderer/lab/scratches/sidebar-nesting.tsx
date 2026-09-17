@@ -262,6 +262,7 @@ function chatRecord(
     projectId: project.id,
     createdAt: overrides.lastActivityAt - 40 * MINUTE,
     adapterId: "claude-code",
+    providerId: null,
     live: false,
     activity: "idle",
     waitingOn: null,

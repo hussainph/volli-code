@@ -56,6 +56,14 @@ export type StatusDotState =
   /** The last turn died rather than finished — nobody ended it (VC-324). */
   | "interrupted";
 
+/** One state's tone: the fill a DISC takes, and the ink a GLYPH takes. */
+interface StatusTone {
+  /** The disc's fill — {@link StatusDot}. */
+  dot: string;
+  /** The glyph's ink — {@link statusToneInk}, for a mark drawn in `currentColor`. */
+  ink: string;
+}
+
 /**
  * The map, and the only place a Session state becomes a colour.
  *
@@ -81,29 +89,50 @@ export type StatusDotState =
  * new signal in a strip that has never had one, and "connecting" does not want
  * a person's eye — `--info` is spent on facts about *changes* (a renamed file),
  * where it replaces sky, and spending it here too would make it mean nothing.
+ *
+ * **Each entry is a PAIR, not a class**, because the sidebar's bands no longer
+ * draw a disc: since VC-402 an Active row's status rides the vendor's own mark
+ * (`ui/session-mark.tsx`), which is filled with `currentColor` and so needs
+ * `text-*` where the dot needs `bg-*`. A second map transposed by hand is
+ * precisely the drift this module was created to end — only now with the two
+ * copies a colour apart rather than a surface apart. Both halves are written
+ * out as literals and neither is built from the other at runtime: Tailwind
+ * reads source text, so a class assembled from a prefix and a token is a name
+ * that never gets generated and a mark that paints nothing.
  */
-const STATUS_DOT_TONE: Record<StatusDotState, string> = {
+const STATUS_DOT_TONE: Record<StatusDotState, StatusTone> = {
   // The halo rides `working` alone, so one live turn is findable in a strip of
   // resting tabs without the resting ones competing for the same attention.
-  working: "bg-positive shadow-[0_0_0_3px_color-mix(in_oklab,var(--positive)_18%,transparent)]",
-  setup: "bg-positive",
-  ready: "bg-positive",
-  waiting: "bg-attention",
-  error: "bg-destructive",
-  starting: "bg-muted-foreground/50",
-  idle: "bg-muted-foreground/50",
-  parked: "bg-muted-foreground/30",
-  exited: "bg-muted-foreground/30",
+  // The mark's own halo is a disc BEHIND the glyph rather than a spread shadow
+  // ({@link STATUS_LIVE_HALO_COLOR}), because a glyph's box is a square and the
+  // same shadow would ring a rounded rectangle around it.
+  working: {
+    dot: "bg-positive shadow-[0_0_0_3px_color-mix(in_oklab,var(--positive)_18%,transparent)]",
+    ink: "text-positive",
+  },
+  setup: { dot: "bg-positive", ink: "text-positive" },
+  ready: { dot: "bg-positive", ink: "text-positive" },
+  waiting: { dot: "bg-attention", ink: "text-attention" },
+  error: { dot: "bg-destructive", ink: "text-destructive" },
+  starting: { dot: "bg-muted-foreground/50", ink: "text-muted-foreground/50" },
+  idle: { dot: "bg-muted-foreground/50", ink: "text-muted-foreground/50" },
+  parked: { dot: "bg-muted-foreground/30", ink: "text-muted-foreground/30" },
+  exited: { dot: "bg-muted-foreground/30", ink: "text-muted-foreground/30" },
   // Ended-by-decision is not an error and asks for nobody: it rests at the
   // same not-running weight as `exited`. The label, not the dot, says who.
-  stopped: "bg-muted-foreground/30",
+  stopped: { dot: "bg-muted-foreground/30", ink: "text-muted-foreground/30" },
   // A turn that DIED is the plumbing failing, so it takes `error`'s colour
   // rather than a fifth one: the two are one family (something broke), and
   // the state word beside the dot is what separates them. It is deliberately
   // NOT `stopped`'s resting neutral — reading a dead turn as an ended-on-
   // purpose one is the exact confusion VC-324 exists to remove.
-  interrupted: "bg-destructive",
+  interrupted: { dot: "bg-destructive", ink: "text-destructive" },
 };
+
+/** The same verdict as the dot's fill, for a mark that paints in `currentColor`. */
+export function statusToneInk(state: StatusDotState): string {
+  return STATUS_DOT_TONE[state].ink;
+}
 
 /** 6px in a row of text, 8px on a tab. The two the app already draws. */
 const STATUS_DOT_SIZE = { sm: "size-1.5", md: "size-2" } as const;
@@ -123,7 +152,24 @@ const STATUS_DOT_SIZE = { sm: "size-1.5", md: "size-2" } as const;
  * `globals.css`, beside the transcript's own running mark. The two are one
  * decision seen from two distances.
  */
-const STATUS_DOT_LIVE = "status-dot-live";
+export const STATUS_DOT_LIVE = "status-dot-live";
+
+/**
+ * The live halo's colour, for a mark that cannot wear the dot's.
+ *
+ * The same formula as `working`'s `shadow-` above — 18% of `--positive` mixed
+ * to transparent — painted as a disc BEHIND the glyph instead of as a spread
+ * around it. The mechanism has to differ because the dot IS a circle and a
+ * glyph's box is a square: the same spread would ring a rounded rectangle
+ * around a mark nowhere near filling it. The colour must not differ, which is
+ * why the two sit together and this is exported rather than retyped.
+ *
+ * A raw value rather than a `bg-[…]` class, and the duplication above is the
+ * reason: Tailwind reads source TEXT, so the dot's arbitrary shadow has to
+ * stay a literal in its own map however it is expressed here. One of the two
+ * has to be plain CSS; the one nothing else can share is the class.
+ */
+export const STATUS_LIVE_HALO_COLOR = "color-mix(in oklab, var(--positive) 18%, transparent)";
 
 export interface StatusDotProps extends React.ComponentProps<"span"> {
   state: StatusDotState;
@@ -144,7 +190,7 @@ export function StatusDot({ state, size = "sm", className, ...props }: StatusDot
       className={cn(
         "shrink-0 rounded-full",
         STATUS_DOT_SIZE[size],
-        STATUS_DOT_TONE[state],
+        STATUS_DOT_TONE[state].dot,
         state === "working" && STATUS_DOT_LIVE,
         className,
       )}

@@ -1904,6 +1904,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         ticketId: ticket.id,
         createdAt: 500,
         adapterId: null,
+        providerId: null,
         live: false,
         activity: "idle",
         waitingOn: null,

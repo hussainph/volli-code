@@ -376,6 +376,13 @@ export default defineConfig(({ mode }) => ({
         // and which command that offer would run.
         "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
+        // Which vendor stands for a harness id and which stands for a provider
+        // id (VC-402). Pure `.ts` in the gate on `activity.ts`'s argument: it
+        // is a lookup two different vocabularies reach the same answer through,
+        // and a missed arm is one Session wearing another vendor's mark — which
+        // is legible on screen only to a reader who already knows which mark is
+        // right.
+        "src/components/ui/vendor-marks.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
         "src/components/sidebar/edge-region.ts",

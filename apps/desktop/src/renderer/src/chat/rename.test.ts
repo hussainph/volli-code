@@ -59,6 +59,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       ticketId: "t1",
       createdAt: 1,
       adapterId: "opencode",
+      providerId: null,
       live: true,
       activity: "idle",
       waitingOn: null,

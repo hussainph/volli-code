@@ -45,7 +45,11 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
-import { sessionSourceHarness, sessionSourceLabel } from "@volli/session-presentation";
+import {
+  sessionSourceHarness,
+  sessionSourceLabel,
+  sessionSourceProvider,
+} from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
   isListableSession,
@@ -196,6 +200,17 @@ export interface ActiveSessionRow {
    * and the words can never name two different harnesses.
    */
   harnessId: HarnessId | null;
+  /**
+   * WHO a structured row's model is billed through (`sessionSourceProvider`),
+   * or `null` when nothing answers for it — every terminal companion, a chat
+   * that has accepted no model, a Draft. The row draws it as the provider's own
+   * mark, which is where a companion draws its harness's (VC-402).
+   *
+   * The exact counterpart of {@link harnessId} and read through the same
+   * contract, so the two can never claim the same row: a Session has a harness
+   * or a provider, never both and never neither by accident.
+   */
+  providerId: string | null;
   /**
    * Never `null`: every row is in some state. For a Session that is what its
    * executor reports. A Draft is always `idle` — it has no executor to be busy,
@@ -361,6 +376,8 @@ export interface PreviousSessionRow {
   kind: SessionRowKind;
   /** See {@link ActiveSessionRow.harnessId} — both bands draw the same glyph from it. */
   harnessId: HarnessId | null;
+  /** See {@link ActiveSessionRow.providerId} — both bands draw the same mark from it. */
+  providerId: string | null;
   /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
   endedOrQuietAt: number;
   /**
@@ -735,6 +752,10 @@ function sessionRow(
     title: tab.title,
     source: sessionSource(recordsById.get(subject.paneId)),
     harnessId: sessionHarness(recordsById.get(subject.paneId)),
+    // A PTY runs a CLI, never a model policy: the provider half is the chat
+    // row's, and a terminal saying one would be claiming a Session fact its
+    // record does not hold (VC-402).
+    providerId: null,
     activity: subject.activity,
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
@@ -776,8 +797,10 @@ function chatRow(
     title: record.title,
     source: sessionSourceLabel({ kind: "chat", record }),
     // A structured Session runs the Agent Runtime, not a CLI: it has no harness
-    // glyph to draw, and its row keeps the marks it already had (VC-402).
+    // to name, and the mark in its status slot is its model's PROVIDER instead
+    // (VC-402).
     harnessId: null,
+    providerId: sessionSourceProvider({ kind: "chat", record }),
     activity: delegationBusy && record.activity === "idle" ? "working" : record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
@@ -1029,6 +1052,7 @@ export function buildActiveSessionListing(
         // Taken off the Active row for the reason `provenance` below is: one
         // Session seen at two ages must not be able to name two harnesses.
         harnessId: row.harnessId,
+        providerId: row.providerId,
         endedOrQuietAt: recency,
         activity: null,
         // Taken off the Active row rather than looked up again: the two bands
@@ -1060,6 +1084,7 @@ export function buildActiveSessionListing(
         // The tab's own root record, which is the one `createdAt` below reads
         // too: an exited tab has no subject pane left to ask.
         harnessId: sessionHarness(recordsById.get(tab.sessionId)),
+        providerId: null,
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
         activity: null,
         provenance: provenanceOf(tab.sessionId),
@@ -1205,6 +1230,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "terminal",
         harnessId: sessionSourceHarness({ kind: "terminal", record }),
+        providerId: null,
         endedOrQuietAt: record.endedAt,
         activity: null,
         provenance: provenanceOf(record.id),
@@ -1262,6 +1288,7 @@ export function buildActiveSessionListing(
         title: record.title,
         kind: "chat",
         harnessId: row.harnessId,
+        providerId: row.providerId,
         endedOrQuietAt: activityAt,
         // Carried verbatim off the Active row's record: interrupted survives
         // the quiet window (VC-324).

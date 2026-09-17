@@ -650,8 +650,10 @@ export function ActiveSessions({
           title: named === undefined || named.length === 0 ? "Draft" : `Draft · ${named}`,
           source: "Draft",
           // Nothing is running, so nothing to name: the same refusal `source`
-          // makes one line up (VC-402).
+          // makes one line up (VC-402). No model has been accepted either, so
+          // the mark's other half is empty too and the row keeps the dot.
           harnessId: null,
+          providerId: null,
           activity: "idle",
           activitySource: "reported",
           attention: null,

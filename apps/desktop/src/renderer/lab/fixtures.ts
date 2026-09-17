@@ -347,6 +347,7 @@ function chat(
     // last column move is the whole reason this is overridable at all).
     createdAt: overrides.lastActivityAt - 40 * MINUTE,
     adapterId: "claude-code",
+    providerId: null,
     live: true,
     activity: "idle",
     // Idle by default, so nothing is waiting on anything. A scenario that wants

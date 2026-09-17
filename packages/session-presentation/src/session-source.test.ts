@@ -8,7 +8,7 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
-import { sessionSourceHarness, sessionSourceLabel } from "./session-source";
+import { sessionSourceHarness, sessionSourceLabel, sessionSourceProvider } from "./session-source";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
   return {
@@ -50,6 +50,7 @@ function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionReco
     ticketId: "t1",
     createdAt: 1,
     adapterId: "opencode",
+    providerId: null,
     live: true,
     activity: "idle",
     waitingOn: null,
@@ -167,5 +168,41 @@ describe("sessionSourceHarness", () => {
   // A structured Session runs the Agent Runtime, not a CLI.
   it("names none for a chat row", () => {
     expect(sessionSourceHarness({ kind: "chat", record: chatRecord() })).toBeNull();
+  });
+});
+
+/**
+ * VC-402: who a structured Session is billed through, as the other half of
+ * {@link sessionSourceHarness}.
+ *
+ * The pair is what is under test, not either function alone: a surface drawing
+ * a mark asks both, and the answer has to be exactly one of them for any row.
+ */
+describe("sessionSourceProvider", () => {
+  it("names the provider a chat's accepted model runs on", () => {
+    expect(
+      sessionSourceProvider({ kind: "chat", record: chatRecord({ providerId: "anthropic" }) }),
+    ).toBe("anthropic");
+  });
+
+  it("names nothing for a chat that has accepted no model", () => {
+    // Never the default it WOULD be given: a Session that has chosen nothing
+    // has nothing to say, and a guessed provider is the row asserting an
+    // account nobody picked.
+    expect(
+      sessionSourceProvider({ kind: "chat", record: chatRecord({ providerId: null }) }),
+    ).toBeNull();
+  });
+
+  it("names nothing for a terminal, which answers the harness question instead", () => {
+    const companion = terminalRow(record({ launchKind: "agent", harnessId: "codex" }));
+
+    expect(sessionSourceProvider(companion)).toBeNull();
+    expect(sessionSourceHarness(companion)).toBe("codex");
+    // And the mirror: a chat answers the provider question and not the harness
+    // one. Exactly one of the two, for every row.
+    expect(
+      sessionSourceHarness({ kind: "chat", record: chatRecord({ providerId: "zai" }) }),
+    ).toBeNull();
   });
 });

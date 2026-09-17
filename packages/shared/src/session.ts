@@ -173,6 +173,22 @@ export interface ChatSessionRecord {
   createdAt: number;
   /** The latest structured attachment's adapter id; `null` before one has ever attached. */
   adapterId: string | null;
+  /**
+   * WHO this Session's current model is billed through —
+   * `SessionProjection.modelSelection`'s provider, or `null` before any model
+   * has been accepted (VC-402).
+   *
+   * The provider id alone, not the whole selection: a listing row names the
+   * Session and says what it is doing, and the model id and reasoning level are
+   * things a surface asks the Session itself for. This is here because the
+   * sidebar draws the provider's own mark where a terminal companion draws its
+   * harness's, and a row holding one and not the other would be a band with two
+   * rules in it.
+   *
+   * A plain string, matching {@link SessionUsage.providerId}: provider ids are
+   * the executor's vocabulary and there is no union to exhaust.
+   */
+  providerId: string | null;
   /** Whether a structured attachment is currently open. */
   live: boolean;
   /**

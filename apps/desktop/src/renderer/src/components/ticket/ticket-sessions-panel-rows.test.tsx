@@ -44,6 +44,7 @@ const fixture = vi.hoisted(() => {
     ticketId: "ticket-6",
     createdAt: 1,
     adapterId: "pi",
+    providerId: null,
     live: true,
     activity: "waiting",
     waitingOn: "question",

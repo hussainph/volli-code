@@ -165,6 +165,7 @@ function chatRecord(index: number): ChatSessionRecord {
     title: index % 9 === 0 ? "Chat" : `Scale fixture chat ${index + 1}`,
     createdAt: lastActivityAt - 40 * MINUTE,
     adapterId: "pi",
+    providerId: null,
     live,
     activity: live ? "working" : "idle",
     waitingOn: null,

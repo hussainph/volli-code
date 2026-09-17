@@ -13,7 +13,6 @@
  * provider mirrors the real tree — `SidebarProvider` wraps the whole app, and
  * `SidebarMenuButton` reads its context unconditionally.
  */
-import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { PERSON_STARTED } from "@volli/shared";
@@ -55,6 +54,7 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
     title: "Session 1",
     source: "Claude Code",
     harnessId: "claude-code",
+    providerId: null,
     activity: "working",
     activitySource: "reported",
     attention: null,
@@ -327,6 +327,7 @@ describe("PreviousBandRow identity", () => {
     title: "Review fixes",
     kind: "chat",
     harnessId: null,
+    providerId: null,
     endedOrQuietAt: 0,
     activity: "idle",
     provenance: PERSON_STARTED,
@@ -421,12 +422,17 @@ describe("PreviousBandRow identity", () => {
 });
 
 /**
- * VC-402: WHICH CLI a companion is running, as a mark rather than as words.
+ * VC-402: WHOSE agent a row is running, as the vendor's own mark carrying the
+ * state the dot used to carry.
  *
- * The acceptance is exactly what these assert — two companion rows on different
- * harnesses are told apart with their titles hidden — so the tests read the
- * glyph's own SVG path rather than only its accessible name: a mapping that
- * handed two harnesses the same drawing would still announce two names.
+ * The acceptance is exactly what these assert — two rows on different vendors
+ * are told apart with every word hidden — so the tests read the mark's own SVG
+ * path rather than only its accessible name: a mapping that handed two
+ * harnesses the same drawing would still announce two names.
+ *
+ * The COLOUR assertions are relations, never hexes, for the same reason
+ * `ui/status-dot.test.tsx` states them that way: what has to hold is that the
+ * mark and the dot cannot disagree about one Session, not what green is.
  */
 // `Array.from` rather than a spread of `.matchAll().map()`: the iterator
 // helper's `map` hands back another ITERATOR, which has no length and compares
@@ -434,7 +440,17 @@ describe("PreviousBandRow identity", () => {
 const glyphPaths = (markup: string): string[] =>
   Array.from(markup.matchAll(/<path d="([^"]*)"/g), (match) => match[1]!);
 
-describe("companion harness glyph", () => {
+/** The `<span data-slot="session-mark">` wrapper's classes, or `[]` if there is none. */
+const markWrapperClasses = (markup: string): string[] =>
+  /<span data-slot="session-mark"[^>]*class="([^"]*)"/.exec(markup)?.[1]?.split(" ") ?? [];
+
+/** The ink utility the mark's own `<svg>` paints with. */
+const markInk = (markup: string): string | undefined => {
+  const svg = /<svg role="img"[^>]*class="([^"]*)"/.exec(markup)?.[1]?.split(" ") ?? [];
+  return svg.find((one) => one.startsWith("text-"));
+};
+
+describe("session vendor mark", () => {
   function renderPrevious(overrides: Partial<PreviousSessionRow>): string {
     return renderToStaticMarkup(
       <SidebarProvider>
@@ -445,6 +461,7 @@ describe("companion harness glyph", () => {
             title: "Session 1",
             kind: "terminal",
             harnessId: null,
+            providerId: null,
             endedOrQuietAt: 0,
             activity: null,
             provenance: PERSON_STARTED,
@@ -462,12 +479,12 @@ describe("companion harness glyph", () => {
     );
   }
 
-  it("draws a different glyph for each first-class harness, in both bands", () => {
+  it("draws a different mark for each first-class harness, in both bands", () => {
     const claude = render(row({ harnessId: "claude-code" }));
     const codex = render(row({ harnessId: "codex" }));
 
-    expect(claude).toContain('aria-label="Claude Code"');
-    expect(codex).toContain('aria-label="Codex"');
+    expect(claude).toContain('aria-label="Claude Code, Working"');
+    expect(codex).toContain('aria-label="Codex, Working"');
     // The whole point: with every word hidden, the two rows still differ.
     expect(glyphPaths(claude)).not.toEqual(glyphPaths(codex));
 
@@ -477,51 +494,110 @@ describe("companion harness glyph", () => {
     expect(cursor).not.toEqual(glyphPaths(renderPrevious({ harnessId: "claude-code" })));
   });
 
-  // Outline at the band's small-glyph tier, pinned against the drawing itself:
-  // `bold` is a DIFFERENT path from `regular`, and `fill` is a different one
-  // again — the mark a row's one exception wears, which no companion row is.
-  it("draws the mark bold rather than filling it", () => {
-    const markup = render(row({ harnessId: "claude-code" }));
+  it("draws a different mark for each provider a structured Session can run", () => {
+    const providers = ["anthropic", "openai-codex", "opencode-go", "zai"];
+    const drawings = providers.map((providerId) =>
+      glyphPaths(render(row({ source: "Chat", harnessId: null, providerId }))),
+    );
 
-    expect(glyphPaths(markup)).toEqual(
-      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="bold" />)),
+    for (const drawing of drawings) expect(drawing).toHaveLength(1);
+    expect(new Set(drawings.map((paths) => paths[0]!)).size).toBe(providers.length);
+    expect(render(row({ source: "Chat", harnessId: null, providerId: "zai" }))).toContain(
+      'aria-label="Z.ai, Working"',
     );
-    expect(glyphPaths(markup)).not.toEqual(
-      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="fill" />)),
-    );
-    expect(/aria-label="Claude Code"[^>]*/.exec(markup)?.[0]).toContain('class="size-3"');
   });
 
-  // A bring-your-own harness gets the generic terminal, not a second invented
-  // mark that would only mean "not one of the four".
-  it("keeps the generic terminal for a harness this build does not know", () => {
-    const custom = renderPrevious({ harnessId: "my-custom-harness" as HarnessId });
+  // The provider is the ACCOUNT, never the family: a Claude model reached
+  // through a gateway is that gateway's row, so the mark follows `providerId`
+  // and nothing about the model is consulted at all.
+  it("draws the harness ahead of the provider on a row that somehow has both", () => {
+    const both = render(row({ harnessId: "cursor", providerId: "anthropic" }));
+    expect(both).toContain('aria-label="Cursor, Working"');
+    expect(glyphPaths(both)).toEqual(glyphPaths(render(row({ harnessId: "cursor" }))));
+  });
 
-    expect(custom).toContain('aria-label="my-custom-harness"');
+  // The mark replaces the dot rather than joining it: one status slot, one
+  // mark in it, or the band grows a column that says the same thing twice.
+  it("stands where the dot stood, and the dot stands down", () => {
+    const marked = render(row({ harnessId: "claude-code" }));
+    expect(marked).not.toContain('data-slot="status-dot"');
+    expect(marked).toContain('data-slot="session-mark"');
+
+    // A row with no vendor to name keeps the dot and grows no mark.
+    const bare = render(row({ source: "Shell", harnessId: null }));
+    expect(bare).toContain('data-slot="status-dot"');
+    expect(bare).not.toContain('data-slot="session-mark"');
+  });
+
+  // The relation `ui/status-dot.tsx` exists to protect, now across two
+  // drawings: the mark's ink and the dot's fill are one verdict about one
+  // Session, so they must move together and never be separately decided.
+  it("takes the dot's own tone, and breathes on the same one state", () => {
+    const working = render(row({ harnessId: "claude-code", activity: "working" }));
+    const idle = render(row({ harnessId: "claude-code", activity: "idle" }));
+    const waiting = render(
+      row({ harnessId: "claude-code", attention: { signal: "waiting", reason: null } }),
+    );
+    const interrupted = render(row({ harnessId: "claude-code", activity: "interrupted" }));
+
+    expect(markInk(working)).toBe("text-positive");
+    expect(markInk(waiting)).toBe("text-attention");
+    expect(markInk(interrupted)).toBe("text-destructive");
+    expect(markInk(idle)).toMatch(/^text-muted-foreground\//);
+    expect(markInk(idle)).not.toBe(markInk(working));
+
+    // The dot's own class, not a second keyframe at a second period: the tab
+    // strip still draws discs for Sessions this band draws marks for.
+    expect(markWrapperClasses(working)).toContain("status-dot-live");
+    for (const still of [idle, waiting, interrupted]) {
+      expect(markWrapperClasses(still)).not.toContain("status-dot-live");
+    }
+  });
+
+  // A bring-your-own harness gets no invented artwork, and a provider this
+  // build has never heard of gets none either — both keep what they drew.
+  it("keeps the old drawing for a vendor this build does not know", () => {
+    const custom = renderPrevious({ harnessId: "my-custom-harness" as HarnessId });
+    expect(custom).toContain('aria-label="Terminal"');
     expect(glyphPaths(custom)).toEqual(glyphPaths(renderPrevious({ harnessId: null })));
+
+    const unknownProvider = render(row({ source: "Chat", harnessId: null, providerId: "acme-ai" }));
+    expect(unknownProvider).toContain('data-slot="status-dot"');
+    expect(unknownProvider).not.toContain('data-slot="session-mark"');
   });
 
   // The words the mark stands for, in the one place this one-line row can
   // afford them. The Active row has carried them in its `title` all along.
-  it("decodes the mark in the row's hover title", () => {
+  it("decodes whatever mark it drew in the row's hover title", () => {
     expect(renderPrevious({ harnessId: "codex" })).toContain('title="Session 1\nCodex"');
+    // A chat's mark is its provider, so that is what the title names — the rule
+    // was written for the mark, not for the harness that first filled it.
+    expect(renderPrevious({ kind: "chat", providerId: "zai" })).toContain(
+      'title="Session 1\nZ.ai"',
+    );
     expect(renderPrevious({ harnessId: null })).toContain('title="Session 1"');
   });
 
-  // No change to structured rows: a chat keeps its own glyph in Previous and
-  // gains nothing at all in Active.
-  it("leaves structured rows exactly as they were", () => {
+  // The continuity the Previous band's mark exists for: the same drawing, in
+  // the band's own muted ink, saying nothing about status and moving not at all.
+  it("keeps the mark as a Session ages out of Active, with the status left behind", () => {
+    const previous = renderPrevious({ harnessId: "claude-code" });
+
+    expect(glyphPaths(previous)).toEqual(glyphPaths(render(row({ harnessId: "claude-code" }))));
+    expect(previous).toContain('aria-label="Claude Code"');
+    expect(previous).toContain('data-state="none"');
+    expect(markInk(previous)).toBeUndefined();
+    expect(markWrapperClasses(previous)).not.toContain("status-dot-live");
+  });
+
+  // A chat with no mark keeps its circle; the rows that have one lose it.
+  it("leaves a markless structured row exactly as it was", () => {
     const chatPrevious = renderPrevious({ kind: "chat", harnessId: null });
     expect(chatPrevious).toContain('aria-label="Chat"');
     expect(glyphPaths(chatPrevious)).toHaveLength(1);
 
-    const chatActive = render(row({ id: "chat:c1", source: "Chat", harnessId: null }));
-    expect(glyphPaths(chatActive)).toHaveLength(0);
-  });
-
-  // A shell names no CLI, so the Active row says nothing rather than claiming
-  // the default harness.
-  it("stays silent on an Active row with no harness to name", () => {
-    expect(render(row({ source: "Shell", harnessId: null }))).not.toContain('aria-label="Claude');
+    const marked = renderPrevious({ kind: "chat", harnessId: null, providerId: "anthropic" });
+    expect(marked).not.toContain('aria-label="Chat"');
+    expect(marked).toContain('aria-label="Anthropic"');
   });
 });

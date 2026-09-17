@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { SESSION_PERSON_NEEDS, type SessionPersonNeed } from "@volli/shared";
 
-import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
+import { statusToneInk, StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 
 /**
  * VC-112's "this needs no new concept", pinned as a type rather than trusted as
@@ -142,6 +142,21 @@ describe("StatusDot", () => {
     // `data-state` is why the panel's own test can assert "this row reports
     // waiting" without asserting a colour it does not own.
     expect(renderToStaticMarkup(<StatusDot state="waiting" />)).toContain('data-state="waiting"');
+  });
+
+  it("hands a glyph the same verdict it paints the disc with (VC-402)", () => {
+    // The sidebar's bands no longer draw a disc: a Session whose vendor is
+    // known wears that vendor's mark, filled with `currentColor`. So the map
+    // now answers in two properties, and the ONE thing that must hold is that
+    // they are one answer — the exact relation this whole component exists to
+    // protect, moved from between two surfaces to between two drawings.
+    //
+    // Deliberately not asserted against a list of expected `text-*` names: that
+    // would be the transposed second copy, written in a test instead of a
+    // module.
+    for (const state of [...EVERY_STATE, "stopped", "interrupted"] as StatusDotState[]) {
+      expect(statusToneInk(state), state).toBe(toneOf(state)?.replace(/^bg-/, "text-"));
+    }
   });
 
   it("draws every state an unattended Run notifies on (VC-112, VC-133)", () => {

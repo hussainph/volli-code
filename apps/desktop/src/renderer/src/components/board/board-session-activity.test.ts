@@ -34,6 +34,7 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     ticketId: "t1",
     createdAt: 1,
     adapterId: "pi",
+    providerId: null,
     live: true,
     activity: "idle",
     waitingOn: null,

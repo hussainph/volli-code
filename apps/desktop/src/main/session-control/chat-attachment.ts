@@ -48,6 +48,11 @@ export function chatSessionRecord(
     ticketId: projection.session.ticketId,
     createdAt: projection.session.createdAt,
     adapterId: attachment?.adapterId ?? null,
+    // The provider of whatever model this Session is running, straight off the
+    // fold (VC-402). Durable across attachment and relaunch, exactly as the
+    // selection it is read from is — a row that has never accepted a model
+    // reads `null` rather than inventing the default it would be given.
+    providerId: projection.modelSelection?.providerId ?? null,
     live,
     activity: chatActivity(projection, live),
     waitingOn: chatWaitingOn(projection),

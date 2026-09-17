@@ -90,3 +90,23 @@ export function sessionSourceHarness(row: SessionListingIdentity): HarnessId | n
   if (row.kind === "chat") return null;
   return row.record.launchKind === "agent" ? effectiveHarnessId(row.record) : null;
 }
+
+/**
+ * WHO a structured Session's model is billed through, as an id — or `null` for
+ * a Session that answers to no provider: every terminal companion, and a chat
+ * that has not accepted a model yet.
+ *
+ * The other half of {@link sessionSourceHarness}, and here for the same one
+ * reason: the two are one question asked of the two kinds of Session ("whose
+ * agent is this?"), and a surface that drew a harness mark from one rule and a
+ * provider mark from another would be the place the two answers could disagree
+ * about the same row. A terminal returns `null` here and a chat returns `null`
+ * there, which is what makes them a pair rather than a choice.
+ *
+ * An id and not a label, exactly as above: words are this contract's, artwork
+ * is the client's, and handing back "Anthropic" would have every client parsing
+ * English to pick a mark.
+ */
+export function sessionSourceProvider(row: SessionListingIdentity): string | null {
+  return row.kind === "chat" ? row.record.providerId : null;
+}

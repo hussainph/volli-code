@@ -280,6 +280,7 @@ describe("useActivityIsland", () => {
               ticketId: null,
               createdAt: 0,
               adapterId: "pi",
+              providerId: null,
               live: true,
               activity: "working",
               waitingOn: null,

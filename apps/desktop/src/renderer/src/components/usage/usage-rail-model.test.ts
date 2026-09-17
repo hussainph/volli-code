@@ -49,6 +49,7 @@ function chatRow(
     ticketId: "t1",
     createdAt: 0,
     adapterId: "pi",
+    providerId: null,
     live: false,
     activity: "idle",
     waitingOn: null,

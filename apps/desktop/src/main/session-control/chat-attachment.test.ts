@@ -107,6 +107,7 @@ describe("chatSessionRecord", () => {
       ticketId: null,
       createdAt: 1,
       adapterId: null,
+      providerId: null,
       live: false,
       activity: "idle",
       waitingOn: null,
@@ -126,6 +127,7 @@ describe("chatSessionRecord", () => {
       ticketId: null,
       createdAt: 1,
       adapterId: "opencode",
+      providerId: null,
       live: true,
       activity: "idle",
       waitingOn: null,
@@ -135,6 +137,21 @@ describe("chatSessionRecord", () => {
       role: "project",
       parentSessionId: null,
     });
+  });
+
+  // VC-402: the sidebar draws the provider's own mark where a companion draws
+  // its harness's, so the row has to carry which provider. It is the fold's
+  // `modelSelection`, not the default this Session WOULD be given — a chat that
+  // has accepted nothing says nothing.
+  it("names the provider of the model the Session accepted, and nothing before it has", () => {
+    expect(
+      chatSessionRecord(
+        projectionWith([structuredAttachment()], {
+          modelSelection: { providerId: "zai", modelId: "glm-5.2", reasoningLevel: "medium" },
+        }),
+      ).providerId,
+    ).toBe("zai");
+    expect(chatSessionRecord(projectionWith([structuredAttachment()])).providerId).toBeNull();
   });
 
   it("does not call a durable attachment live before boot recovery binds it", () => {

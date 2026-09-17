@@ -58,6 +58,7 @@ function chat(over: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     ticketId: null,
     createdAt: 1,
     adapterId: "pi",
+    providerId: null,
     live: true,
     activity: "idle",
     waitingOn: null,

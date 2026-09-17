@@ -101,6 +101,7 @@ function chatSession(
     ticketId: overrides.ticketId,
     createdAt: overrides.createdAt ?? 1,
     adapterId: overrides.adapterId ?? "opencode",
+    providerId: overrides.providerId ?? null,
     live: overrides.live ?? true,
     activity: overrides.activity ?? "idle",
     waitingOn: overrides.waitingOn ?? null,
@@ -1155,6 +1156,7 @@ describe("buildActiveSessionListing — the project container", () => {
       waitingOn: null,
       lastActivityAt: null,
       harnessId: null,
+      providerId: null,
       provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
@@ -1202,6 +1204,7 @@ describe("buildActiveSessionListing — the project container", () => {
       waitingOn: null,
       lastActivityAt: null,
       harnessId: null,
+      providerId: null,
       provenance: PERSON_STARTED,
       target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
     } satisfies ActiveSessionRow;
@@ -1234,6 +1237,7 @@ describe("buildActiveSessionListing — the project container", () => {
       waitingOn: null,
       lastActivityAt: null,
       harnessId: null,
+      providerId: null,
       provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" },
     } satisfies ActiveSessionRow;
@@ -2792,6 +2796,7 @@ function previousRow(
     title: "Chat",
     kind: "chat",
     harnessId: null,
+    providerId: null,
     endedOrQuietAt: 1_000,
     activity: "idle",
     provenance: PERSON_STARTED,
