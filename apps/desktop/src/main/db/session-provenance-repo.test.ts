@@ -5,6 +5,7 @@ import { recordAutomationRun } from "./automations-repo";
 import { recordSessionStartedOnce, recordTicketEvent } from "./events-repo";
 import { insertProject } from "./projects-repo";
 import { readSessionProvenance, readSessionProvenances } from "./session-provenance-repo";
+import type { SessionProvenanceQuery } from "./session-provenance-repo";
 import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { insertTicket } from "./tickets-repo";
@@ -382,6 +383,21 @@ describe("readSessionProvenance", () => {
  * (`activity-watch.ts`) asks for one Session at a time, and a Session that
  * changed provenance as it moved between the two would flicker a Run's bolt.
  */
+/** What the listing hands in: each Session with the Ticket that scopes it. */
+function queriesOf(f: {
+  db: Database.Database;
+  sessionIds: readonly string[];
+}): SessionProvenanceQuery[] {
+  return f.sessionIds.map((sessionId) => ({
+    sessionId,
+    ticketId: (
+      f.db.prepare("SELECT ticket_id FROM sessions WHERE id = ?").get(sessionId) as {
+        ticket_id: string | null;
+      }
+    ).ticket_id,
+  }));
+}
+
 describe("readSessionProvenances", () => {
   /** Every source the reader can answer from, in one project. */
   function roster(): Fixture & { secondTicketId: string; sessionIds: string[] } {
@@ -477,18 +493,6 @@ describe("readSessionProvenances", () => {
         "session-elsewhere",
       ],
     };
-  }
-
-  /** What the listing hands in: each Session with the Ticket that scopes it. */
-  function queriesOf(f: ReturnType<typeof roster>) {
-    return f.sessionIds.map((sessionId) => ({
-      sessionId,
-      ticketId: (
-        f.db.prepare("SELECT ticket_id FROM sessions WHERE id = ?").get(sessionId) as {
-          ticket_id: string | null;
-        }
-      ).ticket_id,
-    }));
   }
 
   // THE constraint this ticket is not allowed to break.

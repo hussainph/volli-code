@@ -47,6 +47,13 @@ const PROJECT_ID = "project-bench";
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const mb = (bytes) => bytes / 1024 / 1024;
 
+/** What the IPC handler hands the provenance read: one query per Session row. */
+const queriesFor = (sessions) =>
+  sessions.map((session) => ({
+    sessionId: session.session.id,
+    ticketId: session.session.ticketId,
+  }));
+
 /**
  * Runs `operation` while watching the event loop, so a fold that never yields
  * and a fold that yields sixty times can be told apart by something other than
@@ -95,16 +102,16 @@ try {
   // module runner's own invoke timeout is 60 s; a very busy machine can still
   // trip it before the first arm runs, and the answer is to re-run.)
   const { openVolliDb } = await vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts");
-  const { insertProject } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/db/projects-repo.ts",
-  );
+  const { insertProject } = await vite.ssrLoadModule("/apps/desktop/src/main/db/projects-repo.ts");
   const { insertTicket } = await vite.ssrLoadModule("/apps/desktop/src/main/db/tickets-repo.ts");
   const eventsRepo = await vite.ssrLoadModule("/apps/desktop/src/main/db/events-repo.ts");
   const automationsRepo = await vite.ssrLoadModule("/apps/desktop/src/main/db/automations-repo.ts");
   const provenanceRepo = await vite.ssrLoadModule(
     "/apps/desktop/src/main/db/session-provenance-repo.ts",
   );
-  const sessionControl = await vite.ssrLoadModule("/apps/desktop/src/main/session-control/index.ts");
+  const sessionControl = await vite.ssrLoadModule(
+    "/apps/desktop/src/main/session-control/index.ts",
+  );
   const { createSqliteSessionLedger } = await vite.ssrLoadModule(
     "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
   );
@@ -315,11 +322,6 @@ try {
   // cost is not mixed in) and then the handler end to end, once with the
   // per-Session reader and once with the set-based one.
   const { PERSON_STARTED } = sharedModule;
-  const queriesFor = (sessions) =>
-    sessions.map((session) => ({
-      sessionId: session.session.id,
-      ticketId: session.session.ticketId,
-    }));
   const perSessionProvenance = (session) =>
     provenanceRepo.readSessionProvenance(db, {
       sessionId: session.session.id,
@@ -337,7 +339,9 @@ try {
   const perSessionAnswers = JSON.stringify(folded.map(perSessionProvenance));
   const batchedAnswers = JSON.stringify(folded.map(batchedProvenanceFor(folded)));
   if (perSessionAnswers !== batchedAnswers) {
-    throw new Error("provenance readers disagree: the batched arm is not measuring the same answer");
+    throw new Error(
+      "provenance readers disagree: the batched arm is not measuring the same answer",
+    );
   }
   const provenanceTailPerSession = await repeat(REPEATS, async () =>
     sessionControl.sessionListingRows(folded, perSessionProvenance, new Set()),
