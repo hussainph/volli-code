@@ -10,6 +10,7 @@
     "check:ghostty-themes": "node scripts/generate-ghostty-themes.mjs --check",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
+    "check:theme-provenance": "node scripts/check-theme-provenance.mjs --self-test && node scripts/check-theme-provenance.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",

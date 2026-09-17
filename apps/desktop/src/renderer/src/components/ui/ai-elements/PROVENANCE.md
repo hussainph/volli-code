@@ -24,13 +24,39 @@ added `ai@^6.0.238` and `@ai-sdk/react@^3.0.240` and named no elements version.
 What was done instead, and what it proves:
 
 1. `9310a1d3` is the newest revision of `packages/elements/src/prompt-input.tsx`
-   at or before the vendoring commit's timestamp (2026-07-30T22:12:18Z). The
-   next-newest change to that file is `58801e55` (2026-03-06, PR #382, "add
-   screenshot action to the prompt input").
+   at or before the vendoring commit's timestamp (2026-07-30T22:12:18Z).
+   Upstream did not touch that file again between 2026-03-06 and the vendoring
+   date, so the window is everything at or below `9310a1d3`. The three most
+   recent commits to touch it, newest first:
+
+   ```
+   9310a1d3  2026-03-06T22:06:58Z  Resolves #369
+   1310612d  2026-03-06T21:19:49Z  Run linter/formatter
+   58801e55  2026-03-06T20:14:49Z  feat(prompt-input): add screenshot action (#382)
+   ```
+
 2. The copy as first committed carries PR #382's additions — `captureScreenshot`,
    `PromptInputActionAddScreenshot`, `ReferencedSourcesContext`, the
-   `SourceDocumentUIPart` import — so it is post-#382, and `9310a1d3` is the only
-   candidate left in the window.
+   `SourceDocumentUIPart` import — so it is post-`58801e55`. That leaves **two**
+   candidates, not one: `1310612d` and `9310a1d3`.
+
+   They are separated by a single line. `9310a1d3`'s entire diff to this file is
+   the deletion of one comment:
+
+   ```
+   -    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup only on unmount; filesRef always current
+   ```
+
+   The vendored copy has never contained that line — not in `17382b58`, not
+   today — while `1310612d` still carries it. So the copy is at `9310a1d3`, and
+   `1310612d` is excluded by evidence rather than by omission:
+
+   ```
+   git show 17382b58:apps/desktop/src/renderer/src/components/ai-elements/prompt-input.tsx | grep -c exhaustive-deps   # 0
+   curl -sL https://raw.githubusercontent.com/vercel/ai-elements/1310612d/packages/elements/src/prompt-input.tsx | grep -c exhaustive-deps   # 1
+   curl -sL https://raw.githubusercontent.com/vercel/ai-elements/9310a1d3/packages/elements/src/prompt-input.tsx | grep -c exhaustive-deps   # 0
+   ```
+
 3. Line-level agreement with the upstream file at `9310a1d3`, on lines no
    independent author would land on twice: the lucide import set and its order
    (`CornerDownLeftIcon, ImageIcon, Monitor, PlusIcon, SquareIcon, XIcon`), the
@@ -55,18 +81,49 @@ upstream tree (`packages/elements/src/conversation.tsx`,
 revision is inherited from the same argument rather than separately
 reconstructed: far less of them survives, so there is far less to match on.
 
+`9310a1d3` pins a **tree**, not a per-file edit. Neither of those two files was
+changed by `9310a1d3` itself; their content at that tree is whatever the last
+commit to touch each of them left, which is what a reader should fetch:
+
+| File at `9310a1d3` | Content last written by                            |
+| ------------------ | -------------------------------------------------- |
+| `prompt-input.tsx` | `9310a1d3` (2026-03-06T22:06:58Z)                  |
+| `conversation.tsx` | `ed31a585` (2026-03-06T21:58:13Z, "Resolves #378") |
+| `message.tsx`      | `1310612d` (2026-03-06T21:19:49Z, formatter run)   |
+
 ## Files taken, and how much of them is still upstream's
 
-Measured as substantive lines (>40 characters) in the file today that appear
-verbatim in the copy as first committed:
+Measured as substantive lines (longer than 40 characters) in the file today —
+ignoring the attribution header this change added — that appear verbatim in the
+copy as first committed:
 
 | File               | Substantive lines | Still verbatim | Attribution |
 | ------------------ | ----------------- | -------------- | ----------- |
-| `prompt-input.tsx` | 212               | 179            | required    |
+| `prompt-input.tsx` | 232               | 199            | required    |
 | `conversation.tsx` | 138               | 15             | required    |
 | `message.tsx`      | 95                | 11             | required    |
-| `reasoning.tsx`    | 76                | 2              | no          |
+| `reasoning.tsx`    | 82                | 2              | no          |
 | `shimmer.tsx`      | 46                | 2              | no          |
+
+Those are a snapshot, not an invariant — every edit to these files moves them,
+which is why no test pins them. What the test does pin is the column that
+matters, the one that decides who is credited: which files carry a notice. Get
+the numbers back with:
+
+```sh
+node --input-type=module -e '
+import { execSync } from "node:child_process";
+const FIRST = "17382b58:apps/desktop/src/renderer/src/components/ai-elements";
+const HERE = "apps/desktop/src/renderer/src/components/ui/ai-elements";
+const ATTRIBUTED = new Set(["prompt-input.tsx", "conversation.tsx", "message.tsx"]);
+for (const f of [...ATTRIBUTED, "reasoning.tsx", "shimmer.tsx"]) {
+  const first = new Set(execSync(`git show ${FIRST}/${f}`, { encoding: "utf8" }).split("\n"));
+  let now = execSync(`git show HEAD:${HERE}/${f}`, { encoding: "utf8" });
+  if (ATTRIBUTED.has(f)) now = now.replace(/\/\*\*[\s\S]*?\*\/\n\n/, "");
+  const lines = now.split("\n").filter((l) => l.length > 40);
+  console.log(f, lines.length, lines.filter((l) => first.has(l)).length);
+}'
+```
 
 `prompt-input.tsx` is still mostly upstream's: the attachment state machine, the
 accept/size/count validation and its error codes, the drop handlers, and the
@@ -83,10 +140,11 @@ copied expression, so it is attributed.
 `reasoning.tsx` and `shimmer.tsx` are **not** attributed, and the reason is that
 nothing of upstream's is left in them. All that matches is `import { cn } from
 "@renderer/lib/utils";`, `import { mermaid } from "@streamdown/mermaid";`, and
-`export const Shimmer = memo(ShimmerComponent);`. Both files were rewritten
-against their own designs — see their module comments. Attributing them would
-be as wrong as failing to attribute the three above: it would claim Vercel wrote
-something they did not.
+`export const Shimmer = memo(ShimmerComponent);`. Both were rewritten against
+their own designs — `reasoning.tsx` carries a module comment saying so;
+`shimmer.tsx` carries none, and the two upstream lines left in it are an import
+and a `memo` call. Attributing either would be as wrong as failing to attribute
+the three above: it would claim Vercel wrote something they did not.
 
 ## Divergences from upstream
 

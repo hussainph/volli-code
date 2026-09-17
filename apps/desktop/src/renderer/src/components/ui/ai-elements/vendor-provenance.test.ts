@@ -30,7 +30,7 @@
  * each), so attributing them would misstate who wrote them. That is a judgement
  * recorded in `PROVENANCE.md`, not an omission.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
@@ -52,16 +52,44 @@ const ATTRIBUTED = {
 } as const;
 
 const HERE = import.meta.dirname;
-const REPO_ROOT = path.resolve(HERE, "../../../../../../../..");
+
+/**
+ * The workspace root, found by walking up for the file that defines it.
+ *
+ * Counting `..` segments from a component directory would be a second copy of
+ * this directory's depth, and moving the file would silently retarget the
+ * §4(a) assertion at whatever `LICENSE` happened to be eight levels up.
+ */
+function repoRoot(): string {
+  let directory = HERE;
+  for (;;) {
+    if (existsSync(path.join(directory, "pnpm-workspace.yaml"))) return directory;
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error(`no pnpm-workspace.yaml above ${HERE}`);
+    directory = parent;
+  }
+}
+
+const REPO_ROOT = repoRoot();
 
 function read(relative: string): string {
   return readFileSync(path.join(HERE, relative), "utf8");
 }
 
-/** A file's leading block comment — a notice below the imports is not a notice. */
+/**
+ * A file's LEADING block comment, or "" when it does not open with one.
+ *
+ * Deliberately not "everything up to the first comment terminator": that reads
+ * a notice moved below the imports as though it were still a header, and on a
+ * file with no header at all it returns the imports and the first interface —
+ * which is what the inverse guard below would then be searching, and it would
+ * pass for the wrong reason. Anchored instead, so "" means "this file has no
+ * notice" and the guards mean what they say. One optional `"use client"`
+ * directive may precede it, because every file here opens with one.
+ */
 function header(source: string): string {
-  const end = source.indexOf("*/");
-  return end === -1 ? "" : source.slice(0, end);
+  const match = /^(?:"use client";\s*)?\/\*\*[\s\S]*?\*\//.exec(source);
+  return match === null ? "" : match[0];
 }
 
 describe("AI Elements vendor provenance", () => {
@@ -110,7 +138,16 @@ describe("AI Elements vendor provenance", () => {
     const license = readFileSync(path.join(REPO_ROOT, "LICENSE"), "utf8");
     expect(license).toContain("Apache License");
     expect(license).toContain("Version 2.0, January 2004");
-    // Not just present — reachable by the relative link PROVENANCE.md prints.
-    expect(read("PROVENANCE.md")).toContain("../../../../../../../../LICENSE");
+  });
+
+  it("links §4(a) at that file rather than at a path-shaped string", () => {
+    // The discharge is only real if a reader who follows the link lands on the
+    // license. Asserting the literal `../../../..` instead would pass just as
+    // happily after the directory moved and the link went nowhere.
+    const link = /\[`LICENSE`\]\(([^)]+)\)/.exec(read("PROVENANCE.md"));
+    expect(link).not.toBeNull();
+    const target = path.resolve(HERE, link![1]);
+    expect(existsSync(target)).toBe(true);
+    expect(realpathSync(target)).toBe(realpathSync(path.join(REPO_ROOT, "LICENSE")));
   });
 });
