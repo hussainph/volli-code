@@ -151,7 +151,7 @@ extraResources:
     to: LICENSE.txt
   - from: THIRD-PARTY-NOTICES
     to: THIRD-PARTY-NOTICES.txt
-  - from: ../../node_modules/electron/dist/LICENSES.chromium.html
+  - from: node_modules/electron/dist/LICENSES.chromium.html
     to: LICENSES.chromium.html
 
 electronLanguages:

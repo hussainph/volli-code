@@ -12626,7 +12626,7 @@ SPDX: MIT
 Note: The application bundle IS an Electron app: its runtime, helpers and framework are
       the shipped executable, so Electron's own licence belongs here even though the
       package is a devDependency. electron-builder copies Chromium's bundled third-party
-      licence catalogue from ../../node_modules/electron/dist into
+      licence catalogue from node_modules/electron/dist into
       Contents/Resources/LICENSES.chromium.html; the stale-notice check allows the
       lazily downloaded source to be absent offline, but rejects it when present and
       empty.

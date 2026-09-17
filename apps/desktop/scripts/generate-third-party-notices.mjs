@@ -86,7 +86,7 @@ const REQUIRED_RESOURCES = [
   { from: "../../LICENSE", to: "LICENSE.txt" },
   { from: "THIRD-PARTY-NOTICES", to: "THIRD-PARTY-NOTICES.txt" },
   {
-    from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+    from: "node_modules/electron/dist/LICENSES.chromium.html",
     to: "LICENSES.chromium.html",
     allowMissing: true,
     requireNonEmpty: true,
@@ -607,7 +607,7 @@ function selfTestPackagingRules() {
       { from: "../../LICENSE", to: "LICENSE.txt" },
       { from: "THIRD-PARTY-NOTICES", to: "THIRD-PARTY-NOTICES.txt" },
       {
-        from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+        from: "node_modules/electron/dist/LICENSES.chromium.html",
         to: "LICENSES.chromium.html",
       },
     ],
@@ -669,7 +669,7 @@ function selfTestPackagingRules() {
         { from: "../../LICENSE", to: "LICENSE.txt" },
         { from: "THIRD-PARTY-NOTICES", to: "somewhere-else.txt" },
         {
-          from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+          from: "node_modules/electron/dist/LICENSES.chromium.html",
           to: "LICENSES.chromium.html",
         },
       ],
@@ -684,7 +684,7 @@ function selfTestPackagingRules() {
     builderConfig: {
       ...builderConfig,
       extraResources: builderConfig.extraResources.map((resource) =>
-        resource.from === "../../node_modules/electron/dist/LICENSES.chromium.html"
+        resource.from === "node_modules/electron/dist/LICENSES.chromium.html"
           ? { ...resource, to: "somewhere-else.html" }
           : resource,
       ),
@@ -696,7 +696,7 @@ function selfTestPackagingRules() {
   assert.deepEqual(
     chromiumWrongDestination,
     [
-      'electron-builder.yml ships "../../node_modules/electron/dist/LICENSES.chromium.html" to "somewhere-else.html"; ' +
+      'electron-builder.yml ships "node_modules/electron/dist/LICENSES.chromium.html" to "somewhere-else.html"; ' +
         'the notice document names "LICENSES.chromium.html".',
     ],
     "Chromium's catalogue must land at the exact Resources path",
@@ -706,8 +706,7 @@ function selfTestPackagingRules() {
     builderConfig,
     coveredNames: covered,
     requiredResources: REQUIRED_RESOURCES,
-    resourceExists: (from) =>
-      from !== "../../node_modules/electron/dist/LICENSES.chromium.html",
+    resourceExists: (from) => from !== "node_modules/electron/dist/LICENSES.chromium.html",
     resourceIsNonEmpty: () => {
       throw new Error("offline checks must not read an absent Electron distribution");
     },
@@ -723,14 +722,13 @@ function selfTestPackagingRules() {
     coveredNames: covered,
     requiredResources: REQUIRED_RESOURCES,
     resourceExists: () => true,
-    resourceIsNonEmpty: (from) =>
-      from !== "../../node_modules/electron/dist/LICENSES.chromium.html",
+    resourceIsNonEmpty: (from) => from !== "node_modules/electron/dist/LICENSES.chromium.html",
   });
   assert.deepEqual(
     chromiumSourceEmpty,
     [
       "electron-builder.yml extraResources source has empty content: " +
-        "../../node_modules/electron/dist/LICENSES.chromium.html",
+        "node_modules/electron/dist/LICENSES.chromium.html",
     ],
     "an installed Chromium catalogue must contain content",
   );

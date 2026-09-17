@@ -16,7 +16,7 @@ Three files ride along in the packaged `.app`, all under `Contents/Resources`
 | -------------------------------------------- | ------------------------------------------------------- |
 | `Contents/Resources/LICENSE.txt`             | the repository's `LICENSE`                              |
 | `Contents/Resources/THIRD-PARTY-NOTICES.txt` | `apps/desktop/THIRD-PARTY-NOTICES`                      |
-| `Contents/Resources/LICENSES.chromium.html`  | `../../node_modules/electron/dist/LICENSES.chromium.html` |
+| `Contents/Resources/LICENSES.chromium.html`  | `node_modules/electron/dist/LICENSES.chromium.html` |
 
 ## What the generator derives, and what this directory supplies
 
