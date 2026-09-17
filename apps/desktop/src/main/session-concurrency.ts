@@ -31,10 +31,15 @@ import { chatSessionRecord, terminalSessionRecord } from "./session-control";
 /** What counting the fleet needs: the projections, and whose start this is. */
 export interface WorkingSessionsInput {
   /**
-   * Every Session of every project, as `volli session list` reads them —
-   * `sessionEngine.listSessions({ projectId, scope: "all" })` per project.
+   * The Sessions that could be working, as `volli session list` reads them.
+   *
    * ALL projects, because load is a fact about the machine: a build in another
-   * project's Session competes for exactly the same cores.
+   * project's Session competes for exactly the same cores. Not all SESSIONS,
+   * though (VC-403): `sessionEngine.listAttachedSessions()` hands over only
+   * the Sessions holding an open attachment, because a Session with none
+   * cannot satisfy either half of the precedence below. Passing the whole
+   * fleet here is still correct and the count is the same — the narrowing
+   * removes a provably-zero set, never a working Session.
    */
   projections: readonly SessionProjection[];
   /**
@@ -104,63 +109,44 @@ export function sessionConcurrencyEnv(input: SessionConcurrencyEnvInput): Record
   return concurrencyBudgetEnv(budget, userEnvironment);
 }
 
-/** The two reads a Session start makes to count the fleet. */
+/** The one read a Session start makes to count who is working. */
 export interface SessionConcurrencyPorts {
-  /** The projects whose Sessions share this machine. */
-  listProjectIds(): readonly string[];
-  /** The Session Engine's own listing, per project. */
-  listSessions(projectId: string): Promise<readonly SessionProjection[]>;
+  /**
+   * Every Session holding an open attachment, across every project, folded.
+   *
+   * ONE read, not a walk of the fleet (VC-403). The budget needs a count in
+   * the terminal/chat precedence the listing uses, and both halves of that
+   * precedence require an open attachment — so the Session Engine narrows to
+   * the Sessions that could possibly be working and folds only those. See
+   * `SessionLedgerTransaction.listAttachedSessions` for why the ones it drops
+   * provably cannot be working.
+   *
+   * ALL projects, because load is a fact about the machine: a build in another
+   * project's Session competes for exactly the same cores.
+   */
+  listAttachedSessions(): Promise<readonly SessionProjection[]>;
 }
 
-/**
- * The budget for a Session start, having asked the Session Engine who is
- * working — the call site's one entry point.
- *
- * Never throws and never blocks a Session from starting: a fleet that cannot
- * be counted yields an empty record, which leaves every toolchain on its own
- * default. A Session that runs unbudgeted is a machine under load; a Session
- * that fails to start because a listing query threw is a person unable to
- * work.
- *
- * This folds the fleet FRESH on every call. `createSessionConcurrencyEnvReader`
- * below is the cached seam every production call site should prefer (VC-403);
- * this stays exported, uncached, as the primitive it is built from and as the
- * direct seam this module's own tests exercise the fold through.
- */
-export async function readSessionConcurrencyEnv(
-  ports: SessionConcurrencyPorts,
-  input: Omit<SessionConcurrencyEnvInput, "projections">,
-): Promise<Record<string, string>> {
-  try {
-    const projections = await foldFleet(ports);
-    return sessionConcurrencyEnv({ ...input, projections });
-  } catch {
-    return {};
-  }
-}
-
-/** Every Session of every project, per {@link SessionConcurrencyPorts}. */
-function foldFleet(ports: SessionConcurrencyPorts): Promise<readonly SessionProjection[]> {
-  return Promise.all(ports.listProjectIds().map((projectId) => ports.listSessions(projectId))).then(
-    (perProject) => perProject.flat(),
-  );
-}
-
-/** A Session start's per-call input to a cached reader — everything but the fleet itself. */
+/** A Session start's per-call input to a reader — everything but the fleet itself. */
 export type SessionConcurrencyEnvReaderInput = Omit<SessionConcurrencyEnvInput, "projections">;
 
-/** What one call into a cached reader answers: the same record `readSessionConcurrencyEnv` does. */
+/** What one call into a reader answers: this Session start's budget variables. */
 export type SessionConcurrencyEnvReader = (
   input: SessionConcurrencyEnvReaderInput,
 ) => Promise<Record<string, string>>;
 
 export interface SessionConcurrencyEnvReaderOptions {
   /**
-   * How long a folded fleet stays valid before the next caller pays for a
-   * fresh listing. The module doc's "computed once, at Session start" already
-   * accepts a few seconds of staleness, so this defaults there — long enough
-   * to collapse a burst of Session starts into one fold, short enough that a
-   * budget handed out a few seconds ago is still describing the same machine.
+   * How long a read stays valid before the next caller pays for a fresh one.
+   * The module doc's "computed once, at Session start" already accepts a few
+   * seconds of staleness, so this defaults there — long enough to collapse a
+   * burst of Session starts into one read, short enough that a budget handed
+   * out a few seconds ago is still describing the same machine.
+   *
+   * The cache is now a burst collapser rather than the fix: the read beneath
+   * it is bounded by how many Sessions are attached, so a cold call is cheap
+   * on its own and a Session that starts after a quiet minute no longer waits
+   * on the fleet.
    */
   ttlMs?: number;
   /** The clock, injectable so tests drive the TTL rather than sleeping. */
@@ -171,29 +157,34 @@ export interface SessionConcurrencyEnvReaderOptions {
 const DEFAULT_CONCURRENCY_ENV_TTL_MS = 5_000;
 
 /**
- * Builds a reader that shares ONE folded fleet across every caller for a few
- * seconds, instead of folding it fresh per call (VC-403).
+ * Builds the process's ONE reader of who is working (VC-403).
  *
- * Every structured attachment, every background shell start and every
- * terminal start asks this module for a budget, and each of those used to run
- * its own `listSessions` per project — so a burst of N Session starts on a
- * busy machine ran N complete fleet folds on the main thread for a number that
- * does not need to be exact, only current within a few seconds.
+ * Never throws and never blocks a Session from starting: a fleet that cannot
+ * be counted yields an empty record, which leaves every toolchain on its own
+ * default. A Session that runs unbudgeted is a machine under load; a Session
+ * that fails to start because a listing query threw is a person unable to
+ * work.
  *
- * Two things make that safe to share:
+ * One reader for the process, not one per call site. Every structured
+ * attachment, every background shell start and every terminal start asks the
+ * same question about the same machine, and two readers with their own windows
+ * would institutionalise two answers to it — so `index.ts` builds this once and
+ * hands it to `PtyManager` rather than each door keeping its own.
  *
- * - **The exclusion happens after the cache, not before it.** The fleet this
+ * Two things make one read safe to share:
+ *
+ * - **The exclusion happens after the cache, not before it.** What this
  *   memoizes is the RAW projections, before `excludeSessionId` is applied —
- *   two Sessions starting in the same window ask to exclude two different
- *   ids, and a cache keyed on the excluded answer would serve one of them the
+ *   two Sessions starting in the same window ask to exclude two different ids,
+ *   and a cache keyed on the excluded answer would serve one of them the
  *   other's number. `sessionConcurrencyEnv` (pure, unchanged) applies the
- *   exclusion per call, against the one shared fold.
- * - **A burst shares one in-flight walk.** A cache alone still lets every
- *   caller that arrives before the first fold resolves start its own fold;
- *   this keeps ONE in-flight promise and hands it to every caller that arrives
+ *   exclusion per call, against the one shared read.
+ * - **A burst shares one in-flight read.** A cache alone still lets every
+ *   caller that arrives before the first read resolves start its own; this
+ *   keeps ONE in-flight promise and hands it to every caller that arrives
  *   while it is still running.
  *
- * A fold that throws is never cached: the next call retries rather than being
+ * A read that throws is never cached: the next call retries rather than being
  * stuck answering `{}` for the rest of the TTL window.
  */
 export function createSessionConcurrencyEnvReader(
@@ -206,12 +197,12 @@ export function createSessionConcurrencyEnvReader(
   let cached: { projections: readonly SessionProjection[]; expiresAt: number } | null = null;
   let inFlight: Promise<readonly SessionProjection[]> | null = null;
 
-  const fold = (): Promise<readonly SessionProjection[]> => {
+  const read = (): Promise<readonly SessionProjection[]> => {
     if (cached !== null && cached.expiresAt > now()) {
       return Promise.resolve(cached.projections);
     }
     if (inFlight !== null) return inFlight;
-    const started = foldFleet(ports).then((projections) => {
+    const started = ports.listAttachedSessions().then((projections) => {
       cached = { projections, expiresAt: now() + ttlMs };
       return projections;
     });
@@ -228,7 +219,7 @@ export function createSessionConcurrencyEnvReader(
 
   return async (input) => {
     try {
-      const projections = await fold();
+      const projections = await read();
       return sessionConcurrencyEnv({ ...input, projections });
     } catch {
       return {};

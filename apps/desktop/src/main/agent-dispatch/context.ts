@@ -370,6 +370,15 @@ export interface AgentCommandContext {
    * `cwd`), never the whole machine's. `null` when there is no `envSession`, or
    * its Session never opened a terminal (a structured Session's workspace is
    * its ticket's worktree instead — `identifyVerb` falls back to that).
+   *
+   * This is the SAME Session {@link envSession} names, and it cannot be any
+   * other: `identify` used to find the terminal by searching the fleet for
+   * `VOLLI_SESSION` while the rest of its answer described the DOOR's Session,
+   * and the two agree by construction because `doorActor` refuses to reconcile
+   * a token and a `VOLLI_SESSION` claim that disagree — it authenticates nobody
+   * instead, so the fallback resolves the claim and both halves read the same
+   * id. Dropping the fleet search is therefore purely the cost, never the
+   * answer.
    */
   readonly envSessionTerminal: SessionRecord | null;
   /**

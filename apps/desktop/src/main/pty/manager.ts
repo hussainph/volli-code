@@ -34,9 +34,7 @@ import type {
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { listProjects } from "../db/projects-repo";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
-import { createSessionConcurrencyEnvReader } from "../session-concurrency";
 import type { SessionConcurrencyEnvReader } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
@@ -230,12 +228,15 @@ export class PtyManager {
    */
   private readonly parkController: ParkController;
   /**
-   * This manager's own cache of the fleet fold behind
-   * {@link sessionConcurrencyEnv} (VC-403), memoized for a few seconds and
-   * coalesced across concurrent callers — one instance for the manager's
-   * whole life, so a burst of terminal starts folds the fleet once rather
-   * than once per terminal. `null` when there is no database or Session
-   * Engine to fold at all.
+   * The process's reader of who is working, behind
+   * {@link sessionConcurrencyEnv} (VC-403).
+   *
+   * Injected rather than built here, and deliberately: a terminal start and a
+   * structured attachment ask the same question about the same machine, so
+   * `index.ts` builds ONE reader and hands it to both doors. A manager that
+   * built its own would give the same machine two answers for as long as their
+   * windows disagreed. `null` when the caller has no Session Engine to ask,
+   * which leaves every toolchain on its own default.
    */
   private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
@@ -259,6 +260,10 @@ export class PtyManager {
    *                   crash can still say whose process it is (VC-341).
    *                   Defaults to the ledger that remembers nothing, which is
    *                   what every test that is not about the ledger wants.
+   * @param concurrencyEnvReader the process's one reader of who is working
+   *                   (VC-339, VC-403), shared with the structured door rather
+   *                   than built here. Defaults to `null`, which budgets
+   *                   nothing — what a test that is not about the budget wants.
    */
   constructor(
     private readonly db: Database.Database | null,
@@ -269,22 +274,10 @@ export class PtyManager {
     private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
     private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
+    concurrencyEnvReader: SessionConcurrencyEnvReader | null = null,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
-    {
-      // Locals rather than `this.db`/`this.sessionEngine` inside the closures
-      // below: both are readonly and already narrowed here, so this is purely
-      // for the closures to hold the narrowed (non-null) type rather than
-      // `this`'s wider one.
-      const engine = this.sessionEngine;
-      this.concurrencyEnvReader =
-        db === null || engine === null
-          ? null
-          : createSessionConcurrencyEnvReader({
-              listProjectIds: () => listProjects(db).map((project) => project.id),
-              listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
-            });
-    }
+    this.concurrencyEnvReader = concurrencyEnvReader;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and webContents — and every current
@@ -373,10 +366,10 @@ export class PtyManager {
    * against a stated environment.
    *
    * Every project's Sessions, because load is a fact about the machine: a
-   * build in another project's Session competes for the same cores. This is
-   * the same read `volli session list` makes — folded at most once every few
-   * seconds by {@link concurrencyEnvReader} (VC-403), so a burst of terminal
-   * starts shares one fold instead of running one each.
+   * build in another project's Session competes for the same cores. Counted
+   * in the same terminal/chat precedence `volli session list` shows a person,
+   * off the narrow attached-Sessions read rather than a fold of the fleet
+   * (VC-403), and shared with every other door through one reader.
    */
   private async sessionConcurrencyEnv(
     sessionId: string,

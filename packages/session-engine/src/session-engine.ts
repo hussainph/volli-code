@@ -138,6 +138,19 @@ export interface SessionEngine {
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   /**
+   * Every Session holding an open attachment, across every project, folded.
+   *
+   * The concurrency budget's read (VC-403). `listSessions` folds a project's
+   * whole roster to answer how many Sessions are working, which on a machine
+   * with a long history is thousands of folds for a number bounded by how many
+   * things are actually attached. This folds the narrowed set the ledger
+   * selects — see {@link SessionLedgerTransaction.listAttachedSessions} for why
+   * the Sessions it drops provably cannot be working — and returns ordinary
+   * projections, so the caller counts them with exactly the code that counts a
+   * listing rather than a parallel rule that can drift from it.
+   */
+  listAttachedSessions(): Promise<readonly SessionProjection[]>;
+  /**
    * When Sessions were started, across every project — the practice chart's
    * whole input. Stamps rather than Sessions, so a 26-week window costs one
    * indexed read and no folds.
@@ -768,6 +781,27 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
 
     async countSessions(query) {
       return ports.ledger.transaction((transaction) => transaction.countSessions(query));
+    },
+
+    async listAttachedSessions() {
+      // Membership decided once, then folded in the same chunks and with the
+      // same host yields `listSessions` uses, through the same per-Session fold
+      // cache: a budget read and a listing read of the same Session are one
+      // fold, not two.
+      const rows = await ports.ledger.transaction((transaction) =>
+        transaction.listAttachedSessions(),
+      );
+      const projections: SessionProjection[] = [];
+      for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
+        if (from > 0) await yieldToHost();
+        const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
+        projections.push(
+          ...(await ports.ledger.transaction((transaction) =>
+            chunk.map((session) => listingProjection(transaction, session)),
+          )),
+        );
+      }
+      return projections;
     },
 
     async listSessionStarts(query) {

@@ -71,11 +71,17 @@ import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktr
  * There used to be a second policy here — whether the dispatch folded every
  * project's Sessions before calling the handler — declared per verb beside
  * this one. VC-403 retired it: `AgentCommandContext.loadProjections` /
- * `loadSessions` fold the fleet lazily and memoized, so a verb that never
+ * `loadSessions` fold the roster lazily and memoized, so a verb that never
  * calls either one simply never pays for the fold, with no policy needed to
  * say so up front. `VOLLI_SESSION` identity stays a real per-verb choice —
  * some verbs want the identity, three want their own terminal record instead
  * — so it keeps its declared field.
+ *
+ * The comments below still say which verbs read the roster and why, because
+ * that is the design fact a reader needs; what they no longer do is DECLARE
+ * it, so a comment that drifts costs nothing. The enforcement moved to
+ * `agent-dispatch.test.ts`, which drives every verb through the real dispatch
+ * and asserts the folding set exactly.
  */
 type EnvSessionPolicy = "resolve" | "skip";
 
@@ -108,6 +114,9 @@ export const AGENT_VERB_TABLE: {
   "ticket.update": { handle: ticketUpdateVerb, envSession: "resolve" },
   "ticket.move": { handle: ticketMoveVerb, envSession: "resolve" },
   "ticket.comment": { handle: ticketCommentVerb, envSession: "resolve" },
+  // Identity is the whole requirement, exactly as it is for the two session
+  // signals below: a verdict needs a signer, not a terminal attachment, so the
+  // roster buys this verb nothing.
   "ticket.signal": { handle: ticketSignalVerb, envSession: "resolve" },
   // No `ticket.archive` and no `session.start` (VC-163). Neither is an omission
   // to be filled in: this table is a TOTAL mapping over the binding ids the
@@ -117,16 +126,34 @@ export const AGENT_VERB_TABLE: {
   "ticket.brief": { handle: ticketBriefVerb, envSession: "resolve" },
   "worktree.status": { handle: worktreeStatusVerb, envSession: "resolve" },
   "worktree.diff": { handle: worktreeDiffVerb, envSession: "resolve" },
+  // The one worktree verb that writes (VC-185). Like its two read siblings, the
+  // context ladder that answers WHICH worktree runs off Tickets rather than off
+  // any Session, so none of the three reads the roster.
   "worktree.sync": { handle: worktreeSyncVerb, envSession: "resolve" },
+  // The radar reads Tickets and worktree diffs, and no Session anywhere — which
+  // is what keeps the one verb whose design claim is that it is cheap enough to
+  // run in a bash pipeline actually cheap.
   conflicts: { handle: conflictsVerb, envSession: "resolve" },
   "project.list": { handle: projectListVerb, envSession: "resolve" },
   "label.list": { handle: labelListVerb, envSession: "resolve" },
+  // Reads Tickets and labels and writes both; no Session is in the answer.
+  // `envSession` still resolves, because the merge is attributed history.
   "label.merge": { handle: labelMergeVerb, envSession: "resolve" },
+  // Reads the Model Access snapshot and nothing else.
   "model.list": { handle: modelListVerb, envSession: "resolve" },
+  // Reads the roster only for `--session <handle>`, which resolves a short id
+  // against it. Everything else the answer needs is one indexed read of the
+  // usage projection — no Session history is folded to price a pass.
   cost: { handle: costVerb, envSession: "resolve" },
   "session.list": { handle: sessionListVerb, envSession: "resolve" },
+  // The one verb that reads BOTH halves of the roster (VC-79), off one fold
+  // rather than by listing the world twice.
   "session.peek": { handle: sessionPeekVerb, envSession: "resolve" },
+  // The whole of a chat's last message (VC-9): resolves the handle against the
+  // same fold a peek does, then reads one artifact.
   "session.answer": { handle: sessionAnswerVerb, envSession: "resolve" },
+  // Identity is the whole requirement (VC-51): the signal needs no terminal
+  // attachment, so it needs no roster to find one in.
   "session.done": { handle: sessionDoneVerb, envSession: "resolve" },
   "session.blocked": { handle: sessionBlockedVerb, envSession: "resolve" },
   // The three that resolve their own terminal record — see EnvSessionPolicy.
