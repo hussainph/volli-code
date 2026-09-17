@@ -126,6 +126,9 @@ jobs:
       - name: Check
         run: vp check
 
+      - name: Check workspace license metadata
+        run: pnpm run check:workspace-licenses
+
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
       # these is expressible as a lint rule, so this step is the only thing that
