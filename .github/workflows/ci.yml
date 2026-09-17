@@ -149,11 +149,19 @@ jobs:
       #                          (VC-76): an engines.node shape the matcher
       #                          cannot read fails HERE, instead of silently
       #                          letting every local Node through the gate.
+      #   check:theme-provenance — self-tests its matchers, then fails when the
+      #                          vendored Ghostty theme catalog and
+      #                          THIRD-PARTY-THEMES.md stop describing the same
+      #                          release (VC-410). Reads only checked-in bytes,
+      #                          so unlike generate-ghostty-themes.mjs --check
+      #                          it does not need a real Ghostty.app and can
+      #                          run in this Linux job.
       - name: Check design system
         run: |
           vp run --filter @volli/desktop check:theme-css
           vp run --filter @volli/desktop check:design-tokens
           vp run --filter @volli/desktop check:node-version
+          vp run --filter @volli/desktop check:theme-provenance
 
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
