@@ -48,6 +48,28 @@ removes Starlight's light/dark toggle, and `volli.css` declares the palette on
 both `:root` and `:root[data-theme="light"]` so a visitor whose system prefers
 light still gets the dark site.
 
+## Fonts and licenses
+
+The site self-hosts Mona Sans (`@fontsource-variable/mona-sans`, loaded through
+Starlight's `customCss`), so every build emits its `.woff2` files and every
+deploy redistributes font software. OFL-1.1 allows that only when the copyright
+notice and license text travel with the fonts, so `src/pages/licenses.txt.ts`
+reads them out of the installed package at build time and publishes
+`/licenses.txt`, which the footer links. Nothing is transcribed by hand: bumping
+the font package rewrites the notice on the next build.
+
+`pnpm -C apps/docs build` finishes by running `scripts/check-font-notices.mjs`
+from the repo root, which fails the build if `dist/` holds a font file that
+`/licenses.txt` does not cover. CI builds both sites, so that gate runs there
+too. Adding a second family means adding it to `REDISTRIBUTED_FONT_PACKAGES` in
+`src/lib/font-notices.ts` (and to the matching list in `apps/website`).
+
+`src/lib/font-notices.ts` is a deliberate copy of the website's module — the two
+Astro projects share no build, and neither would otherwise depend on a workspace
+package. This app has no test runner, so the website's `font-notices.test.ts`
+owns the unit tests and fails if the two copies' code stops matching. Edit one,
+edit the other.
+
 ## Writing
 
 Documentation prose follows the `product-docs` skill: second person, active
