@@ -61,7 +61,7 @@ function keywordsFor(key: string): readonly string[] {
  * to CI. This is the same rule stated where it costs milliseconds.
  */
 describe("the Configure rail's search index", () => {
-  it.each(["skills", "commands", "mcp", "plugins", "authority", "sessions", "worktrees"])(
+  it.each(["skills", "commands", "mcp", "authority", "sessions", "worktrees"])(
     "finds the %s pane from every section title it draws",
     (key) => {
       // The rail matches a lowercased substring, so the stored terms are
@@ -90,13 +90,23 @@ describe("Configure rail", () => {
       "Skills",
       "Commands",
       "MCP Servers",
-      "Plugins",
       "Sessions",
       "Appearance",
       "Worktrees",
     ]) {
       expect(html).toContain(category);
     }
+  });
+
+  it("never brings back Plugins", () => {
+    const category = configureGroups(project)
+      .flatMap((group) => group.categories)
+      .find((candidate) => candidate.key === "plugins");
+    expect(category).toBeUndefined();
+
+    const html = renderConfigure("skills");
+    expect(html).not.toContain("Plugins");
+    expect(html.toLowerCase()).not.toContain("plugin");
   });
 });
 
