@@ -33,8 +33,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
-  '@earendil-works/pi-agent-core@0.85.0': 3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b
-  '@earendil-works/pi-ai@0.85.0': 741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6
+  '@earendil-works/pi-agent-core@0.85.1': 3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b
 
 importers:
 
@@ -378,11 +377,11 @@ importers:
         specifier: 0.0.74
         version: 0.0.74
       '@earendil-works/pi-agent-core':
-        specifier: 0.85.0
-        version: 0.85.0(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)
+        specifier: 0.85.1
+        version: 0.85.1(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-ai':
-        specifier: 0.85.0
-        version: 0.85.0(patch_hash=741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6)(ws@8.21.3)(zod@4.4.3)
+        specifier: 0.85.1
+        version: 0.85.1(ws@8.21.3)(zod@4.4.3)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1140,21 +1139,21 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
-  '@earendil-works/chord@0.85.0':
-    resolution: {integrity: sha512-m/eFMaUg2gFUqEqzffgt/d3xPNKEvD++NZrYDBqpCEc2/dqMoS13Pdx/tofe8t5/DHgnzHxlRQFD5bLPUdPmvw==}
+  '@earendil-works/chord@0.85.1':
+    resolution: {integrity: sha512-VDlkEC3dhCzQ5fcyH1OhG19dq+6jCn+rqc/iXFivwDYGR5anwo2RCiXij9PpHhqNR5GuhhE+Er69Zi1Sn4eY6w==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-agent-core@0.85.0':
-    resolution: {integrity: sha512-uOvSDEG5B/P1mpxnuXCkvlvEKcFpyQ9qgCB2r+LY3YTko996iCCq6OEUWk/Af4xCPXx92Pj73ilNoYa40M7EQg==}
+  '@earendil-works/pi-agent-core@0.85.1':
+    resolution: {integrity: sha512-hIXIP3eAWueAYiAl8aMvWCvvZ8Q5gT3Dip5bE5uJyIGh4+YlWRjtMLI4BaeoXoSs93zndjue61u1B/vhefLnuA==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-ai@0.85.0':
-    resolution: {integrity: sha512-CbeeZH3NHav7Rs182tYq0eoCAWfDd1MvOAXKzonIF4uN3uO99EB8iT1HfyGofJmPkAf8MeIwOBQtqqd0zgrPWA==}
+  '@earendil-works/pi-ai@0.85.1':
+    resolution: {integrity: sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@earendil-works/pi-telemetry@0.85.0':
-    resolution: {integrity: sha512-gs8Zq1lySn8liq7U7CCSgWHJcA8c6+ZWk+CBPp7w0K+SN5LcLcsbs3+bh7zipm4CqNkVhcpwGAEGJp7qZqsVnA==}
+  '@earendil-works/pi-telemetry@0.85.1':
+    resolution: {integrity: sha512-Bg/YN6kA7Swja/NQxka8xFdecb4E/auIEGF2G5A25EaQXhRnPj300/7/KpgsDDMYUzHTDAv4RyUxaQPJKW81Rw==}
     engines: {node: '>=22.19.0'}
 
   '@electron-internal/extract-zip@1.0.5':
@@ -8591,15 +8590,15 @@ snapshots:
       react: 19.2.8
       tslib: 2.8.1
 
-  '@earendil-works/chord@0.85.0':
+  '@earendil-works/chord@0.85.1':
     dependencies:
       esbuild: 0.28.1
 
-  '@earendil-works/pi-agent-core@0.85.0(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-agent-core@0.85.1(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/chord': 0.85.0
-      '@earendil-works/pi-ai': 0.85.0(patch_hash=741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6)(ws@8.21.3)(zod@4.4.3)
-      '@earendil-works/pi-telemetry': 0.85.0
+      '@earendil-works/chord': 0.85.1
+      '@earendil-works/pi-ai': 0.85.1(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-telemetry': 0.85.1
       diff: 8.0.4
       ignore: 7.0.5
       typebox: 1.3.7
@@ -8612,11 +8611,11 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.85.0(patch_hash=741e45d5c9190611e645a6c8d267e783049d95135b5dd937767e7db955e4e6b6)(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.85.1(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.123.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
-      '@earendil-works/pi-telemetry': 0.85.0
+      '@earendil-works/pi-telemetry': 0.85.1
       '@google/genai': 1.52.0
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
@@ -8632,7 +8631,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-telemetry@0.85.0': {}
+  '@earendil-works/pi-telemetry@0.85.1': {}
 
   '@electron-internal/extract-zip@1.0.5': {}
 

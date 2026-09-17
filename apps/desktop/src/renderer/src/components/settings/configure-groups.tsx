@@ -74,7 +74,10 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
         },
         {
           key: "mcp",
-          fill: true,
+          // NOT a `fill` pane (VC-397). `fill` is for a pane where the table IS
+          // the page; this one has an editor and an audit list after its table,
+          // and a filling section whose content outgrew the leftover height
+          // painted straight through both of them.
           label: "MCP Servers",
           icon: PlugsConnectedIcon,
           keywords: [

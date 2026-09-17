@@ -1,6 +1,32 @@
-/** Configure → MCP Servers: app-owned, per-project transport and tool settings. */
+/**
+ * Configure → MCP Servers: app-owned, per-project transport and tool settings.
+ *
+ * TWO LAWS THIS PANE LEARNED THE HARD WAY (VC-397). A real server ships 34
+ * tools with a paragraph of description each, and this pane used to draw all of
+ * them, always, under a section marked `fill`.
+ *
+ *  1. **A pane whose sections FOLLOW a collection does not `fill`.** `fill`
+ *     hands a section the pane's leftover height and expects the collection
+ *     inside it to own the overflow. A bare list does not: it overflowed its
+ *     box and painted straight through `Recent activity` and the editor below
+ *     it. The kit already states the rule — `rows="fill"` is "for a pane where
+ *     the table IS the page", and Settings → Models keeps a numeric cap
+ *     "because sections follow it". This pane is a table, an editor and an
+ *     audit list, so every section sits in ordinary block flow, the table caps
+ *     itself, and each unbounded list owns a bounded scroll box. Nothing can
+ *     then overlap at any viewport size or catalog length.
+ *
+ *  2. **Detail is asked for, not broadcast.** Tool descriptions, and the
+ *     transport line an audit row carries, live behind the shared
+ *     `Collapsible`. The always-visible layer is what a person scans: the
+ *     server, its counts, its freshness, its origin, and anything wrong.
+ *     Nothing was removed — the trust boundary, provenance, freshness, errors
+ *     and every operation still render; they simply stopped arriving all at
+ *     once.
+ */
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
@@ -17,10 +43,16 @@ import type {
 } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@renderer/components/ui/collapsible";
 import { Input } from "@renderer/components/ui/input";
 import { Textarea } from "@renderer/components/ui/textarea";
 import { Cell, DataTable, PrefSection, SectionAction } from "@renderer/components/settings/kit";
 import { relativeTime } from "@renderer/lib/relative-time";
+import { cn } from "@renderer/lib/utils";
 
 const EMPTY_DRAFT: McpServerDraft = {
   id: "",
@@ -28,6 +60,17 @@ const EMPTY_DRAFT: McpServerDraft = {
   enabled: true,
   transport: { type: "stdio", command: "", args: [] },
 };
+
+/**
+ * How many server rows the table shows before it scrolls.
+ *
+ * A number, not `"fill"`: sections follow this table, so the cap is what keeps
+ * them reachable — the same reason Settings → Models keeps one.
+ */
+const SERVER_ROWS = 6;
+
+/** A list long enough to bury the page gets its own scroll box instead. */
+const SCROLL_BOX = "max-h-64 overflow-y-auto";
 
 function freshId(): string {
   return `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -92,6 +135,12 @@ function enabledToolNames(catalog: readonly McpCatalogTool[]): string[] {
     .map((tool) => tool.name);
 }
 
+function toolCountLabel(catalog: readonly McpCatalogTool[]): string {
+  return catalog.length === 0
+    ? "No tools discovered"
+    : `${enabledToolNames(catalog).length} of ${catalog.length} tools enabled`;
+}
+
 function replaceServer(
   servers: readonly McpServerRecord[],
   server: McpServerRecord,
@@ -102,16 +151,32 @@ function replaceServer(
     : servers.map((candidate) => (candidate.id === server.id ? server : candidate));
 }
 
+/**
+ * An open editor, and which server it is open ON.
+ *
+ * `opened` is bumped on every request so the name field is focused each time
+ * the editor is summoned — including "Edit" twice on the same row, where the
+ * editor never unmounts and nothing else in this state would have changed.
+ */
+interface EditorRequest {
+  serverId: string | null;
+  opened: number;
+}
+
 export function McpPane({ project }: { project: Project }) {
   const nameRef = React.useRef<HTMLInputElement>(null);
+  const opens = React.useRef(0);
   const [servers, setServers] = React.useState<readonly McpServerRecord[]>([]);
   const [operations, setOperations] = React.useState<readonly McpOperationRecord[]>([]);
   const [draft, setDraft] = React.useState<McpServerDraft>(EMPTY_DRAFT);
-  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editor, setEditor] = React.useState<EditorRequest | null>(null);
   const [catalog, setCatalog] = React.useState<readonly McpCatalogTool[]>([]);
   const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+
+  const editingId = editor?.serverId ?? null;
+  const opened = editor?.opened ?? null;
 
   const load = React.useCallback(async () => {
     setBusy("list");
@@ -130,13 +195,20 @@ export function McpPane({ project }: { project: Project }) {
     void load();
   }, [load]);
 
+  // The editor mounts when it is summoned, so the focus the old always-open
+  // form took synchronously has to wait for that mount.
+  React.useEffect(() => {
+    if (opened === null) return;
+    nameRef.current?.focus();
+  }, [opened]);
+
   function startAdding(): void {
     setDraft(EMPTY_DRAFT);
-    setEditingId(null);
     setCatalog([]);
     setSelected(new Set());
     setError(null);
-    nameRef.current?.focus();
+    opens.current += 1;
+    setEditor({ serverId: null, opened: opens.current });
   }
 
   function startEditing(server: McpServerRecord): void {
@@ -146,11 +218,19 @@ export function McpPane({ project }: { project: Project }) {
       enabled: server.enabled,
       transport: server.transport,
     });
-    setEditingId(server.id);
     setCatalog(server.catalog);
     setSelected(new Set(enabledToolNames(server.catalog)));
     setError(null);
-    nameRef.current?.focus();
+    opens.current += 1;
+    setEditor({ serverId: server.id, opened: opens.current });
+  }
+
+  function closeEditor(): void {
+    setEditor(null);
+    setDraft(EMPTY_DRAFT);
+    setCatalog([]);
+    setSelected(new Set());
+    setError(null);
   }
 
   function setTransport(type: McpTransportConfig["type"]): void {
@@ -197,11 +277,7 @@ export function McpPane({ project }: { project: Project }) {
       return;
     }
     setServers((current) => replaceServer(current, result.server));
-    setDraft(EMPTY_DRAFT);
-    setEditingId(null);
-    setCatalog([]);
-    setSelected(new Set());
-    setError(null);
+    closeEditor();
   }
 
   async function refresh(server: McpServerRecord): Promise<void> {
@@ -255,9 +331,9 @@ export function McpPane({ project }: { project: Project }) {
 
   const transport = draft.transport;
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6">
+    // Ordinary block flow, no `fill`: see the note at the top of this file.
+    <div className="flex flex-col gap-6">
       <PrefSection
-        fill
         title="Servers"
         icon={PlugsConnectedIcon}
         hint={
@@ -286,7 +362,7 @@ export function McpPane({ project }: { project: Project }) {
           label="MCP servers"
           items={servers}
           keyOf={(server) => server.id}
-          rows={Math.max(1, servers.length)}
+          rows={SERVER_ROWS}
           empty={busy === "list" ? "Loading MCP servers…" : "No MCP servers yet."}
           columns={[
             {
@@ -369,31 +445,237 @@ export function McpPane({ project }: { project: Project }) {
             },
           ]}
         />
-        {servers.map((server) => (
-          <div
-            key={`tools:${server.id}`}
-            className="mt-3 rounded-md border border-border/60 px-3 py-2"
-          >
-            <p className="mb-2 text-ui font-medium">{server.name} tools</p>
-            <p className="mb-2 text-ui text-muted-foreground">{refreshedLabel(server)}</p>
-            {provenanceLine(server.provenance) === null ? null : (
-              <p className="mb-2 text-ui text-muted-foreground">
-                {provenanceLine(server.provenance)}
-              </p>
+        {servers.length === 0 ? null : (
+          <div className="mt-3 flex flex-col gap-2">
+            {servers.map((server) => (
+              <ServerCatalog
+                key={`tools:${server.id}`}
+                server={server}
+                busy={busy !== null}
+                onToggleTool={(name, enabled) => void toggleTool(server, name, enabled)}
+              />
+            ))}
+          </div>
+        )}
+      </PrefSection>
+
+      {editor === null ? null : (
+        <PrefSection title={editingId === null ? "Add server" : "Edit server"} icon={PlusIcon}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-1">
+              <label className="text-ui" htmlFor="mcp-server-name">
+                Name
+              </label>
+              <Input
+                ref={nameRef}
+                id="mcp-server-name"
+                value={draft.name}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, name: event.target.value }))
+                }
+              />
+            </div>
+            <div className="grid gap-1">
+              <label className="text-ui" htmlFor="mcp-transport">
+                Transport
+              </label>
+              <select
+                id="mcp-transport"
+                className="h-7 rounded-control border border-border bg-background px-2 text-ui"
+                value={transport.type}
+                onChange={(event) => setTransport(event.target.value as McpTransportConfig["type"])}
+              >
+                <option value="stdio">Standard input/output</option>
+                <option value="streamable-http">Streamable HTTP</option>
+              </select>
+            </div>
+            {transport.type === "stdio" ? (
+              <>
+                <div className="grid gap-1">
+                  <label className="text-ui" htmlFor="mcp-command">
+                    Executable
+                  </label>
+                  <Input
+                    id="mcp-command"
+                    value={transport.command}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        transport: { ...transport, command: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <label className="text-ui" htmlFor="mcp-args">
+                    Arguments (one per line)
+                  </label>
+                  <Textarea
+                    id="mcp-args"
+                    value={transport.args.join("\n")}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        transport: { ...transport, args: event.target.value.split("\n") },
+                      }))
+                    }
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="grid gap-1 sm:col-span-2">
+                <label className="text-ui" htmlFor="mcp-url">
+                  Endpoint URL
+                </label>
+                <Input
+                  id="mcp-url"
+                  type="url"
+                  value={transport.url}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      transport: { ...transport, url: event.target.value },
+                    }))
+                  }
+                />
+              </div>
+            )}
+          </div>
+          {catalog.length === 0 ? null : (
+            <fieldset className="mt-3 rounded-md border border-border/60 p-3">
+              <legend className="px-1 text-ui font-medium">
+                Discovered tools — choose explicitly
+              </legend>
+              {/* A discovery of 34 tools is a scroll box, not a page. */}
+              <div className={cn("grid gap-2 sm:grid-cols-2", SCROLL_BOX)}>
+                {catalog.map((tool) => (
+                  <label key={tool.name} className="flex gap-2 text-ui">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(tool.name)}
+                      disabled={tool.definition === null}
+                      onChange={(event) => {
+                        const next = new Set(selected);
+                        if (event.currentTarget.checked) next.add(tool.name);
+                        else next.delete(tool.name);
+                        setSelected(next);
+                      }}
+                    />
+                    <span>
+                      {tool.name}
+                      {tool.error === null ? null : ` — unavailable: ${tool.error}`}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="outline" disabled={busy !== null} onClick={() => void testDraft()}>
+              Test and discover
+            </Button>
+            <Button variant="ghost" disabled={busy !== null} onClick={closeEditor}>
+              Cancel
+            </Button>
+            <Button
+              disabled={busy !== null || catalog.length === 0}
+              onClick={() => void saveDraft()}
+            >
+              {editingId === null ? "Save server" : "Save changes"}
+            </Button>
+          </div>
+        </PrefSection>
+      )}
+
+      {operations.length === 0 ? null : (
+        <PrefSection title="Recent activity" icon={ClockCounterClockwiseIcon}>
+          {/*
+            Where an install an AGENT performed becomes findable by a person.
+            The audit row is the only trace of a removal once the server is gone,
+            and the only trace of a failed first install at all — that one writes
+            no server row, so without this list its recovery line exists nowhere
+            a person looks.
+
+            Fifty of these ride in `MCP_OPERATION_HISTORY_LIMIT`, and a removal's
+            detail carries a whole transport line, so the list is bounded and the
+            detail is asked for.
+          */}
+          <ul className={cn("flex flex-col", SCROLL_BOX)}>
+            {operations.map((entry) => (
+              <ActivityRow key={entry.id} entry={entry} />
+            ))}
+          </ul>
+        </PrefSection>
+      )}
+    </div>
+  );
+}
+
+/** The caret every disclosure on this pane turns. */
+function DisclosureCaret({ open }: { open: boolean }) {
+  return <CaretDownIcon aria-hidden className={cn("transition-transform", open && "rotate-180")} />;
+}
+
+/**
+ * One server's health, origin and tools — the tools behind a disclosure.
+ *
+ * Collapsed by default because a real catalog is 34 tools with a paragraph
+ * each, and because nothing in it is actionable until a person has decided to
+ * act on that server. What stays visible is what decides that: the counts, when
+ * the catalog was last read, where the server came from, and what is wrong.
+ */
+function ServerCatalog({
+  server,
+  busy,
+  onToggleTool,
+}: {
+  server: McpServerRecord;
+  busy: boolean;
+  onToggleTool: (name: string, enabled: boolean) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const provenance = provenanceLine(server.provenance);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <div className="rounded-md border border-border/60 px-3 py-2">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-ui font-medium">{server.name}</p>
+            <p className="text-ui text-muted-foreground">
+              {toolCountLabel(server.catalog)} · {refreshedLabel(server)}
+            </p>
+            {provenance === null ? null : (
+              <p className="text-ui text-muted-foreground">{provenance}</p>
             )}
             {server.error === null ? null : (
-              <p className="mb-2 text-ui text-destructive">Stale catalog: {server.error}</p>
+              <p className="text-ui text-destructive">Stale catalog: {server.error}</p>
             )}
+          </div>
+          {server.catalog.length === 0 ? null : (
+            <CollapsibleTrigger asChild>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="shrink-0"
+                aria-label={`${open ? "Hide" : "Show"} ${server.name} tools`}
+              >
+                <DisclosureCaret open={open} />
+                {open ? "Hide tools" : "Show tools"}
+              </Button>
+            </CollapsibleTrigger>
+          )}
+        </div>
+        <CollapsibleContent>
+          <div className={cn("mt-2 border-t border-border/50 pt-2", SCROLL_BOX)}>
             <div className="grid gap-2 sm:grid-cols-2">
               {server.catalog.map((tool) => (
                 <label key={tool.name} className="flex items-start gap-2 text-ui">
                   <input
                     type="checkbox"
                     checked={tool.enabled}
-                    disabled={busy !== null || tool.definition === null || !server.enabled}
-                    onChange={(event) =>
-                      void toggleTool(server, tool.name, event.currentTarget.checked)
-                    }
+                    disabled={busy || tool.definition === null || !server.enabled}
+                    onChange={(event) => onToggleTool(tool.name, event.currentTarget.checked)}
                   />
                   <span>
                     <span className="font-medium">{tool.name}</span>
@@ -408,165 +690,58 @@ export function McpPane({ project }: { project: Project }) {
               ))}
             </div>
           </div>
-        ))}
-      </PrefSection>
+        </CollapsibleContent>
+      </div>
+    </Collapsible>
+  );
+}
 
-      {operations.length === 0 ? null : (
-        <PrefSection title="Recent activity" icon={ClockCounterClockwiseIcon}>
-          {/*
-            Where an install an AGENT performed becomes findable by a person.
-            The audit row is the only trace of a removal once the server is gone,
-            and the only trace of a failed first install at all — that one writes
-            no server row, so without this list its recovery line exists nowhere
-            a person looks.
-          */}
-          <ul className="grid gap-2">
-            {operations.map((entry) => (
-              <li key={entry.id} className="rounded-md border border-border/60 px-3 py-2">
-                <p className="text-ui">
-                  <span
-                    className={
-                      entry.outcome === "failed" ? "font-medium text-destructive" : "font-medium"
-                    }
-                  >
-                    {entry.summary}
-                  </span>
-                </p>
-                <p className="text-ui text-muted-foreground">
-                  {relativeTime(entry.createdAt)} · {operationActor(entry)}
-                </p>
-                {entry.detail === null ? null : (
-                  <p className="text-ui text-muted-foreground">{entry.detail}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </PrefSection>
-      )}
+/**
+ * One recorded operation: what happened and who asked, with its detail behind a
+ * disclosure.
+ *
+ * The detail is where a removal records the whole transport it destroyed, which
+ * is precious and also long enough that fifty of them are the page. Summary
+ * first, evidence on request.
+ */
+function ActivityRow({ entry }: { entry: McpOperationRecord }) {
+  const [open, setOpen] = React.useState(false);
 
-      <PrefSection title={editingId === null ? "Add server" : "Edit server"} icon={PlusIcon}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="grid gap-1">
-            <label className="text-ui" htmlFor="mcp-server-name">
-              Name
-            </label>
-            <Input
-              ref={nameRef}
-              id="mcp-server-name"
-              value={draft.name}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, name: event.target.value }))
-              }
-            />
-          </div>
-          <div className="grid gap-1">
-            <label className="text-ui" htmlFor="mcp-transport">
-              Transport
-            </label>
-            <select
-              id="mcp-transport"
-              className="h-7 rounded-control border border-border bg-background px-2 text-ui"
-              value={transport.type}
-              onChange={(event) => setTransport(event.target.value as McpTransportConfig["type"])}
+  return (
+    <li className="border-t border-border/50 py-2 first:border-t-0 first:pt-0">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p
+              className={cn(
+                "text-ui font-medium",
+                entry.outcome === "failed" && "text-destructive",
+              )}
             >
-              <option value="stdio">Standard input/output</option>
-              <option value="streamable-http">Streamable HTTP</option>
-            </select>
+              {entry.summary}
+            </p>
+            <p className="text-ui text-muted-foreground">
+              {relativeTime(entry.createdAt)} · {operationActor(entry)}
+            </p>
           </div>
-          {transport.type === "stdio" ? (
-            <>
-              <div className="grid gap-1">
-                <label className="text-ui" htmlFor="mcp-command">
-                  Executable
-                </label>
-                <Input
-                  id="mcp-command"
-                  value={transport.command}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      transport: { ...transport, command: event.target.value },
-                    }))
-                  }
-                />
-              </div>
-              <div className="grid gap-1">
-                <label className="text-ui" htmlFor="mcp-args">
-                  Arguments (one per line)
-                </label>
-                <Textarea
-                  id="mcp-args"
-                  value={transport.args.join("\n")}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      transport: { ...transport, args: event.target.value.split("\n") },
-                    }))
-                  }
-                />
-              </div>
-            </>
-          ) : (
-            <div className="grid gap-1 sm:col-span-2">
-              <label className="text-ui" htmlFor="mcp-url">
-                Endpoint URL
-              </label>
-              <Input
-                id="mcp-url"
-                type="url"
-                value={transport.url}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    transport: { ...transport, url: event.target.value },
-                  }))
-                }
-              />
-            </div>
+          {entry.detail === null ? null : (
+            <CollapsibleTrigger asChild>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="shrink-0"
+                aria-label={`${open ? "Hide" : "Show"} detail for ${entry.serverName}`}
+              >
+                <DisclosureCaret open={open} />
+                {open ? "Hide detail" : "Detail"}
+              </Button>
+            </CollapsibleTrigger>
           )}
         </div>
-        {catalog.length === 0 ? null : (
-          <fieldset className="mt-3 rounded-md border border-border/60 p-3">
-            <legend className="px-1 text-ui font-medium">
-              Discovered tools — choose explicitly
-            </legend>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {catalog.map((tool) => (
-                <label key={tool.name} className="flex gap-2 text-ui">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(tool.name)}
-                    disabled={tool.definition === null}
-                    onChange={(event) => {
-                      const next = new Set(selected);
-                      if (event.currentTarget.checked) next.add(tool.name);
-                      else next.delete(tool.name);
-                      setSelected(next);
-                    }}
-                  />
-                  <span>
-                    {tool.name}
-                    {tool.error === null ? null : ` — unavailable: ${tool.error}`}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        )}
-        <div className="mt-3 flex justify-end gap-2">
-          <Button variant="outline" disabled={busy !== null} onClick={() => void testDraft()}>
-            Test and discover
-          </Button>
-          {editingId === null ? null : (
-            <Button variant="ghost" disabled={busy !== null} onClick={startAdding}>
-              Cancel edit
-            </Button>
-          )}
-          <Button disabled={busy !== null || catalog.length === 0} onClick={() => void saveDraft()}>
-            {editingId === null ? "Save server" : "Save changes"}
-          </Button>
-        </div>
-      </PrefSection>
-    </div>
+        <CollapsibleContent>
+          <p className="mt-1 text-ui text-muted-foreground">{entry.detail}</p>
+        </CollapsibleContent>
+      </Collapsible>
+    </li>
   );
 }
