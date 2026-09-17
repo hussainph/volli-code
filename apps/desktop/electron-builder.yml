@@ -132,6 +132,23 @@ asarUnpack:
   # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
 
+# Licence notices travel with the artifact (VC-407). Both files land in
+# Contents/Resources, the place a user reaches through Finder's "Show Package
+# Contents" and the conventional home for a desktop app's notices — inside the
+# asar they would be unreadable without unpacking it.
+#
+# THIRD-PARTY-NOTICES is generated from the resolved production dependency set
+# by scripts/generate-third-party-notices.mjs and committed; `check:notices`
+# (CI) fails when it drifts from what is installed, when a file named here goes
+# missing, and when a package this config ships has no notice covering it. That
+# check reads THIS block — renaming a destination without telling the generator
+# fails rather than silently shipping to the old path.
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: THIRD-PARTY-NOTICES
+    to: THIRD-PARTY-NOTICES.txt
+
 electronLanguages:
   - en
 

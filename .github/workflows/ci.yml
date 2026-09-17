@@ -145,6 +145,22 @@ jobs:
           vp run --filter @volli/desktop check:design-tokens
           vp run --filter @volli/desktop check:node-version
 
+      # Release compliance (VC-407). The notice that ships inside the .app is
+      # derived from the installed production dependency set, so a dependency
+      # bump that changes what is distributed changes this file — and a PR that
+      # forgets to regenerate it fails here rather than shipping a stale notice.
+      # The same command self-tests its rules and re-reads electron-builder.yml,
+      # so dropping the extraResources entries, renaming their destinations, or
+      # whitelisting a package no notice covers fails here too.
+      #
+      # This runs on Linux while the artifact is macOS arm64, which is exactly
+      # why the three platform-native packages are pinned in
+      # apps/desktop/notices/sources.json: the document renders identically on
+      # both, and their pinned text is re-verified against the real package
+      # whenever the generator runs on a mac.
+      - name: Check licence notices
+        run: vp run --filter @volli/desktop check:notices
+
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
       - name: Typecheck
