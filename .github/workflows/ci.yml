@@ -163,6 +163,30 @@ jobs:
           vp run --filter @volli/desktop check:node-version
           vp run --filter @volli/desktop check:theme-provenance
 
+      # Release compliance (VC-407). The notice that ships inside the .app is
+      # derived from the installed production dependency set, so a dependency
+      # bump that changes what is distributed changes this file — and a PR that
+      # forgets to regenerate it fails here rather than shipping a stale notice.
+      # The same command self-tests its rules and re-reads electron-builder.yml,
+      # so dropping the extraResources entries, renaming their destinations, or
+      # whitelisting a package no notice covers fails here too.
+      #
+      # A ROOT script, beside check:workspace-licenses (VC-411) and for the same
+      # reason: it walks packages/cli, reads pnpm-workspace.yaml, and collects
+      # the notices @volli/shared and @volli/agent-runtime declare about their
+      # own vendored material. It is not the desktop app's tool; the desktop
+      # .app is the one artifact it currently describes.
+      #
+      # This runs on Linux while the artifact is macOS arm64, which is exactly
+      # why the three platform-native packages are pinned in
+      # apps/desktop/notices/sources.json: the document renders identically on
+      # both, and their pinned text is re-verified against the real package
+      # whenever the generator runs on a mac. A FOURTH native package that the
+      # packaging config starts shipping without a pinned entry fails here too,
+      # rather than being skipped by the same rule that makes Linux agree.
+      - name: Check licence notices
+        run: vp run check:notices
+
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
       - name: Typecheck
