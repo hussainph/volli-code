@@ -2,6 +2,7 @@
   "name": "@volli/docs",
   "version": "0.0.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
