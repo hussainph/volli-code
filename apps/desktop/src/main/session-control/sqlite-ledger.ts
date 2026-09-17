@@ -419,6 +419,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       commandId: event.commandId ?? null,
       payload: encodeSessionJson(event.payload),
     });
+    this.projectAttachmentClosure(event);
     // Projected in the same transaction that appends the fact. A projection
     // written afterwards would have a window in which the ledger and its read
     // model disagree, and the disagreement would survive a crash.
@@ -800,6 +801,72 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       failure: payload.kind === "attachment.failed" ? encodeSessionJson(payload.failure) : null,
       createdSequence: event.sequence,
     });
+  }
+
+  /**
+   * Projects an `attachment.closed` fact onto the attachment it names (VC-403).
+   *
+   * Written in the same transaction that appends the fact, for the same reason
+   * the usage projection is: a read model written afterwards would have a
+   * window in which the ledger and its index disagree, and the disagreement
+   * would survive a crash.
+   *
+   * A close naming an attachment this Session never opened updates nothing.
+   * That is not a silent loss — the fold ignores such a close too (`if
+   * (existing)`), so both readings agree that it closed nothing.
+   */
+  private projectAttachmentClosure(event: SessionEvent): void {
+    if (event.payload.kind !== "attachment.closed") return;
+    prepared(
+      this.db,
+      `UPDATE session_attachments
+          SET closed_sequence = @sequence
+        WHERE id = @attachmentId AND session_id = @sessionId`,
+    ).run({
+      sequence: event.sequence,
+      attachmentId: event.payload.attachmentId,
+      sessionId: event.sessionId,
+    });
+  }
+
+  /**
+   * Every Session holding at least one OPEN attachment, across EVERY project.
+   *
+   * Unscoped on purpose, and for the same reason {@link listSessionStarts} is:
+   * this answers a question about the MACHINE rather than about any one
+   * project — a build in another project's Session competes for the same cores
+   * (VC-339). Ordered like {@link listSessions} so both reads hand a caller
+   * Sessions in one order.
+   *
+   * This is the concurrency budget's narrowing (VC-403), and it is exact rather
+   * than a heuristic: a Session counts as working only if its latest terminal
+   * attachment is open, or if it is a chat whose structured attachment is open
+   * and mid-turn. Both require an open attachment, so a Session with none
+   * cannot be working and is dropped here without folding it at all. The few
+   * that survive are folded by the caller through the ordinary projection path,
+   * which is what keeps the count's terminal/chat precedence identical to the
+   * one `volli session list` shows a person.
+   *
+   * `session_attachments_open` is a PARTIAL index over exactly the rows this
+   * predicate keeps, so the read is the size of the answer rather than of the
+   * ledger.
+   */
+  listAttachedSessions(): readonly Session[] {
+    this.assertOpen();
+    const rows = prepared(
+      this.db,
+      `SELECT s.id, s.project_id, s.ticket_id, s.role, s.parent_session_id, s.title, s.created_at
+           FROM sessions s
+          WHERE EXISTS (
+                SELECT 1
+                  FROM session_attachments a
+                 WHERE a.session_id = s.id
+                   AND a.observed_kind = 'opened'
+                   AND a.closed_sequence IS NULL
+                )
+          ORDER BY s.created_at DESC, s.id COLLATE BINARY DESC`,
+    ).all() as unknown[];
+    return rows.map((row) => decodeSession(row, "sessions row"));
   }
 
   private assertEventForeignKeys(event: SessionEvent): void {

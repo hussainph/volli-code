@@ -93,7 +93,8 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { readSessionConcurrencyEnv } from "./session-concurrency";
+import { createSessionConcurrencyEnvReader } from "./session-concurrency";
+import type { SessionConcurrencyEnvReader } from "./session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -775,11 +776,13 @@ app.whenReady().then(async () => {
 
   // Renderer permission policy. Electron's default with NO handler installed
   // is grant-everything; this allowlist keeps exactly what the app uses:
-  //  - local-fonts: restty resolves the ghostty-config font families against
-  //    installed fonts via the Local Font Access API (issue #18).
+  //  - local-fonts: the Terminal settings font picker enumerates the user's
+  //    installed families through the Local Font Access API (issue #18), so
+  //    the ghostty-config font chain can be offered as real choices.
   //  - clipboard-read / clipboard-sanitized-write: terminal copy/paste and
   //    OSC 52 (status quo under the old default-grant; a ghostty-style
-  //    clipboard-read=ask policy needs a restty seam that 0.2.0 lacks).
+  //    clipboard-read=ask policy would need a per-request prompt this app
+  //    does not have a surface for yet).
   //  - fullscreen: standard window affordance.
   const allowedPermissions = new Set([
     "local-fonts",
@@ -1191,6 +1194,29 @@ app.whenReady().then(async () => {
   });
 
   /**
+   * This process's ONE reader of who is working (VC-403).
+   *
+   * Every door that starts something asks the same question about the same
+   * machine — a structured attachment, a background shell, a terminal — so
+   * they share one reader rather than each keeping its own. Two readers would
+   * be two answers about one machine for as long as their windows disagreed.
+   *
+   * Behind it, `listAttachedSessions` reads only the Sessions holding an open
+   * attachment instead of folding every Session of every project, so an
+   * uncached start no longer waits on the fleet; the reader's short memo is
+   * now only there to collapse a burst.
+   *
+   * `null` when there is no Session Engine to ask, which leaves every
+   * toolchain on its own default rather than blocking a Session.
+   */
+  const concurrencyEnvReader: SessionConcurrencyEnvReader | null =
+    sessionEngine === null
+      ? null
+      : createSessionConcurrencyEnvReader({
+          listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+        });
+
+  /**
    * One structured Session's share of the machine (VC-339), in the variables
    * `cargo`, `make`, `cmake`, `go`, `pytest`, gradle and vitest already read —
    * the same budget a spawned PTY gets in `pty/manager.ts`, so a Session's
@@ -1202,16 +1228,8 @@ app.whenReady().then(async () => {
    * default rather than blocking the Session.
    */
   const sessionConcurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {
-    if (!dbHandle.ok || sessionEngine === null) return {};
-    const db = dbHandle.db;
-    const engine = sessionEngine;
-    return readSessionConcurrencyEnv(
-      {
-        listProjectIds: () => listProjects(db).map((project) => project.id),
-        listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
-      },
-      { excludeSessionId: sessionId, environment: process.env },
-    );
+    if (concurrencyEnvReader === null) return {};
+    return concurrencyEnvReader({ excludeSessionId: sessionId, environment: process.env });
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
@@ -2281,7 +2299,7 @@ app.whenReady().then(async () => {
   // window edge and by every ghostty chain read — a `theme = light:X,dark:Y`
   // pair resolves to a different half in each.
   const currentAppearance = (): ResolvedAppearance => currentFirstPaint().appearance;
-  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // Ghostty config read + live-reload watch, feeding the terminal appearance. The
   // `userData` root is where Volli's own ghostty OVERLAY files live (decision
   // #67). Registered after the db opens because the chain read needs the
   // resolved mode, which lives in `app_state`.
@@ -2859,7 +2877,14 @@ app.whenReady().then(async () => {
     if (step === "confirm" && !confirmDiscardUnsaved(names, "Quit")) refuseQuit(event);
   });
 
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
+  // The terminal door takes the same reader the structured door uses (VC-403):
+  // one question about one machine, asked once.
+  const ptyManager = registerTerminalIpcHandlers(
+    dbHandle,
+    agentRuntime,
+    sessionEngine,
+    concurrencyEnvReader,
+  );
   ptyManagerRef = ptyManager;
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);

@@ -75,7 +75,7 @@ export interface SessionSplit {
   kind: "split";
   /** Stable identity for resizing this layout node. */
   id: string;
-  /** vertical = left/right; horizontal = top/bottom (restty/Ghostty naming). */
+  /** vertical = left/right; horizontal = top/bottom (Ghostty's naming). */
   direction: TerminalSplitDirection;
   ratio: number;
   first: SessionLayout;

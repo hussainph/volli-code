@@ -4,10 +4,8 @@
  * the glue that reads design tokens and talks to the preload bridge lives in
  * appearance.ts; this module is the unit-tested logic layer.
  */
-import { getBuiltinTheme, parseGhosttyTheme } from "restty";
-import type { GhosttyTheme } from "restty";
-import { parseGhosttyTerminalPrefs } from "@volli/shared";
-import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
+import { getGhosttyTheme, parseGhosttyTerminalPrefs, parseGhosttyTheme } from "@volli/shared";
+import type { GhosttyAppearancePayload, GhosttyTheme, ResolvedAppearance } from "@volli/shared";
 
 import type { TerminalAppearance } from "./engine";
 
@@ -87,10 +85,10 @@ function liveThemeName(
 }
 
 /**
- * Resolve the theme for a payload: named custom theme file, else builtin
- * catalog (restty bundles ghostty's full theme collection), else the app's
- * token-derived fallback — then overlay any explicit color keys from the
- * config text on whichever base won.
+ * Resolve the theme for a payload: named custom theme file, else the vendored
+ * catalog (Ghostty's own theme collection — see `ghostty-theme.ts`), else the
+ * app's token-derived fallback — then overlay any explicit color keys from
+ * the config text on whichever base won.
  */
 export function resolveGhosttyThemeChoice(
   payload: GhosttyAppearancePayload,
@@ -107,7 +105,7 @@ export function resolveGhosttyThemeChoice(
   if (payload.themeSource !== null && themeName === payload.prefs.themeName) {
     base = parseGhosttyTheme(payload.themeSource);
   } else if (themeName !== null) {
-    base = getBuiltinTheme(themeName);
+    base = getGhosttyTheme(themeName);
   }
   let resolved = base ?? fallbackTheme;
   if (payload.configText !== null) {

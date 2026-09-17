@@ -5,8 +5,7 @@ import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { resolveAppearance } from "@volli/shared";
-import { getBuiltinTheme } from "restty";
+import { getGhosttyTheme, resolveAppearance } from "@volli/shared";
 
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import {
@@ -231,14 +230,14 @@ function RevertButton({ settingKey }: { settingKey: TerminalSettingKey }) {
  * catalog doesn't have (cmdk hands back `""` when the selection empties) ends
  * the preview rather than painting nothing.
  */
-const preview = (name: string): void => previewTerminalTheme(getBuiltinTheme(name));
+const preview = (name: string): void => previewTerminalTheme(getGhosttyTheme(name));
 
 /** Puts the resolved palette back, ending a preview. */
 const endPreview = (): void => previewTerminalTheme(null);
 
 /**
- * Terminal theme picker over restty's bundled catalog — which IS ghostty's
- * full theme collection, already in the app bundle.
+ * Terminal theme picker over Ghostty's own theme collection, vendored into
+ * the app bundle (`ghostty-theme.ts`).
  *
  * Apply-then-revert preview: highlighting a name repaints every live terminal
  * and writes nothing; picking one writes `theme = <name>` to the overlay;
@@ -269,9 +268,8 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
 }
 
 /**
- * Font family, from the Local Font Access list restty already resolves
- * families against — so the list can only contain faces the terminal will
- * actually be able to load.
+ * Font family, from the Local Font Access list of installed faces — so the
+ * list can only contain families the terminal will actually be able to load.
  */
 function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   const [opened, setOpened] = React.useState(false);

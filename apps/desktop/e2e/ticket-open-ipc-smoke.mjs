@@ -292,12 +292,12 @@ try {
   await must(2, "start a ticket session so a split has a pane to split", async () => {
     await startTerminalSession(page.locator("aside"));
     await waitUntil(
-      "terminal canvas",
+      "terminal",
       () =>
         page.evaluate(
           () =>
-            Array.from(document.querySelectorAll("canvas")).filter(
-              (canvas) => canvas.offsetParent !== null && canvas.clientWidth > 0,
+            Array.from(document.querySelectorAll(".xterm")).filter(
+              (element) => element.offsetParent !== null && element.clientWidth > 0,
             ).length === 1,
         ),
       { timeout: 45000 },
@@ -418,14 +418,14 @@ try {
     const sessionTab = page.getByRole("tab", { name: /^Session \d+$/ }).first();
     await sessionTab.click();
     const box = await page.evaluate(() => {
-      const canvas = Array.from(document.querySelectorAll("canvas")).find(
+      const terminal = Array.from(document.querySelectorAll(".xterm")).find(
         (candidate) => candidate.offsetParent !== null && candidate.clientWidth > 0,
       );
-      if (!canvas) return null;
-      const rect = canvas.getBoundingClientRect();
+      if (!terminal) return null;
+      const rect = terminal.getBoundingClientRect();
       return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
     });
-    if (box === null) throw new Error("no visible terminal canvas to focus");
+    if (box === null) throw new Error("no visible terminal to focus");
     await page.mouse.click(box.x, box.y);
     await sleep(250);
     await page.keyboard.press("Meta+d");
@@ -434,8 +434,8 @@ try {
       () =>
         page.evaluate(
           () =>
-            Array.from(document.querySelectorAll("canvas")).filter(
-              (canvas) => canvas.offsetParent !== null && canvas.clientWidth > 0,
+            Array.from(document.querySelectorAll(".xterm")).filter(
+              (element) => element.offsetParent !== null && element.clientWidth > 0,
             ).length === 2,
         ),
       { timeout: 30000 },

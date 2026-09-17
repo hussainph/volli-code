@@ -1,5 +1,5 @@
 // Reads the user's Ghostty config from disk, layers Volli's own overlay files
-// on top of it, and maps the result onto restty's appearance model. All
+// on top of it, and ships the result as the renderer's terminal appearance. All
 // parsing/merging logic lives in @volli/shared (pure, filesystem-free); this
 // module supplies the filesystem and wires the IPC channel + a live-reload
 // watch, mirroring pty.ts's shape: injected deps for testability, thin
@@ -69,8 +69,8 @@ function entryConfigPaths(deps: GhosttyConfigDeps): string[] {
  * Resolves the named theme (absolute path, or a name probed across ghostty's
  * theme directories) to its raw text. Null when `themeName` is unset, when
  * it's a builtin name with no on-disk file (the common case — the renderer
- * falls back to restty's builtin catalog), or when the resolved file fails
- * to read.
+ * falls back to the vendored Ghostty theme catalog in `@volli/shared`), or
+ * when the resolved file fails to read.
  */
 function resolveThemeSource(themeName: string | null, deps: GhosttyConfigDeps): string | null {
   if (themeName === null) return null;
@@ -126,8 +126,9 @@ function resolveConfigText(entryPath: string, deps: GhosttyConfigDeps): string |
 }
 
 /**
- * Resolves the full appearance chain for a scope and maps it onto restty's
- * model: both of ghostty's entry configs (its macOS precedence — the
+ * Resolves the full appearance chain for a scope and maps it onto the
+ * renderer's appearance model: both of ghostty's entry configs (its macOS
+ * precedence — the
  * Application Support config overrides the XDG one on scalar conflicts), then
  * Volli's global overlay, then the project's overlay when `ticketPrefix` names
  * one. Later layers win, and `provenance` records which layer won each key so

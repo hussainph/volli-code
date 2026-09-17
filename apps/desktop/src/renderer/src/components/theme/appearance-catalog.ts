@@ -11,9 +11,8 @@
  * list and nothing to open.
  */
 
-import { errorMessage } from "@volli/shared";
+import { errorMessage, listGhosttyThemeNames } from "@volli/shared";
 import type { ResolvedAppearance } from "@volli/shared";
-import { listBuiltinThemeNames } from "restty";
 
 import type { ThemeComboBoxItem } from "@renderer/components/theme/theme-combo-box";
 import { toastError } from "@renderer/lib/toast";
@@ -35,11 +34,12 @@ export function fallbackTerminalThemeLabel(resolved: ResolvedAppearance): string
 }
 
 /**
- * restty's bundled catalog — which IS ghostty's full theme collection, already
- * in the app bundle, so the terminal picker needs no network and no disk read.
+ * Ghostty's own theme collection, vendored into the app bundle
+ * (`ghostty-theme.ts`), so the terminal picker needs no network and no disk
+ * read.
  */
 export function terminalThemeItems(): ThemeComboBoxItem[] {
-  return listBuiltinThemeNames().map((name) => ({ value: name, label: name }));
+  return listGhosttyThemeNames().map((name) => ({ value: name, label: name }));
 }
 
 /**

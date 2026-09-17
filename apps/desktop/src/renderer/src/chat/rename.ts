@@ -53,8 +53,8 @@ export async function renameChatSession(
 
   // The same door the terminal path uses, called directly rather than through
   // its `persistRename` wrapper: that wrapper lives in terminal/session-
-  // lifecycle.ts, which imports the engine registry (and with it the restty
-  // WebGPU engine) — four lines are not worth pulling a terminal renderer into
+  // lifecycle.ts, which imports the engine registry (and with it xterm.js and
+  // its stylesheet) — four lines are not worth pulling a terminal renderer into
   // the chat core.
   try {
     const result = await window.api.sessions.rename({
