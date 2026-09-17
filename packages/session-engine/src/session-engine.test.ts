@@ -24,6 +24,7 @@ import type {
   SessionLedgerTransaction,
   SessionObservation,
   SessionProjectionCheckpoint,
+  SessionProjectionEvent,
   SessionUsage,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -3388,6 +3389,10 @@ describe("InMemorySessionLedger", () => {
       expect(transaction.listSessions({ projectId: "project-1", scope: "project" })).toEqual([
         projectSession,
       ]);
+      // @ts-expect-error -- `Session` is readonly (VC-393); this reaches past
+      // the type on purpose, to prove the ledger answered with a copy rather
+      // than the row it holds. The returned row is not frozen, only the
+      // listing cache's own projections are, so the assignment succeeds.
       all[0]!.title = "Mutated query result";
       expect(transaction.listSessions({ projectId: "project-1", scope: "all" })[0]?.title).toBe(
         "Later id",
@@ -3987,11 +3992,57 @@ describe("listSessions over a project roster (VC-388)", () => {
 });
 
 /**
+ * A ledger that answers every read of the same event with the SAME object.
+ *
+ * Both ledgers in this repository happen to hand out fresh objects — the
+ * in-memory one clones, the SQLite one decodes each row — but {@link
+ * SessionLedger} never promises it, and a conforming implementation that
+ * cached its decoded reads would look like this. It is the shape that catches
+ * a projection which freezes objects it does not own (VC-393).
+ */
+function interningComposition() {
+  const stored = createInMemorySessionLedger();
+  const interned = new Map<string, SessionProjectionEvent>();
+  const intern = (events: readonly SessionProjectionEvent[]): readonly SessionProjectionEvent[] =>
+    events.map((event) => {
+      const key = `${event.sessionId}:${event.sequence}`;
+      const first = interned.get(key);
+      if (first) return first;
+      interned.set(key, event);
+      return event;
+    });
+  const ledger: SessionLedger = {
+    transaction: (work) =>
+      stored.transaction((transaction) =>
+        work(
+          new Proxy(transaction, {
+            get(target, property, receiver) {
+              if (property !== "listProjectionEvents") {
+                return Reflect.get(target, property, receiver);
+              }
+              return (query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0]) =>
+                intern(transaction.listProjectionEvents(query));
+            },
+          }),
+        ),
+      ),
+  };
+  let now = 100;
+  const plane = createSessionEngine({ ledger, clock: { now: () => now++ }, ids: ids() });
+  return { plane, interned };
+}
+
+/**
  * The cache's other half: the SAME object is handed to every caller of a
  * listing while its entry survives (VC-388), so a caller that mutated a
  * returned row would corrupt every later read rather than its own copy
  * (VC-393). Nothing in the engine or its known callers does this today, but
  * the cache must not depend on that staying true.
+ *
+ * `SessionProjection` is `readonly` throughout, so each mutation below is a
+ * compile error first; the assertions are about the runtime backstop that
+ * still has to hold for code which gets past the type (`any`, a structured
+ * clone across an RPC seam, plain JavaScript).
  */
 describe("listSessions cached projections are frozen (VC-393)", () => {
   it("throws when a caller mutates a top-level field of a returned row", async () => {
@@ -4001,29 +4052,63 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
     expect(() => {
-      // Not a type error: `turnActive` is not declared `readonly`, so this
-      // is exactly the assignment that a mutating caller would write. The
-      // runtime freeze is the only thing that stops it.
+      // @ts-expect-error -- the assignment a mutating caller would write.
       row.turnActive = true;
     }).toThrow(TypeError);
   });
 
-  it("throws when a caller mutates a nested array of a returned row", async () => {
+  it("throws when a caller mutates a nested object or array of a returned row", async () => {
     const { plane } = composition();
     await plane.createSession(createRequest("command-freeze-nested"));
 
     const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
 
     expect(() => {
-      // @ts-expect-error -- readonly at the type level too; this is the
-      // runtime backstop for code that gets past that (e.g. `any`).
+      // @ts-expect-error -- a nested array.
       row.commands.push(row.commands[0]);
     }).toThrow(TypeError);
+    // The nested OBJECT is frozen too, not merely the array it holds: a
+    // container that recursed into its children but skipped itself would pass
+    // the push above and fail here.
+    expect(Object.isFrozen(row.attention)).toBe(true);
     expect(() => {
-      // @ts-expect-error -- same backstop, one level deeper (attention is an
-      // object nested inside the row, holding its own frozen array).
+      // @ts-expect-error -- a field of that nested object.
+      row.attention.primary = null;
+    }).toThrow(TypeError);
+    expect(() => {
+      // @ts-expect-error -- and the array one level deeper again.
       row.attention.active.push(row.attention.active[0]);
     }).toThrow(TypeError);
+  });
+
+  /**
+   * The depth the freeze actually claims. Every assertion above stops at a
+   * container; this one reaches an object INSIDE one, which is where a
+   * shallow freeze of the row and its immediate children would still let a
+   * caller rewrite the cache.
+   */
+  it("throws when a caller mutates an object inside an array of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-element"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    // The create wrote a real command, so this element is populated data
+    // rather than an empty-array technicality.
+    expect(row.commands).toHaveLength(1);
+    expect(() => {
+      // @ts-expect-error -- an element of a nested array.
+      row.commands[0].id = "rewritten";
+    }).toThrow(TypeError);
+    // Deeper than the `readonly` modifiers reach: a command's INTENT has
+    // mutable fields, so from here down the runtime freeze is the only guard
+    // left, and it has to hold all the way to the leaves.
+    expect(Object.isFrozen(row.commands[0].intent)).toBe(true);
+    expect(() => {
+      row.commands[0].intent.kind = "session.archive";
+    }).toThrow(TypeError);
+    expect(row.commands[0].id).toBe("command-freeze-element");
+    expect(row.commands[0].intent.kind).toBe("session.create");
   });
 
   it("keeps serving the original values after a rejected mutation attempt", async () => {
@@ -4032,7 +4117,7 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
 
     const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
     try {
-      // Not a type error either, for the same reason as above.
+      // @ts-expect-error -- the mutation a caller past the type would write.
       first[0].session.title = "Mutated by a caller";
     } catch {
       // Expected: the assignment above throws in strict mode. Even if a
@@ -4044,5 +4129,139 @@ describe("listSessions cached projections are frozen (VC-393)", () => {
     // handed back, and it still reads the pre-mutation value.
     expect(second[0]).toBe(first[0]);
     expect(second[0].session.title).toBe("Durable Session");
+  });
+
+  /**
+   * The miss path, which is a second entry into the cache rather than the
+   * first: a freeze applied only to the row that populated an empty cache
+   * would leave every REPLACEMENT row aliased and mutable.
+   */
+  it("freezes the replacement row a refold produces after the log moves", async () => {
+    const { plane } = composition();
+    const created = await plane.createSession(createRequest("command-freeze-refold"));
+
+    const [before] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    await plane.submit({
+      commandId: "command-freeze-refold-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+
+    const [after] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // A genuine refold, not the cached row handed back again.
+    expect(after).not.toBe(before);
+    expect(after.session.title).toBe("Moved on");
+    expect(Object.isFrozen(after)).toBe(true);
+    expect(() => {
+      // @ts-expect-error -- same guarantee as the first fold's row.
+      after.turnActive = true;
+    }).toThrow(TypeError);
+  });
+
+  /**
+   * The other direction: what the cache must NOT freeze.
+   *
+   * A fold does not own its whole graph — `foldSessionProjection` seeds its
+   * containers from the base checkpoint's elements and pushes the objects it
+   * read out of the event payloads. Freezing the folded object in place would
+   * therefore reach back into whatever the ledger handed over. The cache holds
+   * a copy so that it cannot.
+   */
+  it("freezes nothing the ledger owns, so a ledger that caches its reads is safe", async () => {
+    const { plane, interned } = interningComposition();
+    await plane.createSession(createRequest("command-freeze-contagion"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    expect(Object.isFrozen(row)).toBe(true);
+
+    const recorded = [...interned.values()].find(
+      (event) => event.payload.kind === "command.recorded",
+    );
+    expect(recorded?.payload.kind).toBe("command.recorded");
+    const ledgerCommand =
+      recorded?.payload.kind === "command.recorded" ? recorded.payload.command : undefined;
+
+    // The row reports the same command, by value...
+    expect(row.commands[0]).toEqual(ledgerCommand);
+    // ...but does not hold the ledger's object, and left it untouched.
+    expect(row.commands[0]).not.toBe(ledgerCommand);
+    expect(Object.isFrozen(ledgerCommand)).toBe(false);
+    for (const event of interned.values()) {
+      expect(Object.isFrozen(event)).toBe(false);
+      expect(Object.isFrozen(event.payload)).toBe(false);
+    }
+  });
+
+  /**
+   * The behaviour change the cache made to {@link
+   * SessionEnginePorts.onProjectionCheckpointFailure}, held where the port
+   * documents it: a hit never reaches `projectStoredSession`, so a broken
+   * checkpoint is reported once per entry rather than once per listing.
+   */
+  it("reports a checkpoint failure once per fold, not once per listing", async () => {
+    const stored = createInMemorySessionLedger();
+    const failure = new Error("checkpoint row could not be decoded");
+    let failReads = false;
+    const ledger: SessionLedger = {
+      transaction: (work) =>
+        stored.transaction((transaction) =>
+          work(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property !== "getProjectionCheckpoint") {
+                  return Reflect.get(target, property, receiver);
+                }
+                return (sessionId: string) => {
+                  if (failReads) throw failure;
+                  return transaction.getProjectionCheckpoint(sessionId);
+                };
+              },
+            }),
+          ),
+        ),
+    };
+    const reported: unknown[] = [];
+    let now = 100;
+    const plane = createSessionEngine({
+      ledger,
+      clock: { now: () => now++ },
+      ids: ids(),
+      onProjectionCheckpointFailure: (error) => reported.push(error),
+    });
+    const created = await plane.createSession(createRequest("command-freeze-checkpoint"));
+    const query = { projectId: "project-1", scope: "all" } as const;
+
+    failReads = true;
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    // The miss folded, so the unusable checkpoint was seen and reported.
+    expect(reported).toEqual([failure]);
+
+    // A hit answers from the entry and never folds, so the broken checkpoint
+    // is not read again and nothing is reported a second time. This is the
+    // whole behaviour change: once per entry, not once per listing.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported).toEqual([failure]);
+
+    // Moving the log invalidates the entry. The write path folds on its own
+    // account, so it reports once here before any listing has run again.
+    await plane.submit({
+      commandId: "command-freeze-checkpoint-retitle",
+      sessionId: created.session.id,
+      intent: { kind: "session.retitle", title: "Moved on" },
+      provenance: userProvenance,
+    });
+    const beforeRefold = reported.length;
+
+    // And the next listing has to fold again, so the condition becomes
+    // visible again. It is quieter, not silenced.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported.length).toBe(beforeRefold + 1);
+    expect(reported.at(-1)).toBe(failure);
+
+    // ...and then goes quiet again while the new entry stands.
+    await expect(plane.listSessions(query)).resolves.toHaveLength(1);
+    expect(reported.length).toBe(beforeRefold + 1);
   });
 });
