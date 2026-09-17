@@ -144,6 +144,11 @@ function useColumnWindow({
   // Learn the real row height from whatever is mounted. The measurement reads
   // the slots the previous commit painted, so it can only ever refine an
   // estimate — it never gates the first render on a measurement.
+  //
+  // Re-run on the window or the count moving, which is exactly when the
+  // mounted SET changed and there is something new to learn. The write it can
+  // make feeds back into `range`, so the deadband in `shouldAdoptRowStride` is
+  // what stops measure → write → measure from becoming a loop.
   React.useLayoutEffect(() => {
     const list = listRef.current;
     if (list === null) return;
@@ -155,7 +160,7 @@ function useColumnWindow({
     strideRef.current = measured;
     setRowStride(measured);
     recompute();
-  });
+  }, [range, count, listRef, recompute]);
 
   // Selected-item visibility. A selection made somewhere else — the sidebar, a
   // nav step, a drop landing under a non-manual sort — can name a row outside
@@ -387,7 +392,11 @@ export const BoardColumn = React.memo(function BoardColumn({
               className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
             >
               {leadingRows > 0 ? (
-                <div aria-hidden data-column-spacer="leading" style={{ height: spacerHeight(leadingRows) }} />
+                <div
+                  aria-hidden
+                  data-column-spacer="leading"
+                  style={{ height: spacerHeight(leadingRows) }}
+                />
               ) : null}
               {mounted.map((ticket) => (
                 <TicketCard
@@ -405,7 +414,11 @@ export const BoardColumn = React.memo(function BoardColumn({
                 />
               ))}
               {trailingRows > 0 ? (
-                <div aria-hidden data-column-spacer="trailing" style={{ height: spacerHeight(trailingRows) }} />
+                <div
+                  aria-hidden
+                  data-column-spacer="trailing"
+                  style={{ height: spacerHeight(trailingRows) }}
+                />
               ) : null}
             </div>
           </div>

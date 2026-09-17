@@ -231,6 +231,9 @@ export function aggregateInteraction(id, label, samples) {
     // latency they explain.
     "boardTickets",
     "mountedCards",
+    // How long each Session band actually was (VC-316).
+    "sidebarRows_active",
+    "sidebarRows_previous",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -680,7 +683,21 @@ async function measureSidebar(page, app) {
   };
   const close = await phase();
   const open = await phase();
+  // How many rows the two Session bands were actually holding (VC-316). The
+  // sidebar's Previous list is the other half of that ticket's question, and
+  // "is it long?" cannot be answered by a latency: a band bounded by age (see
+  // `PREVIOUS_MAX_AGE_MS`) and a band that is genuinely short read the same on
+  // the clock and want completely different work.
+  const sidebarRows = await page.evaluate(() =>
+    Object.fromEntries(
+      [...document.querySelectorAll("[data-session-band]")].map((band) => [
+        `sidebarRows_${band.getAttribute("data-session-band")}`,
+        band.querySelectorAll('[data-sidebar="menu-item"]').length,
+      ]),
+    ),
+  );
   return {
+    ...sidebarRows,
     latencyMs: close.latencyMs + open.latencyMs,
     closeMs: close.latencyMs,
     openMs: open.latencyMs,
@@ -878,8 +895,6 @@ async function measureBoardScroll(page, app) {
           .toSorted((a, b) => b.distance - a.distance)
           .at(0);
         if (target === undefined || target.distance <= 0) return 0;
-        const frame = () =>
-          new Promise((resolvePromise) => requestAnimationFrame(() => resolvePromise(undefined)));
         // A fixed number of steps rather than a fixed pixel stride: the point is
         // one comparable gesture across 300 and 10,000 cards, and a fixed stride
         // would make the tall board a thirty-times longer measurement.
@@ -888,7 +903,7 @@ async function measureBoardScroll(page, app) {
         for (let step = 1; step <= steps; step += 1) {
           const before = target.node.scrollTop;
           target.node.scrollTop = (target.distance * step) / steps;
-          await frame();
+          await new Promise((settle) => requestAnimationFrame(() => settle(undefined)));
           travelled += Math.abs(target.node.scrollTop - before);
         }
         return travelled;
@@ -1619,6 +1634,7 @@ export function markdown(report) {
       if (interaction.id === "sidebar_toggle") {
         lines.push(
           `| ${arm.name} | ↳ close / open | ${summary.closeMs?.p50 ?? "—"} / ${summary.openMs?.p50 ?? "—"} ms | ${summary.closeMs?.p95 ?? "—"} / ${summary.openMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
+          `| ${arm.name} | ↳ band rows, Active / Previous | ${summary.sidebarRows_active?.p50 ?? "—"} / ${summary.sidebarRows_previous?.p50 ?? "—"} | ${summary.sidebarRows_active?.p95 ?? "—"} / ${summary.sidebarRows_previous?.p95 ?? "—"} | — | — | — | — | — |`,
         );
       }
       if (interaction.id === "ticket_switch") {

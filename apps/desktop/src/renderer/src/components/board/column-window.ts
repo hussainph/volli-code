@@ -87,7 +87,8 @@ export function columnWindow({
   if (count <= minimum) return { first: 0, last: count };
   // A non-finite or non-positive stride is a column that has not been measured
   // yet, never a reason to divide by zero.
-  const stride = Number.isFinite(rowStride) && rowStride > 0 ? rowStride : COLUMN_ROW_STRIDE_FALLBACK;
+  const stride =
+    Number.isFinite(rowStride) && rowStride > 0 ? rowStride : COLUMN_ROW_STRIDE_FALLBACK;
   const top = Number.isFinite(scrollTop) && scrollTop > 0 ? scrollTop : 0;
   const height = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0;
   let first = clamp(Math.floor(top / stride) - overscan, 0, count);

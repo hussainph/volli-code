@@ -99,8 +99,7 @@ function ticketScalePresets() {
     targetFileBytes: 37_300_000,
     targetSessionEventBytes: 17_300_000,
   };
-  const scaled = (tickets) =>
-    Object.freeze({ ...base, tickets, ticketEvents: tickets * 2 });
+  const scaled = (tickets) => Object.freeze({ ...base, tickets, ticketEvents: tickets * 2 });
   return {
     "tickets-300": scaled(300),
     "tickets-3k": scaled(3_000),
