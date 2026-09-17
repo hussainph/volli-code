@@ -493,13 +493,17 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
         // 8px, so the override was a no-op that read like a deliberate
         // difference from the Active row above it.
         className={cn("h-6 gap-1.5 text-ui text-muted-foreground", row.cleaned && "opacity-80")}
-        // The band's second listing surface gets the same provenance line the
-        // Active row gets, from the same function — a Session that dropped its
-        // mark on ageing out of Active would be a Run hiding in the quiet band.
-        // The glyph's own words, in the one place this row can afford them.
-        // The Active row has said its harness in its `title` since the meta
-        // line stopped naming one (see `placeLine`); this band never did, which
-        // left its new mark with nothing anywhere to decode it.
+        // Two facts this one-line row cannot spell on screen, in the one place
+        // it can afford them:
+        //
+        // The provenance line is the same one the Active row gets, from the
+        // same function — a Session that dropped its mark on ageing out of
+        // Active would be a Run hiding in the quiet band.
+        //
+        // The harness is the words its new glyph stands for. The Active row has
+        // said its harness here since the meta line stopped naming one (see
+        // `placeLine`); this band never did, which left the mark with nothing
+        // anywhere to decode it.
         title={rowTitleAttribute(
           row,
           row.harnessId === null ? [row.title] : [row.title, harnessLabel(row.harnessId)],

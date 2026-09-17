@@ -16,8 +16,8 @@
 import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { PERSON_STARTED } from "@volli/shared";
-import type { HarnessId, Ticket } from "@volli/shared";
+import { FIRST_CLASS_HARNESS_IDS, harnessLabel, PERSON_STARTED } from "@volli/shared";
+import type { FirstClassHarnessId, HarnessId, Ticket } from "@volli/shared";
 
 import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
 import {
@@ -462,19 +462,49 @@ describe("companion harness glyph", () => {
     );
   }
 
-  it("draws a different glyph for each first-class harness, in both bands", () => {
-    const claude = render(row({ harnessId: "claude-code" }));
-    const codex = render(row({ harnessId: "codex" }));
+  /** The row's one glyph, as a value two renders can be compared by. */
+  const activeMark = (harnessId: HarnessId | null): string =>
+    glyphPaths(render(row({ harnessId }))).join("|");
+  const previousMark = (overrides: Partial<PreviousSessionRow>): string =>
+    glyphPaths(renderPrevious(overrides)).join("|");
 
-    expect(claude).toContain('aria-label="Claude Code"');
-    expect(codex).toContain('aria-label="Codex"');
-    // The whole point: with every word hidden, the two rows still differ.
-    expect(glyphPaths(claude)).not.toEqual(glyphPaths(codex));
+  // Driven off the shared vocabulary rather than a list retyped here, and over
+  // ALL of it rather than one pair. `HARNESS_GLYPHS` being a
+  // `Record<FirstClassHarnessId, …>` proves only that every harness has a KEY:
+  // two of them pointing at one drawing type-checks perfectly, and it is
+  // precisely the failure the acceptance forbids. A fifth harness added
+  // upstream lands here as a failure rather than as a silently shared mark.
+  it("draws a different glyph for every first-class harness, in both bands", () => {
+    const byDrawing = new Map<string, FirstClassHarnessId[]>();
+    for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
+      const active = activeMark(harnessId);
+      expect(active).not.toBe("");
+      // A Session keeps its mark as it ages out of one band and into the other.
+      expect(previousMark({ harnessId })).toBe(active);
+      expect(render(row({ harnessId }))).toContain(`aria-label="${harnessLabel(harnessId)}"`);
+      byDrawing.set(active, [...(byDrawing.get(active) ?? []), harnessId]);
+    }
 
-    const cursor = glyphPaths(renderPrevious({ harnessId: "cursor" }));
-    const opencode = glyphPaths(renderPrevious({ harnessId: "opencode" }));
-    expect(cursor).not.toEqual(opencode);
-    expect(cursor).not.toEqual(glyphPaths(renderPrevious({ harnessId: "claude-code" })));
+    // One harness per drawing, in order: any collision collapses two ids into
+    // a single entry, and the mismatch names the pair that shared a mark.
+    expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
+      ...FIRST_CLASS_HARNESS_IDS,
+    ]);
+  });
+
+  // Distinct from the harnesses is not enough: the band already draws two
+  // generic marks, and both of them mean something a harness does not. A
+  // first-class harness wearing the terminal window would be indistinguishable
+  // from a bare shell and from a BYO harness, which legitimately wear it.
+  it("keeps every harness mark distinct from the band's generic ones", () => {
+    const terminal = previousMark({ harnessId: null });
+    const chat = previousMark({ kind: "chat", harnessId: null });
+    expect(terminal).not.toBe(chat);
+
+    for (const harnessId of FIRST_CLASS_HARNESS_IDS) {
+      expect(previousMark({ harnessId })).not.toBe(terminal);
+      expect(previousMark({ harnessId })).not.toBe(chat);
+    }
   });
 
   // Outline at the band's small-glyph tier, pinned against the drawing itself:
@@ -495,10 +525,17 @@ describe("companion harness glyph", () => {
   // A bring-your-own harness gets the generic terminal, not a second invented
   // mark that would only mean "not one of the four".
   it("keeps the generic terminal for a harness this build does not know", () => {
-    const custom = renderPrevious({ harnessId: "my-custom-harness" as HarnessId });
+    const custom = "my-custom-harness" as HarnessId;
 
-    expect(custom).toContain('aria-label="my-custom-harness"');
-    expect(glyphPaths(custom)).toEqual(glyphPaths(renderPrevious({ harnessId: null })));
+    expect(renderPrevious({ harnessId: custom })).toContain('aria-label="my-custom-harness"');
+    expect(previousMark({ harnessId: custom })).toBe(previousMark({ harnessId: null }));
+
+    // The Active band takes the same fallback, and still DRAWS: it marks a row
+    // wherever there is a harness, and a slug this build cannot name is still
+    // one — which is what keeps it apart from the shell that draws nothing.
+    expect(render(row({ harnessId: custom }))).toContain('aria-label="my-custom-harness"');
+    expect(activeMark(custom)).toBe(previousMark({ harnessId: null }));
+    expect(activeMark(custom)).not.toBe(activeMark(null));
   });
 
   // The words the mark stands for, in the one place this one-line row can

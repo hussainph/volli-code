@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  harnessLabel,
   PERSON_STARTED,
   type ChatSessionRecord,
   type HarnessId,
@@ -167,5 +168,54 @@ describe("sessionSourceHarness", () => {
   // A structured Session runs the Agent Runtime, not a CLI.
   it("names none for a chat row", () => {
     expect(sessionSourceHarness({ kind: "chat", record: chatRecord() })).toBeNull();
+  });
+});
+
+/**
+ * The pairing itself, which is the thing VC-402 actually rests on: a row draws
+ * the glyph `sessionSourceHarness` picks and prints the words
+ * `sessionSourceLabel` picks, so a reader is told one harness twice or two
+ * harnesses once.
+ *
+ * Asserted as a RELATION over a matrix rather than as two lists of expected
+ * strings, because the failure this guards is drift between the two functions,
+ * and two independently-maintained expectation lists are exactly how that drift
+ * gets written down as intended. The matrix is every axis either function reads
+ * — `launchKind`, `harnessId`, `activeHarnessId`, `placement` — so a change to
+ * the gate in one has nowhere to hide.
+ */
+describe("sessionSourceHarness agrees with sessionSourceLabel", () => {
+  const LAUNCH_KINDS = ["agent", "shell", "unknown"] as const;
+  const HARNESSES = ["claude-code", "codex", "my-custom-harness" as HarnessId] as const;
+  const ACTIVE = [null, "cursor" as HarnessId] as const;
+  const PLACEMENTS = ["tab", "split", "unknown"] as const;
+
+  it("names the same harness in the glyph and in the words, or names none", () => {
+    let namedAHarness = 0;
+    for (const launchKind of LAUNCH_KINDS) {
+      for (const harnessId of HARNESSES) {
+        for (const activeHarnessId of ACTIVE) {
+          for (const placement of PLACEMENTS) {
+            const session = record({ launchKind, harnessId, activeHarnessId, placement });
+            const harness = sessionSourceHarness(terminalRow(session));
+            const label = sourceLabel(session);
+            if (harness === null) {
+              // No glyph to decode, so the words must not be naming a CLI
+              // either: the only labels left are the two generic ones.
+              expect(["Shell", "Shell · Split", "Terminal", "Terminal · Split"]).toContain(label);
+              continue;
+            }
+            namedAHarness += 1;
+            // The label is the harness's own words, plus only the placement
+            // suffix the glyph never claimed to carry.
+            expect(label).toBe(
+              placement === "split" ? `${harnessLabel(harness)} · Split` : harnessLabel(harness),
+            );
+          }
+        }
+      }
+    }
+    // The relation above is vacuously true if nothing ever names a harness.
+    expect(namedAHarness).toBe(HARNESSES.length * ACTIVE.length * PLACEMENTS.length);
   });
 });
