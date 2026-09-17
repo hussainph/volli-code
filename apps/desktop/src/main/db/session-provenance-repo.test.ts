@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 import { recordAutomationRun } from "./automations-repo";
 import { recordSessionStartedOnce, recordTicketEvent } from "./events-repo";
 import { insertProject } from "./projects-repo";
-import { readSessionProvenance } from "./session-provenance-repo";
+import { readSessionProvenance, readSessionProvenances } from "./session-provenance-repo";
 import { openTestDb, testProject, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
 import { insertTicket } from "./tickets-repo";
@@ -370,5 +370,245 @@ describe("readSessionProvenance", () => {
     expect(
       readSessionProvenance(f.db, { sessionId: "session-second", ticketId: f.ticketId }),
     ).toEqual({ kind: "user" });
+  });
+});
+
+/**
+ * The roster shape of the same question (VC-392).
+ *
+ * The rule these tests hold is not "the batch is fast": it is that the batch
+ * and the single reader answer the same Session identically, because the fetch
+ * (`volli:session-list`) asks for a whole roster and the push channel
+ * (`activity-watch.ts`) asks for one Session at a time, and a Session that
+ * changed provenance as it moved between the two would flicker a Run's bolt.
+ */
+describe("readSessionProvenances", () => {
+  /** Every source the reader can answer from, in one project. */
+  function roster(): Fixture & { secondTicketId: string; sessionIds: string[] } {
+    const f = fixture();
+    const secondTicket = testTicket(f.projectId);
+    insertTicket(ctx.db, secondTicket);
+
+    f.session("session-parent", "Orchestrator");
+    // 1. a completed Run, the only source that can carry a name
+    f.session("session-run", "Nightly sweep");
+    recordAutomationRun(
+      f.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: f.ticketId,
+        sessionId: "session-run",
+        model: MODEL,
+      },
+      3_000,
+    );
+    // 2. a Run caught between Session mint and its Run row
+    f.session("session-premint", "Scheduled sweep", null);
+    f.db
+      .prepare("INSERT INTO automation_commands (id, intent, created_at) VALUES (?, ?, ?)")
+      .run("premint-run", JSON.stringify({ kind: "automation.run" }), 1_500);
+    f.db
+      .prepare(
+        `INSERT INTO automation_session_mint_intents
+           (session_create_command_id, automation_command_id, recorded_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run("premint:create", "premint-run", 1_500);
+    f.db
+      .prepare(
+        `INSERT INTO session_commands (id, session_id, created_at, intent, route)
+         VALUES (?, ?, ?, ?, NULL)`,
+      )
+      .run("premint:create", "session-premint", 2_000, JSON.stringify({ kind: "session.create" }));
+    // 3. a launch by a parent Session, and one by a parent that is gone
+    f.session("session-child", "Delegated");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-child",
+      now: 2_100,
+      actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+    });
+    f.session("session-orphan", "Delegated by a deleted parent");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-orphan",
+      now: 2_200,
+      actor: { kind: "session", sessionId: "session-gone", ticketId: f.ticketId },
+    });
+    // 4. an Automation named only by its launch event
+    f.session("session-launched", "Run with no row");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-launched",
+      now: 2_300,
+      actor: { kind: "automation" },
+    });
+    // 5. the resting case, twice: a person on a Ticket, and a Board Session
+    f.session("session-person", "Opened by hand");
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.ticketId,
+      sessionId: "session-person",
+      now: 2_400,
+      actor: { kind: "user" },
+    });
+    f.session("session-board", "Board chat", null);
+    // A Session on the OTHER Ticket, so the batch has more than one Ticket to
+    // scope by.
+    f.session("session-elsewhere", "Second ticket", secondTicket.id);
+    recordSessionStartedOnce(f.db, {
+      ticketId: secondTicket.id,
+      sessionId: "session-elsewhere",
+      now: 2_500,
+      actor: { kind: "session", sessionId: "session-parent", ticketId: secondTicket.id },
+    });
+    return {
+      ...f,
+      secondTicketId: secondTicket.id,
+      sessionIds: [
+        "session-parent",
+        "session-run",
+        "session-premint",
+        "session-child",
+        "session-orphan",
+        "session-launched",
+        "session-person",
+        "session-board",
+        "session-elsewhere",
+      ],
+    };
+  }
+
+  /** What the listing hands in: each Session with the Ticket that scopes it. */
+  function queriesOf(f: ReturnType<typeof roster>) {
+    return f.sessionIds.map((sessionId) => ({
+      sessionId,
+      ticketId: (
+        f.db.prepare("SELECT ticket_id FROM sessions WHERE id = ?").get(sessionId) as {
+          ticket_id: string | null;
+        }
+      ).ticket_id,
+    }));
+  }
+
+  // THE constraint this ticket is not allowed to break.
+  it("answers a roster exactly as the per-Session reader answers each row", () => {
+    const f = roster();
+    const queries = queriesOf(f);
+
+    const batched = readSessionProvenances(f.db, queries);
+
+    expect([...batched.keys()].toSorted()).toEqual(f.sessionIds.toSorted());
+    for (const query of queries) {
+      expect(batched.get(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
+    }
+    // And the answers are the ones the sources say, not merely two agreeing
+    // readers of the same mistake.
+    expect(batched.get("session-run")).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
+    expect(batched.get("session-premint")).toEqual({ kind: "automation", automationName: null });
+    expect(batched.get("session-launched")).toEqual({ kind: "automation", automationName: null });
+    expect(batched.get("session-child")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+    expect(batched.get("session-orphan")).toEqual({
+      kind: "session",
+      parentSessionId: "session-gone",
+      parentTitle: null,
+    });
+    expect(batched.get("session-elsewhere")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+    expect(batched.get("session-person")).toEqual({ kind: "user" });
+    expect(batched.get("session-board")).toEqual({ kind: "user" });
+    expect(batched.get("session-parent")).toEqual({ kind: "user" });
+  });
+
+  // The reason the roster read stays scoped by Ticket rather than matching on
+  // the payload alone: a launch event names a Session, and it only speaks for
+  // that Session ON THE TICKET IT WAS RECORDED ON.
+  it("ignores a launch event recorded on a Ticket the Session is not on", () => {
+    const f = roster();
+    recordSessionStartedOnce(f.db, {
+      ticketId: f.secondTicketId,
+      sessionId: "session-person",
+      now: 2_600,
+      actor: { kind: "session", sessionId: "session-parent", ticketId: f.secondTicketId },
+    });
+
+    const batched = readSessionProvenances(f.db, queriesOf(f));
+
+    expect(batched.get("session-person")).toEqual({ kind: "user" });
+    expect(batched.get("session-person")).toEqual(
+      readSessionProvenance(f.db, { sessionId: "session-person", ticketId: f.ticketId }),
+    );
+  });
+
+  it("answers a Session it can find nothing about, and asks nothing of an empty roster", () => {
+    const f = roster();
+
+    expect(readSessionProvenances(f.db, [{ sessionId: "ghost", ticketId: null }])).toEqual(
+      new Map([["ghost", { kind: "user" }]]),
+    );
+    expect(readSessionProvenances(f.db, [])).toEqual(new Map());
+  });
+
+  it("answers a repeated Session once", () => {
+    const f = roster();
+    const query = { sessionId: "session-child", ticketId: f.ticketId };
+
+    expect(readSessionProvenances(f.db, [query, query, query])).toEqual(
+      new Map([
+        [
+          "session-child",
+          { kind: "session", parentSessionId: "session-parent", parentTitle: "Orchestrator" },
+        ],
+      ]),
+    );
+  });
+
+  // The point of the batch: the statement count is bounded by the number of
+  // sources, not by the roster. Pinned as a count because "one query per
+  // Session, after a fold that deliberately yields" is exactly the block
+  // VC-392 was filed about, and it would come back invisibly.
+  it("reads the whole roster in at most one query per source", () => {
+    const f = roster();
+    const queries = queriesOf(f);
+    const executed: string[] = [];
+    const prepare = f.db.prepare.bind(f.db);
+    // Wraps the statements this call prepares, so the count is of executions
+    // rather than of cache misses (`prepared` memoizes per handle).
+    f.db.prepare = ((sql: string) => {
+      const statement = prepare(sql);
+      for (const method of ["get", "all", "iterate", "run"] as const) {
+        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
+        Object.defineProperty(statement, method, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            executed.push(sql);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
+    }) as typeof f.db.prepare;
+
+    readSessionProvenances(f.db, queries);
+    const batchedCount = executed.length;
+    executed.length = 0;
+    for (const query of queries) readSessionProvenance(f.db, query);
+    const perSessionCount = executed.length;
+
+    expect(batchedCount).toBe(4);
+    // Nine Sessions, and the single reader is the batch of one it delegates to,
+    // so the roster's four queries are what a per-row listing would pay
+    // nine times over.
+    expect(perSessionCount).toBeGreaterThan(batchedCount * 4);
   });
 });

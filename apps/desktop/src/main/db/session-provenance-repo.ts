@@ -31,6 +31,13 @@
  * completed Run row is still the record that names an Automation; the fallback
  * proves only the party, which is enough to keep the bolt and Run-scoped live
  * treatment honest without guessing.
+ *
+ * ── ONE QUESTION, TWO SIZES ───────────────────────────────────────────────
+ * {@link readSessionProvenances} answers a whole roster from set-based queries
+ * and {@link readSessionProvenance} is that same call with a batch of one, so
+ * the fetch (`data-ipc.ts`) and the push (`activity-watch.ts`) cannot come to
+ * disagree about who started a Session (VC-392). Everything the precedence
+ * says lives in the batch; nothing re-derives it for the single case.
  */
 import type Database from "better-sqlite3";
 import { PERSON_STARTED, type SessionProvenance } from "@volli/shared";
@@ -53,60 +60,167 @@ export interface SessionProvenanceReader {
 }
 
 /**
- * Derives one Session's provenance. The completed Run is asked first because it
- * alone can carry a name. The pre-mint relation then covers every Run's crash
- * window; only after those two Automation sources miss does a Ticket launch
- * event decide between a parent Session, an Automation from older history, and
- * a person.
+ * Derives one Session's provenance.
+ *
+ * One call of {@link readSessionProvenances} rather than its own queries, so
+ * there is exactly one implementation of this question in the process. The two
+ * channels ask it at different sizes — the push channel answers one Session at
+ * a time, the fetch answers a whole roster — and a second implementation for
+ * the single case is precisely how a fetch and a push would come to disagree
+ * about who started a Session. A batch of one costs what the per-Session
+ * queries cost: the stages short-circuit the same way, so an Automation's
+ * Session is still answered by one indexed read.
  */
 export function readSessionProvenance(
   db: Database.Database,
   query: SessionProvenanceQuery,
 ): SessionProvenance {
-  const run = prepared<[string], { automation_name: string | null }>(
-    db,
-    "SELECT automation_name FROM automation_runs WHERE session_id = ? LIMIT 1",
-  ).get(query.sessionId);
-  if (run !== undefined) return { kind: "automation", automationName: run.automation_name };
+  return readSessionProvenances(db, [query]).get(query.sessionId) ?? PERSON_STARTED;
+}
 
-  const pendingRun = prepared<[string], { present: number }>(
+/**
+ * The same derivation over a whole roster, in a bounded number of set-based
+ * queries rather than up to three per Session (VC-392).
+ *
+ * `volli:session-list` used to call the single reader once per row, so a
+ * 60-Session roster was up to 180 synchronous statements in one unbroken block
+ * immediately after a fold that deliberately yields. The stages below are the
+ * same four sources in the same precedence, each asked once for every Session
+ * that still needs it:
+ *
+ * 1. the completed Run — the only source that can carry an Automation's name;
+ * 2. the pre-insert marker, for a Run that minted a Session and crashed;
+ * 3. the Ticket's `session_started` event, which names the launching party;
+ * 4. the parent Session's title, for the launches that name a Session.
+ *
+ * Stage 3 is where the batching earns most: it is an index seek on
+ * `ticket_events_ticket (ticket_id, created_at)` followed by a `json_extract`
+ * comparison over the Ticket's whole timeline, and the roster of a worked
+ * Ticket asked for that same timeline once per Session on it. Now each Ticket
+ * is read once, whatever the roster.
+ *
+ * A repeated `sessionId` in `queries` is answered once; the returned map is
+ * keyed by Session id, and a Session has one Ticket, so no key can mean two
+ * questions.
+ *
+ * @returns one entry per distinct queried Session id, never a missing key.
+ */
+export function readSessionProvenances(
+  db: Database.Database,
+  queries: readonly SessionProvenanceQuery[],
+): Map<string, SessionProvenance> {
+  const answers = new Map<string, SessionProvenance>();
+  const pending = new Map<string, string | null>();
+  for (const query of queries) {
+    if (pending.has(query.sessionId)) continue;
+    pending.set(query.sessionId, query.ticketId);
+  }
+  if (pending.size === 0) return answers;
+
+  // ── 1. completed Runs ───────────────────────────────────────────────────
+  for (const row of prepared<[string], { session_id: string; automation_name: string | null }>(
     db,
-    `SELECT 1 AS present
+    `SELECT session_id, automation_name
+       FROM automation_runs
+      WHERE session_id IN (SELECT value FROM json_each(?))`,
+  ).iterate(idList(pending.keys()))) {
+    // First row wins for a Session with more than one Run row, which is what
+    // the single-Session read's bare `LIMIT 1` also takes.
+    if (answers.has(row.session_id)) continue;
+    answers.set(row.session_id, { kind: "automation", automationName: row.automation_name });
+    pending.delete(row.session_id);
+  }
+  if (pending.size === 0) return answers;
+
+  // ── 2. a Run's pre-insert window ────────────────────────────────────────
+  // Its accepted Run marked the stable create command before mint, but the
+  // projection that names the Automation has not landed (and after a crash may
+  // never land).
+  for (const row of prepared<[string], { session_id: string }>(
+    db,
+    `SELECT command.session_id AS session_id
        FROM session_commands AS command
        JOIN automation_session_mint_intents AS mint
          ON mint.session_create_command_id = command.id
-      WHERE command.session_id = ?
-      LIMIT 1`,
-  ).get(query.sessionId);
-  // The pre-Run window for a Board Session: its accepted Run marked the
-  // stable create command before mint, but the projection that names the
-  // Automation has not landed (and after a crash may never land).
-  if (pendingRun !== undefined) return { kind: "automation", automationName: null };
+      WHERE command.session_id IN (SELECT value FROM json_each(?))`,
+  ).iterate(idList(pending.keys()))) {
+    if (answers.has(row.session_id)) continue;
+    answers.set(row.session_id, { kind: "automation", automationName: null });
+    pending.delete(row.session_id);
+  }
 
-  if (query.ticketId === null) return PERSON_STARTED;
-  const started = prepared<[string, string], { actor: string }>(
-    db,
-    `SELECT actor FROM ticket_events
-      WHERE ticket_id = ?
-        AND kind = 'session_started'
-        AND json_extract(payload, '$.sessionId') = ?
-      LIMIT 1`,
-  ).get(query.ticketId, query.sessionId);
-  if (started === undefined) return PERSON_STARTED;
+  // Every Session left rests at a person unless a Ticket launch event says
+  // otherwise, and a Board Session has no Ticket timeline to ask.
+  for (const sessionId of pending.keys()) answers.set(sessionId, PERSON_STARTED);
+  const ticketOf = new Map<string, string>();
+  for (const [sessionId, ticketId] of pending) {
+    if (ticketId !== null) ticketOf.set(sessionId, ticketId);
+  }
+  if (ticketOf.size === 0) return answers;
 
-  const launcher = launchActorOf(started.actor);
-  if (launcher === null) return PERSON_STARTED;
-  // The pre-Run window: the launch says an Automation, and the record that
-  // would name it is not there (or never will be). The bolt still draws.
-  if (launcher.kind === "automation") return { kind: "automation", automationName: null };
-  const parentSessionId = launcher.sessionId;
-  const parent = prepared<[string], { title: string | null }>(
+  // ── 3. the Ticket's launch event ────────────────────────────────────────
+  // Scoped by Ticket for the same reason the single read is: the index makes
+  // it a seek per Ticket, and the payload comparison then runs over that
+  // Ticket's events rather than the table.
+  const parentOf = new Map<string, string>();
+  const tickets = new Set(ticketOf.values());
+  for (const row of prepared<[string], { ticket_id: string; session_id: string; actor: string }>(
     db,
-    "SELECT title FROM sessions WHERE id = ? LIMIT 1",
-  ).get(parentSessionId);
-  // A parent whose row is gone still leaves an honest mark: the tooltip says no
-  // person opened this Session, which is the half that survives the deletion.
-  return { kind: "session", parentSessionId, parentTitle: parent?.title ?? null };
+    `SELECT ticket_id, json_extract(payload, '$.sessionId') AS session_id, actor
+       FROM ticket_events
+      WHERE ticket_id IN (SELECT value FROM json_each(?))
+        AND kind = 'session_started'`,
+  ).iterate(idList(tickets))) {
+    const sessionId = row.session_id;
+    if (typeof sessionId !== "string") continue;
+    // Only the Sessions this roster asked about, and only the first event for
+    // each — the single read's `LIMIT 1` inside the same Ticket scope.
+    if (ticketOf.get(sessionId) !== row.ticket_id) continue;
+    ticketOf.delete(sessionId);
+    const launcher = launchActorOf(row.actor);
+    if (launcher === null) continue;
+    // The pre-Run window: the launch says an Automation, and the record that
+    // would name it is not there (or never will be). The bolt still draws.
+    if (launcher.kind === "automation") {
+      answers.set(sessionId, { kind: "automation", automationName: null });
+      continue;
+    }
+    parentOf.set(sessionId, launcher.sessionId);
+  }
+  if (parentOf.size === 0) return answers;
+
+  // ── 4. the parent Sessions' titles ──────────────────────────────────────
+  const titleOf = new Map<string, string | null>();
+  for (const row of prepared<[string], { id: string; title: string | null }>(
+    db,
+    "SELECT id, title FROM sessions WHERE id IN (SELECT value FROM json_each(?))",
+  ).iterate(idList(new Set(parentOf.values())))) {
+    titleOf.set(row.id, row.title);
+  }
+  for (const [sessionId, parentSessionId] of parentOf) {
+    // A parent whose row is gone still leaves an honest mark: the tooltip says
+    // no person opened this Session, which is the half that survives the
+    // deletion.
+    answers.set(sessionId, {
+      kind: "session",
+      parentSessionId,
+      parentTitle: titleOf.get(parentSessionId) ?? null,
+    });
+  }
+  return answers;
+}
+
+/**
+ * The set of ids a stage asks about, as the one bound parameter of its query.
+ *
+ * A JSON array through `json_each` rather than a generated `IN (?,?,?)`: the
+ * SQL text is then the same for every roster size, so `prepared`'s per-handle
+ * cache holds one statement per stage instead of one per arity, and no roster
+ * can reach SQLite's bound-parameter limit. The plan is unchanged — each value
+ * is still an index seek (`SEARCH ... USING INDEX`), driven from the list.
+ */
+function idList(ids: Iterable<string>): string {
+  return JSON.stringify([...ids]);
 }
 
 /** The two parties a launch actor can name, once everything else is `null`. */
