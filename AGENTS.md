@@ -17,6 +17,7 @@ Use `CONTEXT.md` for canonical domain language and `docs/DESIGN.md` for the livi
 - `packages/session-rpc/` (`@volli/session-rpc`) — the thin tRPC edge for Session clients and sanitized diagnostics.
 - `packages/agent-runtime/` (`@volli/agent-runtime`) — the product-owned executor boundary, Pi implementation, authority enforcement machinery, prompt assembly, model access, and safe web tools.
 - `packages/cli/` (`@volli/cli`) — the built agent-facing `volli` CLI, which communicates with Electron main over the local Unix socket.
+- `packages/font-notices/` (`@volli/font-notices`) — the third-party font license notices the public sites must publish beside the font binaries they redistribute. `src/` is pure rendering with no Node or DOM imports; `check-dist.mjs` and its `check-font-notices` CLI are the build gate that reads a finished `dist/` and shares no code with the renderer.
 - `apps/desktop/src/renderer/lab/` — the UI lab (`pnpm lab`): browser-only scratches for trying interactions against real components and tokens with fixture data, before they become app features. Dev-server only, never built; it imports the app, never the reverse.
 
 App data lives under Electron's `userData` directory. The agent-facing `volli` CLI communicates with main over a Unix socket.
