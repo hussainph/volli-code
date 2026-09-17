@@ -1,0 +1,25 @@
+{
+  "name": "@volli/font-notices",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "bin": {
+    "check-font-notices": "./bin/check-font-notices.mjs"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
