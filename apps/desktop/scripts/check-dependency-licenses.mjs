@@ -37,7 +37,7 @@
  * docs/licensing/dependency-license-review.md — not resolved here.
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -205,6 +205,17 @@ export function isCaretRange(range) {
 }
 
 /**
+ * Whether one license id is on the permissive list. Split out from
+ * {@link electPermissiveLicense} because the election check needs to ask about
+ * a single id rather than about an expression.
+ * @param {string} id
+ * @param {readonly string[]} permissiveIds
+ */
+function isPermissiveId(id, permissiveIds) {
+  return permissiveIds.some((candidate) => candidate.toLowerCase() === id.toLowerCase());
+}
+
+/**
  * Whether a package name is covered by a policy key. A key may end in `*` to
  * cover a family of per-platform packages.
  *
@@ -318,6 +329,39 @@ export function auditDependencyLicenses(facts, policy) {
       }
     }
 
+    // --- 2a. A recorded election is a claim that must still be true ---------
+    //
+    // `electedLicense` is the ONLY field in this record that is copied verbatim
+    // into a published notice (notice-inputs.md §3). Nothing checked it, so a
+    // typo, or a relicense that removes the elected half, would have become a
+    // false statement about the terms Volli uses a dependency under — which is
+    // the precise failure class this whole gate exists to prevent.
+    const choices = splitLicenseChoices(entry.license);
+    if (entry.electedLicense !== undefined) {
+      if (!choices.some((choice) => choice.toLowerCase() === entry.electedLicense.toLowerCase())) {
+        problems.push(
+          `${name}'s review elects "${entry.electedLicense}", which is not one of the licenses it is ` +
+            `published under ("${entry.license}"). A notice may only name a half that is actually ` +
+            `on offer — elect one of: ${choices.join(", ")}.`,
+        );
+      } else if (!electPermissiveLicense(entry.electedLicense, permissiveIds).permissive) {
+        problems.push(
+          `${name}'s review elects "${entry.electedLicense}", which is not on the permissive list. ` +
+            `Electing a half is how a dual license stops constraining us; electing the restrictive ` +
+            `half records an obligation instead, so say so in the entry rather than in this field.`,
+        );
+      }
+    } else if (
+      choices.length > 1 &&
+      choices.some((choice) => isPermissiveId(choice, permissiveIds))
+    ) {
+      problems.push(
+        `${name} is published under "${entry.license}" — more than one set of terms — but its review ` +
+          `records no electedLicense. A notice reading only "${entry.license}" leaves the reader to ` +
+          `guess which terms apply; record the half Volli elects.`,
+      );
+    }
+
     for (const version of entry.versions) {
       if (!versions.has(version)) {
         problems.push(
@@ -411,7 +455,17 @@ export function auditDependencyLicenses(facts, policy) {
     if (rule === undefined) continue;
 
     if (facts.packaging === null) {
-      notes.push(`${name}: packaging config unreadable, so the asar/unpack checks did not run.`);
+      // Fails rather than notes. A skip is only honest when the reason is a
+      // fact about the MACHINE that the reviewer already accounted for — as
+      // with the darwin-only addon below. An unreadable electron-builder.yml
+      // is a fact about the REPOSITORY: renamed, moved, or newly malformed.
+      // Noting it would mean a packaging change could switch off the two
+      // assertions that keep the LGPL library replaceable, and still go green.
+      problems.push(
+        `${name}: apps/desktop/electron-builder.yml could not be read or parsed, so the asar and ` +
+          `files assertions could not run. Those are what keep the LGPL library unpacked and ` +
+          `shipped; a gate that cannot read the packaging config has not checked it.`,
+      );
     } else {
       if (!facts.packaging.asarUnpack.includes(rule.electronBuilderAsarUnpackPattern)) {
         problems.push(
@@ -476,19 +530,33 @@ function readInstalledPackages() {
   return found;
 }
 
+/**
+ * Directory entries, already classified, or `[]` when the directory is absent.
+ *
+ * `withFileTypes` rather than `readdirSync` + `statSync(full)`: the two-call
+ * shape asks the filesystem the same question twice and then acts on the first
+ * answer, which CodeQL reports as `js/file-system-race` (high) and which also
+ * costs one extra syscall per entry. The dirent already carries the answer.
+ * @param {string} dir
+ */
+function readEntries(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
 /** Every workspace manifest, with its declared dependencies by field. */
 function readWorkspaceManifests() {
   const manifests = [];
   const roots = [
     REPO_ROOT,
-    ...["apps", "packages"].flatMap((group) => {
-      const dir = resolve(REPO_ROOT, group);
-      return existsSync(dir)
-        ? readdirSync(dir)
-            .map((entry) => resolve(dir, entry))
-            .filter((entry) => statSync(entry).isDirectory())
-        : [];
-    }),
+    ...["apps", "packages"].flatMap((group) =>
+      readEntries(resolve(REPO_ROOT, group))
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => resolve(REPO_ROOT, group, entry.name)),
+    ),
   ];
   for (const root of roots) {
     const manifestPath = resolve(root, "package.json");
@@ -501,25 +569,39 @@ function readWorkspaceManifests() {
   return manifests;
 }
 
-/** Every first-party source file, repo-relative. */
+/**
+ * Every first-party source file, repo-relative.
+ *
+ * The repository ROOT's own files are scanned as well as `apps/` and
+ * `packages/`. They were not, and that was a hole in the containment rules
+ * rather than a tidiness point: `vite.config.ts` and `vitest.workers.ts` are
+ * first-party code that can import anything, so a confined package reached
+ * from one of them would have passed this gate. Workspace manifests were
+ * already read from the root, so the two halves now agree about where
+ * first-party code lives.
+ */
 function readSources() {
   const sources = [];
+  const collect = (full, entryName) => {
+    if (!SOURCE_EXTENSIONS.some((extension) => entryName.endsWith(extension))) return;
+    const path = relative(REPO_ROOT, full).replaceAll("\\", "/");
+    if (IMPORT_SCAN_EXEMPT.has(path)) return;
+    sources.push({ path, source: readFileSync(full, "utf8") });
+  };
   const walk = (dir) => {
-    for (const entry of readdirSync(dir)) {
-      if (SKIPPED_DIRECTORIES.has(entry)) continue;
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-      } else if (SOURCE_EXTENSIONS.some((extension) => entry.endsWith(extension))) {
-        const path = relative(REPO_ROOT, full).replaceAll("\\", "/");
-        if (IMPORT_SCAN_EXEMPT.has(path)) continue;
-        sources.push({ path, source: readFileSync(full, "utf8") });
-      }
+    for (const entry of readEntries(dir)) {
+      if (SKIPPED_DIRECTORIES.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else collect(full, entry.name);
     }
   };
-  for (const group of ["apps", "packages"]) {
-    const dir = resolve(REPO_ROOT, group);
-    if (existsSync(dir)) walk(dir);
+  for (const group of ["apps", "packages"]) walk(resolve(REPO_ROOT, group));
+  // The root's own files only. Walking the root itself would re-enter apps/
+  // and packages/ and descend into every other directory in the checkout.
+  for (const entry of readEntries(REPO_ROOT)) {
+    if (entry.isDirectory()) continue;
+    collect(join(REPO_ROOT, entry.name), entry.name);
   }
   return sources;
 }
@@ -678,6 +760,35 @@ function selfTest() {
   // The near-miss that makes exact matching worth stating: a prefix match would pass this.
   expect("does not prefix-match", !electPermissiveLicense("MIT-like", permissive).permissive);
 
+  // SPDX shapes this tree does not currently contain. They are asserted anyway
+  // because the question for each is not "does it parse" but "which way does it
+  // fail" — and the answer must always be CLOSED, i.e. falls through to needing
+  // a reviewed entry, rather than open.
+  expect(
+    "an exception clause is not silently dropped",
+    !electPermissiveLicense("GPL-3.0-only WITH Classpath-exception-2.0", permissive).permissive,
+  );
+  expect(
+    "a permissive id carrying an exception still needs review",
+    !electPermissiveLicense("Apache-2.0 WITH LLVM-exception", permissive).permissive,
+  );
+  expect(
+    "a nested conjunction inside a disjunction is not split into its halves",
+    !electPermissiveLicense("(MIT OR (Apache-2.0 AND CC-BY-4.0))", permissive).permissive,
+  );
+  expect(
+    "a conjunction of two permissive halves still needs review",
+    !electPermissiveLicense("MIT AND Apache-2.0", permissive).permissive,
+  );
+  expect(
+    "an empty expression is not permissive",
+    !electPermissiveLicense("", permissive).permissive,
+  );
+  expect(
+    "whitespace around a disjunct does not defeat the match",
+    electPermissiveLicense("  LGPL-3.0-or-later   OR   MIT  ", permissive).elected === "MIT",
+  );
+
   // --- declared license ---
   expect("reads a plain string", declaredLicense({ license: "MIT" }) === "MIT");
   expect("reads the legacy object", declaredLicense({ license: { type: "ISC" } }) === "ISC");
@@ -748,6 +859,20 @@ function selfTest() {
   expect(
     "does not match a longer name",
     importsPackage('import x from "gsap-extra";', "gsap") === false,
+  );
+  // `.astro` files reach the scan too, and their script blocks are where the
+  // website's gsap import actually lives.
+  expect(
+    "sees an import inside an .astro script block",
+    importsPackage('<script>\n  import { gsap } from "gsap";\n</script>', "gsap"),
+  );
+  expect("sees a single-quoted specifier", importsPackage("import { gsap } from 'gsap';", "gsap"));
+  expect(
+    "a scoped package name is matched exactly",
+    importsPackage(
+      'import x from "@img/sharp-libvips-darwin-arm64";',
+      "@img/sharp-libvips-darwin-arm64",
+    ),
   );
 
   // --- package-name patterns ---
@@ -1094,16 +1219,83 @@ function selfTest() {
     skipped.notes.some((n) => n.includes("not installed on this platform")),
   );
 
+  // Unreadable packaging config FAILS. The two assertions it gates are the
+  // ones that keep the LGPL library replaceable, so "could not check" must not
+  // read as "checked" — unlike the darwin-only skip above, which is a fact
+  // about the machine rather than about the repository.
   const unreadable = JSON.parse(JSON.stringify(nativeFacts));
   unreadable.packaging = null;
   const unreadableResult = auditDependencyLicenses(unreadable, nativePolicy);
   expect(
-    "unreadable packaging config notes rather than fails",
-    unreadableResult.problems.length === 0,
+    "unreadable packaging config fails rather than notes",
+    unreadableResult.problems.some((p) => p.includes("could not be read or parsed")),
   );
   expect(
-    "and says so",
-    unreadableResult.notes.some((n) => n.includes("packaging config unreadable")),
+    "and does not quietly note it instead",
+    !unreadableResult.notes.some((n) => n.includes("electron-builder")),
+  );
+
+  // --- the elected half of a dual license ---------------------------------
+  const dualFacts = {
+    installed: [{ name: "dual-lib", version: "1.0.0", license: "(MPL-2.0 OR Apache-2.0)" }],
+    manifests: [],
+    sources: [],
+    packaging: { asarUnpack: [], files: [] },
+    nativeLibraries: [],
+  };
+  const dualEntry = { license: "(MPL-2.0 OR Apache-2.0)", versions: ["1.0.0"], blocked: null };
+  const withElection = (electedLicense) => ({
+    permissive: { ids: permissive },
+    reviewed: { "dual-lib": { ...dualEntry, ...(electedLicense && { electedLicense }) } },
+  });
+  expect(
+    "a valid election is clean",
+    auditDependencyLicenses(dualFacts, withElection("Apache-2.0")).problems.length === 0,
+  );
+  expect(
+    "an election of a half that is not on offer is caught",
+    auditDependencyLicenses(dualFacts, withElection("BSD-3-Clause")).problems.some((p) =>
+      p.includes("is not one of the licenses it is published under"),
+    ),
+  );
+  expect(
+    "electing the restrictive half is caught",
+    auditDependencyLicenses(dualFacts, withElection("MPL-2.0")).problems.some((p) =>
+      p.includes("not on the permissive list"),
+    ),
+  );
+  expect(
+    "a dual license with no election recorded is caught",
+    auditDependencyLicenses(dualFacts, withElection(null)).problems.some((p) =>
+      p.includes("records no electedLicense"),
+    ),
+  );
+  // A single-license entry must NOT be asked to elect anything.
+  const soleFacts = {
+    ...dualFacts,
+    installed: [{ ...dualFacts.installed[0], license: "Bespoke" }],
+  };
+  expect(
+    "a single-license entry needs no election",
+    auditDependencyLicenses(soleFacts, {
+      permissive: { ids: permissive },
+      reviewed: { "dual-lib": { license: "Bespoke", versions: ["1.0.0"], blocked: null } },
+    }).problems.length === 0,
+  );
+  // Neither must a conjunction: it binds us to every part, so there is no half
+  // to elect and demanding one would be asking for a false record.
+  const conjunctionFacts = {
+    ...dualFacts,
+    installed: [{ ...dualFacts.installed[0], license: "MIT AND CC-BY-4.0" }],
+  };
+  expect(
+    "a conjunction is not asked to elect a half",
+    auditDependencyLicenses(conjunctionFacts, {
+      permissive: { ids: permissive },
+      reviewed: {
+        "dual-lib": { license: "MIT AND CC-BY-4.0", versions: ["1.0.0"], blocked: null },
+      },
+    }).problems.length === 0,
   );
 
   if (failures.length > 0) {

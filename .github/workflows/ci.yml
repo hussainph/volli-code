@@ -160,10 +160,12 @@ jobs:
       # Linux runner by os/cpu: the Mach-O dynamic-linking check and the whole
       # of check:notice-inputs. Both PRINT that they skipped rather than passing
       # silently, so this step being green here is not read as having checked
-      # them — a developer Mac and any macOS lane do. The store scan, manifests,
-      # import containment and packaging lists all run on every platform, and
-      # per-platform package families are keyed by pattern in the policy so the
-      # LGPL and MPL binaries are reviewed whichever sibling gets installed.
+      # them — and the `smoke-boot` job below RUNS them on macos-15, so they are
+      # enforced by CI rather than only by a developer Mac. The store scan,
+      # manifests, import containment and packaging lists all run on every
+      # platform, and per-platform package families are keyed by pattern in the
+      # policy so the LGPL and MPL binaries are reviewed whichever sibling gets
+      # installed.
       #
       # GSAP's own gate is not here on purpose: it reads the BUILT site, so it
       # runs as the last step of `vp run --filter @volli/website build` below.
@@ -236,6 +238,25 @@ jobs:
         run: |
           vp run --filter @volli/desktop build
           vp run --filter @volli/desktop ensure:electron
+
+      # The half of the license gates that Linux CANNOT run (VC-409). pnpm
+      # installs only the sibling matching the runner's os/cpu, so on ubuntu
+      # the Mach-O dynamic-linking assertion and the whole of check:notice-
+      # inputs skip — they print that they skipped, but a green Linux run has
+      # not checked them. This is the lane that has the darwin binaries.
+      #
+      # It is here rather than in its own macOS job because this runner has
+      # already paid for the checkout and the install; the checks themselves
+      # are seconds. It is BEFORE the smokes so a compliance failure is not
+      # buried under a boot-tier timeout.
+      #
+      # Gated with the rest of the desktop lanes: `changes` classifies the
+      # lockfile and every manifest as desktop-affecting, so any change that
+      # could move the dependency tree reaches this step.
+      - name: Check platform-specific license assertions
+        run: |
+          vp run --filter @volli/desktop check:licenses
+          vp run --filter @volli/desktop check:notice-inputs
 
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4

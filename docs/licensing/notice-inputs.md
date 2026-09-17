@@ -26,6 +26,13 @@ Payload: `./lib/libvips-cpp.8.18.6.dylib`, loaded at run time by `@img/sharp-dar
 Section 4(a) wants prominent notice that the library is used and is covered by the LGPL;
 4(c) wants libvips named among any copyright notices the app shows while running.
 
+**This draft is conditional, and the condition is not met yet.** The two sentences marked
+below assert facts about the shipped artifact that are only true once the notices ticket has
+acted: §1b's license copies must actually be in the bundle, and the relink freedom in §B2 of
+`dependency-license-review.md` is still an open product decision. Publishing this text
+unchanged would turn an open obligation into a false compliance claim, which is worse than
+shipping no notice at all. Delete or amend the marked lines if the condition does not hold.
+
 ```text
 This application uses libvips, bundled as a prebuilt shared library together with its
 dependencies. libvips and several of the components it links are used under the terms of
@@ -41,13 +48,21 @@ Components used under an LGPL license:
   - pango
   - proxy-libintl
 
-Copies of the GNU General Public License v3 and the GNU Lesser General Public License v3
-accompany this application. libvips itself is available from https://github.com/libvips/libvips
-and the prebuilt package from https://github.com/lovell/sharp-libvips.
+libvips itself is available from https://github.com/libvips/libvips and the prebuilt
+package from https://github.com/lovell/sharp-libvips.
 
-The library is dynamically linked and ships as a separate, unmodified file inside the
-application bundle, so it can be replaced with a compatible build.
+[ONLY IF §1b IS DONE] Copies of the GNU General Public License v3 and the GNU Lesser
+General Public License v3 accompany this application.
+
+[ONLY IF B2 IS RULED ON] The library is dynamically linked and ships as a separate,
+unmodified file inside the application bundle, so it can be replaced with a compatible
+build.
 ```
+
+On the second marked line: the library genuinely is dynamically linked and genuinely does
+ship unpacked — `check:licenses` asserts both. What is not yet true is the *consequence* the
+sentence invites a reader to draw, because macOS library validation and bundle signing stand
+between a user and a replacement dylib. See blocker B2.
 
 ### 1b. License texts that must accompany the app (LGPLv3 section 4(b))
 
@@ -175,4 +190,3 @@ a scanner does not look, so a notice generator must be told where to read it fro
 | `khroma` | MIT | the package's own `license` file |
 | `@yuku-codegen/binding-*` | MIT | its parent package's manifest |
 | `@yuku-parser/binding-*` | MIT | its parent package's manifest |
-

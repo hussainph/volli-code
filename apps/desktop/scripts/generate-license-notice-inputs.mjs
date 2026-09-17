@@ -148,6 +148,13 @@ export function renderNoticeInputs(facts) {
     "Section 4(a) wants prominent notice that the library is used and is covered by the LGPL;",
     "4(c) wants libvips named among any copyright notices the app shows while running.",
     "",
+    "**This draft is conditional, and the condition is not met yet.** The two sentences marked",
+    "below assert facts about the shipped artifact that are only true once the notices ticket has",
+    "acted: §1b's license copies must actually be in the bundle, and the relink freedom in §B2 of",
+    "`dependency-license-review.md` is still an open product decision. Publishing this text",
+    "unchanged would turn an open obligation into a false compliance claim, which is worse than",
+    "shipping no notice at all. Delete or amend the marked lines if the condition does not hold.",
+    "",
     "```text",
     "This application uses libvips, bundled as a prebuilt shared library together with its",
     "dependencies. libvips and several of the components it links are used under the terms of",
@@ -156,13 +163,21 @@ export function renderNoticeInputs(facts) {
     "Components used under an LGPL license:",
     ...lgplNames.map((name) => `  - ${name}`),
     "",
-    "Copies of the GNU General Public License v3 and the GNU Lesser General Public License v3",
-    "accompany this application. libvips itself is available from https://github.com/libvips/libvips",
-    "and the prebuilt package from https://github.com/lovell/sharp-libvips.",
+    "libvips itself is available from https://github.com/libvips/libvips and the prebuilt",
+    "package from https://github.com/lovell/sharp-libvips.",
     "",
-    "The library is dynamically linked and ships as a separate, unmodified file inside the",
-    "application bundle, so it can be replaced with a compatible build.",
+    "[ONLY IF §1b IS DONE] Copies of the GNU General Public License v3 and the GNU Lesser",
+    "General Public License v3 accompany this application.",
+    "",
+    "[ONLY IF B2 IS RULED ON] The library is dynamically linked and ships as a separate,",
+    "unmodified file inside the application bundle, so it can be replaced with a compatible",
+    "build.",
     "```",
+    "",
+    "On the second marked line: the library genuinely is dynamically linked and genuinely does",
+    "ship unpacked — `check:licenses` asserts both. What is not yet true is the *consequence* the",
+    "sentence invites a reader to draw, because macOS library validation and bundle signing stand",
+    "between a user and a replacement dylib. See blocker B2.",
     "",
     "### 1b. License texts that must accompany the app (LGPLv3 section 4(b))",
     "",
@@ -259,7 +274,13 @@ export function renderNoticeInputs(facts) {
     "",
   );
 
-  return `${lines.join("\n").replaceAll(/\n{3,}/g, "\n\n")}\n`;
+  // Collapsed blank runs, then exactly one trailing newline. The previous form
+  // appended `\n` to a body that already ended in one, so the generated file
+  // ended with a blank line and `git diff --check` reported it on every commit.
+  return `${lines
+    .join("\n")
+    .replaceAll(/\n{3,}/g, "\n\n")
+    .trimEnd()}\n`;
 }
 
 /**
@@ -430,34 +451,60 @@ function selfTest() {
     "states the gsap version",
     rendered.includes("GSAP 3.15.0 — Copyright 2008-2026, GreenSock."),
   );
+  // The unmet obligations must stay visibly unmet in the draft notice. A
+  // generator that quietly asserts the license copies ship is how an open
+  // obligation becomes a false compliance claim in a published file.
   expect(
-    "is deterministic",
-    rendered ===
-      renderNoticeInputs({
-        gsapVersion: "3.15.0",
-        policy: {
-          reviewed: {
-            gsap: { license: "Standard 'no charge' license" },
-            dompurify: { license: "(MPL-2.0 OR Apache-2.0)", electedLicense: "Apache-2.0" },
-            khroma: { license: "MIT", licenseSource: "license-file" },
-            "@yuku-parser/binding-darwin-arm64": {
-              license: "MIT",
-              licenseSource: "parent-package",
-            },
-          },
-        },
-        libvips: {
-          version: "1.3.3",
-          license: "LGPL-3.0-or-later",
-          repository: "https://github.com/lovell/sharp-libvips.git",
-          binary: "./lib/libvips-cpp.8.18.6.dylib",
-          componentLicenses: rows,
-          componentVersions: [["vips", "8.18.6"]],
-          licensingNotes: [
-            'Use of libraries under the terms of the LGPLv3 is via the "any later version" clause.',
-          ],
-        },
-      }),
+    "does not assert the license copies ship",
+    !/^Copies of the GNU General Public License/m.test(rendered),
+  );
+  expect("marks the conditional lines", rendered.includes("[ONLY IF \u00a71b IS DONE]"));
+  expect("marks the relink claim as conditional", rendered.includes("[ONLY IF B2 IS RULED ON]"));
+
+  // Determinism, tested as the properties that could actually break it rather
+  // than by rendering the same literals twice and comparing — a pure function
+  // of fixed inputs always equals itself, so that assertion could never fail.
+  expect("ends with exactly one newline", rendered.endsWith("\n") && !rendered.endsWith("\n\n"));
+  expect("has no trailing blank line", !/\n[ \t]*\n$/.test(rendered));
+  expect("embeds no absolute path", !rendered.includes(REPO_ROOT) && !/\s\/Users\//.test(rendered));
+  expect("embeds no timestamp", !/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rendered));
+  // The document names ONE platform sibling on purpose — the target the app is
+  // built for — and it must be that fixed one rather than the host's. Asserting
+  // "contains no platform name" would be wrong: `darwin-arm64` belongs here.
+  // What must never appear is a different sibling, which is what would happen
+  // if the generator ever picked the package up by pattern instead of by name.
+  expect("names the pinned target package", rendered.includes(LIBVIPS_PACKAGE));
+  expect(
+    "names no other platform sibling",
+    !["linux-x64", "linux-arm64", "linuxmusl", "win32-x64", "darwin-x64"].some((sibling) =>
+      rendered.includes(`sharp-libvips-${sibling}`),
+    ),
+  );
+  // Component versions are sorted, so a differently-ordered versions.json
+  // renders the same document instead of churning the file.
+  const shuffled = renderNoticeInputs({
+    gsapVersion: "3.15.0",
+    policy: { reviewed: { gsap: { license: "x" } } },
+    libvips: {
+      version: "1.3.3",
+      license: "LGPL-3.0-or-later",
+      repository: "r",
+      binary: "b",
+      componentLicenses: rows,
+      componentVersions: [
+        ["aom", "3.1.0"],
+        ["vips", "8.18.6"],
+      ],
+      licensingNotes: [],
+    },
+  });
+  expect(
+    "renders component versions in the order given",
+    shuffled.indexOf("| aom | 3.1.0 |") < shuffled.indexOf("| vips | 8.18.6 |"),
+  );
+  expect(
+    "omits the notes block when there are none",
+    !shuffled.includes("Also stated by the README:"),
   );
 
   if (failures.length > 0) {

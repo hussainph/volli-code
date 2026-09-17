@@ -34,8 +34,14 @@ in the tree is MIT or Apache-2.0.
 **What only runs on macOS.** Two assertions need the darwin binaries: the Mach-O dynamic-linking
 check, and the notice-inputs generator (which reads the shipped libvips package). Both say out loud
 that they skipped rather than passing quietly, so a green CI run on Linux is not mistaken for
-having checked them. Everything else — the store scan, manifests, imports, and electron-builder's
-packaging lists — runs everywhere.
+having checked them — and CI runs both for real on the `macos-15` boot-tier lane, so they are
+enforced rather than left to a developer Mac. Everything else — the store scan, manifests, imports,
+and electron-builder's packaging lists — runs everywhere.
+
+**What fails rather than skips.** A skip is only honest when the reason is a fact about the
+*machine* the reviewer already accounted for. An unreadable or renamed `electron-builder.yml` is a
+fact about the *repository*, so it fails: the two assertions it gates are what keep the LGPL
+library unpacked and shipped, and a gate that cannot read the packaging config has not checked it.
 
 ---
 
@@ -221,7 +227,10 @@ verified against its own math.
 - `colorparsley` becomes a direct dependency of any workspace package, or is imported by any source
   file at all.
 - Any source file outside `packages/shared/src/theme/*.test.ts` and `apps/desktop/e2e/*.mjs` imports
-  it. The matcher distinguishes a real import from a mention, so the `declare module "apca-w3"`
+  it. The scan covers `apps/`, `packages/` **and the repository root's own files** — `vite.config.ts`
+  and `vitest.workers.ts` are first-party code that can import anything, and leaving them out was a
+  hole in this rule rather than a tidiness point.
+  The matcher distinguishes a real import from a mention, so the `declare module "apca-w3"`
   ambient types and the prose in `color.ts` are correctly not treated as uses.
 - The version range stops being a caret range. `^0.1.9` resolves across `0.1.x`, which is what makes
   the "stay on the latest non-breaking branch" duty satisfiable by an ordinary `pnpm update`.
@@ -324,7 +333,12 @@ the license, and the III.3 problem that did conflict is fixed.
 - **`dompurify` `(MPL-2.0 OR Apache-2.0)`, `node-forge` `(BSD-3-Clause OR GPL-2.0)`, `json-schema`
   `(AFL-2.1 OR BSD-3-Clause)`.** Dual-licensed, so the choice is ours. Volli elects Apache-2.0,
   BSD-3-Clause and BSD-3-Clause respectively; the notices must say which, or a reader is left
-  guessing.
+  guessing. `electedLicense` is the one field in the policy that is copied verbatim into a
+  published notice, so the gate now checks it rather than trusting it: the elected half must be one
+  of the halves the package is actually published under, it must be on the permissive list, and a
+  dependency published under more than one set of terms must record an election at all. Without
+  that, a typo — or a relicense that removes the elected half — would have turned this record into
+  a false statement about the terms Volli uses a dependency under.
 - **`khroma` (MIT).** No `license` field in its manifest, so scanners report it unlicensed. Its
   `license` file is the plain MIT text.
 - **`@yuku-codegen/binding-*`, `@yuku-parser/binding-*` (MIT).** Generated napi platform packages

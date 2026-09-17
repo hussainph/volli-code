@@ -34,7 +34,7 @@
  * GSAP code present fails instead of passing quietly.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -207,14 +207,20 @@ export function auditBundledNotices(files, { gsapVersion, reviewedSubjects }) {
   return problems;
 }
 
-/** Every `.js` file under `dir`, recursively. */
+/**
+ * Every `.js` file under `dir`, recursively.
+ *
+ * `withFileTypes` rather than `readdirSync` + `statSync(full)`: the two-call
+ * shape asks the filesystem the same question twice and then acts on the first
+ * answer, which CodeQL reports as `js/file-system-race`.
+ */
 function collectJavaScript(dir) {
   const found = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
       found.push(...collectJavaScript(full));
-    } else if (entry.endsWith(".js")) {
+    } else if (entry.name.endsWith(".js")) {
       found.push(full);
     }
   }
@@ -305,6 +311,36 @@ function selfTest() {
   );
   expect("ignores a non-headline banner", describeBanner("/*! not a headline */") === null);
   expect("ignores an empty banner", describeBanner("/*!*/") === null);
+  // A version is REQUIRED, not decorative: it is what the staleness check
+  // compares against the installed gsap, so a headline without one must be
+  // reported as unreadable rather than parsed into a versionless banner that
+  // silently passes every version assertion.
+  expect(
+    "a headline with no version does not parse",
+    describeBanner(`/*!\n * Flip\n * https://gsap.com/standard-license\n*/`) === null,
+  );
+  expect(
+    "a two-digit version does not parse as a full one",
+    describeBanner(`/*!\n * Flip 3.15\n * https://gsap.com/standard-license\n*/`) === null,
+  );
+  expect(
+    "a prerelease version parses",
+    describeBanner(`/*!\n * Flip 3.15.0-beta.1\n*/`)?.version === "3.15.0-beta.1",
+  );
+  // CRLF is what a checkout with autocrlf, or a Windows toolchain, produces.
+  expect(
+    "reads a CRLF banner",
+    describeBanner(realBanner.replaceAll("\n", "\r\n"))?.subject === "Flip",
+  );
+
+  // The reviewed list is the gate's whole basis for set equality. An empty one
+  // makes every "did it ship" assertion vacuously true, and the only condition
+  // under which that is legal is gsap being gone — which is asserted below.
+  expect("the reviewed list is not empty", REVIEWED_GSAP_BANNERS.length > 0);
+  expect(
+    "the reviewed list has no duplicates",
+    new Set(REVIEWED_GSAP_BANNERS).size === REVIEWED_GSAP_BANNERS.length,
+  );
 
   expect("marker detected", containsGsapRuntime("el._gsap.x=1"));
   expect(
@@ -326,6 +362,14 @@ function selfTest() {
   expect(
     "stripped banner names the chunk",
     stripped.some((p) => p.includes("carries no GSAP legal banner")),
+  );
+  // The second of the two findings, asserted rather than merely counted: a
+  // stripped build must report BOTH that the chunk lost its notice and that
+  // the reviewed subject never arrived, because the two halves catch
+  // different regressions (a split chunk versus a stripping toolchain).
+  expect(
+    "stripped banner names the missing reviewed subject",
+    stripped.some((p) => p.includes('No "Flip" legal banner survived')),
   );
 
   const stale = auditBundledNotices(
