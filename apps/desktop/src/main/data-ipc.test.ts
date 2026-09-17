@@ -2006,8 +2006,19 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const pushed = new Map<string, SessionListingRow>();
+    const watch = watchSessionActivity(sessionEngine, {
+      publish: ({ row }) => pushed.set(rowId(row), row),
+      // The expression `index.ts` passes, unchanged.
+      provenanceOf: (born) => readSessionProvenance(ctx.db, born),
+    });
+    // Created THROUGH the watch, because `createSession` is one of the writes
+    // that marks a Session dirty. Nothing here retitles anything: a rename is a
+    // ledger fact and `sessions.title` is only the minted name, so a test that
+    // dirtied Sessions by renaming them would be comparing two readers of a
+    // title neither of them should still be showing.
     const start = async (title: string, ticketId: string | null): Promise<string> => {
-      const created = await sessionEngine.createSession({
+      const created = await watch.engine.createSession({
         commandId: `create-${title}`,
         projectId,
         ticketId,
@@ -2052,25 +2063,8 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     });
     const board = await start("Board chat", null);
 
-    const pushed = new Map<string, SessionListingRow>();
-    const watch = watchSessionActivity(sessionEngine, {
-      publish: ({ row }) => pushed.set(rowId(row), row),
-      // The expression `index.ts` passes, unchanged.
-      provenanceOf: (born) => readSessionProvenance(ctx.db, born),
-    });
-    // A write per Session marks it dirty; the flush then builds the pushed row
-    // the same way the renderer would receive it.
-    for (const sessionId of [parent, delegated, runSession, byHand, board]) {
-      await watch.engine.submit({
-        commandId: `touch-${sessionId}`,
-        sessionId,
-        intent: { kind: "session.retitle", title: `Touched ${sessionId}` },
-        provenance: {
-          source: { kind: "user", id: "test", detail: null },
-          venue: { id: "local", kind: "local" },
-        },
-      });
-    }
+    // The flush builds the pushed row the same way the renderer receives it,
+    // and it runs after the provenance records above are in place.
     await watch.flush();
     watch.stop();
 
@@ -2098,11 +2092,89 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     expect(provenanceById.get(delegated)).toEqual({
       kind: "session",
       parentSessionId: parent,
-      // The `sessions` row's title, which a retitle command does not rewrite.
       parentTitle: "Orchestrator",
     });
     expect(provenanceById.get(byHand)).toEqual({ kind: "user" });
     expect(provenanceById.get(board)).toEqual({ kind: "user" });
+  });
+
+  // VC-392: the bench that measures this tail cannot call the handler itself
+  // (it would have to boot Electron), so it measures
+  // `sessionListingRowsForRoster` — the function the handler calls. This test
+  // is the other half of that arrangement: it pins, through the REAL handler,
+  // that the roster's provenance still costs a bounded number of statements
+  // rather than a number that grows per Session. Together they close the gap a
+  // hand-assembled bench would leave, which is that the handler drifts away
+  // from the thing being measured and nobody notices.
+  it("lists a roster without paying a provenance read per Session", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const roster = 24;
+    for (let index = 0; index < roster; index += 1) {
+      const created = await sessionEngine.createSession({
+        commandId: `create-bulk-${index}`,
+        projectId,
+        ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
+        title: `Bulk ${index}`,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      recordSessionStartedOnce(ctx.db, {
+        ticketId: ticket.id,
+        sessionId: created.session.id,
+        now: 600 + index,
+        actor: { kind: "user" },
+      });
+    }
+
+    // The interceptor goes on BEFORE the first listing, not after it.
+    // `prepared` memoizes per handle, so a wrapper installed after a warm-up
+    // would decorate nothing and count zero however the handler reads — which
+    // is a test that passes because it is blind. `counting` is what switches
+    // recording on, so preparation happens under the wrapper and only the
+    // second listing's EXECUTIONS are counted.
+    let counting: string[] | null = null;
+    const prepare = ctx.db.prepare.bind(ctx.db);
+    ctx.db.prepare = ((sql: string) => {
+      const statement = prepare(sql);
+      if (!/FROM\s+(automation_runs|ticket_events|session_event_sequence)\b/.test(sql)) {
+        return statement;
+      }
+      for (const method of ["get", "all", "iterate"] as const) {
+        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
+        Object.defineProperty(statement, method, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            counting?.push(sql);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
+    }) as typeof ctx.db.prepare;
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const provenanceStatements: string[] = [];
+    counting = provenanceStatements;
+    const listed = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    counting = null;
+
+    if (!listed.ok) throw new Error("listing failed");
+    expect(listed.sessions).toHaveLength(roster);
+    // The counter saw the reads at all. Without this the two bounds below are
+    // satisfied by a counter that is simply not working.
+    expect(provenanceStatements.length).toBeGreaterThan(0);
+    // Comfortably under one per Session, and not pinned to an exact number so
+    // that adding a durable source stays a one-line change here.
+    expect(provenanceStatements.length).toBeLessThanOrEqual(5);
+    expect(provenanceStatements.length).toBeLessThan(roster);
   });
 
   it("rejects invalid input", () => {

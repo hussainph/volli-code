@@ -47,13 +47,6 @@ const PROJECT_ID = "project-bench";
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const mb = (bytes) => bytes / 1024 / 1024;
 
-/** What the IPC handler hands the provenance read: one query per Session row. */
-const queriesFor = (sessions) =>
-  sessions.map((session) => ({
-    sessionId: session.session.id,
-    ticketId: session.session.ticketId,
-  }));
-
 /**
  * Runs `operation` while watching the event loop, so a fold that never yields
  * and a fold that yields sixty times can be told apart by something other than
@@ -314,51 +307,48 @@ try {
   const uncached = await repeat(REPEATS, () => engineFor().listSessions(query));
 
   // ── Arm 2b: the whole IPC handler, not just the fold (VC-392) ───────────
-  // `volli:session-list` is the fold PLUS `sessionListingRows` with the
-  // per-Session provenance read. The fold yields every
-  // `SESSION_LISTING_FOLD_CHUNK` Sessions; the row map does not, so whatever
-  // it costs is one unbroken block however long the roster is. These arms
-  // measure the tail on its own (over an already-folded roster, so the fold's
-  // cost is not mixed in) and then the handler end to end, once with the
-  // per-Session reader and once with the set-based one.
-  const { PERSON_STARTED } = sharedModule;
+  // `volli:session-list` is the fold PLUS the row map with its provenance
+  // read. The fold yields every `SESSION_LISTING_FOLD_CHUNK` Sessions; the row
+  // map does not, so whatever it costs is one unbroken block however long the
+  // roster is. These arms measure the tail on its own (over an already-folded
+  // roster, so the fold's cost is not mixed in) and then the handler end to
+  // end, once with the per-Session reader and once with the set-based one.
+  //
+  // The batched arm calls `sessionListingRowsForRoster` — the SAME function
+  // `data-ipc.ts` calls, not a copy of it assembled here. The handler itself
+  // cannot be invoked from this process (it registers against Electron's
+  // `ipcMain`), so the arrangement is: this bench measures the function the
+  // handler calls, and `data-ipc.test.ts` pins through the real handler that it
+  // still calls that function. A copy assembled here would drift from the
+  // handler with nothing to notice.
   const perSessionProvenance = (session) =>
     provenanceRepo.readSessionProvenance(db, {
       sessionId: session.session.id,
       ticketId: session.session.ticketId,
     });
-  const batchedProvenanceFor = (sessions) => {
-    const answers = provenanceRepo.readSessionProvenances(db, queriesFor(sessions));
-    return (session) => answers.get(session.session.id) ?? PERSON_STARTED;
-  };
+  const rowsPerSession = (sessions) =>
+    sessionControl.sessionListingRows(sessions, perSessionProvenance, new Set());
+  const rowsBatched = (sessions) =>
+    sessionControl.sessionListingRowsForRoster(db, sessions, new Set());
   const folded = await engine.listSessions(query);
   // The two readers must answer the same roster identically — the fetch/push
   // agreement this ticket is not allowed to break. Asserted here as well as in
   // the unit tests, because a bench that compares two different answers is
-  // measuring nothing.
-  const perSessionAnswers = JSON.stringify(folded.map(perSessionProvenance));
-  const batchedAnswers = JSON.stringify(folded.map(batchedProvenanceFor(folded)));
-  if (perSessionAnswers !== batchedAnswers) {
-    throw new Error(
-      "provenance readers disagree: the batched arm is not measuring the same answer",
-    );
+  // measuring nothing. Whole rows, not just the provenance field, because the
+  // batched arm now builds the rows too.
+  if (JSON.stringify(rowsPerSession(folded)) !== JSON.stringify(rowsBatched(folded))) {
+    throw new Error("listing rows disagree: the batched arm is not measuring the same answer");
   }
-  const provenanceTailPerSession = await repeat(REPEATS, async () =>
-    sessionControl.sessionListingRows(folded, perSessionProvenance, new Set()),
-  );
-  const provenanceTailBatched = await repeat(REPEATS, async () =>
-    sessionControl.sessionListingRows(folded, batchedProvenanceFor(folded), new Set()),
-  );
+  const provenanceTailPerSession = await repeat(REPEATS, async () => rowsPerSession(folded));
+  const provenanceTailBatched = await repeat(REPEATS, async () => rowsBatched(folded));
   // Cold engine per call: a first visit to a project, which is the case the
   // ticket is about.
-  const handlerPerSession = await repeat(REPEATS, async () => {
-    const sessions = await engineFor().listSessions(query);
-    return sessionControl.sessionListingRows(sessions, perSessionProvenance, new Set());
-  });
-  const handlerBatched = await repeat(REPEATS, async () => {
-    const sessions = await engineFor().listSessions(query);
-    return sessionControl.sessionListingRows(sessions, batchedProvenanceFor(sessions), new Set());
-  });
+  const handlerPerSession = await repeat(REPEATS, async () =>
+    rowsPerSession(await engineFor().listSessions(query)),
+  );
+  const handlerBatched = await repeat(REPEATS, async () =>
+    rowsBatched(await engineFor().listSessions(query)),
+  );
 
   // ── Arm 3: the pre-VC-388 shape, for the block it used to cause ─────────
   const singleTransaction = await repeat(REPEATS, () =>

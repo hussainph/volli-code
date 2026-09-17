@@ -398,6 +398,70 @@ function queriesOf(f: {
   }));
 }
 
+/**
+ * Appends one `session.retitled` fact to a Session's own ledger, which is where
+ * a rename lives — `sessions.title` is written once at mint and never again.
+ */
+function retitle(db: Database.Database, sessionId: string, title: string | null, at: number): void {
+  db.prepare("INSERT OR IGNORE INTO session_provenances (id, provenance) VALUES (1, ?)").run(
+    JSON.stringify({ source: { kind: "user", id: "test", detail: null } }),
+  );
+  db.prepare(
+    `INSERT INTO session_events
+       (id, session_id, sequence, occurred_at, recorded_at, provenance_id, payload)
+     VALUES (?, ?, ?, ?, ?, 1, ?)`,
+  ).run(
+    `event-${sessionId}-${at}`,
+    sessionId,
+    at,
+    at,
+    at,
+    JSON.stringify({ kind: "session.retitled", title }),
+  );
+}
+
+/**
+ * Counts the statements one call EXECUTES, rather than the ones it prepares.
+ *
+ * `prepared` memoizes per handle, so a second call prepares nothing and a
+ * counter that wrapped `db.prepare` per measurement would see zero. The wrap
+ * is therefore installed once per handle and left in place; each measurement
+ * only swaps the sink the wrapped statements report into.
+ */
+const statementSinks = new WeakMap<Database.Database, { active: string[] | null }>();
+
+function countingStatements(db: Database.Database, run: () => void): number {
+  let sink = statementSinks.get(db);
+  if (sink === undefined) {
+    const state: { active: string[] | null } = { active: null };
+    const prepare = db.prepare.bind(db);
+    db.prepare = ((sql: string) => {
+      const statement = prepare(sql);
+      for (const method of ["get", "all", "iterate", "run"] as const) {
+        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
+        Object.defineProperty(statement, method, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            state.active?.push(sql);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
+    }) as typeof db.prepare;
+    sink = state;
+    statementSinks.set(db, state);
+  }
+  const executed: string[] = [];
+  sink.active = executed;
+  try {
+    run();
+  } finally {
+    sink.active = null;
+  }
+  return executed.length;
+}
+
 describe("readSessionProvenances", () => {
   /** Every source the reader can answer from, in one project. */
   function roster(): Fixture & { secondTicketId: string; sessionIds: string[] } {
@@ -502,117 +566,255 @@ describe("readSessionProvenances", () => {
 
     const batched = readSessionProvenances(f.db, queries);
 
-    expect([...batched.keys()].toSorted()).toEqual(f.sessionIds.toSorted());
     for (const query of queries) {
-      expect(batched.get(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
+      expect(batched(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
     }
     // And the answers are the ones the sources say, not merely two agreeing
     // readers of the same mistake.
-    expect(batched.get("session-run")).toEqual({
+    expect(batched("session-run")).toEqual({
       kind: "automation",
       automationName: "Nightly sweep",
     });
-    expect(batched.get("session-premint")).toEqual({ kind: "automation", automationName: null });
-    expect(batched.get("session-launched")).toEqual({ kind: "automation", automationName: null });
-    expect(batched.get("session-child")).toEqual({
+    expect(batched("session-premint")).toEqual({ kind: "automation", automationName: null });
+    expect(batched("session-launched")).toEqual({ kind: "automation", automationName: null });
+    expect(batched("session-child")).toEqual({
       kind: "session",
       parentSessionId: "session-parent",
       parentTitle: "Orchestrator",
     });
-    expect(batched.get("session-orphan")).toEqual({
+    expect(batched("session-orphan")).toEqual({
       kind: "session",
       parentSessionId: "session-gone",
       parentTitle: null,
     });
-    expect(batched.get("session-elsewhere")).toEqual({
+    expect(batched("session-elsewhere")).toEqual({
       kind: "session",
       parentSessionId: "session-parent",
       parentTitle: "Orchestrator",
     });
-    expect(batched.get("session-person")).toEqual({ kind: "user" });
-    expect(batched.get("session-board")).toEqual({ kind: "user" });
-    expect(batched.get("session-parent")).toEqual({ kind: "user" });
+    expect(batched("session-person")).toEqual({ kind: "user" });
+    expect(batched("session-board")).toEqual({ kind: "user" });
+    expect(batched("session-parent")).toEqual({ kind: "user" });
   });
 
   // The reason the roster read stays scoped by Ticket rather than matching on
-  // the payload alone: a launch event names a Session, and it only speaks for
-  // that Session ON THE TICKET IT WAS RECORDED ON.
+  // the payload alone: a launch event names a Session, and it speaks for that
+  // Session only ON THE TICKET IT WAS RECORDED ON.
+  //
+  // Two things have to be true at once for this to bite, and both are set up
+  // here. The Session has NO launch event of its own, so nothing correct can
+  // shadow the wrong one; and the roster ALSO holds a Session on the other
+  // Ticket, so that Ticket's events are inside the batch's reach. Without the
+  // second half the scope check is never reached and the test proves nothing.
   it("ignores a launch event recorded on a Ticket the Session is not on", () => {
     const f = roster();
+    f.session("session-moved", "No launch event of its own");
     recordSessionStartedOnce(f.db, {
       ticketId: f.secondTicketId,
-      sessionId: "session-person",
+      sessionId: "session-moved",
       now: 2_600,
       actor: { kind: "session", sessionId: "session-parent", ticketId: f.secondTicketId },
     });
+    const moved = { sessionId: "session-moved", ticketId: f.ticketId };
+    const onSecondTicket = { sessionId: "session-elsewhere", ticketId: f.secondTicketId };
 
-    const batched = readSessionProvenances(f.db, queriesOf(f));
+    const batched = readSessionProvenances(f.db, [moved, onSecondTicket]);
 
-    expect(batched.get("session-person")).toEqual({ kind: "user" });
-    expect(batched.get("session-person")).toEqual(
-      readSessionProvenance(f.db, { sessionId: "session-person", ticketId: f.ticketId }),
+    expect(batched("session-moved")).toEqual({ kind: "user" });
+    expect(batched("session-moved")).toEqual(readSessionProvenance(f.db, moved));
+    // The Session that really is on the second Ticket still reads its event, so
+    // the scope check rejects the wrong pairing rather than the whole Ticket.
+    expect(batched("session-elsewhere")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+  });
+
+  // History outlives the build that wrote it, so a launch event whose payload
+  // this build cannot read must cost that one Session its mark and nothing
+  // more. `json_extract` answers `null` there, which is why the column is read
+  // as `unknown`; the narrowing that follows is what lets the Ticket-scope
+  // check take a `string`, and `pnpm typecheck` is what holds it in place.
+  // This test holds the half a type cannot: the row neither throws nor
+  // disturbs the Sessions beside it.
+  it("survives a launch event whose payload names no Session", () => {
+    const f = roster();
+    recordTicketEvent(f.db, f.ticketId, { kind: "session_started" } as never, 2_700);
+    const queries = queriesOf(f);
+
+    const batched = readSessionProvenances(f.db, queries);
+
+    // The unreadable row neither throws nor swallows the Sessions beside it.
+    expect(batched("session-child")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+    expect(batched("session-person")).toEqual({ kind: "user" });
+    for (const query of queries) {
+      expect(batched(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
+    }
+  });
+
+  // Two launch events for one Session on one Ticket. The question is who
+  // STARTED it, so the earliest is the answer — and it is the answer whichever
+  // order SQLite returns the rows in, because the batch ranks them rather than
+  // taking the first one it sees.
+  it("takes the earliest launch event when a Ticket carries more than one", () => {
+    const f = roster();
+    f.session("session-twice", "Launched twice over");
+    recordTicketEvent(
+      f.db,
+      f.ticketId,
+      { kind: "session_started", sessionId: "session-twice" } as never,
+      2_800,
+      { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+    );
+    recordTicketEvent(
+      f.db,
+      f.ticketId,
+      { kind: "session_started", sessionId: "session-twice" } as never,
+      2_900,
+      { kind: "automation" },
+    );
+    const query = { sessionId: "session-twice", ticketId: f.ticketId };
+
+    expect(readSessionProvenances(f.db, [query])("session-twice")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
+    expect(readSessionProvenances(f.db, [query])("session-twice")).toEqual(
+      readSessionProvenance(f.db, query),
     );
   });
 
-  it("answers a Session it can find nothing about, and asks nothing of an empty roster", () => {
+  // `automation_runs.session_id` carries no UNIQUE constraint, so a Session can
+  // hold more than one Run row. The earliest names the Run that started it.
+  it("takes the earliest Run when a Session carries more than one row", () => {
+    const f = roster();
+    recordAutomationRun(
+      f.db,
+      {
+        automationId: "automation-2",
+        automationName: "A later sweep",
+        ticketId: f.ticketId,
+        sessionId: "session-run",
+        model: MODEL,
+      },
+      4_000,
+    );
+    const query = { sessionId: "session-run", ticketId: f.ticketId };
+
+    expect(readSessionProvenances(f.db, [query])("session-run")).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
+    expect(readSessionProvenances(f.db, [query])("session-run")).toEqual(
+      readSessionProvenance(f.db, query),
+    );
+  });
+
+  // `sessions.title` is the fold's seed, written once at mint. A rename is a
+  // `session.retitled` fact on the parent's own ledger, so a parent read from
+  // the row alone kept the name it was born with while the same listing drew
+  // that parent under its current one.
+  it("names a parent Session by its current title, not the one it was minted with", () => {
+    const f = roster();
+    retitle(f.db, "session-parent", "Renamed orchestrator", 1);
+    const query = { sessionId: "session-child", ticketId: f.ticketId };
+
+    expect(readSessionProvenances(f.db, [query])("session-child")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Renamed orchestrator",
+    });
+    expect(readSessionProvenances(f.db, [query])("session-child")).toEqual(
+      readSessionProvenance(f.db, query),
+    );
+  });
+
+  it("takes a parent's last rename, including a rename back to no title", () => {
+    const f = roster();
+    retitle(f.db, "session-parent", "Renamed once", 1);
+    retitle(f.db, "session-parent", null, 2);
+    const query = { sessionId: "session-child", ticketId: f.ticketId };
+
+    // `null` is a real projected title, so it must beat the minted one rather
+    // than fall back to it.
+    expect(readSessionProvenances(f.db, [query])("session-child")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: null,
+    });
+  });
+
+  it("answers a Session it can find nothing about, and one it was never asked about", () => {
     const f = roster();
 
-    expect(readSessionProvenances(f.db, [{ sessionId: "ghost", ticketId: null }])).toEqual(
-      new Map([["ghost", { kind: "user" }]]),
+    expect(readSessionProvenances(f.db, [{ sessionId: "ghost", ticketId: null }])("ghost")).toEqual(
+      { kind: "user" },
     );
-    expect(readSessionProvenances(f.db, [])).toEqual(new Map());
+    // An empty roster asks nothing and still answers, because the answer for a
+    // Session nobody asked about is the resting one.
+    expect(readSessionProvenances(f.db, [])("session-run")).toEqual({ kind: "user" });
   });
 
   it("answers a repeated Session once", () => {
     const f = roster();
     const query = { sessionId: "session-child", ticketId: f.ticketId };
 
-    expect(readSessionProvenances(f.db, [query, query, query])).toEqual(
-      new Map([
-        [
-          "session-child",
-          { kind: "session", parentSessionId: "session-parent", parentTitle: "Orchestrator" },
-        ],
-      ]),
-    );
+    expect(
+      countingStatements(f.db, () => readSessionProvenances(f.db, [query, query, query])),
+    ).toBe(countingStatements(f.db, () => readSessionProvenances(f.db, [query])));
+    expect(readSessionProvenances(f.db, [query, query, query])("session-child")).toEqual({
+      kind: "session",
+      parentSessionId: "session-parent",
+      parentTitle: "Orchestrator",
+    });
   });
 
-  // The point of the batch: the statement count is bounded by the number of
-  // sources, not by the roster. Pinned as a count because "one query per
-  // Session, after a fold that deliberately yields" is exactly the block
-  // VC-392 was filed about, and it would come back invisibly.
-  it("reads the whole roster in at most one query per source", () => {
+  // The point of the batch, pinned as the property rather than as a magic
+  // number: the statement count is bounded by the number of durable sources,
+  // so it does not move when the roster grows. "One query per Session, after a
+  // fold that deliberately yields" is exactly the block VC-392 was filed
+  // about, and it would come back invisibly.
+  it("reads a roster of any size in the same bounded number of queries", () => {
     const f = roster();
-    const queries = queriesOf(f);
-    const executed: string[] = [];
-    const prepare = f.db.prepare.bind(f.db);
-    // Wraps the statements this call prepares, so the count is of executions
-    // rather than of cache misses (`prepared` memoizes per handle).
-    f.db.prepare = ((sql: string) => {
-      const statement = prepare(sql);
-      for (const method of ["get", "all", "iterate", "run"] as const) {
-        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
-        Object.defineProperty(statement, method, {
-          configurable: true,
-          value: (...args: unknown[]) => {
-            executed.push(sql);
-            return real(...args);
-          },
-        });
-      }
-      return statement;
-    }) as typeof f.db.prepare;
+    const small = queriesOf(f);
+    // Forty more Sessions, every one of them needing the Ticket lookup.
+    const largeIds: string[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      const id = `session-bulk-${index}`;
+      f.session(id, `Bulk ${index}`);
+      recordSessionStartedOnce(f.db, {
+        ticketId: f.ticketId,
+        sessionId: id,
+        now: 5_000 + index,
+        actor: { kind: "session", sessionId: "session-parent", ticketId: f.ticketId },
+      });
+      largeIds.push(id);
+    }
+    const large = queriesOf({ db: f.db, sessionIds: [...f.sessionIds, ...largeIds] });
 
-    readSessionProvenances(f.db, queries);
-    const batchedCount = executed.length;
-    executed.length = 0;
-    for (const query of queries) readSessionProvenance(f.db, query);
-    const perSessionCount = executed.length;
+    const batchedSmall = countingStatements(f.db, () => readSessionProvenances(f.db, small));
+    const batchedLarge = countingStatements(f.db, () => readSessionProvenances(f.db, large));
+    const perSessionLarge = countingStatements(f.db, () => {
+      for (const query of large) readSessionProvenance(f.db, query);
+    });
 
-    expect(batchedCount).toBe(4);
-    // Nine Sessions, and the single reader is the batch of one it delegates to,
-    // so the roster's four queries are what a per-row listing would pay
-    // nine times over.
-    expect(perSessionCount).toBeGreaterThan(batchedCount * 4);
+    // Five sources, five statements — and 49 Sessions cost exactly what 9 do.
+    expect(batchedLarge).toBe(batchedSmall);
+    expect(batchedLarge).toBeLessThanOrEqual(5);
+    // Where a per-row listing pays per row. Asserted against the roster size
+    // rather than a constant, so the gap cannot be closed by shrinking the
+    // fixture.
+    expect(perSessionLarge).toBeGreaterThanOrEqual(large.length);
+    // And the answers do not change with the roster size.
+    const batched = readSessionProvenances(f.db, large);
+    for (const query of large) {
+      expect(batched(query.sessionId)).toEqual(readSessionProvenance(f.db, query));
+    }
   });
 });

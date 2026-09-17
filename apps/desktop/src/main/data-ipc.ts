@@ -10,7 +10,6 @@ import {
   errorMessage,
   validateAuthorityPolicyOverride,
   LEGACY_BACKUP_APP_STATE_KEY,
-  PERSON_STARTED,
   PROJECT_COLORS,
   sanitizeLegacyProjects,
   USER_ACTOR,
@@ -24,22 +23,14 @@ import {
   listLinkViews,
   listMaterializableLinks,
 } from "./db/blobs-repo";
-import { readSessionProvenances } from "./db/session-provenance-repo";
+
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
-import type {
-  AuthorityPolicyOverride,
-  Label,
-  Project,
-  SessionProjection,
-  SessionProvenance,
-  Ticket,
-  TicketStatus,
-} from "@volli/shared";
+import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -158,7 +149,13 @@ import {
   updateProjectSetupCommand,
   updateProjectSkillModes,
 } from "./db/projects-repo";
-import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
+/**
+ * Both listing channels build their rows through one roster-shaped read
+ * (VC-131, VC-392). The provenance question lives beside the other Session read
+ * models rather than here, so this handler stays dumb transport and the
+ * performance harness can measure the same function the handler calls.
+ */
+import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
 import { prepared } from "./db/prepared";
 import {
   getTicket,
@@ -480,34 +477,6 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
-  /**
-   * Who started each Session in a listing (VC-131), read for the whole roster
-   * at once (VC-392).
-   *
-   * Bound here rather than at each call site so both listing channels ask the
-   * same question the push channel asks (`activity-watch.ts`) — a fetch and a
-   * push that disagreed would make a Run's bolt flicker as its Session worked.
-   * The push answers one Session at a time and so keeps the single reader;
-   * that reader is one call of this same batch, so the two channels cannot
-   * drift apart.
-   *
-   * Per roster rather than per Session because the fold above this deliberately
-   * yields every `SESSION_LISTING_FOLD_CHUNK` Sessions, and asking per Session
-   * put up to three synchronous statements per row back into one unbroken block
-   * immediately after it.
-   */
-  const provenanceOfRoster = (
-    sessions: readonly SessionProjection[],
-  ): ((session: SessionProjection) => SessionProvenance) => {
-    const answers = readSessionProvenances(
-      db,
-      sessions.map((session) => ({
-        sessionId: session.session.id,
-        ticketId: session.session.ticketId,
-      })),
-    );
-    return (session) => answers.get(session.session.id) ?? PERSON_STARTED;
-  };
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
@@ -1219,7 +1188,7 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        sessions: sessionListingRows(sessions, provenanceOfRoster(sessions), liveAttachmentIds()),
+        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
       };
     },
 
@@ -1233,7 +1202,7 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        sessions: sessionListingRows(sessions, provenanceOfRoster(sessions), liveAttachmentIds()),
+        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
       };
     },
 
