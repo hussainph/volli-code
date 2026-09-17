@@ -126,8 +126,15 @@ jobs:
       - name: Check
         run: vp check
 
+      # Every workspace manifest must declare the license the root declares
+      # (VC-411). Not expressible as a lint rule, so it is its own step.
+      #
+      # `vp run`, not `pnpm run`: setup-vp puts `vp` on PATH and manages pnpm
+      # internally, so a bare `pnpm` in a plain shell step is a 127. The check
+      # itself reads pnpm-workspace.yaml directly for the same reason — it has
+      # to run where pnpm is not a command.
       - name: Check workspace license metadata
-        run: pnpm run check:workspace-licenses
+        run: vp run check:workspace-licenses
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
