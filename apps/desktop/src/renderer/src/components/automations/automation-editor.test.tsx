@@ -422,15 +422,96 @@ describe("automation editor drafts (VC-329)", () => {
 
     const indicator = document.querySelector('[data-slot="draft-resumed"]');
     expect(indicator).not.toBeNull();
-    const header = indicator?.closest("header");
-    expect(header?.querySelector('[aria-label="Name"]')).not.toBeNull();
-    expect(header?.contains(buttonContaining("Discard draft"))).toBe(true);
-    expect(header?.contains(buttonContaining("Create automation"))).toBe(true);
+    // Resolved, not optional-chained: `indicator?.closest(...)` yields undefined
+    // when the indicator escapes the header, and `expect(undefined).not.toBeNull()`
+    // passes — so every assertion below would report on a header that is not there.
+    const header = indicator!.closest("header");
+    expect(header).not.toBeNull();
+    expect(header!.querySelector('[aria-label="Name"]')).not.toBeNull();
+    expect(header!.contains(buttonContaining("Discard draft"))).toBe(true);
+    expect(header!.contains(buttonContaining("Create automation"))).toBe(true);
+
     // The scrolling form holds only the form: nothing above Instructions moves
-    // when the draft state comes and goes.
+    // when the draft state comes and goes. Asserted by KIND rather than by
+    // walking firstElementChild twice — the walk passed on any first node whose
+    // subtree mentioned Instructions, and broke on any wrapper added above it.
     const form = document.querySelector("main");
-    expect(form?.contains(indicator!)).toBe(false);
-    expect(form?.firstElementChild?.firstElementChild?.textContent).toContain("Instructions");
+    expect(form).not.toBeNull();
+    expect(form!.querySelector('[data-slot^="draft-"]')).toBeNull();
+    expect(form!.querySelector("h2")?.textContent).toBe("Instructions");
+  });
+
+  // VC-405's actual complaint is the JUMP, not the placement. The title row is
+  // only steady if the slot is already holding its width open before the first
+  // keystroke: the name input is the row's one elastic member, so a slot that
+  // arrived on `dirty` would take its width straight out of the field under the
+  // cursor. jsdom has no layout engine, so the width cannot be measured here.
+  // What can be pinned is the thing that makes the width stable — the very same
+  // node, carrying the same label, is in the row before and after the keystroke.
+  it("holds the draft slot open before the first keystroke so the row cannot reflow", async () => {
+    await mountEditor();
+
+    const idle = document.querySelector('[data-slot="draft-idle"]');
+    expect(idle).not.toBeNull();
+    expect(idle!.closest("header")).not.toBeNull();
+    // It reserves the exact label it will show, so the width does not change.
+    expect(idle!.textContent).toContain("Draft saved");
+    // Invisible and inert while there is no draft: opacity keeps the width,
+    // where `hidden` or a conditional would surrender it.
+    expect(idle!.className).toContain("opacity-0");
+    expect(idle!.getAttribute("aria-hidden")).toBe("true");
+    expect(buttonContaining("Discard draft").disabled).toBe(true);
+
+    await typeName("Nightly sweep");
+
+    const saved = document.querySelector('[data-slot="draft-saved"]');
+    expect(saved).not.toBeNull();
+    // THE ANTI-JUMP ASSERTION: the same DOM node, not a replacement. Nothing was
+    // inserted into the row, so nothing could have been pushed aside.
+    expect(saved).toBe(idle);
+    expect(saved!.className).not.toContain("opacity-0");
+    expect(saved!.getAttribute("aria-hidden")).toBe("false");
+    expect(buttonContaining("Discard draft").disabled).toBe(false);
+  });
+
+  // VC-405. `role="status"` used to wrap the discard button along with the
+  // sentence, which puts a control inside a live region and re-reads it on every
+  // status change; `chat/activity-island-ui.tsx` records the same lesson.
+  it("announces the draft through a live region that carries text and no control", async () => {
+    await mountEditor();
+
+    const header = document.querySelector("header");
+    expect(header).not.toBeNull();
+    const region = header!.querySelector('[role="status"]');
+    expect(region).not.toBeNull();
+    expect(region!.querySelector("button")).toBeNull();
+    // Mounted while clean and silent. A live region that arrives with its text
+    // already in it announces nothing; this one is watched before it speaks.
+    expect(region!.textContent).toBe("");
+
+    await typeName("Nightly sweep");
+    expect(region!.textContent).toBe("Draft saved");
+  });
+
+  it("names a restored draft apart from one it just saved", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    expect(document.querySelector('[data-slot="draft-saved"]')).toBeNull();
+    const restored = document.querySelector('[data-slot="draft-resumed"]');
+    expect(restored).not.toBeNull();
+    expect(restored!.textContent).toContain("Draft restored");
+    expect(document.querySelector('header [role="status"]')?.textContent).toBe("Draft restored");
+
+    // Discarding returns the row to its clean, inert, width-holding state rather
+    // than removing the slot from the row.
+    await act(async () => buttonContaining("Discard draft").click());
+    expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
+    const idle = document.querySelector('[data-slot="draft-idle"]');
+    expect(idle).not.toBeNull();
+    expect(idle!.closest("header")).not.toBeNull();
+    expect(buttonContaining("Discard draft").disabled).toBe(true);
+    expect(document.querySelector('header [role="status"]')?.textContent).toBe("");
   });
 
   it("clears the draft once the create succeeds", async () => {

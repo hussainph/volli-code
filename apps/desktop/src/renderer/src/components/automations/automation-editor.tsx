@@ -424,6 +424,73 @@ function RuntimeFields({
   );
 }
 
+/**
+ * The draft state, stated in the editor's title row. Two things are separated
+ * here, and the separation is the whole of it.
+ *
+ * THE SLOT NEVER CHANGES WIDTH. As a bordered bar above Instructions this
+ * appeared on the first keystroke and pushed the whole form down — the layout
+ * jump VC-405 calls glitchy. Moving it into the title row ends the vertical
+ * push but not the jump: the name input is the row's only elastic member, so a
+ * `shrink-0` child arriving still takes its width out of the one field under
+ * the cursor, and `dirty` flips on the first character OF THE NAME. So the slot
+ * is always in the row and only its ink changes. `opacity`, not `hidden` or a
+ * conditional: it has to keep occupying the row to hold the width open. The
+ * label it reserves is the label it will show, because `resumed` cannot change
+ * while a draft is being typed — only a discard or a save clears it, and both
+ * end the draft — so the width reserved is the exact width that arrives.
+ *
+ * THE ANNOUNCEMENT CARRIES TEXT AND NOTHING ELSE. `role="status"` used to wrap
+ * the discard button with the sentence, which puts a control inside a live
+ * region and re-reads it on every status change; `chat/activity-island-ui.tsx`
+ * records the same lesson against the same mistake ("A GROUP, not a live
+ * region"). The region is its own sr-only span, and it is mounted whether or
+ * not a draft exists so that the text CHANGES inside a region the reader is
+ * already watching — a live region that arrives with its text already in it is
+ * the classic version of this bug, and it announces nothing.
+ */
+function DraftIndicator({
+  dirty,
+  resumed,
+  onDiscard,
+}: {
+  dirty: boolean;
+  resumed: boolean;
+  onDiscard: () => void;
+}) {
+  const label = resumed ? "Draft restored" : "Draft saved";
+  return (
+    <>
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {dirty ? label : ""}
+      </span>
+      <div
+        data-slot={dirty ? (resumed ? "draft-resumed" : "draft-saved") : "draft-idle"}
+        aria-hidden={!dirty}
+        className={cn(
+          "flex shrink-0 items-center text-ui text-muted-foreground",
+          !dirty && "pointer-events-none opacity-0",
+        )}
+      >
+        <span className="whitespace-nowrap">{label}</span>
+        {/* No gap: the button's own inset is the space, so the pair reads as one
+         * label with a door rather than two peers — the row's `gap-4` is then
+         * the wider interval, and it is what separates this from the record's
+         * controls. */}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          disabled={!dirty}
+          onClick={onDiscard}
+        >
+          Discard draft
+        </Button>
+      </div>
+    </>
+  );
+}
+
 export function AutomationEditorPanel({
   projectId,
   automation,
@@ -675,36 +742,7 @@ export function AutomationEditorPanel({
           placeholder="Name this automation"
           className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
         />
-        {/*
-         * The draft state rides the title row, not the form. As a bordered bar
-         * above Instructions it appeared on the first keystroke and pushed the
-         * whole form down — a layout jump the typist reads as a glitch, paid
-         * for a fact they never asked about. Here it is a muted label at the
-         * name's right edge, in a row whose height is already set by the name
-         * and the buttons, so appearing and vanishing moves nothing; the name
-         * input is the only thing that gives width, and it is left-aligned.
-         */}
-        {dirty ? (
-          <div
-            role="status"
-            data-slot={resumed ? "draft-resumed" : "draft-saved"}
-            className="flex shrink-0 items-center text-ui text-muted-foreground"
-          >
-            <span className="whitespace-nowrap">{resumed ? "Draft restored" : "Draft saved"}</span>
-            {/* No gap: the button's own inset is the space, so the pair reads as
-             * one label with a door rather than two peers — the row's `gap-4`
-             * is then the wider interval, and it is what separates this from
-             * the record's controls. */}
-            <Button
-              variant="ghost"
-              size="xs"
-              className="text-muted-foreground"
-              onClick={discardDraft}
-            >
-              Discard draft
-            </Button>
-          </div>
-        ) : null}
+        <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
         {actions}
         <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
           {automation === null ? "Create automation" : "Save changes"}
