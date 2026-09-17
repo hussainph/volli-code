@@ -3,15 +3,24 @@
 // preferences). The terminal renderer used to own this type and its parser;
 // VC-107 replaced that renderer with xterm.js, so `GhosttyTheme` is now simply
 // the app's own vocabulary for a theme. `xterm-appearance.ts` translates it
-// into xterm's `ITheme`, and `raw` survives because the theme-preview overlay
-// reads the original key-value pairs back out.
+// into xterm's `ITheme`, and `raw` survives because callers read the original
+// key-value pairs back out.
 //
-// The catalog this module resolves names against is generated from Ghostty's
-// own bundled theme collection — see `ghostty-theme-sources.generated.ts` and
-// `apps/desktop/scripts/generate-ghostty-themes.mjs`.
+// THIS MODULE SHIPS NO THEMES (VC-413). It used to resolve a name against a
+// catalog vendored verbatim out of Ghostty.app's bundled collection — 463
+// third-party theme files whose individual provenance and license status were
+// never verified. All of that is deleted: what is left is a PARSER, and the
+// only theme text it is ever handed is the user's own — a file their Ghostty
+// config names, or the config text itself. Material that is local to one user
+// is not material this app redistributes.
+//
+// The consequence, spelled out because it is the design and not an omission: a
+// theme NAME on its own no longer resolves to colors here. `theme = X` is
+// answered by reading X off the user's disk (`main/ghostty-config.ts` probes
+// Ghostty's own theme directories) and, failing that, by the app's own
+// token-derived palette (`renderer/terminal/appearance.ts`).
 
 import { parseConfigLine } from "./ghostty-config";
-import { GHOSTTY_THEME_SOURCES } from "./ghostty-theme-sources.generated";
 
 /** RGBA color with 0-255 byte components. */
 export interface ThemeColor {
@@ -26,7 +35,12 @@ export type ThemeTerminalColor = ThemeColor | "cell-foreground" | "cell-backgrou
 
 /** A parsed Ghostty terminal theme: semantic colors plus the 256-color palette. */
 export interface GhosttyTheme {
-  /** The catalog name, when resolved through `getGhosttyTheme`. */
+  /**
+   * What to call this theme, when the caller knows. Set by whoever BUILT the
+   * theme — today only the app's own token-derived palette, which names itself
+   * per appearance — never by the parser, which is handed text and has no way
+   * to know what the text was called.
+   */
   name?: string;
   colors: {
     background?: ThemeColor;
@@ -148,36 +162,4 @@ export function parseGhosttyTheme(text: string): GhosttyTheme {
   }
 
   return { colors, raw };
-}
-
-// ── the vendored catalog ─────────────────────────────────────────────────
-
-/** Every theme name in the vendored catalog, in catalog (display) order. */
-export function listGhosttyThemeNames(): string[] {
-  return Object.keys(GHOSTTY_THEME_SOURCES);
-}
-
-/** Whether `name` names a theme in the vendored catalog. */
-export function isGhosttyThemeName(name: string): boolean {
-  return Object.hasOwn(GHOSTTY_THEME_SOURCES, name);
-}
-
-/** Parsed-theme cache for `getGhosttyTheme`, keyed by catalog name. */
-const parsedThemeCache = new Map<string, GhosttyTheme>();
-
-/**
- * Resolve a catalog theme by name, parsing lazily (and caching) rather than
- * eagerly parsing all 463 entries at import time. Returns `null` for a name
- * not in the catalog.
- */
-export function getGhosttyTheme(name: string): GhosttyTheme | null {
-  const cached = parsedThemeCache.get(name);
-  if (cached !== undefined) return cached;
-
-  const source = GHOSTTY_THEME_SOURCES[name];
-  if (source === undefined) return null;
-
-  const theme: GhosttyTheme = { ...parseGhosttyTheme(source), name };
-  parsedThemeCache.set(name, theme);
-  return theme;
 }

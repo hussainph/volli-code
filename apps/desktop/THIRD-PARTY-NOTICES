@@ -12,6 +12,11 @@ Shipped theme ids:
   - vitesse-light
   - vitesse-dark
 
+No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 color
+schemes: the terminal is painted from the user's own Ghostty configuration,
+read from their machine, or from a palette derived from Volli's own design
+tokens. Nothing in that path is redistributed, so nothing in it appears below.
+
 =========================================================================================================
 Packages: shiki, @shikijs/monaco, @shikijs/langs, @shikijs/themes
 SPDX: MIT

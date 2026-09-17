@@ -14,6 +14,15 @@
  *
  * The map holds the only theme-id literals. Read that one source instead of
  * duplicating the pair in this plain-Node script.
+ *
+ * EDITOR themes only, and the header says so out loud (VC-413). Volli used to
+ * ship a second body of other people's color work — 463 Ghostty/iTerm2 terminal
+ * themes vendored into @volli/shared — which this file never covered and never
+ * could, because nobody had established what any of it was licensed under. It
+ * was removed rather than documented. The header states the absence so that a
+ * reader of the notices learns it from the notices, and so that a future
+ * terminal theme arriving with no notice entry reads as the omission it would
+ * be; `check-vendored-themes.mjs` is the gate that keeps it true.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -128,6 +137,11 @@ Regenerate with:
 
 Shipped theme ids:
 ${SHIPPED_THEME_IDS.map((id) => `  - ${id}`).join("\n")}
+
+No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 color
+schemes: the terminal is painted from the user's own Ghostty configuration,
+read from their machine, or from a palette derived from Volli's own design
+tokens. Nothing in that path is redistributed, so nothing in it appears below.
 `;
 
 const runtimeLicenseGroups = new Map();

@@ -16,6 +16,10 @@
  * ({@link projectTerminalOverlayEdits}) and the choice the control shows
  * ({@link projectTerminalChoice}).
  *
+ * A third function went with the vendored theme catalog (VC-413): the seed a
+ * "Custom" mode opened its picker on. There is no picker and no Custom mode —
+ * nothing to seed.
+ *
  * Pure: overrides and choices in, overrides and choices out. No DOM, no IPC.
  */
 
@@ -55,17 +59,4 @@ export function projectTerminalChoice(
   const name = payload?.prefs.themeName ?? null;
   if (name === null || payload?.provenance["theme"] !== "volli-project") return { kind: "inherit" };
   return { kind: "theme", name };
-}
-
-/**
- * The name Custom opens on for the terminal: whatever the project is ALREADY
- * showing, so switching to Custom pins the look you were looking at instead of
- * changing it. `null` when no layer in the chain names a theme at all — the
- * terminal is then wearing the token-derived fallback, which has no catalog
- * name, and Volli must not invent one: writing an unrequested `theme = …` into
- * a file the user owns is exactly what the overlay design exists to avoid
- * (#67). The picker opens empty there and the first pick is the first write.
- */
-export function terminalCustomSeed(payload: GhosttyAppearancePayload | null): string | null {
-  return payload?.prefs.themeName ?? null;
 }
