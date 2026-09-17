@@ -675,6 +675,36 @@ export function AutomationEditorPanel({
           placeholder="Name this automation"
           className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
         />
+        {/*
+         * The draft state rides the title row, not the form. As a bordered bar
+         * above Instructions it appeared on the first keystroke and pushed the
+         * whole form down — a layout jump the typist reads as a glitch, paid
+         * for a fact they never asked about. Here it is a muted label at the
+         * name's right edge, in a row whose height is already set by the name
+         * and the buttons, so appearing and vanishing moves nothing; the name
+         * input is the only thing that gives width, and it is left-aligned.
+         */}
+        {dirty ? (
+          <div
+            role="status"
+            data-slot={resumed ? "draft-resumed" : "draft-saved"}
+            className="flex shrink-0 items-center text-ui text-muted-foreground"
+          >
+            <span className="whitespace-nowrap">{resumed ? "Draft restored" : "Draft saved"}</span>
+            {/* No gap: the button's own inset is the space, so the pair reads as
+             * one label with a door rather than two peers — the row's `gap-4`
+             * is then the wider interval, and it is what separates this from
+             * the record's controls. */}
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              onClick={discardDraft}
+            >
+              Discard draft
+            </Button>
+          </div>
+        ) : null}
         {actions}
         <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
           {automation === null ? "Create automation" : "Save changes"}
@@ -684,20 +714,6 @@ export function AutomationEditorPanel({
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
-            {dirty ? (
-              <div
-                role="status"
-                data-slot={resumed ? "draft-resumed" : "draft-saved"}
-                className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-2 py-2 text-ui text-foreground"
-              >
-                <span className="min-w-0 flex-1 text-muted-foreground">
-                  {resumed ? "Draft restored" : "Draft saved"}
-                </span>
-                <Button variant="ghost" size="sm" onClick={discardDraft}>
-                  Discard draft
-                </Button>
-              </div>
-            ) : null}
             <section className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
                 <SectionLabel>Instructions</SectionLabel>

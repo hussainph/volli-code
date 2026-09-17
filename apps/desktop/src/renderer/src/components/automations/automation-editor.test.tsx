@@ -412,6 +412,27 @@ describe("automation editor drafts (VC-329)", () => {
     expect(document.querySelector('[data-slot="draft-resumed"]')).toBeNull();
   });
 
+  // VC-405. The state used to be a bordered bar at the top of the form, so the
+  // first keystroke pushed Instructions down and the typist read the jump as a
+  // glitch. It belongs in the title row, whose height the name and the buttons
+  // already set, with its discard beside it.
+  it("states the draft in the title row rather than above the form", async () => {
+    saveEditorDraft("p1", seededDraft());
+    await mountEditor();
+
+    const indicator = document.querySelector('[data-slot="draft-resumed"]');
+    expect(indicator).not.toBeNull();
+    const header = indicator?.closest("header");
+    expect(header?.querySelector('[aria-label="Name"]')).not.toBeNull();
+    expect(header?.contains(buttonContaining("Discard draft"))).toBe(true);
+    expect(header?.contains(buttonContaining("Create automation"))).toBe(true);
+    // The scrolling form holds only the form: nothing above Instructions moves
+    // when the draft state comes and goes.
+    const form = document.querySelector("main");
+    expect(form?.contains(indicator!)).toBe(false);
+    expect(form?.firstElementChild?.firstElementChild?.textContent).toContain("Instructions");
+  });
+
   it("clears the draft once the create succeeds", async () => {
     saveEditorDraft("p1", seededDraft());
     await mountEditor();
