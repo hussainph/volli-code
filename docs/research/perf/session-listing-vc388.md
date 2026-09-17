@@ -141,6 +141,69 @@ several rosters at once, since `pty/manager.ts` lists every project's Sessions
 to compute a concurrency budget. Ceiling is ~1.4 MB in the shape a real roster
 has, ~20 MB in a shape that needs 256 extreme Sessions to reach.
 
+## Protecting a shared row (VC-393)
+
+The cache's value is that it hands the SAME projection to every caller while
+the entry stands. That is also its hazard: one mutating caller would rewrite
+every later read of that Session, and neither a sequence change nor the
+`sameSession` comparison would dislodge the damage. VC-393 asked for the fix to
+be chosen by measuring the candidates against the entry weights above rather
+than by arguing about them.
+
+Harness: `packages/session-engine/src/listing-cache-cost.bench.test.ts`
+(`pnpm -C packages/session-engine test`). Same two roster shapes as the weights
+table — an ordinary Session of 27 events and the deliberately extreme one of
+453. Medians of five runs, per row, Apple Silicon:
+
+| candidate | ordinary (5.6 KB, 47 nodes) | extreme (79.8 KB, 615 nodes) |
+|---|---|---|
+| freeze in place | 13 µs | 108 µs |
+| **copy and freeze** | **23 µs** | **176 µs** |
+| copy on read | 30 µs | 451 µs |
+| *(in-memory fold, for scale)* | *13 µs* | *30 µs* |
+
+The fold row is the in-memory fold alone. A real listing also reads and decodes
+a checkpoint row, so the number this is actually spent against is the 13.1 ms
+cold listing above — about 218 µs per Session — not the 13–30 µs here.
+
+**Freezing in place is the cheapest and it is the one that is wrong.**
+`foldSessionProjection` copies CONTAINERS and re-uses their ELEMENTS: it seeds
+`commands`, `receipts`, `attachments`, `attention` and `interactions` from the
+base checkpoint's own objects, then pushes the very objects it read out of the
+event payloads (`commands.push(event.payload.command)`). Freezing that graph
+reaches back through it and freezes whatever the ledger handed over. It is
+harmless today only because every ledger here answers reads with fresh objects
+— the in-memory one clones, the SQLite one decodes each row — and `SessionLedger`
+never promises that. A conforming implementation that cached its decoded reads,
+such as the decoded-event LRU `ipc-rpc-sqlite.md` contemplates, would find its
+rows frozen by a mere listing. That is a correctness fault, not a cost, so no
+timing redeems it.
+
+**Copy-on-read is correct and is the one the cache cannot afford.** It is
+dearer per walk, and — unlike the other two — it is paid once per row per
+LISTING rather than once per FOLD. On the warm arm above (3.9 ms p50 for 60
+rows, every row a cache hit) it would add roughly 1.8 ms of pure copying to a
+listing whose entire point is that it did no work.
+
+**So the cache holds a deep-frozen COPY.** Owning the graph instead of freezing
+somebody else's costs about ten microseconds on the row shape a real roster
+has: ~0.2 ms added to a cold listing of sixty Sessions, nothing at all to a
+warm one, and about 0.2 ms per chunk of eight — well inside the 3.6 ms block
+the chunk size was chosen for. The type carries the same rule where the freeze
+cannot follow: `SessionProjection`, `Session` and `SessionCommand` are
+`readonly`, so a mutating caller is a compile error on both sides of an RPC
+seam, where a structured clone drops frozen-ness.
+
+### A checkpoint failure is now reported once per entry
+
+A cache hit answers from the entry and never calls `projectStoredSession`,
+which is where `SessionEnginePorts.onProjectionCheckpointFailure` fires. So an
+unusable checkpoint is reported once per fold rather than once per listing:
+once when the entry is built, then silence until the Session's log moves or the
+entry is evicted. Quieter, not silenced — the condition stays observable, which
+is the whole reason the seam exists. Held by a test in
+`session-engine.test.ts`, and stated on the port itself.
+
 ## D4: the runtime's projection cache
 
 `PROJECTION_CACHE_LIMIT` was 8, with a comment reading "the desktop reads one

@@ -32,10 +32,16 @@ just installed a server will otherwise try to call its tools in the same turn.
 
 ## Configuring a server by hand
 
-**Settings → Configure → MCP Servers.** Add a server, press *Test and discover*
-to connect and read its tool list, tick the tools you want, and save. Nothing is
-stored until discovery succeeds, and discovered tools default to off — every
-tool is an explicit choice.
+**Settings → Configure → MCP Servers.** Press *Add server* to open the editor,
+fill in the transport, press *Test and discover* to connect and read its tool
+list, tick the tools you want, and save. Nothing is stored until discovery
+succeeds, and discovered tools default to off — every tool is an explicit
+choice. *Cancel* closes the editor; *Edit* on a server row reopens it populated.
+
+A configured server's tools sit behind *Show tools* on its summary card, which
+is where they are enabled and disabled. A real catalog is thirty-plus tools with
+a paragraph of description each, so the page shows the counts, the freshness,
+the origin and anything wrong, and opens the rest on request.
 
 ## The agent-facing verbs
 
@@ -280,9 +286,10 @@ exactly the evidence they came looking for.
 
 **A person finds it in Settings → Configure → MCP Servers**, under *Recent
 activity*, which lists the newest operations with what was asked, when, and
-whether a Session or a person did it. A failed first install writes no server
-row at all, so that list is the only place its configuration and recovery line
-survive. `mcp_list` shows the same history to an agent.
+whether a Session or a person did it; an operation that recorded a detail — a
+removal's transport line, a failure's recovery line — carries it behind
+*Detail*. A failed first install writes no server row at all, so that list is
+the only place its configuration and recovery line survive. `mcp_list` shows the same history to an agent.
 
 The row's id is derived from the calling Session and the tool call that asked
 (`${sessionId}:${toolCallId}`), not minted fresh per execution. A retried tool
