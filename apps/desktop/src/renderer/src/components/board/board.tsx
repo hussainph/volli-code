@@ -921,6 +921,11 @@ export const Board = React.memo(function Board({
                 // which cannot start reading a panel before dnd-kit has
                 // actually activated (`automations-picker-smoke.mjs`).
                 data-board-drag={drag === null ? undefined : drag.activeTicket.id}
+                // How many cards the board is HOLDING (VC-316), for the reason
+                // the columns publish their own two numbers: readiness is
+                // asked from outside React, and a count of card nodes is about
+                // to stop being the same question.
+                data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (Trello-style mouse pan). Scrollbar is

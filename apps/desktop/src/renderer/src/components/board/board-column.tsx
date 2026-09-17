@@ -192,6 +192,13 @@ export const BoardColumn = React.memo(function BoardColumn({
               // shape a refactor can quietly undo — the two must never be the
               // same element again. See `board-column-dropzone.test.tsx`.
               data-column-dropzone={status}
+              // What this column HOLDS and what it currently MOUNTS (VC-316).
+              // Equal today, and published anyway: "the board has finished
+              // drawing" is asked from outside React — by the performance
+              // harness and the board smokes — and counting card nodes answers
+              // whichever of the two questions happens to coincide with it.
+              data-column-count={tickets.length}
+              data-column-mounted={tickets.length}
               ref={setNodeRef}
               className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
             >

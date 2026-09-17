@@ -67,13 +67,55 @@ export const PRESETS = Object.freeze({
     targetFileBytes: 746_000_000,
     targetSessionEventBytes: 346_000_000,
   }),
+  ...ticketScalePresets(),
 });
+
+/**
+ * VC-316 board-scale presets: `tickets-300`, `tickets-3k`, `tickets-10k`.
+ *
+ * These answer ONE question — what does a board cost per card — so they vary
+ * the ticket count and hold everything else at the `small` preset's Session
+ * mass. That is deliberate and it is a limitation worth stating: they are NOT
+ * owner-profile fixtures and their absolute numbers are not comparable with
+ * `real`'s. `real` stays the arm for anything about the whole app, and these
+ * three are the arm for the board's own per-card slope, which is what the
+ * ticket asks to see at 300 / 3,000 / 10,000.
+ *
+ * Session Events, transcripts and physical file mass stay at the `small`
+ * budget so generating a ten-thousand-card board takes seconds rather than
+ * scaling a 373 MB file by twenty-five. Ticket Events scale with the tickets
+ * (two per ticket) because a ticket with no history is not a ticket the board
+ * would ever hold.
+ */
+function ticketScalePresets() {
+  const base = {
+    sessions: 120,
+    sessionEvents: 26_040,
+    sessionCommands: 856,
+    liveWorktrees: 8,
+    overlappingWorktrees: 3,
+    maxSessionEvents: 1_200,
+    transcriptMessages: 220,
+    targetFileBytes: 37_300_000,
+    targetSessionEventBytes: 17_300_000,
+  };
+  const scaled = (tickets) =>
+    Object.freeze({ ...base, tickets, ticketEvents: tickets * 2 });
+  return {
+    "tickets-300": scaled(300),
+    "tickets-3k": scaled(3_000),
+    "tickets-10k": scaled(10_000),
+  };
+}
+
+/** Every preset name, in the order they are declared. */
+export const PRESET_NAMES = Object.freeze(Object.keys(PRESETS));
 
 export function presetNamed(name) {
   const preset = PRESETS[name];
   if (preset === undefined) {
     throw new Error(
-      `Unknown performance fixture preset ${JSON.stringify(name)}; expected small, real, or 2x`,
+      `Unknown performance fixture preset ${JSON.stringify(name)}; expected ${PRESET_NAMES.join(", ")}`,
     );
   }
   return preset;
