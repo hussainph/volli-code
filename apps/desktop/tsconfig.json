@@ -6,7 +6,6 @@
   // compilerOptions in a references-only solution file; tsconfig.web.json
   // stays the real authority for @renderer/*.
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@renderer/*": ["./src/renderer/src/*"]
     }
