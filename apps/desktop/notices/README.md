@@ -45,6 +45,13 @@ It cannot see four kinds of thing, so this directory carries them in
   theme data, whose upstream copyrights live in tm-themes' `NOTICE` rather than
   in a package's `LICENSE`. `editor-themes.NOTICE` is regenerated from that
   upstream file by `scripts/generate-editor-theme-notices.mjs`.
+- **`expectedFragments`** — a notice another workspace package owns, which this
+  document has to carry because the `.app` ships this file and not that one.
+  Each entry names the file, the marker that identifies its material in shipped
+  source, and the trees to search. The generator folds the file in verbatim the
+  moment it exists; while it does not, the document prints the entry as pending;
+  and if the material appears in shipped source while the file is still missing,
+  `check:notices` fails rather than packaging it with no attribution.
 
 ## When you have to regenerate
 
@@ -86,6 +93,16 @@ from the packaging work that produced this pipeline.
    declaration that is not a plain permissive grant — today the libvips binary's
    `LGPL-3.0-or-later`, DOMPurify's `(MPL-2.0 OR Apache-2.0)`, and node-forge's
    `(BSD-3-Clause OR GPL-2.0)`. They are listed so a reviewer can find them.
+6. **Shared terminal theme catalog.** `packages/shared/THIRD-PARTY-THEMES.md` —
+   the iTerm2-Color-Schemes licence and provenance for the Ghostty theme catalog,
+   including the per-theme ambiguity that work identifies — is being written on
+   another ticket's branch. Neither the catalog nor the file is in this tree, so
+   the document prints the entry as pending and asserts nothing about it. The
+   integration needs no further code: the `expectedFragments` entry folds the
+   file into the shipped notice as soon as it lands (regenerate, or CI's
+   `check:notices` will say so), and fails the check if the catalog ships first.
+   Per-theme licence judgements stay with the review that owns them; this
+   pipeline only guarantees the attribution travels inside the `.app`.
 
 Out of this artifact's scope, stated so the boundary is legible: the docs and
 website static sites (including GSAP, which only `apps/website` depends on) are

@@ -347,6 +347,39 @@ export function packagingFailures({
   return [...new Set(failures)];
 }
 
+/**
+ * What to do with a notice this repository expects to exist but does not own:
+ * today, the shared terminal theme catalog's iTerm2-Color-Schemes attribution,
+ * which is being written on another ticket's branch (VC-407 coordination).
+ *
+ * The rule has to hold in three states and cannot wait for any of them:
+ *   - the file is here → fold it into the shipped document, whatever else is true;
+ *   - the file is absent and nothing in the shipped source refers to the material
+ *     → the catalog has not landed yet, so the document says pending and the
+ *     check stays green;
+ *   - the file is absent while shipped source DOES refer to the material → the
+ *     catalog landed without its attribution, and the packaged app would ship
+ *     the themes with nothing covering them. That is the failure.
+ *
+ * `markerFound` is the caller's answer to "does shipped source mention this?",
+ * kept out of here so the search stays testable and this stays a decision.
+ *
+ * @param {{ title: string, path: string, present: boolean, markerFound: boolean, marker: string }} fragment
+ * @returns {{ include: boolean, failure: string | null }}
+ */
+export function pendingFragmentDecision({ title, path, present, markerFound, marker }) {
+  if (present) return { include: true, failure: null };
+  if (!markerFound) return { include: false, failure: null };
+  return {
+    include: false,
+    failure:
+      `shipped source refers to "${marker}" (${title}) but ${path} is not in this tree — ` +
+      `the packaged app would carry that material with no attribution. Land the notice ` +
+      `file, or record an equivalent entry in apps/desktop/notices/sources.json, then ` +
+      `regenerate.`,
+  };
+}
+
 const RULE = "=".repeat(105);
 const THIN_RULE = "-".repeat(105);
 /** Columns the document's own prose wraps at; licence texts are never rewrapped. */
@@ -401,6 +434,7 @@ function noteLines(note) {
  *   vendored: { title: string, paths: string[], upstream: string | null, spdx: string | null, evidence: string, text: string | null, unresolved: string | null }[],
  *   patched: { name: string, version: string, patch: string }[],
  *   fragments: { title: string, source: string, text: string }[],
+ *   pendingFragments: { title: string, path: string, marker: string, pending: string }[],
  * }} model
  */
 export function renderNoticeDocument(model) {
@@ -593,9 +627,36 @@ export function renderNoticeDocument(model) {
     "",
   );
 
+  section(`9. ADDITIONAL NOTICES (${model.fragments.length + model.pendingFragments.length})`);
+  out.push(
+    "Notices for material no package manifest describes: data bundled inside a package,",
+    "and catalogs another workspace package carries with its own attribution file. A",
+    "notice recorded here but not yet present in the tree is printed as pending rather",
+    "than omitted — see apps/desktop/notices/sources.json.",
+    "",
+  );
   for (const fragment of model.fragments) {
-    section(`9. ${fragment.title.toUpperCase()}`);
-    out.push("Source:", ...wrapText(fragment.source, "  "), "", fragment.text, "");
+    out.push(
+      RULE,
+      `Notice: ${fragment.title}`,
+      "Source:",
+      ...wrapText(fragment.source, "  "),
+      THIN_RULE,
+      fragment.text,
+      "",
+    );
+  }
+  for (const pending of model.pendingFragments) {
+    out.push(
+      RULE,
+      `Notice: ${pending.title}`,
+      `Source: ${pending.path}`,
+      `Marker: ${pending.marker}`,
+      "Status: PENDING — that file is not in this tree, so nothing is reproduced for it.",
+      THIN_RULE,
+      ...wrapText(pending.pending, "  "),
+      "",
+    );
   }
 
   const review = licensesNeedingReview([

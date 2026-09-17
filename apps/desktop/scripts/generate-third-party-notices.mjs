@@ -59,6 +59,7 @@ import {
   licensesNeedingReview,
   normalizeLicenseText,
   packagingFailures,
+  pendingFragmentDecision,
   renderNoticeDocument,
   repositoryUrl,
   unpackedPackages,
@@ -224,7 +225,68 @@ function readSourcesRegistry() {
     text: normalizeLicenseText(readFileSync(join(NOTICES_DIR, entry.file), "utf8")),
   }));
 
-  return { platformNative, toolchain, vendored, fragments };
+  const pendingFragments = [];
+  const pendingFailures = [];
+  for (const entry of registry.expectedFragments ?? []) {
+    const absolute = resolve(REPO_ROOT, entry.file);
+    const present = existsSync(absolute);
+    const decision = pendingFragmentDecision({
+      title: entry.title,
+      path: entry.file,
+      marker: entry.marker,
+      present,
+      // Only asked when the file is missing: the search is the expensive half,
+      // and its answer changes nothing once the notice itself is here.
+      markerFound: present ? false : shippedSourceMentions(entry.marker, entry.scan),
+    });
+    if (decision.failure !== null) pendingFailures.push(decision.failure);
+    if (decision.include) {
+      fragments.push({
+        title: entry.title,
+        source: `${entry.file} — ${entry.source}`,
+        text: normalizeLicenseText(readFileSync(absolute, "utf8")),
+      });
+    } else {
+      pendingFragments.push({
+        title: entry.title,
+        path: entry.file,
+        marker: entry.marker,
+        pending: noteOf({ note: entry.pending }),
+      });
+    }
+  }
+
+  return { platformNative, toolchain, vendored, fragments, pendingFragments, pendingFailures };
+}
+
+/**
+ * Does any shipped source file under `roots` mention `marker`?
+ *
+ * This is the evidence half of {@link pendingFragmentDecision}: a catalog that
+ * landed without its attribution file announces itself in the source that
+ * carries it. Only source trees that reach the bundle are searched, and build
+ * output and dependencies are skipped — a match inside node_modules would say
+ * nothing about what this repository ships.
+ *
+ * @param {string} marker @param {string[]} roots repo-relative directories
+ */
+function shippedSourceMentions(marker, roots) {
+  const skip = new Set(["node_modules", "dist", "dist-electron", "release", ".git"]);
+  const stack = roots.map((root) => resolve(REPO_ROOT, root)).filter((dir) => existsSync(dir));
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (readFileSync(path, "utf8").includes(marker)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -308,12 +370,17 @@ function coveredNamesOf(model) {
 function generate() {
   const model = buildModel();
   const document = renderNoticeDocument(model);
-  const failures = packagingFailures({
-    builderConfig: model.builderConfig,
-    coveredNames: coveredNamesOf(model),
-    requiredResources: REQUIRED_RESOURCES,
-    resourceExists: (from) => existsSync(resolve(DESKTOP_DIR, from)),
-  });
+  const failures = [
+    ...packagingFailures({
+      builderConfig: model.builderConfig,
+      coveredNames: coveredNamesOf(model),
+      requiredResources: REQUIRED_RESOURCES,
+      resourceExists: (from) => existsSync(resolve(DESKTOP_DIR, from)),
+    }),
+    // A notice this repository expects but does not own — the shared theme
+    // catalog's attribution — whose material has landed without it.
+    ...model.pendingFailures,
+  ];
   return { model, document, failures };
 }
 
@@ -652,6 +719,14 @@ function renderFixtureModel() {
     ],
     patched: [{ name: "alpha", version: "1.0.0", patch: "patches/alpha.patch" }],
     fragments: [{ title: "Editor theme data", source: "s", text: "FRAGMENT TEXT" }],
+    pendingFragments: [
+      {
+        title: "Catalog notice",
+        path: "packages/shared/NOTICE.md",
+        marker: "Upstream-Catalog",
+        pending: "why it is pending",
+      },
+    ],
   };
 }
 
@@ -669,6 +744,10 @@ function selfTestRendering() {
     "PROVENANCE UNRESOLVED",
     "native@3.0.0 — LGPL-3.0-or-later",
     "patches/alpha.patch",
+    "9. ADDITIONAL NOTICES (2)",
+    "Marker: Upstream-Catalog",
+    "Status: PENDING",
+    "why it is pending",
   ]) {
     assert.ok(document.includes(expected), `rendered document is missing: ${expected}`);
   }
@@ -685,11 +764,46 @@ function selfTestRendering() {
   );
 }
 
+function selfTestExpectedFragments() {
+  const fragment = {
+    title: "Shared theme catalog",
+    path: "packages/shared/THIRD-PARTY-THEMES.md",
+    marker: "iTerm2-Color-Schemes",
+  };
+  assert.deepEqual(
+    pendingFragmentDecision({ ...fragment, present: true, markerFound: true }),
+    { include: true, failure: null },
+    "a notice that is here is folded in",
+  );
+  assert.deepEqual(
+    pendingFragmentDecision({ ...fragment, present: true, markerFound: false }),
+    { include: true, failure: null },
+    "a notice that is here is folded in even before its material ships",
+  );
+  assert.deepEqual(
+    pendingFragmentDecision({ ...fragment, present: false, markerFound: false }),
+    { include: false, failure: null },
+    "neither the material nor its notice: pending, and the check stays green",
+  );
+  const landedWithout = pendingFragmentDecision({
+    ...fragment,
+    present: false,
+    markerFound: true,
+  });
+  assert.equal(landedWithout.include, false);
+  assert.match(
+    landedWithout.failure,
+    /iTerm2-Color-Schemes.*THIRD-PARTY-THEMES\.md/s,
+    "material shipping without its notice fails, naming both the marker and the file",
+  );
+}
+
 function selfTest() {
   selfTestClosure();
   selfTestDeclarations();
   selfTestGrouping();
   selfTestPackagingRules();
+  selfTestExpectedFragments();
   selfTestRendering();
   console.log("generate-third-party-notices self-test passed");
 }
