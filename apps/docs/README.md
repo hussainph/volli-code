@@ -53,22 +53,20 @@ light still gets the dark site.
 The site self-hosts Mona Sans (`@fontsource-variable/mona-sans`, loaded through
 Starlight's `customCss`), so every build emits its `.woff2` files and every
 deploy redistributes font software. OFL-1.1 allows that only when the copyright
-notice and license text travel with the fonts, so `src/pages/licenses.txt.ts`
-reads them out of the installed package at build time and publishes
-`/licenses.txt`, which the footer links. Nothing is transcribed by hand: bumping
-the font package rewrites the notice on the next build.
+notice and license text travel with the fonts. `src/pages/licenses.txt.ts`
+imports the font package's `package.json` and `LICENSE`, and publishes them as
+`/licenses.txt`, which the footer links. Nothing is transcribed by hand, so
+bumping the font package rewrites the notice on the next build.
 
-`pnpm -C apps/docs build` finishes by running `scripts/check-font-notices.mjs`
-from the repo root, which fails the build if `dist/` holds a font file that
-`/licenses.txt` does not cover. CI builds both sites, so that gate runs there
-too. Adding a second family means adding it to `REDISTRIBUTED_FONT_PACKAGES` in
-`src/lib/font-notices.ts` (and to the matching list in `apps/website`).
+That route names the fonts this site redistributes. The rendering comes from
+`@volli/font-notices`, shared with `apps/website`. To add a family, declare the
+package in `package.json`, load it in `astro.config.mjs`, and add it to the list
+in `src/pages/licenses.txt.ts`.
 
-`src/lib/font-notices.ts` is a deliberate copy of the website's module — the two
-Astro projects share no build, and neither would otherwise depend on a workspace
-package. This app has no test runner, so the website's `font-notices.test.ts`
-owns the unit tests and fails if the two copies' code stops matching. Edit one,
-edit the other.
+`pnpm -C apps/docs build` finishes by running `check-font-notices`, the gate that
+`@volli/font-notices` installs. It fails the build if `dist/` holds a font file
+that `/licenses.txt` does not cover. `pnpm -C apps/docs deploy` builds first, so
+it runs there too, and CI builds both sites.
 
 ## Writing
 
