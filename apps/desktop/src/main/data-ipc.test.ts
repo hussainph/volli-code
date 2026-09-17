@@ -199,8 +199,11 @@ vi.mock("./worktree", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
 import { insertSession } from "./session-control/test-support";
+import { recordAutomationRun } from "./db/automations-repo";
+import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import { recordMcpOperation } from "./db/mcp-operations-repo";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
@@ -1991,6 +1994,187 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     expect(
       rebound.ok && rebound.sessions.find((row) => rowId(row) === created.session.id)?.record,
     ).toMatchObject({ live: true, activity: "idle" });
+  });
+
+  // VC-392: the fetch reads provenance for the whole roster in one batch
+  // (`readSessionProvenances`) while the push channel reads one Session at a
+  // time (`readSessionProvenance`, exactly as `index.ts` composes it). The two
+  // must produce the same row for the same Session: the renderer applies a push
+  // as a whole-row upsert, so a disagreement would change a Session's mark the
+  // moment it did anything — the flicker the push channel exists to remove.
+  it("pushes the same rows the fetch returns, provenance included", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const pushed = new Map<string, SessionListingRow>();
+    const watch = watchSessionActivity(sessionEngine, {
+      publish: ({ row }) => pushed.set(rowId(row), row),
+      // The expression `index.ts` passes, unchanged.
+      provenanceOf: (born) => readSessionProvenance(ctx.db, born),
+    });
+    // Created THROUGH the watch, because `createSession` is one of the writes
+    // that marks a Session dirty. Nothing here retitles anything: a rename is a
+    // ledger fact and `sessions.title` is only the minted name, so a test that
+    // dirtied Sessions by renaming them would be comparing two readers of a
+    // title neither of them should still be showing.
+    const start = async (title: string, ticketId: string | null): Promise<string> => {
+      const created = await watch.engine.createSession({
+        commandId: `create-${title}`,
+        projectId,
+        ticketId,
+        role: roleImpliedByTicket(ticketId),
+        parentSessionId: null,
+        title,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      return created.session.id;
+    };
+    // One Session per source the reader can answer from, so the comparison
+    // below covers every arm rather than the resting one.
+    const parent = await start("Orchestrator", ticket.id);
+    const delegated = await start("Delegated", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: delegated,
+      now: 600,
+      actor: { kind: "session", sessionId: parent, ticketId: ticket.id },
+    });
+    const runSession = await start("Nightly sweep", ticket.id);
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: ticket.id,
+        sessionId: runSession,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      700,
+    );
+    const byHand = await start("Opened by hand", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: byHand,
+      now: 800,
+      actor: { kind: "user" },
+    });
+    const board = await start("Board chat", null);
+
+    // The flush builds the pushed row the same way the renderer receives it,
+    // and it runs after the provenance records above are in place.
+    await watch.flush();
+    watch.stop();
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    const fetched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const scoped = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
+      ticketId: ticket.id,
+    });
+    if (!fetched.ok || !scoped.ok) throw new Error("listing failed");
+
+    expect(pushed.size).toBe(5);
+    for (const row of [...fetched.sessions, ...scoped.sessions]) {
+      expect(row).toEqual(pushed.get(rowId(row)));
+    }
+    // The marks themselves, so the two channels agreeing on `{ kind: "user" }`
+    // for everything could not pass this test.
+    const provenanceById = new Map(
+      fetched.sessions.map((row) => [rowId(row), row.provenance] as const),
+    );
+    expect(provenanceById.get(runSession)).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
+    expect(provenanceById.get(delegated)).toEqual({
+      kind: "session",
+      parentSessionId: parent,
+      parentTitle: "Orchestrator",
+    });
+    expect(provenanceById.get(byHand)).toEqual({ kind: "user" });
+    expect(provenanceById.get(board)).toEqual({ kind: "user" });
+  });
+
+  // VC-392: the bench that measures this tail cannot call the handler itself
+  // (it would have to boot Electron), so it measures
+  // `sessionListingRowsForRoster` — the function the handler calls. This test
+  // is the other half of that arrangement: it pins, through the REAL handler,
+  // that the roster's provenance still costs a bounded number of statements
+  // rather than a number that grows per Session. Together they close the gap a
+  // hand-assembled bench would leave, which is that the handler drifts away
+  // from the thing being measured and nobody notices.
+  it("lists a roster without paying a provenance read per Session", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const roster = 24;
+    for (let index = 0; index < roster; index += 1) {
+      const created = await sessionEngine.createSession({
+        commandId: `create-bulk-${index}`,
+        projectId,
+        ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
+        title: `Bulk ${index}`,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      recordSessionStartedOnce(ctx.db, {
+        ticketId: ticket.id,
+        sessionId: created.session.id,
+        now: 600 + index,
+        actor: { kind: "user" },
+      });
+    }
+
+    // The interceptor goes on BEFORE the first listing, not after it.
+    // `prepared` memoizes per handle, so a wrapper installed after a warm-up
+    // would decorate nothing and count zero however the handler reads — which
+    // is a test that passes because it is blind. `counting` is what switches
+    // recording on, so preparation happens under the wrapper and only the
+    // second listing's EXECUTIONS are counted.
+    let counting: string[] | null = null;
+    const prepare = ctx.db.prepare.bind(ctx.db);
+    ctx.db.prepare = ((sql: string) => {
+      const statement = prepare(sql);
+      if (!/FROM\s+(automation_runs|ticket_events|session_event_sequence)\b/.test(sql)) {
+        return statement;
+      }
+      for (const method of ["get", "all", "iterate"] as const) {
+        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
+        Object.defineProperty(statement, method, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            counting?.push(sql);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
+    }) as typeof ctx.db.prepare;
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const provenanceStatements: string[] = [];
+    counting = provenanceStatements;
+    const listed = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    counting = null;
+
+    if (!listed.ok) throw new Error("listing failed");
+    expect(listed.sessions).toHaveLength(roster);
+    // The counter saw the reads at all. Without this the two bounds below are
+    // satisfied by a counter that is simply not working.
+    expect(provenanceStatements.length).toBeGreaterThan(0);
+    // Comfortably under one per Session, and not pinned to an exact number so
+    // that adding a durable source stays a one-line change here.
+    expect(provenanceStatements.length).toBeLessThanOrEqual(5);
+    expect(provenanceStatements.length).toBeLessThan(roster);
   });
 
   it("rejects invalid input", () => {
