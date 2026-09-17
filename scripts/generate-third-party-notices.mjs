@@ -506,8 +506,37 @@ function reportIndexDrift(current, generated) {
   if (added.length === 0 && removed.length === 0) {
     console.error(
       "\nThe package index is identical, so the change is in a licence text, in\n" +
-        "apps/desktop/notices/, or in the document's own prose.",
+        "apps/desktop/notices/, or in the document's own prose:",
     );
+    reportFirstTextualDifference(current, generated);
+  }
+}
+
+/**
+ * The first place the two documents actually diverge, with the section heading
+ * it falls under.
+ *
+ * WHY IT IS WORTH THE LINES. "Out of date, and the index is identical" leaves
+ * an author diffing a 770 kB generated file by hand, and it is precisely the
+ * case a person cannot guess: the index is what they can see. It also has to
+ * survive being read from a CI log on a machine they do not have — the reason
+ * this exists is a difference that reproduced only on the Linux runner.
+ */
+function reportFirstTextualDifference(current, generated) {
+  const before = current.split("\n");
+  const after = generated.split("\n");
+  const limit = Math.max(before.length, after.length);
+  for (let index = 0; index < limit; index += 1) {
+    if (before[index] === after[index]) continue;
+    const heading = after.slice(0, index + 1).findLast((line) => /^\d+\. [A-Z]/.test(line));
+    console.error(
+      `\n  first difference at line ${index + 1}${heading ? ` (in "${heading}")` : ""}:`,
+    );
+    console.error(`    committed: ${JSON.stringify(before[index] ?? "(end of file)")}`);
+    console.error(`    generated: ${JSON.stringify(after[index] ?? "(end of file)")}`);
+    const differing = [...Array(limit).keys()].filter((i) => before[i] !== after[i]).length;
+    console.error(`  ${differing} line(s) differ in total.`);
+    return;
   }
 }
 
