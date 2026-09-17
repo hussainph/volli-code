@@ -484,7 +484,7 @@ describe("whole-report validation and Markdown", () => {
     const report = benchmarkReport();
     report.config.interactions = INTERACTION_IDS;
 
-    expect(markdown(report)).toContain("Interactions measured: all nine");
+    expect(markdown(report)).toContain(`Interactions measured: all ${INTERACTION_IDS.length}`);
   });
 
   it("rejects missing arms, console errors, zero samples, and null latency", () => {
