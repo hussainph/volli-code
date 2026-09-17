@@ -86,6 +86,10 @@ export default defineConfig({
           ],
         },
         {
+          label: "Releases",
+          items: [{ label: "What's new in 0.2", slug: "releases/whats-new-0-2" }],
+        },
+        {
           // Ordered by the path through the product: plan on the board, save
           // repeatable starts, open a task, understand chats and worktrees,
           // then configure and theme.

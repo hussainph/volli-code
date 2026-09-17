@@ -57,10 +57,11 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Open **Settings → CLI** to see which executable and shell integration Volli
-detected. Run **Doctor**, then use **Fix & Re-run** to regenerate the parts
-Volli owns. Terminal companions opened by the app already receive `volli` on
-`PATH`.
+Open **Settings → About** for the install's CLI checks; they run when the pane
+opens, and a fault offers **Fix** to regenerate the parts Volli owns, with
+**Re-check** to run them again. To see the detected executable and shell
+integration, copy the support report from that pane. Terminal companions opened
+by the app already receive `volli` on `PATH`.
 
 ## `pnpm install` fails on a native module
 
@@ -82,9 +83,9 @@ after the branch is landed, or remove it yourself:
 git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
 ```
 
-For tickets in Done, **Settings → General → Done worktree retention** controls
-when Volli can reclaim a clean folder automatically. **Keep worktree** exempts a
-ticket from that cleanup.
+For tickets in Done, use **Retention** in **Settings → Storage** to control when
+Volli can reclaim a clean folder automatically. **Keep worktree** exempts a ticket
+from that cleanup.
 
 ## A shortcut does nothing
 

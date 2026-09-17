@@ -154,6 +154,20 @@ The move opens a short delay window with one control, **Cancel**. Selecting
 off the Automation, or disarming the column before the delay ends also prevents
 that automatic Run.
 
+## What starts a Run
+
+Use this table to see which action starts a Run, what can prevent it, and which Session it opens.
+
+| What you do | What starts | What it opens |
+| --- | --- | --- |
+| You select **Run** on a listing. | A manual Run starts immediately, whether **Enabled** is on or off. | A fresh Ticket Session, or a project-level Board Session for a scheduled Automation. |
+| You choose **Run on model** from a Ticket's run menu. | A manual Run with a one-time model and reasoning override. | A fresh **Session** for that Ticket. |
+| You choose **Run once…** in a Ticket's **Automations** section. | An **Unbound Run**; no Automation record is saved. | A fresh **Session** for that Ticket. |
+| You make a **Deliberate move** into a column whose Automation is **Armed** and **Enabled** on this Mac. | An automatic Run starts after a short cancellable delay; **Cancel** prevents it. | A fresh Ticket Session. |
+| You hold **Option (⌥)** during a drag and choose an offered Automation. | The selected Automation's Run starts after the same cancellable delay. | A fresh Ticket Session. |
+| You leave Volli open until a scheduled due time arrives. | A scheduled Run starts. | A project-level Board Session. |
+| You create or edit an Automation, turn **Enabled** on, or arm a column; your Ticket is already in the column; your Session ends, stalls, or is interrupted; or Volli is closed at the due time. | Nothing starts. | No Session; a closed-app due time records a **Skipped** occurrence instead. |
+
 ## Choose during a board drag
 
 When a card is in the air, the hovered column shows its Offered list. Hold

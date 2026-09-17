@@ -19,6 +19,10 @@ const SECTIONS = [
     slugs: ["start/install", "start/quickstart", "start/concepts"],
   },
   {
+    label: "Releases",
+    slugs: ["releases/whats-new-0-2"],
+  },
+  {
     label: "Using Volli",
     slugs: [
       "guides/board",

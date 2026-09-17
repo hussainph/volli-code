@@ -1,0 +1,108 @@
+---
+title: What's new in 0.2
+description: Understand how Automations save Instructions, Trigger, and Runtime for starts by hand, from a board column, or on a schedule.
+sidebar:
+  label: What's new in 0.2
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+In 0.2, you can use **Automations**: a saved, named way to start work. Each
+Automation keeps its **Instructions**, **Trigger**, and **Runtime** together,
+so you can start the same setup by hand, when a ticket enters a board column, or
+on a schedule.
+
+<Aside type="caution" title="Alpha">
+  Volli Code is in early alpha, for Apple silicon Macs. Features move between
+  builds.
+</Aside>
+
+## The saved starting point
+
+An Automation keeps the parts of a start together:
+
+- **Instructions** are the message sent as the first message of the fresh
+  **Session** that a Run opens. They support the same `/` templates and Skills
+  and `@` file references as the chat composer.
+- **Trigger** describes what starts the Automation besides you: **Only when I
+  run it**, **Ticket enters**, or **On a schedule**. Every Automation can be run
+  by hand, and **Only when I run it** is the default for a new Automation.
+- **Runtime** chooses the model policy for the Run. It can use a project
+  default, a named default tier, or an exact model and reasoning level.
+
+## Three ways a Run starts
+
+### Run it by hand
+
+You can run a saved Automation from any surface that lists it: the
+**Automations** page, a ticket's **Automations** section, a board card's
+**Automations** submenu, or the command palette. Select **Run** to start it.
+A manual Run does not depend on **Enabled**. For one invocation without saving
+an Automation, use **Run once…** to create an **Unbound Run** with its own
+Instructions.
+
+### Start when a ticket enters a column
+
+A **Ticket enters** Trigger puts an Automation in the selected columns'
+**Offered** lists. Automatic starts are off by default: turn on **Enabled** for
+this Mac, then arm one offered Automation in the column. Enablement is stored
+for this Mac and does not travel with the project. A column can have at most one
+armed Automation; choose **No Automation** to disarm it.
+
+Arming is not retroactive. Tickets already in the column are not processed when
+you create, enable, or arm an Automation. After you enable and arm one, only a
+**Deliberate move** into the column starts the automatic Run. Volli opens a
+short delay window with one control, **Cancel**. Selecting **Cancel** keeps the
+move and prevents the Run. Moving the ticket back, turning off the Automation,
+or disarming the column before the delay ends also prevents that automatic Run.
+
+### Start on a schedule
+
+A schedule uses one of Volli's presets: **Hourly**, **Every day**, **Mon–Fri**,
+or **Weekly**. Volli must be open for a scheduled Run to start. If a due time
+passes without a Run, Volli records a **Skipped** occurrence with its reason
+instead of silently replaying the missed work.
+
+A **Skipped** row offers **Run now**. **Run now** starts one Run; it does not
+replay every occurrence that the row represents.
+
+## What a Run keeps
+
+Each Run opens a fresh **Session**; it never wakes an old chat. Run history
+keeps the Automation name, target, resolved model, reasoning, and time, with a
+link to the Session it created. The Run therefore keeps the model and reasoning
+that were resolved when it started.
+
+If an exact model pinned in the Runtime is no longer available, repair the
+Runtime in the Automation editor or choose another model. Volli does not
+silently substitute one.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Create Automations, choose Triggers and Runtimes, and read Run history."
+  />
+  <LinkCard
+    title="The board"
+    href="/guides/board/"
+    description="Arm columns, make deliberate moves, and choose an Automation during a drag."
+  />
+  <LinkCard
+    title="The ticket workspace"
+    href="/guides/ticket-workspace/"
+    description="Run an Automation on a ticket and open the Session it creates."
+  />
+  <LinkCard
+    title="Settings"
+    href="/guides/settings/"
+    description="Configure model defaults and other app-wide behavior."
+  />
+  <LinkCard
+    title="Troubleshooting"
+    href="/reference/troubleshooting/"
+    description="Find checks for model and Run problems."
+  />
+</CardGrid>
