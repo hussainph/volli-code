@@ -32,6 +32,19 @@ here with what the ticket asks for and did not exist:
   mean "the window is full".
 - **Sidebar band row counts**, for the same reason: a band bounded by age and a
   band that is genuinely short read identically on a stopwatch.
+- **A `board_filter` arm.** The ticket asks for filter latency beside the mount
+  and the scroll, and it is a different question from either: a filter
+  re-derives every column's list, count badge and window from the whole ticket
+  set, so its cost tracks what the board HOLDS and is not expected to move when
+  only the mount is bounded. Recording it is what keeps that an observation
+  rather than an assumption. It toggles the Priority facet — the fixture assigns
+  priorities round-robin, so one of the three cuts a board of any size to about
+  a third — and restores the unfiltered board before it returns.
+
+  **This arm was added after the sweeps below were taken, so it has no
+  before/after pair in this document.** It is instrumentation for the next run
+  rather than evidence for this one; the windowing claims here rest on the mount
+  and scroll numbers, which were measured on both arms.
 
 Command, for each fixture:
 
@@ -186,7 +199,8 @@ Fixing that is a fixture change — Session timestamps relative to the run clock
 rather than to a frozen `BASE_TIME` — and it is deliberately not made here: it
 would move every Session-touching arm of the shared baseline at the same time,
 which is a change that wants its own before/after rather than riding along
-inside a board ticket.
+inside a board ticket. **That change is now VC-415**, which also carries the
+re-take of the affected baseline arms. VC-116 should wait on it.
 
 ## What was implemented
 
