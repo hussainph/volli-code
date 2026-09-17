@@ -59,7 +59,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence"
+  "sessionId" | "receipt" | "throughSequence" | "refusal"
 >;
 
 /**
@@ -1007,6 +1007,9 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     sessionId: result.sessionId,
     receipt: result.receipt,
     throughSequence: result.throughSequence,
+    // Nullable rather than optional, so the field survives every transport
+    // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
+    refusal: result.refusal,
   };
 }
 

@@ -2063,6 +2063,75 @@ describe("SessionRuntime native adapter contract", () => {
     });
   });
 
+  // VC-141: the adapter's judgement of its own refusal has to survive the
+  // trip, or a client is left re-deriving it from rejection codes it should
+  // never have to know.
+  it.each(["benign", "failure"] as const)(
+    "carries a %s compaction refusal out beside the durable receipt",
+    async (severity) => {
+      const { runtime, adapter } = composition();
+      const sessionId = await createAndAttach(runtime);
+      adapter.dispatchReceipt = {
+        commandId: "compact-weighed",
+        status: "rejected",
+        code: "PI_NOTHING_TO_COMPACT",
+        detail: "There is nothing left to summarize.",
+        native: null,
+        severity,
+      };
+
+      const result = await runtime.command({
+        commandId: "compact-weighed",
+        sessionId,
+        command: { kind: "context.compact" },
+      });
+
+      expect(result.refusal).toBe(severity);
+      // Still not durable content: the ledger keeps the code and the runtime's
+      // sentence, which is everything a later reader needs to judge it again.
+      expect(result.receipt).toMatchObject({
+        status: "rejected",
+        code: "PI_NOTHING_TO_COMPACT",
+      });
+      expect(result.receipt).not.toHaveProperty("severity");
+    },
+  );
+
+  it("leaves the refusal unmarked when the adapter judged nothing", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    adapter.dispatchReceipt = {
+      commandId: "compact-unmarked",
+      status: "rejected",
+      code: "PI_ATTACHMENT_CLOSED",
+      detail: "This attachment is closed.",
+      native: null,
+    };
+
+    const result = await runtime.command({
+      commandId: "compact-unmarked",
+      sessionId,
+      command: { kind: "context.compact" },
+    });
+
+    // Null, never a guess: a client reads an unvouched refusal as a failure.
+    expect(result.refusal).toBeNull();
+  });
+
+  it("marks nothing on a compaction the adapter accepted", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    const result = await runtime.command({
+      commandId: "compact-accepted",
+      sessionId,
+      command: { kind: "context.compact" },
+    });
+
+    expect(result.refusal).toBeNull();
+    expect(result.receipt).toMatchObject({ status: "accepted" });
+  });
+
   it("refuses a compaction addressed to no executor at all", async () => {
     const { runtime } = composition();
     const created = await runtime.command({

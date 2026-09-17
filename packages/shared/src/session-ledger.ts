@@ -1307,6 +1307,23 @@ export type CommandReceipt = UnstampedCommandReceipt & {
 
 export type AcceptedCommandReceipt = Extract<CommandReceipt, { status: "accepted" }>;
 
+/**
+ * How much a refused Command weighs, decided by the side that knows (VC-141).
+ *
+ * `failure` is the default and every refusal that has not said otherwise: the
+ * Command could not be served, and a person is owed the word "wrong".
+ * `benign` is the refusal a person's own request simply ran into — a context
+ * with nothing left to summarize, a compaction already running — where
+ * nothing failed and CLAUDE.md's line applies: "Errors are for operations
+ * that failed, not for outcomes the user chose."
+ *
+ * The judgement belongs to the runtime that produced the refusal, never to a
+ * client reading its codes back: a client that re-derived this from code
+ * strings would have to carry one adapter's vocabulary, and a second client
+ * or a second runtime would silently get it wrong.
+ */
+export type CommandRefusalSeverity = "benign" | "failure";
+
 /** Product-owned result of starting or reattaching a structured Session. */
 export interface SessionStartResult {
   sessionId: string;

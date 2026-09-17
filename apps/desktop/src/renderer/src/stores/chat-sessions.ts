@@ -249,11 +249,11 @@ export function createChatSessionsStore(
         // (VC-169): an event failure surfaces as an error toast, and the
         // auto-title write goes through the shared rename path — which owns
         // the optimistic labels, the rollback, and its own failure toast.
-        // `tone` defaults to `"error"` in the core (every caller but VC-141's
-        // `compactContext`); `"neutral"` is a plain sonner toast at the
-        // library's own default duration, never the longer-held error one.
-        notify: (message, tone = "error") =>
-          tone === "neutral" ? toast(message) : toastError(message),
+        // The core always states the tone (VC-141). `"neutral"` is a plain
+        // sonner toast at the library's own default duration — right for a
+        // refusal that is a transient confirmation — never the longer-held,
+        // closeable error one `toastError` exists to give a real failure.
+        notify: (message, tone) => (tone === "neutral" ? toast(message) : toastError(message)),
         renameSession: (target, title, refineFrom) => {
           void renameChatSession(target, title, refineFrom);
         },

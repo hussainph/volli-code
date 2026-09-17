@@ -77,6 +77,8 @@ const projection: SessionPresentationProjection = {
 interface CommandAnswer {
   sessionId: string;
   receipt?: CommandReceipt | null;
+  /** The host's judgement of a refusal (VC-141), read structurally off JSON. */
+  refusal?: unknown;
 }
 
 type StartAnswer = SessionStartResult;
@@ -1709,18 +1711,20 @@ describe("the deps attach() wires", () => {
     });
   });
 
-  // VC-141: a manual `/compact` that finds nothing to summarize is an outcome
-  // the person's own request chose, not a failure — it gets a plain toast at
-  // the library's default duration, never the longer-held error one, and
-  // never the `sessionError` band a Retry button would offer on a Session
-  // that has nothing to retry.
-  it("routes a compact refusal with nothing to summarize through a neutral toast", async () => {
+  // VC-141: a manual `/compact` the host marked benign is an outcome the
+  // person's own request chose, not a failure — it gets a plain toast at the
+  // library's default duration, never the longer-held error one, and never
+  // the `sessionError` band a Retry button would offer on a Session that has
+  // nothing to retry. This is the seam the core cannot test for itself: that
+  // `"neutral"` really does reach `toast` and not `toastError`.
+  it("routes a benign compact refusal through a neutral toast, in the host's words", async () => {
     const { state, store } = await adoptedDescribed();
     store
       .getState()
       .setProjection("durable-9", { ...projection, liveExecutor: { id: "attach-1" } });
     state.answer = () => ({
       sessionId: SESSION.id,
+      refusal: "benign",
       receipt: {
         id: "receipt-compact-skip",
         commandId: "command-compact-skip",
@@ -1734,7 +1738,9 @@ describe("the deps attach() wires", () => {
 
     await expect(getChatClient("durable-9")!.compactContext(null)).resolves.toBe(false);
 
-    expect(vi.mocked(toast)).toHaveBeenCalledWith("Nothing to compact yet");
+    // One argument, so it keeps sonner's own default lifetime: a neutral
+    // outcome is the transient confirmation that default was tuned for.
+    expect(vi.mocked(toast)).toHaveBeenCalledWith("There is nothing left to summarize.");
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
     expect(store.getState().sessions["durable-9"]).toMatchObject({
       lifecycle: "ready",
@@ -1744,13 +1750,14 @@ describe("the deps attach() wires", () => {
 
   // The provider's own explanation of what went wrong IS a failure, and it
   // keeps the error toast every other refused command gets.
-  it("routes a compact refusal that failed the summary through the error toast", async () => {
+  it("routes a failed compact refusal through the longer-held error toast", async () => {
     const { state, store } = await adoptedDescribed();
     store
       .getState()
       .setProjection("durable-9", { ...projection, liveExecutor: { id: "attach-1" } });
     state.answer = () => ({
       sessionId: SESSION.id,
+      refusal: "failure",
       receipt: {
         id: "receipt-compact-failed",
         commandId: "command-compact-failed",
@@ -1764,14 +1771,33 @@ describe("the deps attach() wires", () => {
 
     await expect(getChatClient("durable-9")!.compactContext(null)).resolves.toBe(false);
 
+    // The exact options `toastError` exists to add, asserted rather than waved
+    // past: an 8s closeable window is the whole difference from a plain toast,
+    // and `expect.anything()` would have passed on a bare `toast.error`.
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       "Compact: The provider refused the summary.",
-      expect.anything(),
+      { duration: 8000, closeButton: true },
     );
+    expect(vi.mocked(toast)).not.toHaveBeenCalled();
     expect(store.getState().sessions["durable-9"]).toMatchObject({
       lifecycle: "ready",
       sessionError: null,
     });
+  });
+
+  // The silent arm VC-141 left open: `/compact` on a Session with nothing
+  // attached sent no command and said nothing at all.
+  it("tells the person when a compact had no live executor to reach", async () => {
+    const { commands, store } = await adoptedDescribed();
+    store.getState().setProjection("durable-9", { ...projection, liveExecutor: null });
+
+    await expect(getChatClient("durable-9")!.compactContext(null)).resolves.toBe(false);
+
+    expect(commands.filter((entry) => entry.command.kind === "context.compact")).toEqual([]);
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Compaction can't run until the Session is live",
+      { duration: 8000, closeButton: true },
+    );
   });
 });
 
