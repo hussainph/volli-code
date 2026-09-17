@@ -93,7 +93,8 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { readSessionConcurrencyEnv } from "./session-concurrency";
+import { createSessionConcurrencyEnvReader } from "./session-concurrency";
+import type { SessionConcurrencyEnvReader } from "./session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -1193,6 +1194,17 @@ app.whenReady().then(async () => {
   });
 
   /**
+   * The fleet fold behind {@link sessionConcurrencyEnvFor}, memoized for a few
+   * seconds and coalesced across concurrent callers (VC-403): a burst of
+   * structured attachments and background-shell starts used to run one
+   * complete `listSessions` per project EACH, on the main thread, for a number
+   * the module doc already says tolerates a few seconds of staleness. Built
+   * once the database and Session Engine are known to exist, which happens
+   * exactly once for the life of this process.
+   */
+  let concurrencyEnvReader: SessionConcurrencyEnvReader | null = null;
+
+  /**
    * One structured Session's share of the machine (VC-339), in the variables
    * `cargo`, `make`, `cmake`, `go`, `pytest`, gradle and vitest already read —
    * the same budget a spawned PTY gets in `pty/manager.ts`, so a Session's
@@ -1207,13 +1219,11 @@ app.whenReady().then(async () => {
     if (!dbHandle.ok || sessionEngine === null) return {};
     const db = dbHandle.db;
     const engine = sessionEngine;
-    return readSessionConcurrencyEnv(
-      {
-        listProjectIds: () => listProjects(db).map((project) => project.id),
-        listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
-      },
-      { excludeSessionId: sessionId, environment: process.env },
-    );
+    concurrencyEnvReader ??= createSessionConcurrencyEnvReader({
+      listProjectIds: () => listProjects(db).map((project) => project.id),
+      listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
+    });
+    return concurrencyEnvReader({ excludeSessionId: sessionId, environment: process.env });
   };
 
   let agentToolDoor: AgentToolDoor | null = null;

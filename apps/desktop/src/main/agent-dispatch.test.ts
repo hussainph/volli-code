@@ -14,14 +14,19 @@
  *
  * 1. That each id resolves the handler that verb is NAMED for. Exhaustiveness
  *    proves every id has a handler, not that `ticket.move` got the move one.
- * 2. The preload policy, which is behavior rather than shape — the hook hot
- *    path resolving nothing it does not need is a promise about work done, and
- *    the only way to check work is to watch for it.
+ * 2. The `envSession` preload policy, which is behavior rather than shape —
+ *    the hook hot path resolving nothing it does not need is a promise about
+ *    work done, and the only way to check work is to watch for it.
+ * 3. The fold's laziness (VC-403), which is no longer a declared policy at
+ *    all: `AgentCommandContext.loadProjections`/`loadSessions` fold the fleet
+ *    only when a handler calls one, so "does this verb pay for the fold" is
+ *    now a fact about what the handler does, not about a table entry.
  *
  * The laziness tests spy on the Session Engine rather than on a clock, because
- * what the skips buy is exactly two things: the multi-project `listSessions`
- * fold, and the `getSession` identity lookup. A verb that skips both must call
- * neither, and one that skips only the fold must still call the lookup.
+ * what matters is exactly two things: the multi-project `listSessions` fold,
+ * and the `getSession` identity lookup. A verb that reads neither must call
+ * neither, one that skips only the identity must still fold when it reads the
+ * roster, and a verb that reads the roster twice must still fold it once.
  */
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -96,56 +101,15 @@ describe("the dispatch table (VC-167)", () => {
   });
 });
 
-describe("the preload policy each entry declares", () => {
-  /**
-   * The verbs that take no Session snapshot. Six were exactly what the chain's
-   * ternary listed — this is the same policy, moved beside the handlers it
-   * governs rather than restated — and `ticket.signal` (VC-85) joined them by
-   * being the same shape: it needs a signer's identity, never a terminal.
-   *
-   * `conflicts` (VC-185) joined for a different reason and is worth naming: it
-   * reads Tickets and worktree diffs and no Session anywhere, so the fold would
-   * be pure cost on the one verb whose design claim is that it is cheap enough
-   * to run in a bash pipeline. `label.merge` likewise reads only Labels and
-   * Tickets; its authenticated actor is resolved separately.
-   */
-  const NO_PROJECTIONS = [
-    "model.list",
-    "conflicts",
-    "label.merge",
-    "ticket.signal",
-    "session.done",
-    "session.blocked",
-    "session.link",
-    "session.harness",
-    "hook",
-  ];
-
+describe("the envSession preload policy each entry declares", () => {
   /** The three that resolve their own terminal record instead of an identity. */
   const NO_ENV_SESSION = ["session.link", "session.harness", "hook"];
-
-  it("skips the Session fold for exactly the verbs that never read one", () => {
-    const skipped = Object.entries(AGENT_VERB_TABLE)
-      .filter(([, binding]) => binding.projections === "skip")
-      .map(([id]) => id);
-    expect(skipped.toSorted()).toEqual(NO_PROJECTIONS.toSorted());
-  });
 
   it("skips the VOLLI_SESSION lookup for exactly the three that resolve their own", () => {
     const skipped = Object.entries(AGENT_VERB_TABLE)
       .filter(([, binding]) => binding.envSession === "skip")
       .map(([id]) => id);
     expect(skipped.toSorted()).toEqual(NO_ENV_SESSION.toSorted());
-  });
-
-  it("never resolves an identity for a verb that skips it", () => {
-    // The two axes are independent, and this is the direction that would be
-    // easy to get wrong: a verb may skip the fold and still need the identity
-    // (both signals do), but one that skips the identity must not have it
-    // resolved behind its back.
-    for (const id of NO_ENV_SESSION) {
-      expect(AGENT_VERB_TABLE[id as keyof typeof AGENT_VERB_TABLE].projections).toBe("skip");
-    }
   });
 });
 
@@ -250,5 +214,41 @@ describe("what the hot path actually resolves", () => {
 
     expect(response).toMatchObject({ ok: true });
     expect(listSessions).toHaveBeenCalled();
+  });
+
+  // VC-403: the fold is lazy now, not declared per verb — these two pin the
+  // laziness itself rather than a table policy.
+  it("folds nothing for a verb whose handler never asks for the roster", async () => {
+    // `project.list` reads only `projects`, never `loadProjections`/
+    // `loadSessions` — there is no table entry left to opt it out, so this is
+    // the handler's own behavior that has to hold.
+    const { service, listSessions } = scenario();
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "project.list",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
+  it("folds the roster once even when a verb's handler reads it twice", async () => {
+    // `session.peek` reads `loadSessions` for the terminal half and falls back
+    // to `loadProjections` for the chat half on a miss — two reads sharing one
+    // memo, so the underlying `listSessions` call must still happen once.
+    const { service, listSessions } = scenario();
+
+    const response = await service.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: "not-a-real-session" },
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(response).toMatchObject({ ok: false, error: { code: "SESSION_NOT_FOUND" } });
+    expect(listSessions).toHaveBeenCalledTimes(1);
   });
 });

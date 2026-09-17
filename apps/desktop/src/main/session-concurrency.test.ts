@@ -1,13 +1,15 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 import type { SessionAttachmentProjection, SessionProjection } from "@volli/shared";
 
 import { terminalNativeReference } from "./session-control";
 import {
+  createSessionConcurrencyEnvReader,
   readSessionConcurrencyEnv,
   sessionConcurrencyEnv,
   workingSessionCount,
 } from "./session-concurrency";
+import type { SessionConcurrencyPorts } from "./session-concurrency";
 
 function projectionWith(
   id: string,
@@ -223,5 +225,103 @@ describe("readSessionConcurrencyEnv", () => {
         { environment: {}, cores: 8 },
       ),
     ).toEqual({});
+  });
+});
+
+/** A single-project ports double whose listing is scriptable per test. */
+function fakePorts(
+  listSessions: (projectId: string) => Promise<readonly SessionProjection[]>,
+): SessionConcurrencyPorts {
+  return { listProjectIds: () => ["one"], listSessions };
+}
+
+describe("createSessionConcurrencyEnvReader", () => {
+  it("runs one listing for two calls inside the TTL", async () => {
+    let clock = 0;
+    const listSessions = vi.fn(async () => [liveTerminal("a")]);
+    const reader = createSessionConcurrencyEnvReader(fakePorts(listSessions), {
+      ttlMs: 5_000,
+      now: () => clock,
+    });
+
+    await reader({ environment: {}, cores: 8 });
+    clock += 1_000;
+    await reader({ environment: {}, cores: 8 });
+
+    expect(listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a fresh listing once the TTL has elapsed", async () => {
+    let clock = 0;
+    const listSessions = vi.fn(async () => [liveTerminal("a")]);
+    const reader = createSessionConcurrencyEnvReader(fakePorts(listSessions), {
+      ttlMs: 5_000,
+      now: () => clock,
+    });
+
+    await reader({ environment: {}, cores: 8 });
+    clock += 5_001;
+    await reader({ environment: {}, cores: 8 });
+
+    expect(listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one in-flight listing across concurrent callers instead of running N", async () => {
+    let resolveListing!: (value: readonly SessionProjection[]) => void;
+    const listing = new Promise<readonly SessionProjection[]>((resolve) => {
+      resolveListing = resolve;
+    });
+    const listSessions = vi.fn(() => listing);
+    const reader = createSessionConcurrencyEnvReader(fakePorts(listSessions), { now: () => 0 });
+
+    const calls = [
+      reader({ environment: {}, cores: 8 }),
+      reader({ environment: {}, cores: 8 }),
+      reader({ environment: {}, cores: 8 }),
+    ];
+    // Nothing has settled yet — every caller above joined the one fold rather
+    // than starting its own.
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    resolveListing([liveTerminal("a"), liveTerminal("b")]);
+    const results = await Promise.all(calls);
+
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    for (const env of results) expect(env["VOLLI_CONCURRENCY_HINT"]).toBe("4");
+  });
+
+  it("applies each caller's own exclusion against the one cached fleet", async () => {
+    const listSessions = vi.fn(async () => [liveTerminal("a"), liveTerminal("b")]);
+    const reader = createSessionConcurrencyEnvReader(fakePorts(listSessions), { now: () => 0 });
+
+    // Same cached fold, two different exclusions: one names a Session that is
+    // actually in the fleet, the other names one that is not — so the counted
+    // total differs even though nothing was listed twice.
+    const excludingA = await reader({ excludeSessionId: "a", environment: {}, cores: 8 });
+    const excludingNobody = await reader({
+      excludeSessionId: "not-in-the-fleet",
+      environment: {},
+      cores: 8,
+    });
+
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(excludingA["VOLLI_CONCURRENCY_HINT"]).toBe("8");
+    expect(excludingNobody["VOLLI_CONCURRENCY_HINT"]).toBe("4");
+  });
+
+  it("yields no variables on a failed listing, and does not poison the cache", async () => {
+    let calls = 0;
+    const listSessions = async (): Promise<readonly SessionProjection[]> => {
+      calls += 1;
+      if (calls === 1) throw new Error("ledger is closed");
+      return [liveTerminal("a")];
+    };
+    const reader = createSessionConcurrencyEnvReader(fakePorts(listSessions), { now: () => 0 });
+
+    expect(await reader({ environment: {}, cores: 8 })).toEqual({});
+    // The failure was not cached as "no one is working": the next call
+    // retries the listing rather than serving a poisoned empty fold.
+    const recovered = await reader({ environment: {}, cores: 8 });
+    expect(recovered["VOLLI_CONCURRENCY_HINT"]).toBe("8");
+    expect(calls).toBe(2);
   });
 });

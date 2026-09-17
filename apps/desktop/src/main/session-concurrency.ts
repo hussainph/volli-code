@@ -121,17 +121,117 @@ export interface SessionConcurrencyPorts {
  * default. A Session that runs unbudgeted is a machine under load; a Session
  * that fails to start because a listing query threw is a person unable to
  * work.
+ *
+ * This folds the fleet FRESH on every call. `createSessionConcurrencyEnvReader`
+ * below is the cached seam every production call site should prefer (VC-403);
+ * this stays exported, uncached, as the primitive it is built from and as the
+ * direct seam this module's own tests exercise the fold through.
  */
 export async function readSessionConcurrencyEnv(
   ports: SessionConcurrencyPorts,
   input: Omit<SessionConcurrencyEnvInput, "projections">,
 ): Promise<Record<string, string>> {
   try {
-    const projections = (
-      await Promise.all(ports.listProjectIds().map((projectId) => ports.listSessions(projectId)))
-    ).flat();
+    const projections = await foldFleet(ports);
     return sessionConcurrencyEnv({ ...input, projections });
   } catch {
     return {};
   }
+}
+
+/** Every Session of every project, per {@link SessionConcurrencyPorts}. */
+function foldFleet(ports: SessionConcurrencyPorts): Promise<readonly SessionProjection[]> {
+  return Promise.all(ports.listProjectIds().map((projectId) => ports.listSessions(projectId))).then(
+    (perProject) => perProject.flat(),
+  );
+}
+
+/** A Session start's per-call input to a cached reader — everything but the fleet itself. */
+export type SessionConcurrencyEnvReaderInput = Omit<SessionConcurrencyEnvInput, "projections">;
+
+/** What one call into a cached reader answers: the same record `readSessionConcurrencyEnv` does. */
+export type SessionConcurrencyEnvReader = (
+  input: SessionConcurrencyEnvReaderInput,
+) => Promise<Record<string, string>>;
+
+export interface SessionConcurrencyEnvReaderOptions {
+  /**
+   * How long a folded fleet stays valid before the next caller pays for a
+   * fresh listing. The module doc's "computed once, at Session start" already
+   * accepts a few seconds of staleness, so this defaults there — long enough
+   * to collapse a burst of Session starts into one fold, short enough that a
+   * budget handed out a few seconds ago is still describing the same machine.
+   */
+  ttlMs?: number;
+  /** The clock, injectable so tests drive the TTL rather than sleeping. */
+  now?: () => number;
+}
+
+/** {@link SessionConcurrencyEnvReaderOptions.ttlMs}'s default — see its doc. */
+const DEFAULT_CONCURRENCY_ENV_TTL_MS = 5_000;
+
+/**
+ * Builds a reader that shares ONE folded fleet across every caller for a few
+ * seconds, instead of folding it fresh per call (VC-403).
+ *
+ * Every structured attachment, every background shell start and every
+ * terminal start asks this module for a budget, and each of those used to run
+ * its own `listSessions` per project — so a burst of N Session starts on a
+ * busy machine ran N complete fleet folds on the main thread for a number that
+ * does not need to be exact, only current within a few seconds.
+ *
+ * Two things make that safe to share:
+ *
+ * - **The exclusion happens after the cache, not before it.** The fleet this
+ *   memoizes is the RAW projections, before `excludeSessionId` is applied —
+ *   two Sessions starting in the same window ask to exclude two different
+ *   ids, and a cache keyed on the excluded answer would serve one of them the
+ *   other's number. `sessionConcurrencyEnv` (pure, unchanged) applies the
+ *   exclusion per call, against the one shared fold.
+ * - **A burst shares one in-flight walk.** A cache alone still lets every
+ *   caller that arrives before the first fold resolves start its own fold;
+ *   this keeps ONE in-flight promise and hands it to every caller that arrives
+ *   while it is still running.
+ *
+ * A fold that throws is never cached: the next call retries rather than being
+ * stuck answering `{}` for the rest of the TTL window.
+ */
+export function createSessionConcurrencyEnvReader(
+  ports: SessionConcurrencyPorts,
+  options: SessionConcurrencyEnvReaderOptions = {},
+): SessionConcurrencyEnvReader {
+  const ttlMs = options.ttlMs ?? DEFAULT_CONCURRENCY_ENV_TTL_MS;
+  const now = options.now ?? Date.now;
+
+  let cached: { projections: readonly SessionProjection[]; expiresAt: number } | null = null;
+  let inFlight: Promise<readonly SessionProjection[]> | null = null;
+
+  const fold = (): Promise<readonly SessionProjection[]> => {
+    if (cached !== null && cached.expiresAt > now()) {
+      return Promise.resolve(cached.projections);
+    }
+    if (inFlight !== null) return inFlight;
+    const started = foldFleet(ports).then((projections) => {
+      cached = { projections, expiresAt: now() + ttlMs };
+      return projections;
+    });
+    inFlight = started;
+    // Cleared on both settlements: a throw must not leave a stale in-flight
+    // promise wedged in place for the rest of the process, poisoning every
+    // later call with the same rejection.
+    started.then(
+      () => (inFlight = null),
+      () => (inFlight = null),
+    );
+    return started;
+  };
+
+  return async (input) => {
+    try {
+      const projections = await fold();
+      return sessionConcurrencyEnv({ ...input, projections });
+    } catch {
+      return {};
+    }
+  };
 }

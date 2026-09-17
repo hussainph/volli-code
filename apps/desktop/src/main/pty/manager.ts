@@ -36,7 +36,8 @@ import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
 import { listProjects } from "../db/projects-repo";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
-import { readSessionConcurrencyEnv } from "../session-concurrency";
+import { createSessionConcurrencyEnvReader } from "../session-concurrency";
+import type { SessionConcurrencyEnvReader } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
@@ -228,6 +229,15 @@ export class PtyManager {
    * side effects that touch node-pty/webContents and hands them in as deps.
    */
   private readonly parkController: ParkController;
+  /**
+   * This manager's own cache of the fleet fold behind
+   * {@link sessionConcurrencyEnv} (VC-403), memoized for a few seconds and
+   * coalesced across concurrent callers — one instance for the manager's
+   * whole life, so a burst of terminal starts folds the fleet once rather
+   * than once per terminal. `null` when there is no database or Session
+   * Engine to fold at all.
+   */
+  private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
   /**
    * @param db         the app database, or `null` when it failed to open. Every
@@ -261,6 +271,20 @@ export class PtyManager {
     private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
+    {
+      // Locals rather than `this.db`/`this.sessionEngine` inside the closures
+      // below: both are readonly and already narrowed here, so this is purely
+      // for the closures to hold the narrowed (non-null) type rather than
+      // `this`'s wider one.
+      const engine = this.sessionEngine;
+      this.concurrencyEnvReader =
+        db === null || engine === null
+          ? null
+          : createSessionConcurrencyEnvReader({
+              listProjectIds: () => listProjects(db).map((project) => project.id),
+              listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
+            });
+    }
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and webContents — and every current
@@ -350,22 +374,16 @@ export class PtyManager {
    *
    * Every project's Sessions, because load is a fact about the machine: a
    * build in another project's Session competes for the same cores. This is
-   * the same read `volli session list` makes.
+   * the same read `volli session list` makes — folded at most once every few
+   * seconds by {@link concurrencyEnvReader} (VC-403), so a burst of terminal
+   * starts shares one fold instead of running one each.
    */
   private async sessionConcurrencyEnv(
     sessionId: string,
     inheritedEnv: Readonly<Record<string, string | undefined>>,
   ): Promise<Record<string, string>> {
-    const db = this.db;
-    const sessionEngine = this.sessionEngine;
-    if (db === null || sessionEngine === null) return {};
-    return readSessionConcurrencyEnv(
-      {
-        listProjectIds: () => listProjects(db).map((project) => project.id),
-        listSessions: (projectId) => sessionEngine.listSessions({ projectId, scope: "all" }),
-      },
-      { excludeSessionId: sessionId, environment: inheritedEnv },
-    );
+    if (this.concurrencyEnvReader === null) return {};
+    return this.concurrencyEnvReader({ excludeSessionId: sessionId, environment: inheritedEnv });
   }
 
   async create(
