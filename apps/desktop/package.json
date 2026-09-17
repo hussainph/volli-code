@@ -7,6 +7,7 @@
   "scripts": {
     "postinstall": "pnpm run rebuild:native",
     "check:theme-css": "node scripts/generate-theme-css.mjs --check",
+    "check:ghostty-themes": "node scripts/generate-ghostty-themes.mjs --check",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
