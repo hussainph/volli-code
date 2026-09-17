@@ -1971,6 +1971,10 @@ describe("Pi native adapter dispatch", () => {
       status: "rejected",
       code: "PI_NOTHING_TO_COMPACT",
       detail: "There is nothing left to summarize.",
+      // VC-141: the adapter is the last place the runtime's reason is legible,
+      // so it is where "this refused nothing a person needs apologising for"
+      // gets decided. A client reading only the code could not.
+      severity: "benign",
     });
   });
 
@@ -1994,7 +1998,81 @@ describe("Pi native adapter dispatch", () => {
       status: "rejected",
       code: "PI_COMPACTION_FAILED",
       detail: "the summarizer is unhappy",
+      // A provider that would not produce the summary IS a failure.
+      severity: "failure",
     });
+  });
+
+  // One code, two causes, two sentences — and both benign. The runtime writes
+  // them apart on purpose, and nothing between here and the toast collapses
+  // them back together (VC-141).
+  it.each([
+    ["a live turn", "The context cannot be compacted while Pi is running."],
+    ["a compaction already running", "This context is already being compacted."],
+  ])("carries the busy sentence for %s, marked benign", async (_cause, message) => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({ kind: "rejected", reason: "busy-unsupported", message });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_BUSY",
+      detail: message,
+      severity: "benign",
+    });
+  });
+
+  it("marks a compaction refused by a closed attachment a failure", async () => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_ATTACHMENT_CLOSED",
+      severity: "failure",
+    });
+  });
+
+  it("leaves every other refusal unmarked, which reads as a failure", async () => {
+    // Only compaction answers the severity question today. An interrupt or a
+    // model change that is refused carries no mark, and a client must treat an
+    // unvouched refusal as a failure rather than guessing.
+    const { binding, runtime } = await attached();
+    runtime.modelSelectionOutcomes.push({
+      kind: "rejected",
+      reason: "model-unavailable",
+      message: "That model is not available.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "model.select",
+      commandId: "command-model-unmarked",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      selection: { providerId: "openai-codex", modelId: "missing", reasoningLevel: "off" },
+    });
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_MODEL_UNAVAILABLE" });
+    expect(receipt).not.toHaveProperty("severity");
   });
 
   it("reports a compaction that threw as an unknown outcome, never a refusal", async () => {

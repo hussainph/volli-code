@@ -14,7 +14,6 @@ import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsConnectedIcon } from "@phosphor-icons/react/dist/csr/PlugsConnected";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
-import { PuzzlePieceIcon } from "@phosphor-icons/react/dist/csr/PuzzlePiece";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import type { Project } from "@volli/shared";
 
@@ -23,7 +22,6 @@ import type { PrefGroup } from "@renderer/components/settings/kit";
 import { AuthorityPane } from "./configure/authority-pane";
 import { CommandsPane } from "./configure/commands-pane";
 import { McpPane } from "./configure/mcp-pane";
-import { PluginsPane } from "./configure/plugins-pane";
 import { SessionsPane } from "./configure/sessions-pane";
 import { SkillsPane } from "./configure/skills-pane";
 import { WorktreesPane } from "./configure/worktrees-pane";
@@ -98,14 +96,6 @@ export function configureGroups(project: Project): readonly PrefGroup[] {
             "edit server",
           ],
           content: <McpPane project={project} />,
-        },
-        {
-          key: "plugins",
-          fill: true,
-          label: "Plugins",
-          icon: PuzzlePieceIcon,
-          keywords: ["plugin", "installed plugins", "bundle", "marketplace", "contents", "browse"],
-          content: <PluginsPane />,
         },
         {
           // Agent, not Project: this is what this repo's agents are ALLOWED to

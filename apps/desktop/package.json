@@ -11,7 +11,7 @@
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",
     "test:performance-harness": "vp test run --config vite.bench.config.ts",
     "start": "node scripts/start-electron.mjs",

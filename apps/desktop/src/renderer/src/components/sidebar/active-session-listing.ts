@@ -45,7 +45,7 @@
  * recompute — one `setTimeout`, not a polling interval that stops mattering the
  * moment nothing is live.
  */
-import { sessionSourceLabel } from "@volli/session-presentation";
+import { sessionSourceHarness, sessionSourceLabel } from "@volli/session-presentation";
 import {
   HARNESS_EVENT_GRACE_MS,
   isListableSession,
@@ -54,6 +54,7 @@ import {
   sessionProvenanceOf,
   type ChatSessionRecord,
   type ChatWaitingReason,
+  type HarnessId,
   type SessionActivitySource,
   type SessionActivityState,
   type SessionHarnessState,
@@ -183,6 +184,18 @@ export interface ActiveSessionRow {
    * executor that has not been chosen yet would be the one dishonest answer.
    */
   source: string;
+  /**
+   * WHICH CLI this row is running (`sessionSourceHarness`), or `null` when it
+   * runs none — a chat, a bare shell, a Draft. The row draws it as a glyph
+   * (`session-band-row.tsx`), which is why the ID travels rather than the
+   * label: a band holding Claude Code beside Codex is told apart by a mark, and
+   * the harness's words already ride in the hover `title` via {@link source}.
+   *
+   * A pure read of the durable record's launch metadata — the same fact
+   * {@link source} is built from, reached through the same rule so the glyph
+   * and the words can never name two different harnesses.
+   */
+  harnessId: HarnessId | null;
   /**
    * Never `null`: every row is in some state. For a Session that is what its
    * executor reports. A Draft is always `idle` — it has no executor to be busy,
@@ -346,6 +359,8 @@ export interface PreviousSessionRow {
   ticket: Ticket | null;
   title: string;
   kind: SessionRowKind;
+  /** See {@link ActiveSessionRow.harnessId} — both bands draw the same glyph from it. */
+  harnessId: HarnessId | null;
   /** Epoch ms of the last thing this Session did: a terminal's end or output, a chat's last fact. */
   endedOrQuietAt: number;
   /**
@@ -613,6 +628,16 @@ function sessionSource(record: SessionRecord | undefined): string {
   return record === undefined ? "Terminal" : sessionSourceLabel({ kind: "terminal", record });
 }
 
+/**
+ * The harness behind a pane, for the rows that draw one. A pane with no durable
+ * record yet says `null` for the same reason {@link sessionSource} says
+ * "Terminal": nothing has told us what it launched, and a glyph guessed from
+ * the default harness would be the row asserting a CLI nobody chose.
+ */
+function sessionHarness(record: SessionRecord | undefined): HarnessId | null {
+  return record === undefined ? null : sessionSourceHarness({ kind: "terminal", record });
+}
+
 type ActivityInput = Pick<
   BuildActiveSessionListingInput,
   "lastOutputAt" | "parkState" | "harness" | "now"
@@ -709,6 +734,7 @@ function sessionRow(
     ticket,
     title: tab.title,
     source: sessionSource(recordsById.get(subject.paneId)),
+    harnessId: sessionHarness(recordsById.get(subject.paneId)),
     activity: subject.activity,
     activitySource: paneActivitySource(subject.paneId, input),
     attention,
@@ -749,6 +775,9 @@ function chatRow(
     ticket,
     title: record.title,
     source: sessionSourceLabel({ kind: "chat", record }),
+    // A structured Session runs the Agent Runtime, not a CLI: it has no harness
+    // glyph to draw, and its row keeps the marks it already had (VC-402).
+    harnessId: null,
     activity: delegationBusy && record.activity === "idle" ? "working" : record.activity,
     activitySource: "reported",
     attention: record.activity === "waiting" ? { signal: "waiting", reason: null } : null,
@@ -997,6 +1026,9 @@ export function buildActiveSessionListing(
         ticket,
         title: row.title,
         kind: "terminal",
+        // Taken off the Active row for the reason `provenance` below is: one
+        // Session seen at two ages must not be able to name two harnesses.
+        harnessId: row.harnessId,
         endedOrQuietAt: recency,
         activity: null,
         // Taken off the Active row rather than looked up again: the two bands
@@ -1025,6 +1057,9 @@ export function buildActiveSessionListing(
         ticket,
         title: tab.title,
         kind: "terminal",
+        // The tab's own root record, which is the one `createdAt` below reads
+        // too: an exited tab has no subject pane left to ask.
+        harnessId: sessionHarness(recordsById.get(tab.sessionId)),
         endedOrQuietAt: quietStamp(tab.sessionId) ?? recencyFallback(ticket, tab.sessionId),
         activity: null,
         provenance: provenanceOf(tab.sessionId),
@@ -1169,6 +1204,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "terminal",
+        harnessId: sessionSourceHarness({ kind: "terminal", record }),
         endedOrQuietAt: record.endedAt,
         activity: null,
         provenance: provenanceOf(record.id),
@@ -1225,6 +1261,7 @@ export function buildActiveSessionListing(
         ticket,
         title: record.title,
         kind: "chat",
+        harnessId: row.harnessId,
         endedOrQuietAt: activityAt,
         // Carried verbatim off the Active row's record: interrupted survives
         // the quiet window (VC-324).

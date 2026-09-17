@@ -15,6 +15,7 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
+import type { CommandRefusalSeverity } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -296,7 +297,7 @@ function trackedValue(value: unknown): { id: string; data: unknown } {
   return { id, data };
 }
 
-function runtimeFixture(): {
+function runtimeFixture(refusal: CommandRefusalSeverity | null = null): {
   runtime: SessionRuntime;
   calls: {
     command: SessionRuntimeCommandRequest[];
@@ -339,6 +340,7 @@ function runtimeFixture(): {
         },
         receipt: null,
         throughSequence: 1,
+        refusal,
       };
     },
     snapshot: async () => snapshot(),
@@ -1763,6 +1765,30 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  // VC-141: the adapter's judgement is in-memory detail, so it only reaches a
+  // client if this edge forwards it deliberately. Nullable rather than
+  // optional, so it survives a transport that drops `undefined` keys
+  // (BOUNDARIES.md rule 3).
+  it.each(["benign", "failure", null] as const)(
+    "forwards a %s refusal mark to the renderer beside the receipt",
+    async (refusal) => {
+      const fixture = runtimeFixture(refusal);
+      const caller = createSessionRouter().createCaller({
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      });
+
+      const result = await caller.session.command({
+        commandId: "compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact" },
+      });
+
+      expect(result.refusal).toBe(refusal);
+      expect("refusal" in result).toBe(true);
+    },
+  );
+
   it("passes executor retry attachment identity to the Session runtime only when supplied", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
@@ -1884,6 +1910,7 @@ describe("Session tRPC router", () => {
       sessionId: "session-1",
       receipt: null,
       throughSequence: 1,
+      refusal: null,
     });
     expect(JSON.stringify(selected)).not.toMatch(/adapter|profile/i);
   });

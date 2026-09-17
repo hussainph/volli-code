@@ -14,6 +14,7 @@ import {
   harnessLabel,
   isSubagentSession,
   shortSessionId,
+  type HarnessId,
   type SessionListingIdentity,
 } from "@volli/shared";
 
@@ -58,11 +59,37 @@ export function sessionSourceLabel(row: SessionListingIdentity): string {
       : `Subagent · of ${shortSessionId(record.parentSessionId)}`;
   }
   const record = row.record;
+  // Through {@link sessionSourceHarness} rather than re-deriving the gate, so
+  // the words and the id cannot drift: the agent arm IS "this row names a
+  // harness", and one function decides that for both callers. A non-null
+  // harness here is exactly `launchKind === "agent"`, which is what makes the
+  // remaining two arms the shell/pre-metadata split they always were.
+  const harness = sessionSourceHarness(row);
   const source =
-    record.launchKind === "agent"
-      ? harnessLabel(effectiveHarnessId(record))
-      : record.launchKind === "shell"
-        ? "Shell"
-        : "Terminal";
+    harness !== null ? harnessLabel(harness) : record.launchKind === "shell" ? "Shell" : "Terminal";
   return record.placement === "split" ? `${source} · Split` : source;
+}
+
+/**
+ * WHICH CLI is running here, as an id rather than as words — or `null` for a
+ * Session that runs none: a chat, a bare shell, a pane that predates launch
+ * metadata.
+ *
+ * The harness half of {@link sessionSourceLabel}, and the half that DECIDES:
+ * the label calls this rather than re-deriving the rule, so a surface that
+ * draws Claude Code apart from Codex cannot reach a different verdict from the
+ * words beside it. That is a property of the code here, not a convention two
+ * functions are trusted to keep — the `launchKind` gate and the
+ * {@link effectiveHarnessId} fallback exist once. A shell launch that later ran
+ * an agent still names no harness here, exactly as it still reads "Shell"
+ * above, and a pane whose agent was replaced names what is in it now.
+ *
+ * An id and not a label because the caller is drawing artwork. Words are a
+ * client-neutral fact this contract owns; which glyph stands for `codex` is the
+ * client's, and handing a label back would have every client parsing English to
+ * pick one.
+ */
+export function sessionSourceHarness(row: SessionListingIdentity): HarnessId | null {
+  if (row.kind === "chat") return null;
+  return row.record.launchKind === "agent" ? effectiveHarnessId(row.record) : null;
 }
