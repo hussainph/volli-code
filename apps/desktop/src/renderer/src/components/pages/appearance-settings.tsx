@@ -268,9 +268,8 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
 }
 
 /**
- * Font family, from the Local Font Access list restty already resolves
- * families against — so the list can only contain faces the terminal will
- * actually be able to load.
+ * Font family, from the Local Font Access list of installed faces — so the
+ * list can only contain families the terminal will actually be able to load.
  */
 function FontFamilyRow({ row }: { row: TerminalSettingRow }) {
   const [opened, setOpened] = React.useState(false);

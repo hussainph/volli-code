@@ -3,11 +3,12 @@
  * main over IPC, live-reloaded on file edits — issue #18) resolved against
  * the app's design-token fallback theme.
  *
- * Font strategy: restty's text-shaper rasterizes glyphs itself, so CSS
- * `font-family` does nothing for its canvas. Families resolve through the
- * Local Font Access API (main grants the `local-fonts` permission), exactly
- * like ghostty resolves them against installed system fonts — no bundled
- * font bytes, and the same config renders the same face in both apps.
+ * Font strategy: the families are handed to xterm.js as a CSS `font-family`
+ * chain, so Chromium resolves them against the fonts actually installed —
+ * exactly like ghostty does. No bundled font bytes, and the same config
+ * renders the same face in both apps. The Local Font Access API (main grants
+ * the `local-fonts` permission) is what lets the settings picker LIST those
+ * families; it is not how a terminal loads one.
  */
 import type {
   GhosttyAppearancePayload,

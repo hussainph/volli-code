@@ -111,7 +111,6 @@ patchedDependencies:
   # Upstream still ships no such hook — 0.85.1's dist/harness/compaction/* is
   # byte-identical to 0.85.0's, so this patch regenerated unchanged.
   "@earendil-works/pi-agent-core@0.85.1": patches/@earendil-works__pi-agent-core@0.85.1.patch
-  restty@0.2.0: patches/restty@0.2.0.patch
 
 peerDependencyRules:
   allowAny:

@@ -1,11 +1,10 @@
 // Pure vocabulary and parser for a Ghostty terminal theme (a `background = …`,
 // `palette = N=…` style file, distinct from `ghostty-config.ts`'s window/font
-// preferences). VC-107 replaces restty with xterm.js; restty previously owned
-// this type (`GhosttyTheme`) and its parser, so this module is the app's own
-// copy, kept STRUCTURALLY ASSIGNABLE to restty's shape (see the `raw` and
-// `palette` fields, and the `ThemeTerminalColor` union) so `restty-engine.ts`
-// can keep handing restty `TerminalAppearance.theme` until the next PR removes
-// that dependency. Do not add capabilities restty's type lacked.
+// preferences). The terminal renderer used to own this type and its parser;
+// VC-107 replaced that renderer with xterm.js, so `GhosttyTheme` is now simply
+// the app's own vocabulary for a theme. `xterm-appearance.ts` translates it
+// into xterm's `ITheme`, and `raw` survives because the theme-preview overlay
+// reads the original key-value pairs back out.
 //
 // The catalog this module resolves names against is generated from Ghostty's
 // own bundled theme collection — see `ghostty-theme-sources.generated.ts` and

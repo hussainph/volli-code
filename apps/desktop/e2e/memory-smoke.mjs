@@ -1,7 +1,7 @@
 /**
  * Memory-load smoke for parallel terminal sessions (NOT wired into `vp test`).
  *
- * Question under test: what does each additional live (model-resident) restty
+ * Question under test: what does each additional live (model-resident) terminal
  * session cost in RAM, and what does a full default scrollback cost — i.e. how
  * much would ghostty's scrollback compression (upstream PR #13264) actually
  * buy us, and where should a `scrollback-limit` cap sit?
@@ -16,7 +16,7 @@
  *      scrollback limit caps residency (delta2 ≈ 0) or keeps growing.
  *
  *   Run:
- *     pnpm -C apps/desktop run build
+ *     pnpm run build
  *     node apps/desktop/e2e/memory-smoke.mjs [N_SESSIONS]
  */
 import { execFileSync } from "node:child_process";
@@ -118,30 +118,30 @@ async function rendererHeapMB(cdp) {
 
 async function focusTerminal(page) {
   const box = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll("canvas"));
-    const visible = canvases.find(
+    const terminals = Array.from(document.querySelectorAll(".xterm"));
+    const visible = terminals.find(
       (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
     );
     if (!visible) return null;
     const r = visible.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
-  if (!box) throw new Error("no visible terminal canvas to focus");
+  if (!box) throw new Error("no visible terminal to focus");
   await page.mouse.click(box.x, box.y);
   await sleep(200);
 }
 
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
+      const c = Array.from(document.querySelectorAll(".xterm")).find(
         (el) => el.offsetParent !== null,
       );
       return c && c.clientWidth > 0 && c.clientHeight > 0;
     },
     { timeout: timeoutMs },
   );
-  await sleep(2200); // let restty boot the shell and paint
+  await sleep(2200); // let the shell boot and paint
 }
 
 async function waitForFileContains(path, needle, timeoutMs = 30000) {
@@ -252,7 +252,7 @@ async function main() {
         i,
         { timeout: 10000 },
       );
-      await waitForLiveCanvas(page);
+      await waitForLiveTerminal(page);
       await focusTerminal(page);
       await page.keyboard.type("claude");
       await page.keyboard.press("Enter");
@@ -276,7 +276,7 @@ async function main() {
       N_SESSIONS + 1,
       { timeout: 10000 },
     );
-    await waitForLiveCanvas(page);
+    await waitForLiveTerminal(page);
     await snap("plain tab, empty");
 
     const line80 = "0123456789".repeat(8);
