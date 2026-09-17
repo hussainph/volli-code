@@ -78,11 +78,19 @@ const BUILDER_CONFIG_PATH = resolve(DESKTOP_DIR, "electron-builder.yml");
  * apps/desktop (electron-builder's project directory), `to` is relative to
  * Contents/Resources inside the bundle — the location a user reaches through
  * Finder's "Show Package Contents", which is where a desktop app's notices are
- * conventionally found.
+ * conventionally found. Electron's distribution is downloaded lazily, so its
+ * Chromium catalogue may be absent when the offline stale-notice check runs;
+ * electron-builder still requires it when packaging the app.
  */
 const REQUIRED_RESOURCES = [
   { from: "../../LICENSE", to: "LICENSE.txt" },
   { from: "THIRD-PARTY-NOTICES", to: "THIRD-PARTY-NOTICES.txt" },
+  {
+    from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+    to: "LICENSES.chromium.html",
+    allowMissing: true,
+    requireNonEmpty: true,
+  },
 ];
 
 /**
@@ -387,6 +395,8 @@ function generate() {
       coveredNames: coveredNamesOf(model),
       requiredResources: REQUIRED_RESOURCES,
       resourceExists: (from) => existsSync(resolve(DESKTOP_DIR, from)),
+      resourceIsNonEmpty: (from) =>
+        readFileSync(resolve(DESKTOP_DIR, from), "utf8").trim().length > 0,
     }),
     // A notice this repository expects but does not own — the shared theme
     // catalog's attribution — whose material has landed without it.
@@ -596,6 +606,10 @@ function selfTestPackagingRules() {
     extraResources: [
       { from: "../../LICENSE", to: "LICENSE.txt" },
       { from: "THIRD-PARTY-NOTICES", to: "THIRD-PARTY-NOTICES.txt" },
+      {
+        from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+        to: "LICENSES.chromium.html",
+      },
     ],
   };
   assert.deepEqual(keptNodeModulePackages(builderConfig), ["@img", "better-sqlite3", "node-pty"]);
@@ -618,8 +632,9 @@ function selfTestPackagingRules() {
     coveredNames: covered,
     requiredResources: REQUIRED_RESOURCES,
     resourceExists: () => true,
+    resourceIsNonEmpty: () => true,
   });
-  assert.deepEqual(ok, [], "a config that ships both files and covers every package passes");
+  assert.deepEqual(ok, [], "a config that ships all resources and covers every package passes");
 
   assert.deepEqual(
     vendoredPathFailures(
@@ -644,7 +659,7 @@ function selfTestPackagingRules() {
     requiredResources: REQUIRED_RESOURCES,
     resourceExists: () => true,
   });
-  assert.equal(missingResource.length, 2, "dropping extraResources fails for both files");
+  assert.equal(missingResource.length, 3, "dropping extraResources fails for all three files");
   assert.ok(missingResource.every((failure) => failure.includes("extraResources")));
 
   const wrongDestination = packagingFailures({
@@ -653,13 +668,72 @@ function selfTestPackagingRules() {
       extraResources: [
         { from: "../../LICENSE", to: "LICENSE.txt" },
         { from: "THIRD-PARTY-NOTICES", to: "somewhere-else.txt" },
+        {
+          from: "../../node_modules/electron/dist/LICENSES.chromium.html",
+          to: "LICENSES.chromium.html",
+        },
       ],
     },
     coveredNames: covered,
     requiredResources: REQUIRED_RESOURCES,
     resourceExists: () => true,
   });
-  assert.equal(wrongDestination.length, 1, "shipping the notice to another path is a failure");
+  assert.equal(wrongDestination.length, 1, "shipping a notice to another path is a failure");
+
+  const chromiumWrongDestination = packagingFailures({
+    builderConfig: {
+      ...builderConfig,
+      extraResources: builderConfig.extraResources.map((resource) =>
+        resource.from === "../../node_modules/electron/dist/LICENSES.chromium.html"
+          ? { ...resource, to: "somewhere-else.html" }
+          : resource,
+      ),
+    },
+    coveredNames: covered,
+    requiredResources: REQUIRED_RESOURCES,
+    resourceExists: () => true,
+  });
+  assert.deepEqual(
+    chromiumWrongDestination,
+    [
+      'electron-builder.yml ships "../../node_modules/electron/dist/LICENSES.chromium.html" to "somewhere-else.html"; ' +
+        'the notice document names "LICENSES.chromium.html".',
+    ],
+    "Chromium's catalogue must land at the exact Resources path",
+  );
+
+  const chromiumSourceMissing = packagingFailures({
+    builderConfig,
+    coveredNames: covered,
+    requiredResources: REQUIRED_RESOURCES,
+    resourceExists: (from) =>
+      from !== "../../node_modules/electron/dist/LICENSES.chromium.html",
+    resourceIsNonEmpty: () => {
+      throw new Error("offline checks must not read an absent Electron distribution");
+    },
+  });
+  assert.deepEqual(
+    chromiumSourceMissing,
+    [],
+    "the stale-notice check stays green when Electron's distribution is absent",
+  );
+
+  const chromiumSourceEmpty = packagingFailures({
+    builderConfig,
+    coveredNames: covered,
+    requiredResources: REQUIRED_RESOURCES,
+    resourceExists: () => true,
+    resourceIsNonEmpty: (from) =>
+      from !== "../../node_modules/electron/dist/LICENSES.chromium.html",
+  });
+  assert.deepEqual(
+    chromiumSourceEmpty,
+    [
+      "electron-builder.yml extraResources source has empty content: " +
+        "../../node_modules/electron/dist/LICENSES.chromium.html",
+    ],
+    "an installed Chromium catalogue must contain content",
+  );
 
   const absentFile = packagingFailures({
     builderConfig,

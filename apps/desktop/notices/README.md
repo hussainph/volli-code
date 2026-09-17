@@ -8,14 +8,15 @@ node apps/desktop/scripts/generate-third-party-notices.mjs        # regenerate
 pnpm -C apps/desktop run check:notices                            # what CI runs
 ```
 
-Two files ride along in the packaged `.app`, both under `Contents/Resources`
+Three files ride along in the packaged `.app`, all under `Contents/Resources`
 (Finder → Show Package Contents), declared by `extraResources` in
 `electron-builder.yml`:
 
-| In the bundle                                | From                               |
-| -------------------------------------------- | ---------------------------------- |
-| `Contents/Resources/LICENSE.txt`             | the repository's `LICENSE`         |
-| `Contents/Resources/THIRD-PARTY-NOTICES.txt` | `apps/desktop/THIRD-PARTY-NOTICES` |
+| In the bundle                                | From                                                    |
+| -------------------------------------------- | ------------------------------------------------------- |
+| `Contents/Resources/LICENSE.txt`             | the repository's `LICENSE`                              |
+| `Contents/Resources/THIRD-PARTY-NOTICES.txt` | `apps/desktop/THIRD-PARTY-NOTICES`                      |
+| `Contents/Resources/LICENSES.chromium.html`  | `../../node_modules/electron/dist/LICENSES.chromium.html` |
 
 ## What the generator derives, and what this directory supplies
 
@@ -82,18 +83,11 @@ from the packaging work that produced this pipeline.
    published APCA-W3 constants in shipped code (the `apca-w3` package itself is a
    test-only devDependency). Whether that reproduction carries an obligation is
    part of the separate licensing review.
-4. **Chromium's own third-party licences.** Electron's distribution ships
-   `LICENSES.chromium.html` beside `Electron.app`, and electron-builder does not
-   copy it into the bundle. Electron's MIT licence is reproduced in the document;
-   the Chromium document is not, because the file exists only in a downloaded
-   Electron distribution that neither the build nor the release workflow unpacks
-   into the repository. Shipping it needs a build step that fetches it, which is
-   a packaging decision of its own.
-5. **Declarations flagged for review.** The document's last section lists every
+4. **Declarations flagged for review.** The document's last section lists every
    declaration that is not a plain permissive grant — today the libvips binary's
    `LGPL-3.0-or-later`, DOMPurify's `(MPL-2.0 OR Apache-2.0)`, and node-forge's
    `(BSD-3-Clause OR GPL-2.0)`. They are listed so a reviewer can find them.
-6. **Shared terminal theme catalog.** `packages/shared/THIRD-PARTY-THEMES.md` —
+5. **Shared terminal theme catalog.** `packages/shared/THIRD-PARTY-THEMES.md` —
    the iTerm2-Color-Schemes licence and provenance for the Ghostty theme catalog,
    including the per-theme ambiguity that work identifies — is being written on
    another ticket's branch. Neither the catalog nor the file is in this tree, so

@@ -27,6 +27,7 @@ at LICENSE in the repository and ships inside the application bundle at:
 
   Contents/Resources/LICENSE.txt
   Contents/Resources/THIRD-PARTY-NOTICES.txt
+  Contents/Resources/LICENSES.chromium.html
 
 Copyright holder: not recorded in this repository. The root LICENSE carries the
 Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]"), no package
@@ -12624,9 +12625,11 @@ Package: electron@44.0.0
 SPDX: MIT
 Note: The application bundle IS an Electron app: its runtime, helpers and framework are
       the shipped executable, so Electron's own licence belongs here even though the
-      package is a devDependency. Chromium's bundled third-party licences are a separate
-      document that electron-builder does not copy out of the Electron distribution —
-      see notices/README.md, which records that as open.
+      package is a devDependency. electron-builder copies Chromium's bundled third-party
+      licence catalogue from ../../node_modules/electron/dist into
+      Contents/Resources/LICENSES.chromium.html; the stale-notice check allows the
+      lazily downloaded source to be absent offline, but rejects it when present and
+      empty.
 ---------------------------------------------------------------------------------------------------------
 Copyright (c) Electron contributors
 Copyright (c) 2013-2020 GitHub Inc.

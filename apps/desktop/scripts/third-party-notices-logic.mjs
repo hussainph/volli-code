@@ -290,12 +290,16 @@ export function isNameCovered(name, coveredNames) {
 /**
  * The packaging half of the gate: everything electron-builder promises to put
  * in the .app must exist, and everything it ships must be named in the notice.
+ * A resource may allow a missing source so the stale-notice check remains
+ * offline-friendly before Electron's lazily downloaded distribution exists;
+ * electron-builder still requires that source when it packages the app.
  *
  * @param {{
  *   builderConfig: Record<string, unknown>,
  *   coveredNames: Set<string>,
- *   requiredResources: { from: string, to: string }[],
+ *   requiredResources: { from: string, to: string, allowMissing?: boolean, requireNonEmpty?: boolean }[],
  *   resourceExists: (from: string) => boolean,
+ *   resourceIsNonEmpty?: (from: string) => boolean,
  * }} options
  * @returns {string[]} one line per failure, empty when the packaging holds
  */
@@ -304,6 +308,7 @@ export function packagingFailures({
   coveredNames,
   requiredResources,
   resourceExists,
+  resourceIsNonEmpty = () => true,
 }) {
   const failures = [];
   const extraResources = Array.isArray(/** @type {any} */ (builderConfig).extraResources)
@@ -327,9 +332,18 @@ export function packagingFailures({
         `electron-builder.yml ships "${required.from}" to "${to}"; the notice document names "${required.to}".`,
       );
     }
-    if (!resourceExists(required.from)) {
+    const exists = resourceExists(required.from);
+    if (!exists) {
+      if (!required.allowMissing) {
+        failures.push(
+          `electron-builder.yml extraResources points at a missing file: ${required.from}`,
+        );
+      }
+      continue;
+    }
+    if (required.requireNonEmpty && !resourceIsNonEmpty(required.from)) {
       failures.push(
-        `electron-builder.yml extraResources points at a missing file: ${required.from}`,
+        `electron-builder.yml extraResources source has empty content: ${required.from}`,
       );
     }
   }
