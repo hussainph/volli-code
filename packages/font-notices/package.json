@@ -2,6 +2,7 @@
   "name": "@volli/font-notices",
   "version": "0.0.1",
   "private": true,
+  "license": "Apache-2.0",
   "bin": {
     "check-font-notices": "./bin/check-font-notices.mjs"
   },
