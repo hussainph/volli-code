@@ -2128,6 +2128,47 @@ CREATE INDEX IF NOT EXISTS mcp_operations_project_order ON mcp_operations(projec
 const MIGRATION_050 = `${MIGRATION_050_MCP_PROVENANCE}${MIGRATION_050_MCP_OPERATIONS}`;
 
 /**
+ * Migration 051: an indexed mark for "this attachment is still open" (VC-403).
+ *
+ * `session_attachments` records that an attachment was OPENED; that it later
+ * CLOSED lives only in an `attachment.closed` event, so the one question the
+ * concurrency budget asks — who is attached right now — could previously be
+ * answered only by folding every Session's whole log. This adds the closure
+ * back as a rebuildable read model beside the fact, exactly as `session_usage`
+ * projects `usage.recorded`: the event stays canonical, this column is derived
+ * from it in the same transaction that appends it, and the backfill below is
+ * the derivation — re-running it over the same immutable events reproduces the
+ * same marks, which is what makes the column a cache rather than a second
+ * opinion.
+ *
+ * The partial index is the point. Open attachments are a handful on any
+ * machine while closed ones are the entire history, so an index that holds
+ * only the open rows is the size of the answer rather than the size of the
+ * ledger — which is what turns a fleet fold into a lookup.
+ */
+const MIGRATION_051_SESSION_ATTACHMENT_CLOSURE = `
+ALTER TABLE session_attachments ADD COLUMN closed_sequence INTEGER;
+
+-- Backfill from the canonical facts, once: every attachment named by an
+-- attachment.closed event carries that event's sequence. An attachment whose
+-- close was never recorded stays NULL, which is the same thing the fold says
+-- about it -- a terminal left open by a crash reads as open, and the budget has
+-- always counted it.
+UPDATE session_attachments
+   SET closed_sequence = (
+     SELECT MAX(e.sequence)
+       FROM session_events e
+      WHERE e.session_id = session_attachments.session_id
+        AND json_extract(e.payload, '$.kind') = 'attachment.closed'
+        AND json_extract(e.payload, '$.attachmentId') = session_attachments.id
+   );
+
+CREATE INDEX IF NOT EXISTS session_attachments_open
+    ON session_attachments(session_id)
+ WHERE closed_sequence IS NULL AND observed_kind = 'opened';
+`;
+
+/**
  * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
  *
  * The immutable event log remains canonical. This table is an additive cache:
@@ -2448,6 +2489,12 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: MIGRATION_050,
     apply: applyMigration050McpProvenance,
   },
+  {
+    version: 51,
+    name: "session_attachments — an indexed closure mark, so asking who is attached costs no fold",
+    sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
+    apply: applyMigration051AttachmentClosure,
+  },
 ];
 
 /**
@@ -2475,6 +2522,23 @@ function applyMigration050McpProvenance(db: Database.Database): void {
     db.exec(MIGRATION_050_MCP_PROVENANCE);
   }
   db.exec(MIGRATION_050_MCP_OPERATIONS);
+}
+
+/**
+ * Migration 051's column addition, probe-gated like 040's, 041's and 050's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. The backfill
+ * and the partial index are idempotent on their own, so the probe covers only
+ * the column: re-running the `UPDATE` derives the same closure marks from the
+ * same immutable events.
+ */
+function applyMigration051AttachmentClosure(db: Database.Database): void {
+  const columns = db.pragma("table_info(session_attachments)") as { name: string }[];
+  if (columns.some(({ name }) => name === "closed_sequence")) return;
+  db.exec(MIGRATION_051_SESSION_ATTACHMENT_CLOSURE);
 }
 
 /**

@@ -222,6 +222,13 @@ interface CommandAnswer {
   receipt?: CommandReceipt | null;
   state?: "ready" | "needs-recovery";
   throughSequence?: number;
+  /**
+   * What the host said a refusal on this result weighed (VC-141). Typed as
+   * `unknown` rather than the severity union on purpose: the client reads it
+   * structurally off JSON, so the fakes have to be able to send a host that
+   * said nothing, said something else, or said it wrong.
+   */
+  refusal?: unknown;
 }
 
 class FakeStream {
@@ -381,6 +388,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
   prepare(rpc);
   let commandIds = 0;
   const notifications: string[] = [];
+  const notificationTones: Array<"error" | "neutral"> = [];
   const renames: { sessionId: string; title: string; refineFrom?: string }[] = [];
   const store = createSurfaceStore();
   const sessionId = `session-${++sessionCounter}`;
@@ -407,8 +415,11 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
       };
     },
     store,
-    notify: (message) => {
+    // No default: the core states the tone on every line, and a double that
+    // supplied one would hide a core that had stopped doing so.
+    notify: (message, tone) => {
       notifications.push(message);
+      notificationTones.push(tone);
     },
     renameSession: (target, title, refineFrom) => {
       renames.push({
@@ -447,6 +458,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
     slice,
     close,
     notifications,
+    notificationTones,
     renames,
     stream: () => rpc.streams.at(-1)!,
   };
@@ -1294,25 +1306,256 @@ describe("compactContext", () => {
     expect("instructions" in rpc.commands.at(-1)!.command).toBe(false);
   });
 
-  it("settles a refusal onto the Session, because somebody asked", async () => {
-    const { client, slice } = await adopted((fake) => {
+  it("reads an accepted compaction as done, and says nothing about it", async () => {
+    const { client, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ACCEPTED;
+    });
+
+    // The compaction itself is announced by the runtime as a Session Event.
+    // A toast here would be this client narrating a fact already on screen.
+    await expect(client.compactContext(null)).resolves.toBe(true);
+    expect(notifications).toEqual([]);
+  });
+
+  it("reads a compaction as done when the answer carries no receipt at all", async () => {
+    const { client } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({ sessionId: SESSION.id });
+    });
+
+    // Not a shape this host sends — `rendererCommandResult` always sets the
+    // key — but the reader is structural on purpose, so the shape has to have
+    // a defined meaning rather than a thrown one. A result that refused
+    // nothing did not refuse this.
+    await expect(client.compactContext(null)).resolves.toBe(true);
+  });
+
+  it("toasts a thrown mutate as a failure, never the sessionError band", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => {
+        throw new Error("socket hang up");
+      };
+    });
+
+    // A throw is the ambiguous case — a transport that never reached main and
+    // a failure past the durable write both arrive this way — and it is a
+    // moment, not a state: notified like every other refused command, never
+    // latched onto the Session the way `#run` would have.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: socket hang up");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("falls back to the rejection code when an unrecognised refusal carries no detail", async () => {
+    const { client, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-mute",
+          commandId: "command-compact-mute",
+          status: "rejected",
+          code: "location_unavailable",
+          detail: null,
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: location_unavailable");
+    expect(notificationTones.at(-1)).toBe("error");
+  });
+
+  it("toasts a refusal nobody vouched for as a failure, never the sessionError band", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
       fake.answer = () => REFUSED;
     });
 
-    // The whole difference between this and the two compactions nobody asked
-    // for: a reason that reaches a person, rather than a fact filed away.
+    // No `refusal` on the result: a host that said nothing about the weight of
+    // its own refusal has not vouched for it, and an unvouched refusal is a
+    // failure. A one-shot toast even so — not the `sessionError` band that
+    // draws a Retry button, because there is nothing here to retry.
     await expect(client.compactContext(null)).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Compact: Pi is unavailable");
+    expect(notifications.at(-1)).toBe("Compact: Pi is unavailable");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
   });
 
-  it("refuses a compaction when the Session has no live attachment", async () => {
-    const { client, rpc } = await adopted((fake) => {
-      fake.snapshotProjection = projectionFor(null);
+  // VC-141: the four compaction refusals as the host actually sends them —
+  // its own sentence, and its own judgement of what that sentence weighs.
+  // Nothing below names a rejection code, and that is the point: the client
+  // reads the weight the host set, so a second runtime with a vocabulary of
+  // its own needs no change on this side.
+  const compactionRefusal = (
+    code: string,
+    detail: string,
+    refusal: "benign" | "failure",
+  ): CommandAnswer => ({
+    sessionId: SESSION.id,
+    refusal,
+    receipt: {
+      id: `receipt-${code}`,
+      commandId: `command-${code}`,
+      status: "rejected",
+      code,
+      detail,
+      recordedAt: 0,
+      sequence: 1,
+    },
+  });
+
+  it("toasts the host's own words, neutrally, when there is nothing left to summarize", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () =>
+        compactionRefusal("PI_NOTHING_TO_COMPACT", "There is nothing left to summarize.", "benign");
+    });
+
+    // Nothing to compact is an outcome the person's own `/compact` chose, not
+    // a failure of the Session's plumbing (CLAUDE.md's line between the two):
+    // the neutral tone that is a plain toast, never the longer-held error one.
+    // Unprefixed, because naming the command again would make an outcome read
+    // as a fault.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("There is nothing left to summarize.");
+    expect(notificationTones.at(-1)).toBe("neutral");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  // The two causes behind one busy code. The runtime writes a different
+  // sentence for each on purpose — a person told "already being compacted"
+  // about a Session that is plainly mid-turn would go looking for a summary
+  // that is not running — and carrying its words rather than a code keeps both.
+  it("toasts the live-turn sentence, neutrally, when a turn holds the context", async () => {
+    const { client, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () =>
+        compactionRefusal(
+          "PI_BUSY",
+          "The context cannot be compacted while Pi is running.",
+          "benign",
+        );
     });
 
     await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("The context cannot be compacted while Pi is running.");
+    expect(notificationTones.at(-1)).toBe("neutral");
+  });
+
+  it("toasts the other busy sentence under the very same code", async () => {
+    const { client, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () =>
+        compactionRefusal("PI_BUSY", "This context is already being compacted.", "benign");
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("This context is already being compacted.");
+    expect(notificationTones.at(-1)).toBe("neutral");
+  });
+
+  it("toasts an error, with the provider's own words, when the summary itself failed", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () =>
+        compactionRefusal("PI_COMPACTION_FAILED", "The provider refused the summary.", "failure");
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: The provider refused the summary.");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("toasts an error when the attachment the compaction needed has closed", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () =>
+        compactionRefusal("PI_ATTACHMENT_CLOSED", "This attachment is closed.", "failure");
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: This attachment is closed.");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("never reads a benign mark on anything the host did not refuse", async () => {
+    const { client, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      // A stray mark beside an accepted receipt must not invent a refusal:
+      // the receipt's own status is what decides that there was one.
+      fake.answer = () => ({ ...ACCEPTED, refusal: "benign" });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(true);
+    expect(notifications).toEqual([]);
+  });
+
+  // BOUNDARIES.md rule 4: "Leave reconciliation semantics undecided rather
+  // than assumed absent." An unreconciled receipt is the runtime saying it
+  // does not know, and reporting that as a finished compaction is the one
+  // answer it cannot support.
+  it("refuses to call an unreconciled compaction done, and says so in the host's words", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-unknown",
+          commandId: "command-compact-unknown",
+          status: "unreconciled",
+          detail: "Pi stopped answering mid-summary.",
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: Pi stopped answering mid-summary.");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("says the uncertainty itself when an unreconciled receipt left no words", async () => {
+    const { client, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-mute",
+          commandId: "command-compact-mute",
+          status: "unreconciled",
+          detail: null,
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: the runtime could not confirm whether this ran");
+    expect(notificationTones.at(-1)).toBe("error");
+  });
+
+  it("refuses a compaction when the Session has no live executor, and still says why", async () => {
+    const { client, rpc, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor(null);
+    });
+
+    // VC-141's own complaint, in the one arm this client can see for itself: a
+    // `/compact` that goes nowhere must not go nowhere silently.
+    await expect(client.compactContext(null)).resolves.toBe(false);
     expect(rpc.commands).toEqual([]);
+    expect(notifications.at(-1)).toBe("Compaction can't run until the Session is live");
+    expect(notificationTones.at(-1)).toBe("error");
   });
 });
 

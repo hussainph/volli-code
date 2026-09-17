@@ -17,8 +17,8 @@
  *   • Data is fake and the bridge is stubbed (see fake-api.ts) — that is the
  *     whole trade. Nothing in `src/renderer/src/` may import from this folder.
  *
- * What it deliberately cannot model: terminals (restty/WebGPU and node-pty need
- * the main process), native window chrome, and Electron's font rasterization.
+ * What it deliberately cannot model: terminals (node-pty needs the main
+ * process), native window chrome, and Electron's font rasterization.
  * Judge layout, interaction, state and motion here; confirm those three in the
  * real app.
  *

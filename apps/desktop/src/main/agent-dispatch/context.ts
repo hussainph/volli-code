@@ -8,10 +8,16 @@
  * Handlers now take it as an argument, so what a verb can reach is legible at
  * its signature instead of being whatever happened to be in scope.
  *
- * The snapshot half is deliberately not resolved here. Several verbs skip work
- * they do not need — the hook hot path takes no projection snapshot and no
- * identity lookup — and that laziness is declared per verb in `table.ts`,
- * beside the handler it belongs to, rather than hidden in a condition here.
+ * The Session snapshot half is deliberately not resolved here (VC-403):
+ * {@link AgentCommandContext.loadProjections} and
+ * {@link AgentCommandContext.loadSessions} fold every project's Sessions only
+ * when a handler actually calls one of them, and share one memo when a
+ * handler calls both (or calls one twice) — so a verb that never asks pays
+ * nothing, automatically, rather than by a policy declared per verb. The
+ * `VOLLI_SESSION` identity lookup is still declared per verb in `table.ts`
+ * (`envSession`), because which of two lookups a verb wants — the identity or
+ * its own terminal record — is a real per-verb choice the fold's laziness does
+ * not make for it.
  */
 
 import type Database from "better-sqlite3";
@@ -329,17 +335,24 @@ export interface AgentCommandContext {
   /** Every registered project, listed once per request. */
   readonly projects: readonly Project[];
   /**
-   * Every Session of every project, folded once — or empty, for a verb whose
-   * table entry declares it takes no snapshot. `sessions` below narrows it to
-   * the terminal rows.
+   * Every Session of every project — lazy and memoized (VC-403). Nothing is
+   * folded until a handler actually calls this; a verb that never reads it
+   * pays nothing, and a verb that calls it more than once (or calls
+   * {@link loadSessions} too) still folds it exactly once. `loadSessions`
+   * narrows the answer to the terminal rows.
+   *
+   * Previously an eager `projections` field the dispatch resolved for every
+   * verb whose table entry did not opt out — that policy is gone; laziness now
+   * makes the opt-out automatic for any verb that never calls this.
    */
-  readonly projections: readonly SessionProjection[];
+  loadProjections(): Promise<readonly SessionProjection[]>;
   /**
-   * The terminal half of {@link projections}: the verbs that need a PTY have
-   * nothing a structured-only Session can answer, and dropping it there is
-   * correct, not a compatibility gap.
+   * The terminal half of {@link loadProjections}'s answer: the verbs that need
+   * a PTY have nothing a structured-only Session can answer, and dropping it
+   * there is correct, not a compatibility gap. Shares {@link loadProjections}'s
+   * memo, so calling both costs one fold, not two.
    */
-  readonly sessions: readonly SessionRecord[];
+  loadSessions(): Promise<readonly SessionRecord[]>;
   /**
    * Who `VOLLI_SESSION` is, when the caller exported one and this verb's table
    * entry asks for it. `null` means no session env, an id that resolves to no
@@ -350,6 +363,24 @@ export interface AgentCommandContext {
    * `VOLLI_SESSION` still resolves here, and still attributes as nobody.
    */
   readonly envSession: EnvSessionIdentity | null;
+  /**
+   * {@link envSession}'s own terminal record, resolved from the SAME
+   * `getSession` call rather than the fleet fold (VC-403): `identify` is the
+   * one caller, and it needs only this one Session's terminal facts (its
+   * `cwd`), never the whole machine's. `null` when there is no `envSession`, or
+   * its Session never opened a terminal (a structured Session's workspace is
+   * its ticket's worktree instead — `identifyVerb` falls back to that).
+   *
+   * This is the SAME Session {@link envSession} names, and it cannot be any
+   * other: `identify` used to find the terminal by searching the fleet for
+   * `VOLLI_SESSION` while the rest of its answer described the DOOR's Session,
+   * and the two agree by construction because `doorActor` refuses to reconcile
+   * a token and a `VOLLI_SESSION` claim that disagree — it authenticates nobody
+   * instead, so the fallback resolves the claim and both halves read the same
+   * id. Dropping the fleet search is therefore purely the cost, never the
+   * answer.
+   */
+  readonly envSessionTerminal: SessionRecord | null;
   /**
    * The Session this request's attachment token authenticated at the socket
    * door, or null when the caller presented no valid matching token. Kept
