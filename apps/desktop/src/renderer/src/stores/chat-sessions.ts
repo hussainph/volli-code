@@ -40,6 +40,7 @@ import {
   type ChatSessionWrites,
   type QueuedMessage,
 } from "@volli/session-presentation";
+import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { browserChatTransport } from "@renderer/chat/transport";
@@ -248,7 +249,11 @@ export function createChatSessionsStore(
         // (VC-169): an event failure surfaces as an error toast, and the
         // auto-title write goes through the shared rename path — which owns
         // the optimistic labels, the rollback, and its own failure toast.
-        notify: toastError,
+        // `tone` defaults to `"error"` in the core (every caller but VC-141's
+        // `compactContext`); `"neutral"` is a plain sonner toast at the
+        // library's own default duration, never the longer-held error one.
+        notify: (message, tone = "error") =>
+          tone === "neutral" ? toast(message) : toastError(message),
         renameSession: (target, title, refineFrom) => {
           void renameChatSession(target, title, refineFrom);
         },

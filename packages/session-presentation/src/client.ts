@@ -23,6 +23,7 @@ import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@vol
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   BlobLinkView,
+  CommandReceipt,
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
@@ -301,7 +302,16 @@ export interface ChatSessionRpc {
     subscribe: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
     };
-    command: { mutate(input: ChatCommandRequest): Promise<{ sessionId: string }> };
+    // `receipt` is optional and typed rather than folded into the generic
+    // `unknown` `rejectedReceipt` reads structurally: `compactContext` is the
+    // one caller that has to tell a neutral refusal from a real failure, which
+    // means it needs the receipt's `code`, not the message string alone that
+    // every other command settles for.
+    command: {
+      mutate(
+        input: ChatCommandRequest,
+      ): Promise<{ sessionId: string; receipt?: CommandReceipt | null }>;
+    };
     cancelInteraction: {
       mutate(input: { sessionId: string; interactionId: string }): Promise<unknown>;
     };
@@ -413,8 +423,14 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
    * One line to a person about a command that failed as a moment, not a state
    * — the surface {@link ChatSessionClient.#eventRun} speaks to. The desktop
    * passes its error toast; nothing here assumes what the line becomes.
+   *
+   * `tone` defaults to `"error"`, which is every existing caller: a stopped
+   * turn, a decision that did not land, a model that would not change. Only
+   * {@link ChatSessionClient.compactContext} ever asks for `"neutral"` — a
+   * history with nothing left to summarize is an outcome the person chose to
+   * ask about, not a failure (CLAUDE.md's line between the two).
    */
-  notify(message: string): void;
+  notify(message: string, tone?: "error" | "neutral"): void;
   /**
    * Retitle the durable Session everywhere it is named — the auto-title's one
    * write ({@link ChatSessionClient.#autoTitle}). Fire-and-forget by
@@ -426,6 +442,23 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 }
 
 export type ProductSessionResult = SessionStartResult;
+
+/**
+ * The two `context.compact` refusal codes ({@link
+ * apps/desktop/src/main/session-runtime/pi-adapter.ts}'s
+ * `COMPACTION_REJECTION_CODES`) a person's own `/compact` earns just by
+ * asking, mapped to Volli's own short copy — sentence case, no trailing
+ * period, per CLAUDE.md — rather than the runtime's longer sentence. Any code
+ * this map does not name (a `summary-failed`, a `closed`, or a future
+ * rejection reason) is a real failure and keeps the runtime's own words: a
+ * refusal this client cannot vouch for as harmless is not one it can call
+ * neutral, and `summary-failed`'s message is the provider's own explanation
+ * of what went wrong, different every time.
+ */
+const NEUTRAL_COMPACTION_COPY: ReadonlyMap<string, string> = new Map([
+  ["PI_NOTHING_TO_COMPACT", "Nothing to compact yet"],
+  ["PI_BUSY", "Compact is already running"],
+]);
 
 export class ChatSessionClient {
   readonly sessionId: string;
@@ -715,16 +748,21 @@ export class ChatSessionClient {
    *
    * Every way it does not happen comes back as a rejected receipt — a turn
    * still running, a history with nothing left to summarize, a summary the
-   * provider refused — and {@link #run} settles all of them onto the Session
-   * as one readable line. That is the whole difference between this and the
-   * two compactions nobody asked for: those report to the ledger, and this
-   * reports to a person.
+   * provider refused. VC-141: this is a one-shot toast, never a durable
+   * observation and never the `sessionError` band {@link #run} would have
+   * latched — a history with nothing left to summarize is an outcome the
+   * person's own `/compact` chose, not a failure of the Session's plumbing,
+   * and a persistent error row with a Retry button that re-attaches a fine
+   * executor is the wrong report for it (CLAUDE.md's line between the two).
+   * Only `closed` and `summary-failed` are real failures, and they toast at
+   * the same error tone every other refused command does.
    */
-  compactContext(instructions: string | null): Promise<boolean> {
+  async compactContext(instructions: string | null): Promise<boolean> {
     const attachmentId = this.#liveAttachmentId();
-    if (attachmentId === null) return Promise.resolve(false);
-    return this.#run("Compact", () =>
-      this.#rpc.session.command.mutate({
+    if (attachmentId === null) return false;
+    let result: { receipt?: CommandReceipt | null };
+    try {
+      result = await this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
         // Absent, never explicitly `undefined` — `interrupt`'s rule, for
@@ -733,8 +771,28 @@ export class ChatSessionClient {
           instructions === null
             ? { kind: "context.compact", attachmentId }
             : { kind: "context.compact", attachmentId, instructions },
-      }),
-    );
+      });
+    } catch (failure) {
+      // A thrown mutate is a transport failure, not a rejected receipt — the
+      // same ambiguous "never reached main, or failed past it" case
+      // `#eventRun` catches. Notified, never latched: VC-97's reasoning
+      // there applies here too, a compaction failure is a moment and not a
+      // state, and a `/compact` a person can simply retype owns no Session
+      // plumbing to park a Retry button on.
+      this.#notify(`Compact: ${errorMessage(failure)}`);
+      return false;
+    }
+    const receipt = result.receipt ?? null;
+    if (receipt?.status !== "rejected") return true;
+    const neutralCopy = NEUTRAL_COMPACTION_COPY.get(receipt.code);
+    if (neutralCopy !== undefined) {
+      this.#notify(neutralCopy, "neutral");
+      return false;
+    }
+    const detail =
+      receipt.detail !== null && receipt.detail.length > 0 ? receipt.detail : receipt.code;
+    this.#notify(`Compact: ${detail}`);
+    return false;
   }
 
   /**

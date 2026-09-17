@@ -381,6 +381,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
   prepare(rpc);
   let commandIds = 0;
   const notifications: string[] = [];
+  const notificationTones: Array<"error" | "neutral"> = [];
   const renames: { sessionId: string; title: string; refineFrom?: string }[] = [];
   const store = createSurfaceStore();
   const sessionId = `session-${++sessionCounter}`;
@@ -407,8 +408,9 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
       };
     },
     store,
-    notify: (message) => {
+    notify: (message, tone = "error") => {
       notifications.push(message);
+      notificationTones.push(tone);
     },
     renameSession: (target, title, refineFrom) => {
       renames.push({
@@ -447,6 +449,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
     slice,
     close,
     notifications,
+    notificationTones,
     renames,
     stream: () => rpc.streams.at(-1)!,
   };
@@ -1294,16 +1297,117 @@ describe("compactContext", () => {
     expect("instructions" in rpc.commands.at(-1)!.command).toBe(false);
   });
 
-  it("settles a refusal onto the Session, because somebody asked", async () => {
-    const { client, slice } = await adopted((fake) => {
+  it("reads a compaction as done when the mutation answers with no receipt at all", async () => {
+    const { client } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({ sessionId: SESSION.id });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(true);
+  });
+
+  it("toasts a thrown mutate as a failure, never the sessionError band", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => {
+        throw new Error("socket hang up");
+      };
+    });
+
+    // A throw is the ambiguous case — a transport that never reached main and
+    // a failure past the durable write both arrive this way — and it is a
+    // moment, not a state: notified like every other refused command, never
+    // latched onto the Session the way `#run` would have.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: socket hang up");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("falls back to the rejection code when an unrecognised refusal carries no detail", async () => {
+    const { client, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-mute",
+          commandId: "command-compact-mute",
+          status: "rejected",
+          code: "location_unavailable",
+          detail: null,
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: location_unavailable");
+    expect(notificationTones.at(-1)).toBe("error");
+  });
+
+  it("toasts an unrecognised refusal as a failure, never the sessionError band (VC-141)", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
       fake.snapshotProjection = projectionFor("attach-1");
       fake.answer = () => REFUSED;
     });
 
-    // The whole difference between this and the two compactions nobody asked
-    // for: a reason that reaches a person, rather than a fact filed away.
+    // A one-shot toast, not a durable observation and not the `sessionError`
+    // band that draws a Retry button — there is nothing here to retry.
     await expect(client.compactContext(null)).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Compact: Pi is unavailable");
+    expect(notifications.at(-1)).toBe("Compact: Pi is unavailable");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("toasts neutral copy when there is nothing left to summarize", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-skip",
+          commandId: "command-compact-skip",
+          status: "rejected",
+          code: "PI_NOTHING_TO_COMPACT",
+          detail: "There is nothing left to summarize.",
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    // Nothing to compact is an outcome the person's own `/compact` chose, not
+    // a failure of the Session's plumbing (CLAUDE.md's line between the two):
+    // short house copy, and the neutral tone that is a plain toast, never the
+    // longer-held error one.
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Nothing to compact yet");
+    expect(notificationTones.at(-1)).toBe("neutral");
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("toasts an error, with the provider's own words, when the summary itself failed", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.answer = () => ({
+        sessionId: SESSION.id,
+        receipt: {
+          id: "receipt-compact-failed",
+          commandId: "command-compact-failed",
+          status: "rejected",
+          code: "PI_COMPACTION_FAILED",
+          detail: "The provider refused the summary.",
+          recordedAt: 0,
+          sequence: 1,
+        },
+      });
+    });
+
+    await expect(client.compactContext(null)).resolves.toBe(false);
+    expect(notifications.at(-1)).toBe("Compact: The provider refused the summary.");
+    expect(notificationTones.at(-1)).toBe("error");
+    expect(slice()!.sessionError).toBeNull();
   });
 
   it("refuses a compaction when the Session has no live attachment", async () => {

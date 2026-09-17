@@ -18,7 +18,9 @@ import { useChatDraftsStore } from "./chat-drafts";
 import { createChatSessionsStore } from "./chat-sessions";
 import { useUiStore } from "./ui";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+// Callable AND `.error`: VC-141's neutral compact toast is a plain `toast(...)`
+// call, while every other notify stays `toast.error(...)`.
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 const noop = (): void => undefined;
 
@@ -186,6 +188,7 @@ afterEach(() => {
   useChatDraftsStore.setState({ drafts: {} });
   vi.unstubAllGlobals();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast).mockClear();
 });
 
 describe("createChatSession", () => {
@@ -1700,6 +1703,71 @@ describe("the deps attach() wires", () => {
       expect.anything(),
     );
     // The failure is a moment, not a state: nothing latched on the slice.
+    expect(store.getState().sessions["durable-9"]).toMatchObject({
+      lifecycle: "ready",
+      sessionError: null,
+    });
+  });
+
+  // VC-141: a manual `/compact` that finds nothing to summarize is an outcome
+  // the person's own request chose, not a failure — it gets a plain toast at
+  // the library's default duration, never the longer-held error one, and
+  // never the `sessionError` band a Retry button would offer on a Session
+  // that has nothing to retry.
+  it("routes a compact refusal with nothing to summarize through a neutral toast", async () => {
+    const { state, store } = await adoptedDescribed();
+    store
+      .getState()
+      .setProjection("durable-9", { ...projection, liveExecutor: { id: "attach-1" } });
+    state.answer = () => ({
+      sessionId: SESSION.id,
+      receipt: {
+        id: "receipt-compact-skip",
+        commandId: "command-compact-skip",
+        status: "rejected",
+        code: "PI_NOTHING_TO_COMPACT",
+        detail: "There is nothing left to summarize.",
+        recordedAt: 0,
+        sequence: 1,
+      },
+    });
+
+    await expect(getChatClient("durable-9")!.compactContext(null)).resolves.toBe(false);
+
+    expect(vi.mocked(toast)).toHaveBeenCalledWith("Nothing to compact yet");
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+    expect(store.getState().sessions["durable-9"]).toMatchObject({
+      lifecycle: "ready",
+      sessionError: null,
+    });
+  });
+
+  // The provider's own explanation of what went wrong IS a failure, and it
+  // keeps the error toast every other refused command gets.
+  it("routes a compact refusal that failed the summary through the error toast", async () => {
+    const { state, store } = await adoptedDescribed();
+    store
+      .getState()
+      .setProjection("durable-9", { ...projection, liveExecutor: { id: "attach-1" } });
+    state.answer = () => ({
+      sessionId: SESSION.id,
+      receipt: {
+        id: "receipt-compact-failed",
+        commandId: "command-compact-failed",
+        status: "rejected",
+        code: "PI_COMPACTION_FAILED",
+        detail: "The provider refused the summary.",
+        recordedAt: 0,
+        sequence: 1,
+      },
+    });
+
+    await expect(getChatClient("durable-9")!.compactContext(null)).resolves.toBe(false);
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      "Compact: The provider refused the summary.",
+      expect.anything(),
+    );
     expect(store.getState().sessions["durable-9"]).toMatchObject({
       lifecycle: "ready",
       sessionError: null,
