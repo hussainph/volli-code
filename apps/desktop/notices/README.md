@@ -4,100 +4,135 @@
 application bundle. It is generated, not written:
 
 ```sh
-node apps/desktop/scripts/generate-third-party-notices.mjs        # regenerate
-pnpm -C apps/desktop run check:notices                            # what CI runs
+node scripts/generate-third-party-notices.mjs        # regenerate
+pnpm run check:notices                               # what CI runs
 ```
+
+The generator is a **root** script (`scripts/`), beside
+`check-workspace-licenses.mjs`. It walks `packages/cli`, reads
+`pnpm-workspace.yaml`, and collects notices that other workspace packages
+declare, so it is not the desktop app's tool — the desktop `.app` is simply the
+one artifact it currently describes. Its `ARTIFACTS` list is where a second
+client or a standalone server would add its own roots and packaging adapter.
 
 Three files ride along in the packaged `.app`, all under `Contents/Resources`
 (Finder → Show Package Contents), declared by `extraResources` in
 `electron-builder.yml`:
 
-| In the bundle                                | From                                                    |
-| -------------------------------------------- | ------------------------------------------------------- |
-| `Contents/Resources/LICENSE.txt`             | the repository's `LICENSE`                              |
-| `Contents/Resources/THIRD-PARTY-NOTICES.txt` | `apps/desktop/THIRD-PARTY-NOTICES`                      |
+| In the bundle                                | From                                                |
+| -------------------------------------------- | --------------------------------------------------- |
+| `Contents/Resources/LICENSE.txt`             | the repository's `LICENSE`                          |
+| `Contents/Resources/THIRD-PARTY-NOTICES.txt` | `apps/desktop/THIRD-PARTY-NOTICES`                  |
 | `Contents/Resources/LICENSES.chromium.html`  | `node_modules/electron/dist/LICENSES.chromium.html` |
 
-## What the generator derives, and what this directory supplies
+## What the generator derives
 
-The generator walks the production dependency closure of `apps/desktop` and
-`packages/cli` — the two roots whose code reaches the bundle — and reads each
-package's own licence and NOTICE files. That covers the renderer bundle, the
-packed main process, the `node_modules` tree electron-builder keeps, the fonts,
-and the `volli` CLI.
+It walks the production dependency closure of `apps/desktop` and `packages/cli`
+— the two roots whose code reaches the bundle — through `dependencies`,
+`optionalDependencies`, and **required** peer dependencies, and reads each
+package's own licence and `NOTICE` files. Peers marked `optional` are skipped:
+that is the type-only case (`@types/react` under every Radix primitive), and a
+list whose claim is "these reach the artifact" should not carry them.
 
-It cannot see four kinds of thing, so this directory carries them in
-`sources.json`, reviewed by a person and verified by the generator:
+The copyright holder is **read from the root `LICENSE`**, never chosen here. If
+the Apache-2.0 appendix still carries `[yyyy] [name of copyright owner]`, the
+document says the holder is not recorded; once it names one, the document
+reproduces that line. VC-414's one-line edit therefore reaches the shipped
+notice by regenerating, with no second copy of the owner's name to drift.
+
+## What this directory supplies
+
+`sources.json` carries what a dependency walk cannot see **and that this app
+owns**:
 
 - **`platformNative`** — packages that install on one platform only (the sharp
   addon, its libvips dylib, ripgrep's binary). Their licence text is pinned in
   `texts/` so the document renders identically on macOS and on Linux CI. When
   the package _is_ installed, the generator compares the pinned text and version
-  against it and fails on drift.
+  against it and fails on drift. A platform package that the packaging config
+  ships and that no entry here pins is a **failure**, not a silent skip.
 - **`toolchain`** — development dependencies whose own code or generated output
-  ships anyway: Electron (the runtime itself), Tailwind and `tw-animate-css`
-  (their CSS is emitted into the renderer stylesheet). Their versions and licence
-  texts are read live from `node_modules`.
-- **`vendored`** — third-party source copied into the repository instead of
-  installed, each with the in-repo evidence that establishes where it came from.
-  An entry whose provenance is not recorded carries `unresolved` instead of a
-  licence, and the document prints it as unresolved rather than guessing.
+  ships anyway: Electron (the runtime itself), Tailwind and `tw-animate-css`.
+- **`vendored`** — third-party source copied into **this app** rather than
+  installed, each with the in-repo evidence establishing where it came from.
 - **`fragments`** — notices that exist outside any package: today the TextMate
-  theme data, whose upstream copyrights live in tm-themes' `NOTICE` rather than
-  in a package's `LICENSE`. `editor-themes.NOTICE` is regenerated from that
-  upstream file by `scripts/generate-editor-theme-notices.mjs`.
-- **`expectedFragments`** — a notice another workspace package owns, which this
-  document has to carry because the `.app` ships this file and not that one.
-  Each entry names the file, the marker that identifies its material in shipped
-  source, and the trees to search. The generator folds the file in verbatim the
-  moment it exists; while it does not, the document prints the entry as pending;
-  and if the material appears in shipped source while the file is still missing,
-  `check:notices` fails rather than packaging it with no attribution.
+  theme data, regenerated by `scripts/generate-editor-theme-notices.mjs`.
+
+## What other packages supply
+
+Material another workspace package vendored is **not** recorded here. That
+package declares it in its own `package.json`, so the declaration and the files
+it names move together under one review:
+
+```jsonc
+"volli": {
+  "notices": [
+    {
+      "title": "Ghostty terminal theme catalog (iTerm2-Color-Schemes)",
+      "covers": ["src/ghostty-theme-sources.generated.ts"],
+      "document": "THIRD-PARTY-THEMES.md"
+    }
+  ]
+}
+```
+
+The rule keys on **the files themselves**, which is what makes coverage
+structural rather than a guess:
+
+- material present, notice file present → the notice is folded into the shipped
+  document verbatim;
+- material present, notice file **absent** → `check:notices` **fails**: the app
+  would ship unattributed material;
+- a `covers` path that no longer resolves → **fails**, so a typo cannot
+  masquerade as coverage.
+
+An entry may carry `document` (fold a whole attribution file in), `text` (a
+licence file beside the material), or `unresolved` (provenance nobody has
+established — recorded, never invented). Today `@volli/shared` declares the
+Ghostty theme catalog and the APCA-W3 formulation; `@volli/agent-runtime`
+declares the vendored pi-automode helpers.
+
+> This replaced a marker grep that searched every shipped source file for the
+> string `iTerm2-Color-Schemes`. The catalog landed as
+> `ghostty-theme-sources.generated.ts`, whose 463 entries say "iTerm2 Dark
+> Background" and never that marker, so the grep concluded the material had not
+> shipped and stayed green. Matching a file is checkable; guessing how someone
+> else will spell something is not.
 
 ## When you have to regenerate
 
-Any change to the production dependency set: adding or removing a dependency,
-bumping one, changing `electron-builder.yml`'s shipped-package whitelist, or
-editing this directory. `check:notices` fails in CI otherwise, and it also fails
-when the packaging config stops shipping the notices or starts shipping a package
-nothing covers.
+Any change to the production dependency set: adding, removing or bumping a
+dependency, changing `electron-builder.yml`'s shipped-package whitelist, editing
+this directory, or editing another package's `volli.notices`. `check:notices`
+fails in CI otherwise.
 
-Adding a dependency with an unusual licence needs no code change here — the
-generator reports whatever the package declares and publishes, and lists
-anything that is not a plain permissive grant in the document's last section.
+Regeneration is never blocked by a coverage failure: the generator writes the
+document and then reports, exiting non-zero. The two faults are independent, so
+you can fix both in one pass.
 
 ## Open items
 
-These are recorded rather than decided. None of them is a conclusion about
-obligations; the licensing review that reaches conclusions is tracked separately
-from the packaging work that produced this pipeline.
+Recorded rather than decided. None is a conclusion about obligations; the
+licensing review that reaches conclusions is tracked separately.
 
-1. **Copyright holder.** The root `LICENSE` still carries the Apache-2.0
-   appendix placeholder, no manifest names an author, and there is no `NOTICE`
-   file. The document says exactly that instead of naming a holder.
-2. **AI Elements provenance.** `src/renderer/src/components/ui/ai-elements/` was
-   copied in; the introducing commit records no upstream project, revision or
-   licence. The entry stays `unresolved` until someone confirms the origin and
-   adds it to `sources.json` with its licence text.
-3. **APCA-W3 formulation.** `packages/shared/src/theme/color.ts` implements the
-   published APCA-W3 constants in shipped code (the `apca-w3` package itself is a
-   test-only devDependency). Whether that reproduction carries an obligation is
-   part of the separate licensing review.
-4. **Declarations flagged for review.** The document's last section lists every
+1. **APCA-W3 formulation.** `packages/shared/src/theme/color.ts` implements the
+   published APCA-W3 constants in shipped code (the `apca-w3` package itself is
+   a test-only devDependency). Whether that reproduction carries an obligation
+   is part of the separate licensing review. Declared by `@volli/shared` as
+   `unresolved`.
+2. **Per-theme licences in the Ghostty catalog.** `THIRD-PARTY-THEMES.md`
+   (VC-410) chains the collection to iTerm2-Color-Schemes' MIT grant and records
+   that the grant explicitly does **not** reach individual themes, that upstream
+   issue #638 is open on it, and that Monokai's own terms forbid redistributing
+   a collective work containing Monokai Pro. That question belongs to the review
+   that owns it; this pipeline only guarantees the attribution travels inside
+   the `.app`.
+3. **Declarations flagged for review.** The document's last section lists every
    declaration that is not a plain permissive grant — today the libvips binary's
    `LGPL-3.0-or-later`, DOMPurify's `(MPL-2.0 OR Apache-2.0)`, and node-forge's
-   `(BSD-3-Clause OR GPL-2.0)`. They are listed so a reviewer can find them.
-5. **Shared terminal theme catalog.** `packages/shared/THIRD-PARTY-THEMES.md` —
-   the iTerm2-Color-Schemes licence and provenance for the Ghostty theme catalog,
-   including the per-theme ambiguity that work identifies — is being written on
-   another ticket's branch. Neither the catalog nor the file is in this tree, so
-   the document prints the entry as pending and asserts nothing about it. The
-   integration needs no further code: the `expectedFragments` entry folds the
-   file into the shipped notice as soon as it lands (regenerate, or CI's
-   `check:notices` will say so), and fails the check if the catalog ships first.
-   Per-theme licence judgements stay with the review that owns them; this
-   pipeline only guarantees the attribution travels inside the `.app`.
+   `(BSD-3-Clause OR GPL-2.0)`.
 
 Out of this artifact's scope, stated so the boundary is legible: the docs and
 website static sites (including GSAP, which only `apps/website` depends on) are
-not part of the desktop bundle and are covered by their own work.
+not part of the desktop bundle. `@volli/font-notices` (VC-408) covers the fonts
+those sites redistribute.

@@ -138,9 +138,10 @@ asarUnpack:
 # asar they would be unreadable without unpacking it.
 #
 # THIRD-PARTY-NOTICES is generated from the resolved production dependency set
-# by scripts/generate-third-party-notices.mjs and committed; `check:notices`
-# (CI) fails when it drifts from what is installed, when a file named here goes
-# missing, and when a package this config ships has no notice covering it. That
+# by the repo-root scripts/generate-third-party-notices.mjs and committed;
+# `check:notices` (CI) fails when it drifts from what is installed, when a file
+# named here goes missing, and when a package this config ships — including a
+# platform-native one the dependency walk skips — has no notice covering it. That
 # check reads THIS block — renaming a destination without telling the generator
 # fails rather than silently shipping to the old path. The Electron Chromium
 # catalogue source is intentionally not checked in: electron-builder resolves

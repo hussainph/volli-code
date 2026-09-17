@@ -4,9 +4,9 @@
  * inside the macOS application bundle — from the resolved production
  * dependency set, and verifies that electron-builder still puts it there.
  *
- *     node apps/desktop/scripts/generate-third-party-notices.mjs             # write it
- *     node apps/desktop/scripts/generate-third-party-notices.mjs --check     # CI gate
- *     node apps/desktop/scripts/generate-third-party-notices.mjs --self-test # the rules' own tests
+ *     node scripts/generate-third-party-notices.mjs             # write it
+ *     node scripts/generate-third-party-notices.mjs --check     # CI gate
+ *     node scripts/generate-third-party-notices.mjs --self-test # the rules' own tests
  *
  * WHY THIS EXISTS (VC-407). The file it replaces covered two Shiki themes and
  * the packages that load them, and electron-builder shipped neither it nor the
@@ -16,40 +16,58 @@
  * derives the list instead, checks the derivation in CI, and fails when the
  * packaging config stops shipping what it produced.
  *
+ * WHY IT IS A ROOT SCRIPT and not `apps/desktop/scripts/` (VC-407 review). It
+ * reads pnpm-workspace.yaml, walks @volli/cli, and collects notices that
+ * @volli/shared and @volli/agent-runtime declare about their own material — a
+ * workspace-wide job that happened to have one consumer. `ARTIFACTS` below is
+ * the whole of what is desktop-specific; a second client or a standalone
+ * server adds an entry there rather than a second copy of this file.
+ * `scripts/check-workspace-licenses.mjs` (VC-411) set this seam.
+ *
  * WHAT IT READS, all locally and with no network:
- *   - apps/desktop and packages/cli package.json, walked transitively through
- *     dependencies + optionalDependencies (see third-party-notices-logic.mjs
- *     for why that closure is the right superset),
+ *   - the artifact's roots (apps/desktop, packages/cli) walked transitively
+ *     through dependencies + optionalDependencies + peerDependencies (see
+ *     third-party-notices-logic.mjs for why that closure is the right
+ *     superset),
  *   - each resolved package's own licence and NOTICE files,
- *   - apps/desktop/notices/sources.json: the reviewed registry of things the
+ *   - `volli.notices` in each first-party package the walk reaches: the
+ *     notices a package keeps beside its OWN vendored material,
+ *   - apps/desktop/notices/sources.json: the reviewed registry of what the
  *     walk cannot see — platform-native packages that install on one OS only,
- *     build-time sources whose output ships, vendored source, and the editor
- *     theme fragment generate-editor-theme-notices.mjs produces,
+ *     build-time sources whose output ships, and the material this app itself
+ *     vendored,
+ *   - the root LICENSE, for the project's own grant and its copyright line,
  *   - pnpm-workspace.yaml's patchedDependencies, for the statement of
  *     modification that a patched dependency requires,
  *   - apps/desktop/electron-builder.yml, for what actually ships.
  *
- * WHAT IT NEVER DOES is decide a licence. A package that publishes no licence
- * file is reported as publishing none; vendored material whose provenance is
- * not recorded is reported as unresolved. Substituting a plausible text would
- * turn a gap a reviewer must close into one nobody can see.
+ * WHAT IT NEVER DOES is decide a licence, or name an owner. A package that
+ * publishes no licence file is reported as publishing none; vendored material
+ * whose provenance is not recorded is reported as unresolved; the copyright
+ * holder is read from LICENSE or reported absent. Substituting a plausible
+ * value would turn a gap a reviewer must close into one nobody can see.
  */
 
 import assert from "node:assert/strict";
 import {
   existsSync,
+  mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 import {
   collectPackageClosure,
+  copyrightHolder,
   declaredLicense,
   groupLicenseBlocks,
   isLicenseFileName,
@@ -58,20 +76,21 @@ import {
   keptNodeModulePackages,
   licensesNeedingReview,
   normalizeLicenseText,
+  packageNoticeDecisions,
   packagingFailures,
-  pendingFragmentDecision,
   renderNoticeDocument,
   repositoryUrl,
+  uncoveredPlatformPackages,
   unpackedPackages,
-  vendoredPathFailures,
   wrapText,
 } from "./third-party-notices-logic.mjs";
 
-const DESKTOP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO_ROOT = resolve(DESKTOP_DIR, "../..");
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const DESKTOP_DIR = resolve(REPO_ROOT, "apps/desktop");
 const NOTICES_DIR = resolve(DESKTOP_DIR, "notices");
 const OUTPUT_PATH = resolve(DESKTOP_DIR, "THIRD-PARTY-NOTICES");
 const BUILDER_CONFIG_PATH = resolve(DESKTOP_DIR, "electron-builder.yml");
+const LICENSE_PATH = resolve(REPO_ROOT, "LICENSE");
 
 /**
  * What the packaged .app must carry, and where. `from` is relative to
@@ -94,21 +113,56 @@ const REQUIRED_RESOURCES = [
 ];
 
 /**
- * The root LICENSE keeps the Apache-2.0 appendix placeholder and no manifest
- * names a holder, so the document says so instead of inventing one. Naming a
- * copyright owner is the project's decision to record, not this script's to
- * guess — apps/desktop/notices/README.md carries it as an open item.
+ * Every distributable this repository produces a notice for. One entry today;
+ * the point of the shape is that a second client or a standalone server is an
+ * entry here, with its own roots and its own packaging adapter, rather than a
+ * fork of this script. Adding one does not touch a rule in the logic module.
  */
-const OWNERSHIP_NOTE = [
-  "Copyright holder: not recorded in this repository. The root LICENSE carries the",
-  'Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]"), no package',
-  "manifest names an author, and there is no NOTICE file. That is an ownership",
-  "decision to record rather than a value to derive, so nothing is asserted here;",
-  "apps/desktop/notices/README.md tracks it as open.",
-].join("\n");
+const ARTIFACTS = [
+  {
+    id: "desktop",
+    description: "the macOS arm64 Volli Code application bundle (app id app.volli.desktop)",
+    // The two roots whose code reaches the bundle. The CLI is not a dependency
+    // of the desktop app: copy-cli.mjs drops its bundle into dist-electron, so
+    // its production closure ships too.
+    roots: [
+      { name: "@volli/desktop", dir: DESKTOP_DIR },
+      { name: "@volli/cli", dir: resolve(REPO_ROOT, "packages/cli") },
+    ],
+    projectDir: DESKTOP_DIR,
+    noticesDir: NOTICES_DIR,
+    outputPath: OUTPUT_PATH,
+    builderConfigPath: BUILDER_CONFIG_PATH,
+    requiredResources: REQUIRED_RESOURCES,
+  },
+];
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const repoRelative = (path) => relative(REPO_ROOT, path).split(sep).join("/");
+
+/**
+ * The ownership paragraph, built from whatever the root LICENSE actually says.
+ * Neither branch names a holder this script chose: one reports the recorded
+ * line, the other reports that no line is recorded. See {@link copyrightHolder}.
+ * @param {string} licenseText
+ */
+function ownershipNoteFrom(licenseText) {
+  const { holder } = copyrightHolder(licenseText);
+  if (holder === null) {
+    return [
+      "Copyright holder: not recorded in this repository. The root LICENSE carries the",
+      'Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]"), no package',
+      "manifest names an author, and there is no NOTICE file. That is an ownership",
+      "decision to record rather than a value to derive, so nothing is asserted here;",
+      "apps/desktop/notices/README.md tracks it as open.",
+    ].join("\n");
+  }
+  return [
+    `Copyright ${holder}, as recorded in the root LICENSE's Apache-2.0 appendix. This`,
+    "document reproduces that line rather than restating it, so the LICENSE remains the",
+    "single place the holder is named.",
+  ].join("\n");
+}
 
 /**
  * Node's own resolution, run from `fromDir`: walk up the directory chain
@@ -218,25 +272,27 @@ function readSourcesRegistry() {
     };
   });
 
+  // This app's OWN vendored material. Anything another workspace package
+  // vendored is declared by that package — see collectPackageOwnedNotices.
   const vendored = registry.vendored.map((entry) => ({
     title: entry.title,
     paths: entry.paths,
+    owner: null,
     upstream: entry.upstream ?? null,
     spdx: entry.spdx ?? null,
     evidence: entry.evidence,
     text: entry.text === undefined ? null : readText(entry.text),
     unresolved: entry.unresolved ?? null,
   }));
-  const pathFailures = vendoredPathFailures(vendored, (path) =>
-    existsSync(resolve(REPO_ROOT, path)),
+  const ownFailures = registry.vendored.flatMap(
+    (entry) =>
+      packageNoticeDecisions({
+        packageName: "apps/desktop/notices/sources.json",
+        entries: [{ ...entry, covers: entry.paths, text: entry.text }],
+        materialExists: (path) => existsSync(resolve(REPO_ROOT, path)),
+        noticeExists: (path) => existsSync(join(NOTICES_DIR, path)),
+      }).failures,
   );
-  if (pathFailures.length > 0) {
-    throw new Error(
-      `notices/sources.json has vendored paths that are not present:\n${pathFailures
-        .map((failure) => `  - ${failure}`)
-        .join("\n")}`,
-    );
-  }
 
   const fragments = registry.fragments.map((entry) => ({
     title: entry.title,
@@ -244,68 +300,64 @@ function readSourcesRegistry() {
     text: normalizeLicenseText(readFileSync(join(NOTICES_DIR, entry.file), "utf8")),
   }));
 
-  const pendingFragments = [];
-  const pendingFailures = [];
-  for (const entry of registry.expectedFragments ?? []) {
-    const absolute = resolve(REPO_ROOT, entry.file);
-    const present = existsSync(absolute);
-    const decision = pendingFragmentDecision({
-      title: entry.title,
-      path: entry.file,
-      marker: entry.marker,
-      present,
-      // Only asked when the file is missing: the search is the expensive half,
-      // and its answer changes nothing once the notice itself is here.
-      markerFound: present ? false : shippedSourceMentions(entry.marker, entry.scan),
-    });
-    if (decision.failure !== null) pendingFailures.push(decision.failure);
-    if (decision.include) {
-      fragments.push({
-        title: entry.title,
-        source: `${entry.file} — ${entry.source}`,
-        text: normalizeLicenseText(readFileSync(absolute, "utf8")),
-      });
-    } else {
-      pendingFragments.push({
-        title: entry.title,
-        path: entry.file,
-        marker: entry.marker,
-        pending: noteOf({ note: entry.pending }),
-      });
-    }
-  }
-
-  return { platformNative, toolchain, vendored, fragments, pendingFragments, pendingFailures };
+  return { platformNative, toolchain, vendored, fragments, registryFailures: ownFailures };
 }
 
 /**
- * Does any shipped source file under `roots` mention `marker`?
+ * Collect the notices each first-party package declares about its OWN vendored
+ * material, and the failures in those declarations.
  *
- * This is the evidence half of {@link pendingFragmentDecision}: a catalog that
- * landed without its attribution file announces itself in the source that
- * carries it. Only source trees that reach the bundle are searched, and build
- * output and dependencies are skipped — a match inside node_modules would say
- * nothing about what this repository ships.
+ * Only packages the dependency walk actually reached are asked, which is what
+ * makes the coverage structural: a package whose code is in the artifact is a
+ * package whose declarations are read, and one that dropped out of the closure
+ * stops contributing notices in the same step it stops shipping.
  *
- * @param {string} marker @param {string[]} roots repo-relative directories
+ * @param {{ name: string, dir: string }[]} firstParty
  */
-function shippedSourceMentions(marker, roots) {
-  const skip = new Set(["node_modules", "dist", "dist-electron", "release", ".git"]);
-  const stack = roots.map((root) => resolve(REPO_ROOT, root)).filter((dir) => existsSync(dir));
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (skip.has(entry.name)) continue;
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(path);
+function collectPackageOwnedNotices(firstParty) {
+  const vendored = [];
+  const documents = [];
+  const failures = [];
+
+  for (const pkg of firstParty.toSorted((a, b) => (a.name < b.name ? -1 : 1))) {
+    const manifest = readManifest(pkg.dir);
+    if (manifest === null) continue;
+    const decisions = packageNoticeDecisions({
+      packageName: pkg.name,
+      entries: manifest.volli?.notices,
+      materialExists: (path) => existsSync(resolve(pkg.dir, path)),
+      noticeExists: (path) => existsSync(resolve(pkg.dir, path)),
+    });
+    failures.push(...decisions.failures);
+
+    for (const { title, entry, document } of decisions.include) {
+      const covers = entry.covers.map((path) => `${repoRelative(resolve(pkg.dir, path))}`);
+      if (document !== null) {
+        documents.push({
+          title,
+          source: `${repoRelative(resolve(pkg.dir, document))} — ${pkg.name}'s own attribution for ${covers.join(", ")}`,
+          text: normalizeLicenseText(readFileSync(resolve(pkg.dir, document), "utf8")),
+        });
         continue;
       }
-      if (!entry.isFile()) continue;
-      if (readFileSync(path, "utf8").includes(marker)) return true;
+      vendored.push({
+        title,
+        paths: covers,
+        owner: pkg.name,
+        upstream: entry.upstream ?? null,
+        spdx: entry.spdx ?? null,
+        evidence: Array.isArray(entry.evidence) ? entry.evidence.join(" ") : entry.evidence,
+        text:
+          typeof entry.text === "string"
+            ? normalizeLicenseText(readFileSync(resolve(pkg.dir, entry.text), "utf8"))
+            : null,
+        unresolved: Array.isArray(entry.unresolved)
+          ? entry.unresolved.join(" ")
+          : (entry.unresolved ?? null),
+      });
     }
   }
-  return false;
+  return { vendored, documents, failures };
 }
 
 /**
@@ -327,17 +379,12 @@ function readPatchedDependencies() {
     .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-function buildModel() {
-  const builderConfig = parseYaml(readFileSync(BUILDER_CONFIG_PATH, "utf8"));
+function buildModel(artifact) {
+  const builderConfig = parseYaml(readFileSync(artifact.builderConfigPath, "utf8"));
   const keptNames = new Set(keptNodeModulePackages(builderConfig));
 
   const closure = collectPackageClosure({
-    roots: [
-      { name: "@volli/desktop", dir: DESKTOP_DIR },
-      // The CLI is not a dependency of the desktop app: copy-cli.mjs drops its
-      // bundle into dist-electron, so its production closure ships too.
-      { name: "@volli/cli", dir: resolve(REPO_ROOT, "packages/cli") },
-    ],
+    roots: artifact.roots,
     readManifest,
     resolveDependency: resolveDependencyDir,
   });
@@ -355,22 +402,33 @@ function buildModel() {
   }));
 
   const registry = readSourcesRegistry();
+  // The roots are themselves first-party and can declare their own notices,
+  // but the walk records DEPENDENCIES, never the roots it started from.
+  const owned = collectPackageOwnedNotices([...closure.firstParty, ...artifact.roots]);
   return {
     projectLicenseName: "Apache-2.0",
     projectLicenseFile: "LICENSE",
-    ownershipNote: OWNERSHIP_NOTE,
-    shippedResources: REQUIRED_RESOURCES,
+    ownershipNote: ownershipNoteFrom(readFileSync(LICENSE_PATH, "utf8")),
+    shippedResources: artifact.requiredResources,
     // Names without versions: these are this repository's own modules, and
     // pinning the app's release version here would churn the notice on every
     // canary bump without telling a reader anything about licensing.
     firstParty: [
       ...closure.firstParty.map((pkg) => pkg.name),
-      "@volli/cli",
-      "@volli/desktop",
+      ...artifact.roots.map((root) => root.name),
     ].toSorted(),
     entries,
     patched: readPatchedDependencies(),
     ...registry,
+    // A package's own declarations sit beside the desktop registry's, sorted
+    // together so the document does not depend on which source supplied them.
+    vendored: [...registry.vendored, ...owned.vendored].toSorted((a, b) =>
+      a.title < b.title ? -1 : a.title > b.title ? 1 : 0,
+    ),
+    fragments: [...registry.fragments, ...owned.documents].toSorted((a, b) =>
+      a.title < b.title ? -1 : a.title > b.title ? 1 : 0,
+    ),
+    noticeFailures: [...registry.registryFailures, ...owned.failures],
     builderConfig,
     skippedPlatformPackages,
   };
@@ -386,21 +444,31 @@ function coveredNamesOf(model) {
   ]);
 }
 
-function generate() {
-  const model = buildModel();
+function generate(artifact) {
+  const model = buildModel(artifact);
   const document = renderNoticeDocument(model);
+  const shippedNames = new Set([
+    ...keptNodeModulePackages(model.builderConfig),
+    ...unpackedPackages(model.builderConfig),
+  ]);
   const failures = [
     ...packagingFailures({
       builderConfig: model.builderConfig,
       coveredNames: coveredNamesOf(model),
-      requiredResources: REQUIRED_RESOURCES,
-      resourceExists: (from) => existsSync(resolve(DESKTOP_DIR, from)),
+      requiredResources: artifact.requiredResources,
+      resourceExists: (from) => existsSync(resolve(artifact.projectDir, from)),
       resourceIsNonEmpty: (from) =>
-        readFileSync(resolve(DESKTOP_DIR, from), "utf8").trim().length > 0,
+        readFileSync(resolve(artifact.projectDir, from), "utf8").trim().length > 0,
     }),
-    // A notice this repository expects but does not own — the shared theme
-    // catalog's attribution — whose material has landed without it.
-    ...model.pendingFailures,
+    // A platform package the walk skipped, that the packaging config ships, and
+    // that no reviewed entry pins.
+    ...uncoveredPlatformPackages({
+      skipped: model.skippedPlatformPackages,
+      shippedNames,
+      registeredNames: new Set(model.platformNative.map((entry) => entry.name)),
+    }),
+    // A workspace package whose declared notice and vendored material disagree.
+    ...model.noticeFailures,
   ];
   return { model, document, failures };
 }
@@ -439,46 +507,58 @@ function reportIndexDrift(current, generated) {
   }
 }
 
-function reportPackagingFailures(failures) {
-  console.error("Packaging coverage check failed:");
+function reportCoverageFailures(failures) {
+  console.error("Notice coverage check failed:");
   for (const failure of failures) console.error(`  - ${failure}`);
   console.error(
-    "\nFix apps/desktop/electron-builder.yml (or notices/sources.json) so every shipped\n" +
-      "package is covered and the notices reach Contents/Resources.",
+    "\nFix apps/desktop/electron-builder.yml, apps/desktop/notices/sources.json, or the\n" +
+      'owning package\'s "volli.notices", so every shipped package is covered and the\n' +
+      "notices reach Contents/Resources.",
   );
 }
 
 function main({ check }) {
-  const { model, document, failures } = generate();
-  if (failures.length > 0) {
-    reportPackagingFailures(failures);
-    process.exit(1);
-  }
+  const artifact = ARTIFACTS[0];
+  const { model, document, failures } = generate(artifact);
   const packageCount = model.entries.length + model.platformNative.length + model.toolchain.length;
 
   if (check) {
-    const current = existsSync(OUTPUT_PATH) ? readFileSync(OUTPUT_PATH, "utf8") : null;
+    if (failures.length > 0) {
+      reportCoverageFailures(failures);
+      process.exit(1);
+    }
+    const current = existsSync(artifact.outputPath)
+      ? readFileSync(artifact.outputPath, "utf8")
+      : null;
     if (current === document) {
       console.log(
-        `${repoRelative(OUTPUT_PATH)} is current (${packageCount} packages, ` +
+        `${repoRelative(artifact.outputPath)} is current (${packageCount} packages, ` +
           `${model.vendored.length} vendored sources) and electron-builder ships it.`,
       );
       return;
     }
     console.error(
       current === null
-        ? `${repoRelative(OUTPUT_PATH)} is missing.`
-        : `${repoRelative(OUTPUT_PATH)} is out of date with the installed production dependency set.`,
+        ? `${repoRelative(artifact.outputPath)} is missing.`
+        : `${repoRelative(artifact.outputPath)} is out of date with the installed production dependency set.`,
     );
     if (current !== null) reportIndexDrift(current, document);
     console.error(
       "\nRegenerate it and commit the result:\n" +
-        "  node apps/desktop/scripts/generate-third-party-notices.mjs\n",
+        "  node scripts/generate-third-party-notices.mjs\n",
     );
     process.exit(1);
   }
 
-  writeFileSync(OUTPUT_PATH, document);
+  // WRITE FIRST, THEN REPORT (VC-407 review). Refusing to write while a
+  // coverage failure stands made the one command that fixes a stale notice
+  // unavailable exactly when something else was also wrong — and the two
+  // faults are independent: a package with no notice does not make the
+  // regenerated document less correct than the committed one. The exit code
+  // still fails, so nothing becomes green by regenerating; the difference is
+  // that the author can now fix both in one pass instead of being blocked on
+  // the order they happened to appear.
+  writeFileSync(artifact.outputPath, document);
   console.log(
     `Wrote ${repoRelative(OUTPUT_PATH)}: ${packageCount} packages ` +
       `(${model.entries.length} resolved, ${model.platformNative.length} native, ` +
@@ -515,8 +595,19 @@ function fakeTree(tree) {
 function selfTestClosure() {
   const tree = {
     "/app": { name: "app", dependencies: { alpha: "1" }, optionalDependencies: { native: "1" } },
-    "/store/alpha": { name: "alpha", version: "1.0.0", dependencies: { beta: "1" } },
+    "/store/alpha": {
+      name: "alpha",
+      version: "1.0.0",
+      dependencies: { beta: "1" },
+      // A required peer is code alpha executes, so it ships. An optional peer
+      // is the type-only case (@types/react under every Radix primitive) and
+      // must not enter a document that says everything in it is in the bundle.
+      peerDependencies: { needed: "1", types: "1" },
+      peerDependenciesMeta: { types: { optional: true } },
+    },
     "/store/beta": { name: "beta", version: "2.0.0", dependencies: { alpha: "1" } },
+    "/store/needed": { name: "needed", version: "5.0.0" },
+    "/store/types": { name: "types", version: "6.0.0" },
     "/store/native": { name: "native", version: "3.0.0", os: ["darwin"], cpu: ["arm64"] },
     "/cli": { name: "cli", dependencies: { "@volli/shared": "workspace:*", gone: "1" } },
     "/cli/node_modules/@volli/shared": { name: "@volli/shared", version: "0.0.1" },
@@ -530,8 +621,12 @@ function selfTestClosure() {
   });
   assert.deepEqual(
     closure.thirdParty.map((pkg) => `${pkg.name}@${pkg.version}`),
-    ["alpha@1.0.0", "beta@2.0.0"],
-    "closure follows transitive dependencies and terminates on a cycle",
+    ["alpha@1.0.0", "beta@2.0.0", "needed@5.0.0"],
+    "transitive deps and REQUIRED peers ship; the walk terminates on a cycle",
+  );
+  assert.ok(
+    !closure.thirdParty.some((pkg) => pkg.name === "types"),
+    "an optional peer is the type-only case and never enters the shipped list",
   );
   assert.deepEqual(
     closure.firstParty.map((pkg) => pkg.name),
@@ -640,22 +735,9 @@ function selfTestPackagingRules() {
   });
   assert.deepEqual(ok, [], "a config that ships all resources and covers every package passes");
 
-  assert.deepEqual(
-    vendoredPathFailures(
-      [
-        { title: "present", paths: ["one", "two"] },
-        { title: "missing", paths: ["gone"] },
-      ],
-      (path) => path !== "gone",
-    ),
-    ['vendored source "missing" names a missing path: gone'],
-    "a vendored path that disappears fails the notice check",
-  );
-  assert.deepEqual(
-    vendoredPathFailures([{ title: "malformed", paths: [] }], () => true),
-    ['vendored source "malformed" has no paths recorded.'],
-    "a vendored entry without paths fails the notice check",
-  );
+  // Vendored-path validation moved onto packageNoticeDecisions, which now runs
+  // over both the desktop registry and each package's own declarations — see
+  // selfTestPackageNotices for the rot and missing-notice cases.
 
   const missingResource = packagingFailures({
     builderConfig: { ...builderConfig, extraResources: [] },
@@ -805,6 +887,7 @@ function renderFixtureModel() {
       {
         title: "Known",
         paths: ["a/b"],
+        owner: null,
         upstream: "https://example.invalid/known",
         spdx: "MIT",
         evidence: "e",
@@ -812,8 +895,19 @@ function renderFixtureModel() {
         unresolved: null,
       },
       {
+        title: "Owned by a package",
+        paths: ["packages/thing/src/x.ts"],
+        owner: "@volli/thing",
+        upstream: "https://example.invalid/owned",
+        spdx: "MIT",
+        evidence: "e",
+        text: "OWNED VENDORED TEXT",
+        unresolved: null,
+      },
+      {
         title: "Unknown",
         paths: ["c/d"],
+        owner: null,
         upstream: null,
         spdx: null,
         evidence: "e",
@@ -822,14 +916,9 @@ function renderFixtureModel() {
       },
     ],
     patched: [{ name: "alpha", version: "1.0.0", patch: "patches/alpha.patch" }],
-    fragments: [{ title: "Editor theme data", source: "s", text: "FRAGMENT TEXT" }],
-    pendingFragments: [
-      {
-        title: "Catalog notice",
-        path: "packages/shared/NOTICE.md",
-        marker: "Upstream-Catalog",
-        pending: "why it is pending",
-      },
+    fragments: [
+      { title: "Editor theme data", source: "s", text: "FRAGMENT TEXT" },
+      { title: "Theme catalog", source: "packages/thing/NOTICE.md", text: "CATALOG TEXT" },
     ],
   };
 }
@@ -849,12 +938,21 @@ function selfTestRendering() {
     "native@3.0.0 — LGPL-3.0-or-later",
     "patches/alpha.patch",
     "9. ADDITIONAL NOTICES (2)",
-    "Marker: Upstream-Catalog",
-    "Status: PENDING",
-    "why it is pending",
+    "CATALOG TEXT",
+    "OWNED VENDORED TEXT",
+    "Declared by: @volli/thing",
+    "7. VENDORED SOURCES (3)",
   ]) {
     assert.ok(document.includes(expected), `rendered document is missing: ${expected}`);
   }
+  assert.ok(
+    !/Status: PENDING|Marker:/.test(document),
+    "the pending-fragment concept is gone: a notice is folded in or its absence fails",
+  );
+  assert.ok(
+    document.indexOf("Declared by: @volli/thing") > document.indexOf("Source: Known"),
+    "a package-owned vendored entry renders beside the registry's own",
+  );
   assert.ok(
     document.includes("4. PACKAGES THAT PUBLISH NO LICENCE FILE (1)") &&
       document.includes("declared: ISC"),
@@ -869,37 +967,277 @@ function selfTestRendering() {
   );
 }
 
-function selfTestExpectedFragments() {
-  const fragment = {
-    title: "Shared theme catalog",
-    path: "packages/shared/THIRD-PARTY-THEMES.md",
-    marker: "iTerm2-Color-Schemes",
-  };
-  assert.deepEqual(
-    pendingFragmentDecision({ ...fragment, present: true, markerFound: true }),
-    { include: true, failure: null },
-    "a notice that is here is folded in",
-  );
-  assert.deepEqual(
-    pendingFragmentDecision({ ...fragment, present: true, markerFound: false }),
-    { include: true, failure: null },
-    "a notice that is here is folded in even before its material ships",
-  );
-  assert.deepEqual(
-    pendingFragmentDecision({ ...fragment, present: false, markerFound: false }),
-    { include: false, failure: null },
-    "neither the material nor its notice: pending, and the check stays green",
-  );
-  const landedWithout = pendingFragmentDecision({
-    ...fragment,
-    present: false,
-    markerFound: true,
+/**
+ * Run the declaration rule against a fixture package whose tree is exactly
+ * `present`. Both existence probes read the same list, because on disk a
+ * notice and the material it covers live in the same package directory.
+ */
+function decideFixtureNotices(entries, present) {
+  return packageNoticeDecisions({
+    packageName: "@volli/shared",
+    entries,
+    materialExists: (path) => present.includes(path),
+    noticeExists: (path) => present.includes(path),
   });
-  assert.equal(landedWithout.include, false);
+}
+
+/**
+ * The rule that replaced the marker grep. The case that matters most is the
+ * one the grep got wrong: material in the tree, notice file absent.
+ */
+function selfTestPackageNotices() {
+  const themeEntry = {
+    title: "Ghostty terminal theme catalog",
+    covers: ["src/ghostty-theme-sources.generated.ts"],
+    document: "THIRD-PARTY-THEMES.md",
+  };
+  const run = decideFixtureNotices;
+
+  const bothHere = run(
+    [themeEntry],
+    ["src/ghostty-theme-sources.generated.ts", "THIRD-PARTY-THEMES.md"],
+  );
+  assert.deepEqual(bothHere.failures, []);
+  assert.deepEqual(
+    bothHere.include.map((item) => item.document),
+    ["THIRD-PARTY-THEMES.md"],
+    "material and notice both present: the notice is folded in",
+  );
+
+  // THE REGRESSION THIS RULE EXISTS FOR. The Ghostty catalog shipped as
+  // `ghostty-theme-sources.generated.ts`, whose 463 entries say "iTerm2 Dark
+  // Background" and never the marker "iTerm2-Color-Schemes". The old grep
+  // therefore concluded the material had not shipped, stayed green, and would
+  // have packaged the catalog with no attribution. Keyed on the file instead,
+  // the same state is a failure that names both sides.
+  const materialWithoutNotice = run([themeEntry], ["src/ghostty-theme-sources.generated.ts"]);
+  assert.deepEqual(materialWithoutNotice.include, [], "nothing is folded in");
+  assert.equal(materialWithoutNotice.failures.length, 1);
   assert.match(
-    landedWithout.failure,
-    /iTerm2-Color-Schemes.*THIRD-PARTY-THEMES\.md/s,
-    "material shipping without its notice fails, naming both the marker and the file",
+    materialWithoutNotice.failures[0],
+    /THIRD-PARTY-THEMES\.md.*no attribution/s,
+    "material present with its notice absent fails, naming the missing notice",
+  );
+
+  // The mirror: a declaration whose material is gone has rotted. Silence here
+  // would let a mistyped path masquerade as coverage.
+  const noticeWithoutMaterial = run([themeEntry], ["THIRD-PARTY-THEMES.md"]);
+  assert.deepEqual(noticeWithoutMaterial.include, []);
+  assert.match(
+    noticeWithoutMaterial.failures[0],
+    /covers.*not in this package/s,
+    "a covers path that no longer exists is named, not ignored",
+  );
+
+  // A package that declares nothing contributes nothing, and is not an error.
+  assert.deepEqual(
+    packageNoticeDecisions({
+      packageName: "@volli/quiet",
+      entries: undefined,
+      materialExists: () => true,
+      noticeExists: () => true,
+    }),
+    { include: [], failures: [] },
+    "most packages declare no notices and must stay silent",
+  );
+
+  // Malformed declarations fail rather than silently covering nothing.
+  const malformed = [
+    [{ title: "no covers", document: "N.md" }, /records no "covers" paths/],
+    [{ covers: ["a"], document: "N.md" }, /has no title/],
+    [{ title: "bare", covers: ["a"] }, /neither a licence text, a notice document/],
+    [{ title: "bad path", covers: [42] }, /not a path/],
+  ];
+  for (const [entry, pattern] of malformed) {
+    const result = run([entry], ["a", "N.md"]);
+    assert.deepEqual(result.include, [], `${JSON.stringify(entry)} must contribute nothing`);
+    assert.match(result.failures[0], pattern);
+  }
+  assert.match(
+    packageNoticeDecisions({
+      packageName: "@volli/x",
+      entries: "not an array",
+      materialExists: () => true,
+      noticeExists: () => true,
+    }).failures[0],
+    /must be an array/,
+  );
+
+  // An "unresolved" entry is legitimate and needs no licence text: that is how
+  // provenance nobody has established travels without being invented.
+  const unresolved = run(
+    [{ title: "APCA", covers: ["src/theme/color.ts"], unresolved: "what is missing" }],
+    ["src/theme/color.ts"],
+  );
+  assert.deepEqual(unresolved.failures, []);
+  assert.equal(unresolved.include.length, 1);
+  assert.equal(unresolved.include[0].document, null, "it renders as vendored, not as a document");
+}
+
+/** The platform-exclusion hole: skipped, shipped, and pinned by nobody. */
+function selfTestPlatformCoverage() {
+  const shippedNames = new Set(["@img", "node-pty"]);
+  assert.deepEqual(
+    uncoveredPlatformPackages({
+      skipped: ["@img/sharp-darwin-arm64@0.35.4"],
+      shippedNames,
+      registeredNames: new Set(["@img/sharp-darwin-arm64"]),
+    }),
+    [],
+    "a skipped platform package the registry pins is covered",
+  );
+  assert.deepEqual(
+    uncoveredPlatformPackages({
+      skipped: ["@esbuild/linux-x64@0.25.0"],
+      shippedNames,
+      registeredNames: new Set(),
+    }),
+    [],
+    "a skipped platform package that ships nowhere needs no notice",
+  );
+  const uncovered = uncoveredPlatformPackages({
+    skipped: ["@img/sharp-libvips-darwin-arm64@1.3.3"],
+    shippedNames,
+    registeredNames: new Set(["@img/sharp-darwin-arm64"]),
+  });
+  assert.equal(uncovered.length, 1, "a fourth native package under a shipped scope is named");
+  assert.match(uncovered[0], /@img\/sharp-libvips-darwin-arm64@1\.3\.3.*platformNative/s);
+  assert.deepEqual(
+    uncoveredPlatformPackages({
+      skipped: ["node-pty@1.0.0"],
+      shippedNames,
+      registeredNames: new Set(),
+    }).length,
+    1,
+    "a shipped package named outright, not by scope, is caught too",
+  );
+}
+
+/** Ownership is read from LICENSE and never chosen here (VC-407 / VC-414). */
+function selfTestOwnership() {
+  const placeholder = "   Copyright [yyyy] [name of copyright owner]\n\n   Licensed under";
+  assert.deepEqual(
+    copyrightHolder(placeholder),
+    { holder: null, line: "[yyyy] [name of copyright owner]" },
+    "Apache's own appendix placeholder is not a holder",
+  );
+  assert.deepEqual(copyrightHolder("   Copyright 2026 Hussain Phalasiya\n"), {
+    holder: "2026 Hussain Phalasiya",
+    line: "2026 Hussain Phalasiya",
+  });
+  assert.deepEqual(copyrightHolder("no copyright line here"), { holder: null, line: null });
+
+  assert.match(ownershipNoteFrom(placeholder), /not recorded in this repository/);
+  assert.ok(!/Hussain/.test(ownershipNoteFrom(placeholder)), "the placeholder branch names nobody");
+  const named = ownershipNoteFrom("   Copyright 2026 Hussain Phalasiya\n");
+  assert.match(named, /Copyright 2026 Hussain Phalasiya/);
+  assert.ok(
+    !/not recorded/.test(named),
+    "once LICENSE names a holder the document stops saying it is unrecorded",
+  );
+}
+
+/**
+ * The IO half, against real directories in a temp tree. These functions read
+ * the disk, so a fixture that is not on disk tests nothing about them; the two
+ * defects this pipeline actually shipped (a build script reproduced as a
+ * licence, a marker that never matched) both lived here rather than in a rule.
+ */
+function selfTestFilesystem() {
+  const root = mkdtempSync(join(tmpdir(), "volli-notices-"));
+  try {
+    const pkg = join(root, "node_modules", "widget");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "widget", version: "1.0.0" }));
+    writeFileSync(join(pkg, "LICENSE"), "WIDGET TERMS\r\n");
+    writeFileSync(join(pkg, "NOTICE"), "WIDGET NOTICE\n");
+    // The cytoscape case, exactly: a build script at the package root whose
+    // name begins with "license-".
+    writeFileSync(join(pkg, "license-update.mjs"), "import fs from 'fs';\n");
+    writeFileSync(join(pkg, "LICENSE-MIT"), "SECOND GRANT\n");
+    writeFileSync(join(pkg, "licence.txt"), "");
+    mkdirSync(join(pkg, "LICENSES"));
+
+    const files = licenseFilesIn(pkg);
+    assert.deepEqual(
+      files.map((entry) => entry.file),
+      ["LICENSE", "LICENSE-MIT", "NOTICE"],
+      "a real licence, a suffixed one and a NOTICE are read; a .mjs build script is not",
+    );
+    assert.equal(
+      files.find((entry) => entry.file === "NOTICE").kind,
+      "notice",
+      "NOTICE files are classified as notices, so Apache-2.0 §4(d) text travels",
+    );
+    assert.equal(files[0].text, "WIDGET TERMS\n", "CRLF is folded on read");
+    assert.ok(
+      !files.some((entry) => entry.file === "licence.txt"),
+      "an empty licence file is dropped rather than printed as blank terms",
+    );
+    assert.ok(
+      !files.some((entry) => entry.file === "LICENSES"),
+      "a directory named like a licence is not read as one",
+    );
+
+    // resolveDependencyDir walks up and skips node_modules segments.
+    const nested = join(pkg, "sub");
+    mkdirSync(nested);
+    assert.equal(resolveDependencyDir(nested, "widget"), realpathSync(pkg));
+    assert.equal(resolveDependencyDir(root, "absent"), null);
+
+    // collectPackageOwnedNotices, end to end against a real package directory.
+    const owner = join(root, "owned");
+    mkdirSync(join(owner, "src"), { recursive: true });
+    writeFileSync(join(owner, "src", "vendored.ts"), "// material\n");
+    writeFileSync(join(owner, "NOTICE.md"), "OWNED NOTICE TEXT\n");
+    writeFileSync(
+      join(owner, "package.json"),
+      JSON.stringify({
+        name: "@volli/owned",
+        volli: {
+          notices: [{ title: "Owned catalog", covers: ["src/vendored.ts"], document: "NOTICE.md" }],
+        },
+      }),
+    );
+    const collected = collectPackageOwnedNotices([{ name: "@volli/owned", dir: owner }]);
+    assert.deepEqual(collected.failures, []);
+    assert.equal(collected.documents.length, 1);
+    assert.equal(collected.documents[0].text, "OWNED NOTICE TEXT\n");
+    assert.match(collected.documents[0].source, /NOTICE\.md/);
+
+    // Delete the notice, keep the material: the failure the grep could not see.
+    rmSync(join(owner, "NOTICE.md"));
+    const broken = collectPackageOwnedNotices([{ name: "@volli/owned", dir: owner }]);
+    assert.deepEqual(broken.documents, []);
+    assert.match(broken.failures[0], /@volli\/owned.*no attribution/s);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The live tree has to satisfy the rules too. A self-test that only ever sees
+ * fixtures can pass while this repository's own declarations are malformed.
+ */
+function selfTestLiveDeclarations() {
+  const owned = collectPackageOwnedNotices(
+    ["packages/shared", "packages/agent-runtime"].map((dir) => ({
+      name: dir,
+      dir: resolve(REPO_ROOT, dir),
+    })),
+  );
+  assert.deepEqual(
+    owned.failures,
+    [],
+    "this repository's own package-declared notices must satisfy the rule",
+  );
+  assert.ok(
+    owned.documents.length + owned.vendored.length >= 3,
+    "shared declares the theme catalog and APCA; agent-runtime declares pi-automode",
+  );
+  assert.ok(
+    owned.documents.some((doc) => /THIRD-PARTY-THEMES\.md/.test(doc.source)),
+    "the Ghostty theme attribution is collected from @volli/shared, not grepped for",
   );
 }
 
@@ -908,10 +1246,33 @@ function selfTest() {
   selfTestDeclarations();
   selfTestGrouping();
   selfTestPackagingRules();
-  selfTestExpectedFragments();
+  selfTestPackageNotices();
+  selfTestPlatformCoverage();
+  selfTestOwnership();
+  selfTestFilesystem();
+  selfTestLiveDeclarations();
   selfTestRendering();
   console.log("generate-third-party-notices self-test passed");
 }
 
-if (process.argv.includes("--self-test")) selfTest();
-else main({ check: process.argv.includes("--check") });
+/**
+ * Whether this file is the entry point rather than an import, compared through
+ * `realpathSync` on BOTH sides. The obvious `import.meta.url === argv[1]` form
+ * answers "no" whenever the invoking path crosses a symlink (macOS /tmp ->
+ * /private/tmp, a worktree behind a link), and a gate that answers "no" exits 0
+ * — a silent pass, the one outcome a gate must never produce. Same reasoning,
+ * and same shape, as scripts/check-workspace-licenses.mjs.
+ */
+function invokedAsScript() {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsScript()) {
+  if (process.argv.includes("--self-test")) selfTest();
+  else main({ check: process.argv.includes("--check") });
+}

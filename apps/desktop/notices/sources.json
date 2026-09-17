@@ -1,8 +1,16 @@
 {
   "$comment": [
     "The reviewed half of the desktop licence notice: everything a dependency walk",
-    "cannot see. generate-third-party-notices.mjs reads this file, folds it into",
-    "THIRD-PARTY-NOTICES, and fails when an entry drifts from what is installed.",
+    "cannot see, AND that this app itself owns. scripts/generate-third-party-notices.mjs",
+    "reads this file, folds it into THIRD-PARTY-NOTICES, and fails when an entry drifts",
+    "from what is installed.",
+    "",
+    "Material another workspace package vendored is NOT recorded here. That package",
+    "declares it in its own package.json under \"volli.notices\", so the declaration and",
+    "the files it names move together under one review — see packages/shared and",
+    "packages/agent-runtime. The generator collects those from every first-party package",
+    "in the dependency closure.",
+    "",
     "See README.md in this directory for how to edit it and what is still open."
   ],
   "platformNative": [
@@ -17,7 +25,10 @@
         "darwin/arm64 only, and the notice has to render the same on every host."
       ],
       "text": "texts/img-sharp-darwin-arm64.LICENSE.txt",
-      "verify": { "file": "LICENSE", "mode": "equals" }
+      "verify": {
+        "file": "LICENSE",
+        "mode": "equals"
+      }
     },
     {
       "name": "@img/sharp-libvips-darwin-arm64",
@@ -32,7 +43,10 @@
         "conclusion — see section 10 and notices/README.md."
       ],
       "text": "texts/img-sharp-libvips-darwin-arm64.NOTICE.txt",
-      "verify": { "file": "README.md", "mode": "contains" }
+      "verify": {
+        "file": "README.md",
+        "mode": "contains"
+      }
     },
     {
       "name": "@vscode/ripgrep-darwin-arm64",
@@ -44,7 +58,10 @@
         "platform reason as the two @img packages above."
       ],
       "text": "texts/vscode-ripgrep-darwin-arm64.LICENSE.txt",
-      "verify": { "file": "LICENSE", "mode": "equals" }
+      "verify": {
+        "file": "LICENSE",
+        "mode": "equals"
+      }
     }
   ],
   "toolchain": [
@@ -84,31 +101,16 @@
       "text": "texts/shadcn-ui.LICENSE.txt"
     },
     {
-      "title": "pi-automode path canonicalization and shell lexer",
-      "paths": [
-        "packages/agent-runtime/src/authority/vendor/paths.ts",
-        "packages/agent-runtime/src/authority/vendor/shell.ts"
-      ],
-      "upstream": "https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)",
-      "spdx": "MIT",
-      "evidence": "packages/agent-runtime/src/authority/vendor/README.md pins the upstream repository, revision and tag, and lists file-by-file what was taken and what diverges. The licence text is upstream's LICENSE.md at that revision.",
-      "text": "texts/pi-automode.LICENSE.txt"
-    },
-    {
-      "title": "APCA-W3 lightness-contrast formulation in @volli/shared",
-      "paths": ["packages/shared/src/theme/color.ts"],
-      "upstream": "https://github.com/Myndex/apca-w3 (apca-w3 0.1.9, a devDependency of @volli/shared used only by its tests)",
-      "spdx": null,
-      "evidence": "The module's own comments: @volli/shared carries no runtime dependencies, so the contrast math is hand-written, and its APCA constants are described there as 'APCA-W3 0.1.9 constants (the W3C-licensed sRGBcalc formulation)' and pinned against the apca-w3 package by test.",
-      "unresolved": "Known: the shipped code is written in this repository, not copied, and the apca-w3 package itself is a devDependency that never reaches the bundle; what the shipped file reproduces is the published APCA-W3 constant set and formulation. Not resolved here: whether that reproduction carries any attribution or licence obligation of its own. That is a judgement about a published algorithm rather than a packaging fact, so this entry records it and asserts nothing; it is carried in notices/README.md as an open item for the separate licensing review."
-    },
-    {
       "title": "AI Elements chat primitives",
-      "paths": ["apps/desktop/src/renderer/src/components/ui/ai-elements/"],
-      "upstream": null,
-      "spdx": null,
-      "evidence": "The directory name, and docs/plans/attachments.md calling prompt-input.tsx vendored. The commit that introduced the files (02a2442) records no origin.",
-      "unresolved": "Known: these files were copied in rather than written here, and the naming follows the AI Elements component registry. Not recorded anywhere in this repository: which upstream project and revision they came from, and under which licence. Nothing is asserted for them here and no licence text is reproduced. To close this, confirm the upstream project and revision, add them with the licence text to this registry, and regenerate. Until then the entry stands as an open item in notices/README.md."
+      "paths": [
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/prompt-input.tsx",
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/conversation.tsx",
+        "apps/desktop/src/renderer/src/components/ui/ai-elements/message.tsx"
+      ],
+      "upstream": "https://github.com/vercel/ai-elements at revision 9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)",
+      "spdx": "Apache-2.0",
+      "evidence": "apps/desktop/src/renderer/src/components/ui/ai-elements/PROVENANCE.md (VC-410) establishes the upstream project, the revision, and the Apache-2.0 grant, and records how the revision was recovered from content because it was never pinned. Each of the three files carries an Apache-2.0 §4(b) modification notice pointing at that document, held in place by vendor-provenance.test.ts. reasoning.tsx and shimmer.tsx are deliberately NOT attributed there: two import lines each is all that survives of upstream in them.",
+      "text": "texts/ai-elements.LICENSE.txt"
     }
   ],
   "fragments": [
@@ -116,26 +118,6 @@
       "title": "Bundled editor theme data",
       "file": "editor-themes.NOTICE",
       "source": "apps/desktop/notices/editor-themes.NOTICE, generated by scripts/generate-editor-theme-notices.mjs from shikijs/textmate-grammars-themes packages/tm-themes/NOTICE."
-    }
-  ],
-  "expectedFragments": [
-    {
-      "title": "Shared terminal theme catalog (iTerm2-Color-Schemes)",
-      "file": "packages/shared/THIRD-PARTY-THEMES.md",
-      "source": "the shared package's own attribution file for the Ghostty terminal theme catalog, folded in verbatim because the .app ships this document and not that one.",
-      "marker": "iTerm2-Color-Schemes",
-      "scan": ["packages/shared/src", "apps/desktop/src"],
-      "pending": [
-        "The shared Ghostty terminal theme catalog and its iTerm2-Color-Schemes attribution",
-        "are being written on another ticket's branch; neither the catalog nor the file is in",
-        "this tree, so nothing is reproduced for it and nothing is asserted about it. The",
-        "integration is mechanical and already wired: when packages/shared/THIRD-PARTY-THEMES.md",
-        "lands, the generator folds it into this document verbatim, and check:notices fails",
-        "until the regenerated notice is committed. If the catalog lands WITHOUT that file —",
-        "detected by the marker above appearing in shipped source — the check fails instead of",
-        "packaging themes with no attribution. Per-theme licence ambiguity inside that catalog",
-        "belongs to the review that owns it, not to this generator."
-      ]
     }
   ]
 }

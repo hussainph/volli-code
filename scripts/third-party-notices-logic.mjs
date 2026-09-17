@@ -1,5 +1,5 @@
 /**
- * The pure half of the desktop licence-notice pipeline: dependency-closure
+ * The pure half of the workspace licence-notice pipeline: dependency-closure
  * walking, licence grouping, document rendering, and the packaging-coverage
  * rules. No filesystem, no process, no absolute paths — every input arrives as
  * an argument, so `generate-third-party-notices.mjs --self-test` can drive all
@@ -12,14 +12,30 @@
  * "what counts as shipped" is a change to one testable function, not to a
  * script that only speaks to the disk.
  *
+ * WHY IT LIVES AT THE REPOSITORY ROOT and not under apps/desktop. Nothing in
+ * this file knows about Electron. It walks a dependency closure from ROOTS THE
+ * CALLER NAMES and renders a document from a model the caller builds, which is
+ * what lets one artifact (today the macOS .app) be described without the rules
+ * being owned by it. `scripts/check-workspace-licenses.mjs` (VC-411) already
+ * established this seam for repository-wide licensing gates. When a second
+ * client or a standalone server needs its own notice, it supplies its own
+ * roots and its own packaging adapter and reuses everything here — the
+ * alternative was a copy of 700 lines per artifact, each drifting on its own.
+ *
+ * The one Electron-shaped thing left is {@link keptNodeModulePackages} and
+ * {@link unpackedPackages}, which read electron-builder's grammar. They are
+ * the ADAPTER: `packagingFailures` takes the shipped-name set as data, so a
+ * future artifact swaps those two functions and keeps the rule.
+ *
  * WHAT COUNTS AS SHIPPED is decided in {@link collectPackageClosure}: the
- * production dependency closure (dependencies + optionalDependencies,
- * transitively) of the two roots whose code reaches the .app — the desktop app
- * itself and @volli/cli, whose bundle copy-cli.mjs drops into dist-electron.
- * It is a deliberate SUPERSET of the bytes in the artifact: a package in the
- * closure may end up tree-shaken out of a renderer chunk, but nothing that
- * ships can be missing from it. Over-listing a notice is harmless; under-
- * listing it is the compliance failure this exists to prevent.
+ * production dependency closure (dependencies + optionalDependencies + peer
+ * dependencies, transitively) of the roots the caller names. For the desktop
+ * artifact those are the desktop app itself and @volli/cli, whose bundle
+ * copy-cli.mjs drops into dist-electron. It is a deliberate SUPERSET of the
+ * bytes in the artifact: a package in the closure may end up tree-shaken out
+ * of a renderer chunk, but nothing that ships can be missing from it.
+ * Over-listing a notice is harmless; under-listing it is the compliance
+ * failure this exists to prevent.
  *
  * PLATFORM PACKAGES ARE EXCLUDED from that walk (`os`/`cpu` in their manifest)
  * and come from the checked-in registry instead. They are the one input that
@@ -28,6 +44,9 @@
  * packages the app actually ships do not install on Linux at all. A generated
  * file that differed by host could not be checked in, so the registry pins the
  * ones that ship (with their licence text) and the walk skips the rest.
+ * {@link uncoveredPlatformPackages} is what stops that exclusion from becoming
+ * a hole: a skipped package that the packaging config actually ships, and that
+ * the registry does not pin, is a failure rather than a silent omission.
  */
 
 /** Packages whose licence declaration is not a plain permissive grant. */
@@ -37,15 +56,100 @@ const REVIEW_LICENSE_PATTERN = /\b(?:[AL]?GPL|MPL|EPL|CDDL|CPL|SSPL|OSL|CC-BY-SA
 const LICENSE_FILE_PATTERN = /^(licen[cs]e|copying)([-._][^/]*)?$/i;
 /** Root-level NOTICE files (Apache-2.0 §4(d) content travels with the licence). */
 const NOTICE_FILE_PATTERN = /^notice([-._][^/]*)?$/i;
+/** Extensions a document of TERMS never has — see {@link hasCodeExtension}. */
+const CODE_EXTENSIONS = new Set([
+  "js",
+  "mjs",
+  "cjs",
+  "jsx",
+  "ts",
+  "mts",
+  "cts",
+  "tsx",
+  "json",
+  "json5",
+  "map",
+  "yml",
+  "yaml",
+  "toml",
+  "ini",
+  "cfg",
+  "xml",
+  "lock",
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "ps1",
+  "bat",
+  "cmd",
+  "py",
+  "rb",
+  "go",
+  "rs",
+  "java",
+  "kt",
+  "swift",
+  "c",
+  "h",
+  "cc",
+  "cpp",
+  "hpp",
+  "cs",
+  "php",
+  "pl",
+  "lua",
+  "r",
+  "scala",
+  "node",
+  "wasm",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "bin",
+  "gz",
+  "zip",
+  "tgz",
+]);
+/** Extensions a licence document legitimately carries, stripped before matching. */
+const DOCUMENT_EXTENSION_PATTERN = /\.(md|markdown|txt|text|rst)$/i;
+
+/**
+ * Does this filename end in an extension that means "code", not "terms"?
+ *
+ * WHY THIS EXISTS. The name patterns above accept an optional `[-._]` tail, so
+ * that `LICENSE-MIT`, `LICENSE.APACHE2` and `COPYING.LESSER` — all real, all
+ * genuine terms — are found. That same tail also accepted `license-update.mjs`,
+ * a BUILD SCRIPT that cytoscape publishes at its package root, and 32 lines of
+ * JavaScript were reproduced verbatim into the shipped notice as if they were
+ * a grant. Reproducing code as licence text is worse than missing it: it makes
+ * the document wrong in a way a reader cannot detect, because everything
+ * around it is real.
+ *
+ * A DENYLIST, not an allowlist, and deliberately: packages publish terms under
+ * extensions nobody can enumerate (`LICENSE.APACHE2`, `LICENSE.BSD`, bare
+ * `COPYING`), so an allowlist would silently DROP real grants — the failure
+ * direction this whole pipeline exists to prevent. A denylist can only ever
+ * admit a file that is not code, which the reviewer reading the document sees.
+ * @param {string} name
+ */
+function hasCodeExtension(name) {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return false;
+  return CODE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
 
 /** @param {string} name */
 export function isLicenseFileName(name) {
-  return LICENSE_FILE_PATTERN.test(name.replace(/\.(md|txt|rst)$/i, ""));
+  if (hasCodeExtension(name)) return false;
+  return LICENSE_FILE_PATTERN.test(name.replace(DOCUMENT_EXTENSION_PATTERN, ""));
 }
 
 /** @param {string} name */
 export function isNoticeFileName(name) {
-  return NOTICE_FILE_PATTERN.test(name.replace(/\.(md|txt|rst)$/i, ""));
+  if (hasCodeExtension(name)) return false;
+  return NOTICE_FILE_PATTERN.test(name.replace(DOCUMENT_EXTENSION_PATTERN, ""));
 }
 
 /**
@@ -60,6 +164,34 @@ export function normalizeLicenseText(text) {
     .replace(/^\uFEFF/, "")
     .replaceAll("\r\n", "\n")
     .replace(/[ \t]+(?=\n|$)/g, "");
+}
+
+/**
+ * Read the project's copyright line out of its own Apache-2.0 LICENSE.
+ *
+ * WHY IT IS READ AND NEVER WRITTEN HERE (VC-407 / VC-414). Naming a copyright
+ * holder is an ownership decision, not a value a build script may derive. So
+ * this reports one of exactly two states and invents neither:
+ *
+ *   - the appendix still carries Apache's `[yyyy] [name of copyright owner]`
+ *     placeholder → `{ holder: null }`, and the document says so plainly;
+ *   - the appendix names a holder → `{ holder: "<that line, verbatim>" }`.
+ *
+ * The consequence is that VC-414's edit to one line of LICENSE flows into the
+ * shipped notice by regenerating it, with no second copy of the owner's name
+ * anywhere in this pipeline to drift. A hardcoded holder here would be a
+ * second source of truth for the one fact the LICENSE exists to state.
+ *
+ * @param {string} licenseText
+ * @returns {{ holder: string | null, line: string | null }}
+ */
+export function copyrightHolder(licenseText) {
+  const match = /^[ \t]*Copyright[ \t]+(.+?)[ \t]*$/m.exec(licenseText);
+  if (match === null) return { holder: null, line: null };
+  const value = match[1].trim();
+  // Apache's own appendix placeholder, in the bracket form the template ships.
+  if (/\[.*\]/.test(value)) return { holder: null, line: value };
+  return { holder: value, line: value };
 }
 
 /**
@@ -109,6 +241,30 @@ export function repositoryUrl(manifest) {
  * would resolve that name to from that package (or null when this host did not
  * install it). Both are trivial to fake, which is what the self-test does.
  *
+ * PEER DEPENDENCIES ARE WALKED, and that is not belt-and-braces. A peer is
+ * code the dependent EXECUTES; npm 7+ installs it automatically, so it is
+ * present in the artifact whether or not any manifest also lists it as a
+ * direct dependency. Walking only `dependencies` rested on the assumption
+ * that every shipped peer is someone's direct dependency too — true today by
+ * luck, and silently false the first time it is not.
+ *
+ * PEERS MARKED OPTIONAL ARE NOT WALKED. `peerDependenciesMeta[name].optional`
+ * is the package's own declaration that it runs without that peer, and in
+ * practice it is the type-only case: every Radix primitive declares
+ * `@types/react` optional, and walking those dragged @types/react,
+ * @types/react-dom and csstype into a list whose whole claim is that its
+ * members reach the artifact. Over-listing is cheap but not free — padding
+ * the list with packages that provably cannot ship teaches a reader to
+ * discount it.
+ *
+ * A REQUIRED peer still enters the list even when the requirement is only a
+ * type-level one — @trpc/client and @trpc/server require `typescript`, which
+ * no bundle executes. That is deliberate: the alternative is a hand-kept
+ * denylist of "peers we judge not to ship", which is the drift this file
+ * exists to avoid, and the document already states that the list is a
+ * superset. Erring here costs a reader one extra entry; erring the other way
+ * costs an unlicensed redistribution.
+ *
  * @param {{
  *   roots: { name: string, dir: string }[],
  *   readManifest: (dir: string) => Record<string, unknown> | null,
@@ -139,9 +295,16 @@ export function collectPackageClosure({
     if (current.manifest === null) {
       throw new Error(`third-party-notices: no package.json at ${current.dir}`);
     }
+    const meta = /** @type {any} */ (current.manifest).peerDependenciesMeta ?? {};
+    const requiredPeers = Object.fromEntries(
+      Object.entries(/** @type {any} */ (current.manifest).peerDependencies ?? {}).filter(
+        ([name]) => meta[name]?.optional !== true,
+      ),
+    );
     const dependencies = {
       .../** @type {any} */ (current.manifest).dependencies,
       .../** @type {any} */ (current.manifest).optionalDependencies,
+      ...requiredPeers,
     };
     for (const name of Object.keys(dependencies).toSorted()) {
       const dir = resolveDependency(current.dir, name);
@@ -363,66 +526,165 @@ export function packagingFailures({
 }
 
 /**
- * Return one failure for every vendored registry path that is absent.
+ * Platform packages the walk skipped that the packaging config nevertheless
+ * ships, and that the reviewed registry does not pin.
  *
- * The registry is reviewed input, but a typo there would otherwise leave the
- * document claiming to cover source that the bundle does not contain. Keep the
- * filesystem lookup injected so the self-test can exercise the rule without
- * touching this checkout.
+ * WHY THIS RULE EXISTS. Excluding every `os`/`cpu` package is what makes the
+ * document render identically on macOS and on Linux CI, but on its own it is
+ * indistinguishable from a hole: the three darwin-arm64 packages the .app
+ * really ships are excluded by exactly the same test as @esbuild/linux-x64,
+ * which ships nowhere. The registry closes it for the three we know about; a
+ * FOURTH native package added tomorrow would be skipped by the walk, absent
+ * from the registry, and covered by nothing — with every check green. This
+ * turns that into a named failure at the moment the packaging config starts
+ * shipping it.
  *
- * @param {{ title: string, paths: unknown }[]} entries
- * @param {(path: string) => boolean} pathExists
+ * @param {{
+ *   skipped: string[],                 // `name@version` keys the walk excluded
+ *   shippedNames: Set<string>,         // what the packaging config ships
+ *   registeredNames: Set<string>,      // what the reviewed registry pins
+ * }} options
  * @returns {string[]}
  */
-export function vendoredPathFailures(entries, pathExists) {
+export function uncoveredPlatformPackages({ skipped, shippedNames, registeredNames }) {
   const failures = [];
-  for (const entry of entries) {
-    if (!Array.isArray(entry.paths) || entry.paths.length === 0) {
-      failures.push(`vendored source "${entry.title}" has no paths recorded.`);
-      continue;
-    }
-    for (const path of entry.paths) {
-      if (typeof path !== "string" || path.trim() === "") {
-        failures.push(`vendored source "${entry.title}" has an invalid path.`);
-      } else if (!pathExists(path)) {
-        failures.push(`vendored source "${entry.title}" names a missing path: ${path}`);
-      }
-    }
+  for (const key of skipped) {
+    const name = key.slice(0, key.lastIndexOf("@"));
+    if (registeredNames.has(name)) continue;
+    if (!isNameCovered(name, shippedNames) && !isNameShipped(name, shippedNames)) continue;
+    failures.push(
+      `${key} is a platform-specific package the dependency walk skips, it ships in the ` +
+        `packaged app (electron-builder.yml), and no entry in notices/sources.json pins ` +
+        `its licence text. Add it to platformNative, or stop shipping it.`,
+    );
   }
-  return [...new Set(failures)];
+  return [...new Set(failures)].toSorted();
 }
 
 /**
- * What to do with a notice this repository expects to exist but does not own:
- * today, the shared terminal theme catalog's iTerm2-Color-Schemes attribution,
- * which is being written on another ticket's branch (VC-407 coordination).
- *
- * The rule has to hold in three states and cannot wait for any of them:
- *   - the file is here → fold it into the shipped document, whatever else is true;
- *   - the file is absent and nothing in the shipped source refers to the material
- *     → the catalog has not landed yet, so the document says pending and the
- *     check stays green;
- *   - the file is absent while shipped source DOES refer to the material → the
- *     catalog landed without its attribution, and the packaged app would ship
- *     the themes with nothing covering them. That is the failure.
- *
- * `markerFound` is the caller's answer to "does shipped source mention this?",
- * kept out of here so the search stays testable and this stays a decision.
- *
- * @param {{ title: string, path: string, present: boolean, markerFound: boolean, marker: string }} fragment
- * @returns {{ include: boolean, failure: string | null }}
+ * Is `name` shipped because the config names its SCOPE or the package itself?
+ * The mirror of {@link isNameCovered}: there we ask whether a shipped scope is
+ * covered by a notice, here whether a skipped package falls under a shipped
+ * scope (`@img/sharp-darwin-arm64` under a shipped `@img`).
+ * @param {string} name @param {Set<string>} shippedNames
  */
-export function pendingFragmentDecision({ title, path, present, markerFound, marker }) {
-  if (present) return { include: true, failure: null };
-  if (!markerFound) return { include: false, failure: null };
-  return {
-    include: false,
-    failure:
-      `shipped source refers to "${marker}" (${title}) but ${path} is not in this tree — ` +
-      `the packaged app would carry that material with no attribution. Land the notice ` +
-      `file, or record an equivalent entry in apps/desktop/notices/sources.json, then ` +
-      `regenerate.`,
-  };
+function isNameShipped(name, shippedNames) {
+  if (shippedNames.has(name)) return true;
+  const slash = name.indexOf("/");
+  return slash > 0 && shippedNames.has(name.slice(0, slash));
+}
+
+/**
+ * Decide what a workspace package's OWN declared notices contribute, and what
+ * about them is broken.
+ *
+ * THIS REPLACES A MAGIC-STRING GREP (VC-407 review). The first design had the
+ * desktop registry name a file owned by another package plus a marker word,
+ * and decided by reading every shipped source file looking for that word. The
+ * real case walked straight through the hole: the Ghostty theme catalog landed
+ * as `ghostty-theme-sources.generated.ts`, 463 entries whose text says
+ * "iTerm2 Dark Background" and never the marker `iTerm2-Color-Schemes`. Marker
+ * not found, so the rule concluded the material had not shipped, stayed green,
+ * and would have packaged 463 vendored themes with no attribution. A grep for
+ * a word is a guess about how someone else will spell something.
+ *
+ * WHAT REPLACES IT IS THE FILE ITSELF. A package declares, in its own
+ * `package.json`, which of its files are vendored third-party material and
+ * which notice covers them:
+ *
+ *     "volli": { "notices": [ { "title": ..., "covers": [...], "document": ... } ] }
+ *
+ * The rule then keys on presence, not on prose: the material is shipped if and
+ * only if its file is in the tree, which is the same question the packaging
+ * asks. There is no string to get wrong and no tree to scan.
+ *
+ * WHY IT LIVES IN THE OWNING PACKAGE. Before, the desktop registry named paths
+ * inside @volli/shared and @volli/agent-runtime, so an ordinary rename in
+ * either package broke the DESKTOP gate, with the declaration to fix three
+ * directories away. Declared here, the path and the file it names move
+ * together in one package, under one review.
+ *
+ * Both directions are failures, and deliberately:
+ *   - material present, notice file absent  → the artifact would ship
+ *     unattributed material. This is the case the grep missed.
+ *   - notice declared, material absent      → the declaration has rotted (a
+ *     typo, or material deleted without its entry). Silence here would let a
+ *     mistyped path masquerade as coverage.
+ *
+ * @param {{
+ *   packageName: string,
+ *   entries: unknown,
+ *   materialExists: (relativePath: string) => boolean,
+ *   noticeExists: (relativePath: string) => boolean,
+ * }} options
+ * @returns {{ include: { title: string, packageName: string, document: string | null, entry: any }[], failures: string[] }}
+ */
+export function packageNoticeDecisions({ packageName, entries, materialExists, noticeExists }) {
+  const include = [];
+  const failures = [];
+  if (entries === undefined || entries === null) return { include, failures };
+  if (!Array.isArray(entries)) {
+    failures.push(`${packageName}: "volli.notices" must be an array.`);
+    return { include, failures };
+  }
+
+  for (const [index, entry] of entries.entries()) {
+    const label = typeof entry?.title === "string" ? entry.title : `entry ${index}`;
+    const where = `${packageName} "${label}"`;
+    if (entry === null || typeof entry !== "object") {
+      failures.push(`${where}: notice entry must be an object.`);
+      continue;
+    }
+    if (typeof entry.title !== "string" || entry.title.trim() === "") {
+      failures.push(`${where}: notice entry has no title.`);
+      continue;
+    }
+    if (!Array.isArray(entry.covers) || entry.covers.length === 0) {
+      failures.push(
+        `${where}: notice entry records no "covers" paths, so nothing ties it to shipped ` +
+          `material. Name the vendored files it covers.`,
+      );
+      continue;
+    }
+
+    let rotted = false;
+    for (const path of entry.covers) {
+      if (typeof path !== "string" || path.trim() === "") {
+        failures.push(`${where}: "covers" holds an entry that is not a path.`);
+        rotted = true;
+      } else if (!materialExists(path)) {
+        failures.push(
+          `${where}: "covers" names ${path}, which is not in this package. Fix the path, ` +
+            `or drop the entry if the material is gone.`,
+        );
+        rotted = true;
+      }
+    }
+    if (rotted) continue;
+
+    // The material is here. From this point the notice is REQUIRED.
+    const document = typeof entry.document === "string" ? entry.document : null;
+    if (document !== null && !noticeExists(document)) {
+      failures.push(
+        `${where}: the material in "covers" is in this tree but its notice ${document} is ` +
+          `not — the packaged app would carry it with no attribution.`,
+      );
+      continue;
+    }
+    if (document === null && typeof entry.text === "string" && !noticeExists(entry.text)) {
+      failures.push(`${where}: licence text ${entry.text} is not in this package.`);
+      continue;
+    }
+    if (document === null && entry.text === undefined && entry.unresolved === undefined) {
+      failures.push(
+        `${where}: records neither a licence text, a notice document, nor an "unresolved" ` +
+          `statement. One of the three must be true of any vendored material.`,
+      );
+      continue;
+    }
+    include.push({ title: entry.title, packageName, document, entry });
+  }
+  return { include, failures };
 }
 
 const RULE = "=".repeat(105);
@@ -476,10 +738,9 @@ function noteLines(note) {
  *   entries: { name: string, version: string, spdx: string | null, shippedAs: string, files: { file: string, text: string, kind: string }[], repository: string | null }[],
  *   platformNative: { name: string, version: string, spdx: string | null, note: string, text: string }[],
  *   toolchain: { name: string, version: string, spdx: string | null, note: string, files: { file: string, text: string, kind: string }[] }[],
- *   vendored: { title: string, paths: string[], upstream: string | null, spdx: string | null, evidence: string, text: string | null, unresolved: string | null }[],
+ *   vendored: { title: string, paths: string[], owner: string | null, upstream: string | null, spdx: string | null, evidence: string, text: string | null, unresolved: string | null }[],
  *   patched: { name: string, version: string, patch: string }[],
  *   fragments: { title: string, source: string, text: string }[],
- *   pendingFragments: { title: string, path: string, marker: string, pending: string }[],
  * }} model
  */
 export function renderNoticeDocument(model) {
@@ -493,8 +754,8 @@ export function renderNoticeDocument(model) {
     "VOLLI CODE — THIRD-PARTY SOFTWARE NOTICES AND INFORMATION",
     "",
     "Generated file. Do not edit by hand.",
-    "  regenerate:  node apps/desktop/scripts/generate-third-party-notices.mjs",
-    "  verify:      pnpm -C apps/desktop run check:notices",
+    "  regenerate:  node scripts/generate-third-party-notices.mjs",
+    "  verify:      pnpm run check:notices",
     "",
     "Scope: the macOS arm64 Volli Code application bundle (app id app.volli.desktop).",
     `It covers ${totalPackages} third-party packages: the production dependency closure`,
@@ -646,6 +907,7 @@ export function renderNoticeDocument(model) {
       RULE,
       `Source: ${vendored.title}`,
       `Paths: ${vendored.paths.join(", ")}`,
+      ...(vendored.owner === null ? [] : [`Declared by: ${vendored.owner}`]),
       `Upstream: ${vendored.upstream ?? "(not recorded)"}`,
       `SPDX: ${vendored.spdx ?? "(unresolved)"}`,
       "Evidence:",
@@ -672,12 +934,13 @@ export function renderNoticeDocument(model) {
     "",
   );
 
-  section(`9. ADDITIONAL NOTICES (${model.fragments.length + model.pendingFragments.length})`);
+  section(`9. ADDITIONAL NOTICES (${model.fragments.length})`);
   out.push(
     "Notices for material no package manifest describes: data bundled inside a package,",
-    "and catalogs another workspace package carries with its own attribution file. A",
-    "notice recorded here but not yet present in the tree is printed as pending rather",
-    "than omitted — see apps/desktop/notices/sources.json.",
+    "and the attribution files workspace packages keep beside their own vendored",
+    "material. Each is reproduced verbatim from the file named under it. A package that",
+    "declares such a notice cannot ship the material without it — the notice check fails",
+    "when the covered files are present and the notice file is not.",
     "",
   );
   for (const fragment of model.fragments) {
@@ -688,18 +951,6 @@ export function renderNoticeDocument(model) {
       ...wrapText(fragment.source, "  "),
       THIN_RULE,
       fragment.text,
-      "",
-    );
-  }
-  for (const pending of model.pendingFragments) {
-    out.push(
-      RULE,
-      `Notice: ${pending.title}`,
-      `Source: ${pending.path}`,
-      `Marker: ${pending.marker}`,
-      "Status: PENDING — that file is not in this tree, so nothing is reproduced for it.",
-      THIN_RULE,
-      ...wrapText(pending.pending, "  "),
       "",
     );
   }
