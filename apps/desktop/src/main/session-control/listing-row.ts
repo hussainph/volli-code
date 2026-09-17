@@ -62,9 +62,12 @@ export function sessionListingRow(
 /**
  * {@link sessionListingRow} over a whole listing.
  *
- * `provenanceOf` is asked per Session rather than handed a prebuilt map: the
- * reader behind it is two indexed point queries against SQLite, and a map would
- * have to be built from the same reads plus a second pass to key them.
+ * `provenanceOf` stays a function of one Session so this file keeps having no
+ * opinion about where the answers come from. A caller with a whole roster in
+ * hand reads them in one batch and closes over the result
+ * (`readSessionProvenances`, VC-392); a caller with one Session asks for one.
+ * Either way the row is built from an answer handed in, which is what keeps the
+ * fetch and the push identical.
  */
 export function sessionListingRows(
   sessions: readonly SessionProjection[],

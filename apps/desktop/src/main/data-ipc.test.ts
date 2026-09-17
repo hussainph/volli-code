@@ -199,8 +199,11 @@ vi.mock("./worktree", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
 import { insertSession } from "./session-control/test-support";
+import { recordAutomationRun } from "./db/automations-repo";
+import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
 import { recordMcpOperation } from "./db/mcp-operations-repo";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
@@ -1991,6 +1994,115 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     expect(
       rebound.ok && rebound.sessions.find((row) => rowId(row) === created.session.id)?.record,
     ).toMatchObject({ live: true, activity: "idle" });
+  });
+
+  // VC-392: the fetch reads provenance for the whole roster in one batch
+  // (`readSessionProvenances`) while the push channel reads one Session at a
+  // time (`readSessionProvenance`, exactly as `index.ts` composes it). The two
+  // must produce the same row for the same Session: the renderer applies a push
+  // as a whole-row upsert, so a disagreement would change a Session's mark the
+  // moment it did anything — the flicker the push channel exists to remove.
+  it("pushes the same rows the fetch returns, provenance included", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const start = async (title: string, ticketId: string | null): Promise<string> => {
+      const created = await sessionEngine.createSession({
+        commandId: `create-${title}`,
+        projectId,
+        ticketId,
+        role: roleImpliedByTicket(ticketId),
+        parentSessionId: null,
+        title,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      return created.session.id;
+    };
+    // One Session per source the reader can answer from, so the comparison
+    // below covers every arm rather than the resting one.
+    const parent = await start("Orchestrator", ticket.id);
+    const delegated = await start("Delegated", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: delegated,
+      now: 600,
+      actor: { kind: "session", sessionId: parent, ticketId: ticket.id },
+    });
+    const runSession = await start("Nightly sweep", ticket.id);
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: ticket.id,
+        sessionId: runSession,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      700,
+    );
+    const byHand = await start("Opened by hand", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: byHand,
+      now: 800,
+      actor: { kind: "user" },
+    });
+    const board = await start("Board chat", null);
+
+    const pushed = new Map<string, SessionListingRow>();
+    const watch = watchSessionActivity(sessionEngine, {
+      publish: ({ row }) => pushed.set(rowId(row), row),
+      // The expression `index.ts` passes, unchanged.
+      provenanceOf: (born) => readSessionProvenance(ctx.db, born),
+    });
+    // A write per Session marks it dirty; the flush then builds the pushed row
+    // the same way the renderer would receive it.
+    for (const sessionId of [parent, delegated, runSession, byHand, board]) {
+      await watch.engine.submit({
+        commandId: `touch-${sessionId}`,
+        sessionId,
+        intent: { kind: "session.retitle", title: `Touched ${sessionId}` },
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+    }
+    await watch.flush();
+    watch.stop();
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    const fetched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const scoped = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
+      ticketId: ticket.id,
+    });
+    if (!fetched.ok || !scoped.ok) throw new Error("listing failed");
+
+    expect(pushed.size).toBe(5);
+    for (const row of [...fetched.sessions, ...scoped.sessions]) {
+      expect(row).toEqual(pushed.get(rowId(row)));
+    }
+    // The marks themselves, so the two channels agreeing on `{ kind: "user" }`
+    // for everything could not pass this test.
+    const provenanceById = new Map(
+      fetched.sessions.map((row) => [rowId(row), row.provenance] as const),
+    );
+    expect(provenanceById.get(runSession)).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
+    expect(provenanceById.get(delegated)).toEqual({
+      kind: "session",
+      parentSessionId: parent,
+      // The `sessions` row's title, which a retitle command does not rewrite.
+      parentTitle: "Orchestrator",
+    });
+    expect(provenanceById.get(byHand)).toEqual({ kind: "user" });
+    expect(provenanceById.get(board)).toEqual({ kind: "user" });
   });
 
   it("rejects invalid input", () => {
