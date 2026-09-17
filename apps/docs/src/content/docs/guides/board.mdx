@@ -17,20 +17,24 @@ Review, and Done) hold twenty-four tasks. The Doing column contains VLT-14,
 
 ## The columns
 
-**Backlog.** Work you've written down but aren't committing to yet. Nothing
-runs here.
+**Backlog.** Work you've written down but aren't committing to yet. A column
+Automation can still be armed here, so a Deliberate move into Backlog may start
+one.
 
-**Todo.** Work you intend to do next. Nothing runs here either.
+**Todo.** Work you intend to do next. It can also have an armed Automation; an
+armed column is not limited to active work.
 
 **Doing.** Work is active. Move a ticket here when implementation starts, then
-open its workspace to start or return to a chat.
+open its workspace to start or return to a chat. An enabled Automation can run
+when a ticket deliberately enters this column if one is armed.
 
 **Needs Review.** The ticket is ready for you to inspect its Change Set and
-decide what happens next.
+decide what happens next. This column can offer and arm Automations too.
 
 **Done.** Finished. Volli keeps the ticket and branch. After the configured
 retention period, it can reclaim a clean worktree folder when no pull request
-is open and no work is running there.
+is open and no work is running there. A Deliberate move into Done can also fire
+an enabled, armed Automation.
 
 The board records task state; it does not control chat lifetime. A ticket chat
 stays openable after the ticket moves.
@@ -60,6 +64,32 @@ it.
 
 Free-text search isn't in this header. It's part of the command palette
 (`⌘K`), which searches tickets and sessions across every project.
+
+## Automations on the board
+
+A column's lightning control chooses its armed Automation from that column's
+**Offered** list. The list contains Automations whose Trigger is **Ticket
+enters** for that column. A column can offer several, but it can arm only one;
+choose **No Automation** to disarm it. The Automations page's **Lanes** view
+also shows the five columns and lets you arrange each Offered list.
+
+Enable the Automation on this Mac before expecting an automatic Run. Enablement
+is machine-local, and an Automation that is switched off is still available for
+a deliberate manual Run. Arming is not retroactive: tickets already in a
+column are left alone.
+
+When an enabled Automation is armed, only a **Deliberate move** into that
+column can start it. That includes a drag, an explicit status change, or
+[`volli ticket move`](/reference/cli/#volli-ticket-move). Volli opens a short
+delay window with **Cancel**. Cancel keeps the status change and prevents the
+Run. Lifecycle handling and tickets that were already there do not start it.
+
+While dragging a card, the hovered column shows its Offered list. Hold
+**Option (⌥)** to expand it into landing targets. Press **1**–**9** to choose
+an Automation or **0** for **Move only**, which moves the ticket without
+starting a Run. The enabled armed Automation is pinned to **1**, so a plain drop
+and **1** have the same result. See [Automations](/guides/automations/) for
+the complete Trigger, Runtime, and Run history model.
 
 ## What moves a ticket
 
@@ -191,6 +221,11 @@ automatically without surfacing an error toast.
 ## Next steps
 
 <CardGrid>
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Save repeatable starts, arm columns, and read Run history."
+  />
   <LinkCard
     title="Chats and worktrees"
     href="/guides/agents-and-worktrees/"

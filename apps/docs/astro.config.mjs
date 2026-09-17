@@ -86,11 +86,13 @@ export default defineConfig({
           ],
         },
         {
-          // Ordered by the path through the product: plan on the board, open a
-          // task, understand chats and worktrees, then configure and theme.
+          // Ordered by the path through the product: plan on the board, save
+          // repeatable starts, open a task, understand chats and worktrees,
+          // then configure and theme.
           label: "Using Volli",
           items: [
             { label: "The board", slug: "guides/board" },
+            { label: "Automations", slug: "guides/automations" },
             { label: "Ticket workspace", slug: "guides/ticket-workspace" },
             { label: "Chats and worktrees", slug: "guides/agents-and-worktrees" },
             { label: "Settings", slug: "guides/settings" },

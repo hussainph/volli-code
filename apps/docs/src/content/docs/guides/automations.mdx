@@ -1,0 +1,210 @@
+---
+title: Automations
+description: Save repeatable ways to start work by hand, when tickets enter columns, or on a schedule.
+sidebar:
+  label: Automations
+---
+
+import { Aside, CardGrid, LinkCard, Steps } from "@astrojs/starlight/components";
+
+An **Automation** is a saved, named way to start work. It keeps the
+**Instructions**, **Trigger**, and **Runtime** together so you can run the same
+setup again without composing it from scratch.
+
+<Aside type="note" title="Automatic starts are local">
+  An Automation is available to run by hand as soon as you save it. Automatic
+  starts are off until you enable the Automation on this Mac and, for a column
+  Trigger, arm a column. Those choices do not travel with the project.
+</Aside>
+
+## What an Automation saves
+
+| Part | What it controls |
+| --- | --- |
+| **Name** | The name shown in the Automations page, run menus, and history. |
+| **Instructions** | The message sent as the first message of the fresh Session a Run opens. |
+| **Trigger** | What starts it besides a person: **Only when I run it**, **Ticket enters**, or **On a schedule**. |
+| **Runtime** | The model policy used for the Run: a project default, a named default tier, or an exact model and reasoning level. |
+
+A saved Automation Run records the Automation, its target, and the model and
+reasoning that were resolved when it started. A Run always opens a fresh
+**Session**; it never wakes an old chat. The Run history keeps a link back to
+that Session.
+
+## Create an Automation
+
+<Steps>
+
+1. Open **Automations** in the app navigation.
+2. Select **New Automation**.
+3. Enter a name and write **Instructions**. Instructions support the same `/`
+   templates and Skills and `@` file references as the chat composer.
+4. Choose **Ownership**: **This project** lists the Automation only here;
+   **All projects** lists it in every project.
+5. Choose a Trigger and Runtime, then select **Create automation**.
+
+</Steps>
+
+The Automations page is the only place that creates, edits, duplicates, or
+deletes an Automation. The board, ticket workspace, and command palette can
+run saved Automations, but they do not contain another authoring form.
+
+A schedule always belongs to one project because its Run targets that project.
+The editor therefore uses **This project** for a scheduled Automation.
+
+## Choose a Trigger
+
+### Only when I run it
+
+This is the default for a new Automation. It has no automatic start; you run it
+from a listing or a Ticket. The Automation remains runnable by hand even when
+its **Enabled** switch is off.
+
+### Ticket enters
+
+Select one or more columns with **Choose columns**. This makes the Automation
+part of each selected column's **Offered** list. Offering it does not arm it:
+the column can offer several Automations but can fire at most one automatically.
+
+A ticket-enter Trigger starts a fresh Ticket Session for the ticket that
+arrived. A ticket already in the column is not processed when you create,
+enable, or arm the Automation.
+
+### On a schedule
+
+Choose one of the closed presets in **Schedule**:
+
+- **Hourly**, at a chosen number of minutes past the hour
+- **Every day**, at a chosen time
+- **Mon–Fri**, at a chosen time
+- **Weekly**, on a chosen day and time
+
+The saved time zone is shown with the schedule and stays authoritative if you
+travel. Schedules are presets; Volli does not accept cron expressions. The app
+must be open for a scheduled Run to start. A scheduled Run targets the project
+and opens a project-level Board Session. If a due time passes without a Run,
+Volli records a **Skipped** occurrence with its reason instead of silently
+replaying the missed work.
+
+## Set a Runtime
+
+In **Runtime**, choose how a Run gets its model:
+
+- **Project default** uses the project's resolved Session default.
+- A named default such as **Fast**, **Deep**, **Visual**, **Ticket Sessions**, or
+  **Board chats** uses the corresponding tier configured in **Settings →
+  Models**.
+- An exact model pins that model for the Automation. If it offers more than one
+  reasoning level, choose **Reasoning effort** as well.
+
+A named default resolves when the Run starts. The Run history shows the model and
+reasoning that actually launched the Session. If an exact model is no longer
+available, repair the Runtime instead of expecting a silent replacement.
+
+## Run an Automation by hand
+
+You can run a saved Automation from any surface that lists it:
+
+- Select **Run** on the Automations page. For a non-scheduled Automation, pick
+  the Ticket to run it on. A scheduled Automation runs for the project.
+- In a Ticket workspace's **Automations** section, use the split Run control
+  or open its menu. The default action is the Automation armed for the Ticket's
+  column, when one is ready.
+- On a board card, open the **Automations** submenu in its context menu.
+- Use the command palette when the Automation is offered there.
+
+A manual Run does not depend on **Enabled**. That switch controls automatic
+Triggers, not a person's deliberate Run. You can also choose **Run on model**
+from the Ticket's run menu for a one-time model and reasoning override.
+
+### Run once
+
+Use **Run once…** in a Ticket's Automations section when you have Instructions
+for one invocation but do not want to save an Automation. This creates an
+**Unbound Run**: it carries its own Instructions, names no Automation, saves no
+Automation record, and still opens a fresh Session. The form can use the
+**Default model** or a model selected for **This run**.
+
+## Enable and arm automatic starts
+
+### Enable an Automation
+
+On the Automations page, turn on **Enabled** for the Automation. Enablement is
+stored for this Mac and is off by default. A switched-off Automation remains in
+the Offered list and remains runnable by hand; it simply does not start from a
+Trigger here.
+
+### Arm a column
+
+For a **Ticket enters** Trigger:
+
+1. Open **Automations → Lanes**, or use the lightning control in a board column
+   header.
+2. Find the column and choose one offered Automation, or **No Automation**.
+3. Make sure that Automation is **Enabled** on this Mac.
+
+Each column has at most one armed Automation. Arming is a property of the
+column, not of the Automation, so the same Automation can be armed in one
+column and merely offered in another. Arming is not retroactive.
+
+An enabled Automation fires only when a ticket makes a **Deliberate move** into
+the armed column: a drag, an explicit status change, or a `volli ticket move`.
+The move opens a short delay window with one control, **Cancel**. Selecting
+**Cancel** keeps the move and prevents the Run. Moving the ticket back, turning
+off the Automation, or disarming the column before the delay ends also prevents
+that automatic Run.
+
+## Choose during a board drag
+
+When a card is in the air, the hovered column shows its Offered list. Hold
+**Option (⌥)** to expand that list into landing targets. The expanded picker
+includes up to nine offered Automations and **Move only**.
+
+- Press **1** through **9** to choose the corresponding offered Automation.
+- Press **0** or choose **Move only** to move the ticket without starting a Run.
+- An enabled armed Automation is pinned to **1**, so **1** matches a plain drop
+  into that column.
+
+The picker is a way to choose the Run for this move; it does not change the
+Automation record. An Automation ranked past the ninth remains runnable by
+hand, but has no drag digit. A selected Automation uses the same cancellable
+delay as an armed arrival.
+
+## Read Runs and skipped occurrences
+
+The selected Automation's **Runs** section lists successful and interrupted
+Runs newest first. Each row shows the saved Automation name, target, resolved
+model and reasoning, and time. Select a row to open the Session it created.
+
+A scheduled **Skipped** row explains why the occurrence did not start and offers
+**Run now**. **Run now** starts one Run; it does not replay every occurrence a
+row represents. Deleting an Automation removes its record but keeps past Runs
+in history.
+
+<Aside type="caution" title="If a Run does not start">
+  Check the Automation's **Enabled** switch, the target column's arming, and
+  whether the ticket actually entered that column. A scheduled Automation needs
+  Volli to be open at the due time. If the Runtime model is no longer available,
+  repair it in the Automation editor or choose another model; Volli does not
+  silently substitute one.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="The ticket workspace"
+    href="/guides/ticket-workspace/"
+    description="Run an Automation on one ticket and open its Session history."
+  />
+  <LinkCard
+    title="The board"
+    href="/guides/board/"
+    description="Move tickets, arm columns, and choose an Automation during a drag."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/start/concepts/"
+    description="Look up the terms used by Automations and Runs."
+  />
+</CardGrid>

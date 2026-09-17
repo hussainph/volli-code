@@ -1,10 +1,10 @@
 ---
 /**
- * PROPOSAL — a 0.2 homepage for comparative review, not the live lander.
+ * COMPARISON — a review copy of the 0.2 homepage, kept beside the live lander.
  *
- * `/` is untouched; this route is excluded from the sitemap (astro.config.mjs)
- * and carries noindex, so it can be deployed beside the current page and
- * compared without being found.
+ * `/` now uses this product-first structure; this route remains excluded from
+ * the sitemap (astro.config.mjs) and carries noindex so it can be compared
+ * without being found in search.
  *
  * Shape: the whole product first, the release second.
  *  - hero → the interactive board demo (the same VolliDemo island as `/`) →
@@ -26,10 +26,7 @@ const repositoryUrl = "https://github.com/hussainph/volli-code";
 const releasesUrl = `${repositoryUrl}/releases`;
 const issuesUrl = `${repositoryUrl}/issues`;
 const docsUrl = "https://docs.volli.app";
-// The launch build should point this at the Automations guide once
-// docs/guides/automations ships (audit §8.1). Until then the docs home is the
-// only destination that exists, and a reviewer should not land on a 404.
-const automationsDocsUrl = docsUrl;
+const automationsDocsUrl = `${docsUrl}/guides/automations/`;
 const description =
   "The workspace for parallel coding agents. Coding agents work your tickets in parallel, each in its own worktree; you review every change. Local-first, on your Mac.";
 
@@ -83,8 +80,8 @@ const workspace = [
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
-    {/* A proposal page for comparison, not a public route: keep it out of
-        search and out of the sitemap (see astro.config.mjs). */}
+    {/* A review copy, not an indexed landing page: keep it out of search and
+        out of the sitemap (see astro.config.mjs). */}
     <meta name="robots" content="noindex, nofollow" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Volli | The workspace for parallel coding agents" />
@@ -94,16 +91,16 @@ const workspace = [
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="icon" type="image/png" href="/volli-icon-dark.png" />
-    <title>Volli 0.2 homepage proposal | The workspace for parallel coding agents</title>
+    <title>Volli 0.2 homepage comparison | The workspace for parallel coding agents</title>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
-    {/* Reviewer context only. Delete this bar if the proposal is adopted. */}
-    <p class="proposal-note">
-      <span>Proposal</span>
-      A 0.2 homepage for side-by-side review. The live page is unchanged.
-      <a href="/">Open the current homepage</a>
+    {/* Reviewer context only. */}
+    <p class="comparison-note">
+      <span>Comparison</span>
+      A review copy of the 0.2 homepage. The live page now uses this structure.
+      <a href="/">Open the live homepage</a>
     </p>
 
     <header class="site-header">
@@ -124,7 +121,7 @@ const workspace = [
     <main id="main" tabindex="-1">
       {/* The durable promise. Category, maturity and platform are read before
           anything else on the page. */}
-      <section class="hero hero--proposal" id="top">
+      <section class="hero hero--comparison" id="top">
         <span class="alpha-pill">Alpha · Apple silicon</span>
         {/* Each clause is masked so it can rise into place once on load; the
             text stays one node per clause and reads as one sentence. */}
@@ -220,8 +217,8 @@ const workspace = [
           </span>
           <h2 id="release-title">Save how work starts.</h2>
           <p>
-            Save the instructions, trigger, and runtime once. Run it by hand, arm a board column, or
-            put it on a schedule. Each run opens a fresh Session.
+            Save the Instructions, Trigger, and Runtime once. Run an Automation by hand, arm a board
+            column, or put it on a schedule. Every Run opens a fresh Session.
           </p>
         </div>
 
@@ -233,22 +230,25 @@ const workspace = [
           <li>
             <b>By hand</b>
             <span>
-              From the Automations page, a ticket, or the command palette. <strong>Run once</strong>
-              {" "}sends one-time Instructions without saving anything.
+              From the Automations page, a ticket, a board card, or the command palette. It stays
+              available by hand even when automatic triggering is switched off. <strong>Run once</strong>
+              {" "}sends one-time Instructions without saving an Automation.
             </span>
           </li>
           <li>
             <b>Ticket enters</b>
             <span>
-              Arm one automation per column, on this Mac. Only a deliberate move — a drag, a status
-              change, or a volli CLI move — fires it. Tickets already there are left alone.
+              Enable it on this Mac, then arm one Automation per column. Only a deliberate move — a
+              drag, a status change, or a volli CLI move — fires it. Tickets already there are left
+              alone, and the move keeps a single Cancel window.
             </span>
           </li>
           <li>
             <b>On a schedule</b>
             <span>
-              Hourly, Every day, Mon–Fri, or Weekly, in your time zone, while Volli is open. Skips are
-              recorded with a reason, never replayed.
+              Hourly, Every day, Mon–Fri, or Weekly, in your time zone, while Volli is open. A
+              Ticket enters Trigger starts a Ticket Session; a schedule starts a Board Session. Skips
+              are recorded with a reason, never replayed.
             </span>
           </li>
         </ul>
@@ -273,8 +273,8 @@ const workspace = [
             <h3>Your models, your provider</h3>
             <p>
               Model requests go to the provider and account you configure in{" "}
-              <a href={`${docsUrl}/guides/settings/`}>Model Access</a>. An automation’s runtime sets
-              its model and tier. Choose Deep, Fast, or Default model.
+              <a href={`${docsUrl}/guides/settings/`}>Settings → Models</a>. An Automation’s Runtime
+              sets its model or tier.
             </p>
           </article>
           <article class="trust-item">

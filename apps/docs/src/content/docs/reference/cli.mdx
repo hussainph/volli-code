@@ -14,6 +14,11 @@ typed by hand. It talks to the running app over a local Unix socket.
 
 Every public command accepts `--json` for machine-readable output.
 
+The `volli` CLI does not author or list Automations. Create and configure them
+on the app's **Automations** page. A CLI move is still a **Deliberate move**, so
+it can trigger an enabled Automation armed for the destination column; see
+[Automations](/guides/automations/) for that behavior.
+
 ## Addressing
 
 Commands that take an `<id>` want a display ID, like `VC-12`.

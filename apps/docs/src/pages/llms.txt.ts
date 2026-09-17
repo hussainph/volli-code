@@ -22,6 +22,7 @@ const SECTIONS = [
     label: "Using Volli",
     slugs: [
       "guides/board",
+      "guides/automations",
       "guides/ticket-workspace",
       "guides/agents-and-worktrees",
       "guides/settings",

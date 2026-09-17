@@ -1,9 +1,9 @@
-/* Page styles for the 0.2 homepage proposal (/preview/home-0-2/).
+/* Page styles for the public 0.2 homepage and its review preview.
  *
  * Loaded after global.css, which already owns the shared furniture: the skip
  * link, the alpha pill, the header, the hero block, the CTAs, the feature
  * glyphs and the footer. Nothing here restyles those — this file adds only the
- * sections the proposal introduces, plus the few modifiers it needs.
+ * sections this homepage introduces, plus the few modifiers it needs.
  *
  * The storyboard (.storyboard, .story-*) has its own stylesheet and is not
  * touched here.
@@ -12,13 +12,13 @@
  * accent, Mona Sans at restrained weights, hairlines instead of gradients,
  * generous measure, one primary CTA. §6.2's complaint is rhythm, not surface,
  * so the extra sections alternate between open space and a hairline rule
- * rather than adding new backgrounds. Nothing on the page animates; the only
- * transitions are the 180ms link hovers global.css already uses.
+ * rather than adding new backgrounds. Motion is limited to one-time reveals and
+ * illustration movement, with reduced-motion fallbacks.
  */
 
 /* Reviewer bar. Deliberately thinner and quieter than a banner — it explains
    the route, it does not announce anything about the product. */
-.proposal-note {
+.comparison-note {
   display: flex;
   margin: 0;
   padding: 9px 24px;
@@ -36,7 +36,7 @@
 
 /* The label reads like .alpha-pill's text, without the pill: a bordered
    capsule up here would compete with the real status marker in the hero. */
-.proposal-note span {
+.comparison-note span {
   color: #ff9a68;
   font-size: 11px;
   font-weight: 600;
@@ -44,7 +44,7 @@
   text-transform: uppercase;
 }
 
-.proposal-note a {
+.comparison-note a {
   color: #ff966c;
   text-decoration: underline;
   text-decoration-color: rgb(255 150 108 / 38%);
@@ -53,13 +53,13 @@
   transition: text-decoration-color 180ms ease;
 }
 
-.proposal-note a:hover {
+.comparison-note a:hover {
   text-decoration-color: #ff966c;
 }
 
 /* Hero — three sentences, not one clause, so the column and the headline
    measure both need more room than the single-promise hero they inherit. */
-.hero--proposal {
+.hero--comparison {
   max-width: 860px;
 }
 
@@ -501,7 +501,7 @@ section[id] {
 }
 
 @media (max-width: 560px) {
-  .proposal-note {
+  .comparison-note {
     padding: 9px 20px;
   }
 

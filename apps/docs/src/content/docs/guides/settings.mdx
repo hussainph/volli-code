@@ -1,15 +1,17 @@
 ---
 title: Settings and configuration
-description: Every pane in Settings and Configure, including the worktree copy set that controls which local files reach a fresh ticket, and how to back up your data.
+description: Configure models, integrations, storage, and project-specific agent behavior in Volli Code.
 sidebar:
   label: Settings
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli splits configuration into two places: **Settings**, for preferences that
-apply everywhere, and **Configure**, for defaults scoped to one project. This
-page covers every pane in both, and the one path for backing up your data.
+Volli separates app-wide **Settings** from project-specific **Configure**.
+Automation records, their Runtime choices, and their machine-local **Enabled**
+switches live on the [Automations](/guides/automations/) page, not in Settings.
+An Automation set to a project default reads the model policy described in
+**Settings → Models** and the project's **Configure → Sessions** settings.
 
 ## Settings
 
@@ -17,114 +19,104 @@ Open **Settings** from the gear icon in the sidebar footer.
 
 ### General
 
-**Settings → General → Done worktree retention** sets how long Volli keeps a
-finished ticket's checkout. It defaults to 14 days and accepts whole numbers of
-1 or more.
-
-After a ticket has spent that long in Done, Volli can remove its clean worktree
-folder when no pull request is open and no work is running there. The ticket,
-branch, commits, and pull-request URL remain, and you can recreate the worktree
-from the branch. The same setting controls when clean orphaned worktree folders
-become eligible for cleanup.
+**Settings → General** controls the app window: whether to show the project
+switcher and whether to keep the sidebar open.
 
 ### Appearance
 
-**Settings → Appearance** has three sections. **App theme** holds the
-light/dark/auto mode and the canvas editor; see [Theming](/guides/theming/) for
-both. **Editor** and **Terminal** are covered here.
+**Settings → Appearance** contains the app theme, editor and terminal
+appearance, display zoom, and diff layout. See [Theming](/guides/theming/) for
+the canvas, light/dark mode, and terminal colors.
 
-**Editor.** The syntax-highlighting theme for the editor Volli uses for files
-and documents. It doesn't follow your canvas. Leave it alone and the row shows
-**Default**; pick one explicitly and it shows **Set by Volli**, with a button to
-reset it.
+### Notifications
 
-**Terminal.** Font family and font size, plus the terminal's color theme
-(covered in [Theming](/guides/theming/#what-the-terminal-does)). Each row shows
-where its value came from: **Inherited from Ghostty**, **Set by Volli**, **Set
-by this project**, or **Built-in default**, with a revert button on anything
-Volli set. Reverting removes the key from Volli's overlay file rather than
-touching your Ghostty config. Two buttons under **Config files** reveal the
-Ghostty config and Volli's overlay file in Finder.
+**Settings → Notifications** controls which native notifications Volli sends,
+including when an agent needs your input, a pull request merges, a worktree is
+reclaimed, or an update is ready.
 
-### Model Access
+### Models
 
-**Settings → Model Access** holds the model policy for structured Sessions.
-Choose separate defaults for **Board chats**, **Ticket Sessions**, and
-**Utility** work; Ticket Sessions and Utility inherit the Board chats default
-until you choose one explicitly. **Automatic compaction** controls whether
-Sessions compact before their context window fills, and each visible model can
-set its own reserve. **Visible models** controls which available models appear
-in every composer and picker. The Accounts section shows which providers are
-available and gives you a recovery action when sign-in is required. Volli never
-silently substitutes a different model or account.
+**Settings → Models** is the Model Access surface. Set default models for the
+Board, Ticket Sessions, and other model purposes; configure named default tiers;
+choose which models appear in pickers; and manage provider accounts. **Automatic
+compaction** is also here. Volli does not silently replace an unavailable model
+with another one.
 
-### Web
+An Automation can use a project default, a named default tier, or an exact
+model and reasoning level. See [Automations](/guides/automations/#set-a-runtime)
+for how those choices are saved and resolved.
 
-**Settings → Web** selects the provider used by structured Sessions for web
-search. Choose **Off**, **Brave**, **Exa**, or **SearXNG**. Brave and Exa store
-the API key in your macOS keychain and never read it back into the renderer.
-SearXNG stores the instance URL you provide.
+### Web Search
 
-### Harness Runtimes
+**Settings → Web Search** chooses **Off**, **Brave**, **Exa**, or **SearXNG** for
+structured Session web search. Brave and Exa use an API key; SearXNG uses the
+instance URL you provide. Keys are not shown again after they are saved.
 
-**Settings → Harness Runtimes** lists the terminal companions Volli can launch:
-**Claude Code**, **Codex**, **Cursor**, and **OpenCode**, plus registered custom
-harnesses. These settings describe manual terminal integrations, not the
-Pi-backed structured runtime configured under Model Access.
+### Integrations
 
-### CLI
+**Settings → Integrations** lists supported external editors and terminals and
+chooses what Volli uses when you open a file or worktree. **Ask every time** is
+available when you do not want a default.
 
-**Settings → CLI** shows which `volli` executable and shell integration are in
-use. **Run Doctor** checks the live installation. **Fix & Re-run** regenerates
-wrappers, harness configuration, and shell integration before checking again.
+### Storage
 
-### Worktrees
+**Settings → Storage** groups the data and cleanup controls that affect the
+local install:
 
-**Settings → Worktrees** lists orphaned worktree directories: leftovers from
-tickets that no longer exist, kept on disk because git found uncommitted
-changes, an unfinished merge, or commits that never reached a remote. Volli
-never deletes these automatically. Each row gets **Reveal in Finder** and
-**Delete**. Deleting is permanent and asks you to confirm first.
+- **Retention** sets how long clean Done ticket worktrees can remain before
+  Volli can reclaim their folders. The ticket, branch, commits, pull-request
+  link, and history remain.
+- **Build artifacts** scans worktrees for git-ignored dependencies, build
+  output, and caches and can trim them after confirmation. Local configuration
+  and active or dirty worktrees are protected.
+- **Pi session logs** finds logs no longer referenced by a Session and offers
+  confirmed cleanup.
+- **Orphaned worktrees** scans for folders no longer owned by a ticket and
+  offers a separate confirmed cleanup.
+- **Database** shows the local database and can export the supported data as
+  JSON. The export is a backup and inspection file; Volli has no import path.
 
-Volli sweeps for orphans once, at app launch, and caches the result. Press the
-refresh button to rescan on demand, for instance after you've committed and
-pushed the work yourself.
+### Telemetry
+
+**Settings → Telemetry** optionally exports agent telemetry to an OpenTelemetry
+collector that you specify. It is separate from model requests and is off until
+you enable it.
+
+### Updates
+
+**Settings → Updates** shows the installed version, update channel, and update
+checks for the alpha build.
+
+### About
+
+**Settings → About** checks the installation, CLI integration, and health of the
+supported terminal companions. Use its repair action or copy the support report
+when troubleshooting; it is where the former CLI and harness-health checks now
+live.
 
 ## Configure
 
-Open the **Configure** tab for a selected project. Everything here is scoped to
-that one project.
+Open **Configure** for a selected project. These settings belong to that
+project rather than to the whole app.
 
-### General
+### Agent
 
-**Configure → General → Default base branch** overrides which branch a new
-ticket's worktree branches from. Leave it blank and Volli detects your repo's
-default itself, from `origin`'s HEAD, or your current branch if there's no
-remote.
+- **Skills** manages the project's available Skills and their prompt budget.
+- **Commands** manages project slash commands and templates.
+- **MCP Servers** configures the project's Model Context Protocol servers.
+- **Plugins** lists and manages installed project plugins.
+- **Authority** sets the project's agent authority policy and approval behavior.
 
-**Configure → General → Setup command** runs once in a fresh ticket terminal,
-after its worktree is created and before a terminal harness starts. Use it for
-`pnpm install` or another command the worktree needs. Output stays in that
-terminal. If setup fails, the harness does not start and the terminal remains
-open so you can fix it by hand.
+### Project
 
-### Appearance
+- **Sessions** sets project-level Session defaults and instruction precedence.
+- **Appearance** overrides the app theme, editor, and terminal settings for
+  this project.
+- **Worktrees** sets the default base branch, setup command, and copy set for a
+  fresh ticket worktree.
 
-**Configure → Appearance** lets this project override the app-wide canvas, the
-light/dark choice, and the terminal theme, each on its own. The editor follows
-the resolved light/dark choice automatically. Covered in
-[Theming](/guides/theming/#use-a-different-theme-for-one-project).
-
-### Worktrees
-
-**Configure → Worktrees** documents the copy set: which files, besides your
-tracked source, reach a fresh ticket worktree. By default that's `.env*` and
-`.claude/settings.local.json`, copied with their real contents so an agent has
-your local secrets and settings without either being committed to the repo.
-
-Add a `.worktreeinclude` file at your project's repo root to change the set. It
-uses gitignore syntax, one pattern per line, and Volli reads it straight from
-your main checkout, so it never has to be tracked by git itself:
+For the worktree copy set, add a `.worktreeinclude` file at the repository root
+when you need to extend or suppress the defaults:
 
 ```
 # Extend the default copy set
@@ -135,46 +127,37 @@ config/dev-secrets.json
 !.env*
 ```
 
-The copy step follows three more rules:
-
-- It fires once, right after `git worktree add`, before the setup command or
-  the agent starts.
-- If a file already exists at the destination, because `git worktree add` put
-  it there, Volli leaves it alone. This step only fills in what git doesn't
-  track.
-- Volli recreates a symlink as a symlink rather than following it, so a link
-  pointing outside your repo can't leak its target's contents into the
-  worktree.
+The copy step runs once after `git worktree add`, before setup or an agent
+starts. It leaves files that Git already created alone and recreates symlinks as
+symlinks rather than following them.
 
 <Aside type="caution">
-  The copy set duplicates whatever it matches onto disk in every ticket
-  worktree, including your `.env` files. A coding agent running in that
-  worktree can read them.
+  A copied local configuration file exists in every new ticket worktree. An
+  agent running there can read it.
 </Aside>
 
-## Back up your data
+## Back up local data
 
-Volli does not sync its local database. **File → Export Database as JSON…**
-writes your projects, tickets, labels, event history, Sessions, and comments to
-a JSON file at a location you choose. There's no import path back in, so treat
-the export as a backup and inspection tool rather than a restore mechanism.
+Volli keeps projects, tickets, labels, history, Sessions, comments, and
+Automation records in local storage. It does not sync them to an account. Use
+**Settings → Storage → Database → Export** for a JSON backup or inspection file.
 
 ## Next steps
 
 <CardGrid>
   <LinkCard
-    title="Theming"
-    href="/guides/theming/"
-    description="Build the app and terminal color palette this page doesn't cover."
+    title="Automations"
+    href="/guides/automations/"
+    description="Save a Runtime choice and control when work starts."
   />
   <LinkCard
-    title="Chats and worktrees"
-    href="/guides/agents-and-worktrees/"
-    description="How built-in chats, worktrees, and terminal companions differ."
+    title="Theming"
+    href="/guides/theming/"
+    description="Build the app and terminal color palette."
   />
   <LinkCard
     title="Troubleshooting"
     href="/reference/troubleshooting/"
-    description="Fixes for Model Access, worktrees, terminals, and local data."
+    description="Fix model, worktree, terminal, and local-data problems."
   />
 </CardGrid>
