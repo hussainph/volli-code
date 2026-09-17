@@ -24,6 +24,7 @@
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check",
+    "check:excluded-dependencies": "node scripts/check-excluded-dependencies.mjs --self-test && node scripts/check-excluded-dependencies.mjs",
     "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs"
   },
   "devDependencies": {
