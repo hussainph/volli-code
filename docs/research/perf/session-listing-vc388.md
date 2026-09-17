@@ -1,8 +1,9 @@
-# Listing a project's Session roster (VC-388)
+# Listing a project's Session roster (VC-388, VC-392)
 
 Split out of VC-383's audit (`loading-states-vc383.md`, deferred items D3 and
 D4). VC-383 put a skeleton over the block this describes; this measures the
-block itself and removes it.
+block itself and removes it. VC-392 then measured what the same IPC handler
+pays **after** the fold — see "The handler's tail" below.
 
 Harness: `apps/desktop/e2e/bench/session-listing-vc388.mjs`. Unlike
 `session-rpc-sqlite-bench.mjs` it needs no existing database — the roster is
@@ -12,6 +13,10 @@ takes the path the app writes.
 ```
 node --expose-gc apps/desktop/e2e/bench/session-listing-vc388.mjs \
   --sessions 60 --events 150 --repeats 7
+
+# the provenance arms scale with Tickets and their history, not only Sessions
+node --expose-gc apps/desktop/e2e/bench/session-listing-vc388.mjs \
+  --sessions 240 --events 20 --repeats 5 --tickets 40 --ticket-events 300
 ```
 
 Machine: Apple Silicon, better-sqlite3 on WAL, `synchronous = NORMAL`.
@@ -116,6 +121,89 @@ falling off a cliff, which chunk 1 does not.
 A browser host has no `setImmediate`; `MessageChannel` is the no-clamp spelling
 there, and `SessionEnginePorts.yieldToHost` is the seam for it.
 
+## The handler's tail: provenance (VC-392)
+
+Everything above stops at `engine.listSessions()`. The renderer's handler does
+not:
+
+```ts
+sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+```
+
+`readSessionProvenance` is up to three synchronous statements per Session, one
+of them an index seek on `ticket_events_ticket (ticket_id, created_at)` whose
+`json_extract(payload, '$.sessionId')` comparison then runs over that Ticket's
+whole timeline. The fold above it yields every eight Sessions; this map did
+not yield at all, so after VC-388 it was **the** unbroken block in the handler.
+On the owner's 1,438-Session fleet the handler ran p50 ≈ 2.1 s with a longest
+single stall of 135–187 ms, and that stall was this tail (ticket comment,
+2026-09-16).
+
+The harness now has the whole handler. Two new arms isolate the tail over an
+already-folded roster (`provenanceTail*`) and two run the handler end to end
+with a cold engine (`handler*`), which is a first visit to a project. The
+fixture grew the records provenance is actually read out of: Tickets with real
+timelines, a `session_started` event per Ticket Session (person, parent Session
+and Automation actors), a completed Run every tenth Session, a pre-insert mint
+intent every twentieth, and a Board Session every seventh.
+
+Machine: Apple Silicon, load average 7–13 throughout (other Sessions working),
+so read the ratios rather than the absolutes.
+
+| roster | arm | p50 | p95 | longest block |
+|---|---|---|---|---|
+| 60 Sessions, 8 Tickets, 532 Ticket events | tail, per Session | 2.2 ms | 6.1 ms | **7.7 ms** |
+| | tail, batched | 0.9 ms | 1.5 ms | **3.1 ms** |
+| 240 Sessions, 40 Tickets, 12,206 Ticket events | tail, per Session | 39.4 ms | 61.6 ms | **63.8 ms** |
+| | tail, batched | 4.1 ms | 6.8 ms | **7.8 ms** |
+| | whole handler, per Session | 93.8 ms | 138.6 ms | **65.4 ms** |
+| | whole handler, batched | 81.2 ms | 113.8 ms | **14.3 ms** |
+| 1,000 Sessions, 200 Tickets, 60,858 Ticket events | tail, per Session | 64.8 ms | 94.2 ms | **95.6 ms** |
+| | tail, batched | 27.8 ms | 40.5 ms | **43.1 ms** |
+| | whole handler, per Session | 314.9 ms | 505.6 ms | **67.8 ms** |
+| | whole handler, batched | 284.5 ms | 335.6 ms | **31.2 ms** |
+
+Read the middle block first: at 240 Sessions the handler's longest block is
+**65.4 ms with the per-Session read and 14.3 ms with the batched one**, and the
+fold's own cold block in the same run is 4.3 ms. That is the ticket's claim
+measured — the tail was the block, not the fold — and it is the claim removed.
+
+### What the batch is
+
+`readSessionProvenances(db, queries[])` asks each of the four durable sources
+once for every Session that still needs it, in the same precedence the single
+reader used: the completed Run, the pre-insert mint marker, the Ticket's
+`session_started` event, the parent Session's title. Four statements for a
+roster of any size (pinned by a test), against up to three per Session.
+
+The set is passed as one JSON array through `json_each` rather than a generated
+`IN (?,?,?)`. Two reasons, both structural: the SQL text is then identical for
+every roster size, so `prepared`'s per-handle cache holds one statement per
+stage instead of one per arity, and no roster can reach SQLite's
+bound-parameter limit. `EXPLAIN QUERY PLAN` shows each stage still a
+`SEARCH … USING INDEX` driven from the list.
+
+Most of the win is stage 3. A worked Ticket's roster used to ask for that
+Ticket's whole timeline once per Session on it; now each Ticket is read once.
+That is why the arms scale with `--tickets × --ticket-events` and not only with
+`--sessions`.
+
+### The fetch/push agreement
+
+The constraint the ticket names: the push channel (`activity-watch.ts`) reads
+provenance for one Session at a time, deliberately, so a push and a fetch never
+disagree about who started a Session — the renderer applies a push as a
+whole-row upsert, so a disagreement would change a Session's mark the moment it
+did anything.
+
+It is held by construction rather than by care: `readSessionProvenance` **is**
+`readSessionProvenances` with a batch of one, so there is one implementation of
+the question in the process. A batch of one costs what the old per-Session
+queries cost, because the stages short-circuit the same way. Two tests hold it
+from both ends — `readSessionProvenances` answers a mixed roster exactly as the
+single reader answers each row, and `volli:session-list` returns rows that equal
+the ones the real push channel publishes for the same Sessions.
+
 ## Cache entry weights
 
 Held-heap after a forced GC, divided by rows. Two roster shapes, because the
@@ -180,7 +268,16 @@ nobody is looking at, each costing one re-read when dropped.
 - The "old shape" arm and the chunk-size sweep read but do not fold (see the
   `folds?` column). Re-measure both through `projectStoredSession` on a quiet
   machine before quoting their absolute numbers anywhere else.
-- The `volli:session-list` IPC handler still runs `sessionListingRows` after
-  the chunked fold, and `readSessionProvenance` inside it is up to three
-  synchronous SQLite queries per Session in one unbroken block. The fold's
-  block is gone; this one is not measured here and is filed as VC-392.
+- At **fleet** scale the batched tail is smaller but not yet inside a frame:
+  1,000 Sessions over 200 worked Tickets still block for 43 ms, because stage 3
+  scans 60,858 `ticket_events` rows and pays a `json_extract` on each. The
+  ticket's done-condition is dozens of Sessions (0.9–4 ms), so batching alone
+  answers it; the next lever for a fleet is an index the payload lookup can
+  seek — `CREATE INDEX … ON ticket_events(json_extract(payload, '$.sessionId'))
+  WHERE kind = 'session_started'` — which turns that stage into one seek per
+  Session instead of a scan per Ticket. That is a migration and a different
+  query shape (driven by Session id, with the Ticket kept as the filter), so it
+  is deliberately not in VC-392.
+- The fold is now the handler's cost again, not its block: 284 ms p50 for a
+  1,000-Session roster, in yielding chunks. Whether a first visit should fold a
+  whole roster at all is VC-403's question, not this file's.
