@@ -1,20 +1,31 @@
 /**
- * The ticket rail's Automations block (VC-129): one split button that runs an
- * Automation on THIS Ticket without leaving the current tab. VC-234 makes that
- * landing universal: success toasts with an "Open session" action and never
- * navigates.
+ * The ticket rail's Automations block (VC-129): what this Ticket can be made
+ * to run, and one press to run it, without leaving the current tab. VC-234
+ * makes that landing universal: success toasts with an "Open session" action
+ * and never navigates.
  *
- * **One control, and nothing under it** (VC-406). The block used to stack
- * three things under its eyebrow: the split button, a visible list of every
- * column's Automations (each a ghost button with a play glyph), and this
- * Ticket's Runs. The list repeated, in the open, exactly the grouped rows the
- * button's own caret menu holds — every name twice in one glance, in two
- * drawings, and the block grew a row per Automation the project authored. The
- * Runs were doors back to their Sessions, and every one of those Sessions is
- * already a row in the Sessions roster above, wearing the bolt that says a Run
- * started it (`session-provenance-mark.tsx`); a second list of the same doors
- * under a different heading was the roster drawn twice. Both are gone. What is
- * left is the one thing the rail exists to offer here: the press.
+ * **ONE LIST, CAPPED** (VC-406). The block has been three shapes. It began as
+ * a split button under an eyebrow, with a second visible list of every
+ * column's Automations under THAT (each a ghost button with a play glyph) and
+ * this Ticket's Runs under that again — three stacked drawings, every name
+ * printed twice, and nothing in the geometry saying which of them was a
+ * button. The correction deleted both lists and left the split button alone,
+ * which fixed the clutter by making the block say almost nothing: one name,
+ * and everything else behind a caret a reader has no reason to open.
+ *
+ * What it is now is the middle answer. The offer is a LIST, because a list is
+ * what the offer IS — several named things, one of which is this column's
+ * default. It is bounded by HEIGHT rather than by hiding rows: `max-h` and a
+ * scroller, so a project with thirty Automations costs the same vertical space
+ * as a project with three, and the roster underneath never moves. The rows are
+ * `ListRow`s, the same object the Sessions roster is built from, so "a row
+ * opens the thing it names" is one rule on this page rather than a convention
+ * per block. Run once is the one BUTTON here, wearing the rail's one control
+ * recipe — which is what makes it read as an act rather than as one more row.
+ *
+ * A Run's Session is listed once, in the roster below, wearing the bolt that
+ * says a Run started it (`session-provenance-mark.tsx`). This block never
+ * lists Runs.
  *
  * **The rail runs; it does not author.** There is no form here for making an
  * Automation, and that is a ruling rather than an omission (VC-112): an
@@ -29,10 +40,12 @@
  *
  * Four rules the drawing carries:
  *
- *  - **The press follows the column.** The default action is whatever this
- *    Ticket's current column has ARMED, so pressing here is the same act the
- *    board performs on a Deliberate move into that column. With nothing armed
- *    the press becomes Run once, which needs no record at all.
+ *  - **The column's own default is MARKED, not hidden.** The row this Ticket's
+ *    column has ARMED leads the list and says so: pressing it is the same act
+ *    the board performs on a Deliberate move into that column. Every other
+ *    offered row is a hand-run of the same kind, and says which column offers
+ *    it. With nothing armed there is no marked row and nothing is lost — Run
+ *    once needs no record at all.
  *  - **It never presses what it has not read.** The rail re-reads on arrival,
  *    and until that read lands the control says so and starts nothing bound
  *    (`automation-run-menu.tsx` owns the rule, `armed-run.ts` makes the same
@@ -41,9 +54,9 @@
  *    press the Automation the column used to arm. All of it is wrong for one
  *    reason: the cache cannot tell "nothing armed" from "not asked yet", nor a
  *    value that was just confirmed from one that merely survived.
- *  - **Never hidden when empty.** A project with no Automations still draws the
- *    Run button, says so in one line, and puts its existing page door in the
- *    header. Hidden-when-empty is how a feature never gets discovered.
+ *  - **Never hidden when empty.** A project with no Automations still draws
+ *    the block, its Run once button and its page door, and says the absence in
+ *    one line. Hidden-when-empty is how a feature never gets discovered.
  *  - **By hand is universal.** Running from here is unaffected by the
  *    machine-local switch (VC-112) — the switch governs what starts an
  *    Automation BESIDES a person. A switched-off Automation is offered with the
@@ -51,7 +64,6 @@
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
@@ -65,21 +77,15 @@ import {
   type Ticket,
 } from "@volli/shared";
 
-import {
-  AutomationRunMenuItems,
-  OffNote,
-  useAutomationRunOffer,
-  useOfferableModels,
-} from "./automation-run-menu";
+import { OffNote, useAutomationRunOffer, useOfferableModels } from "./automation-run-menu";
 import { InstructionsTextarea } from "./automation-editor";
 import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
-  overridePressable,
-  railRunLabel,
+  railAutomationRows,
   RAIL_UNREAD_LABEL,
+  type RailAutomationRow,
   type RailRunAction,
-  type TicketRailAutomations,
 } from "./ticket-rail-automations-model";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
@@ -94,10 +100,14 @@ import {
   RailSectionHeadingRow,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
-import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import {
@@ -107,18 +117,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@renderer/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@renderer/components/ui/dropdown-menu";
-import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
+import { ListRow } from "@renderer/components/ui/list-row";
 import { Segmented } from "@renderer/components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -138,15 +137,15 @@ const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
 type OverrideChoice = "inherit" | "pin";
 
 /**
- * The open Run once form, and what it opens HOLDING.
+ * Whether the Run once form is open.
  *
- * `null` is closed. An open form carries the per-invocation override the menu
- * was on when it asked for one — choosing "Run on model ▸ Opus" where the
- * column arms nothing is still a person choosing a model for the Run they are
- * about to describe, and dropping it on the way to the dialog would answer that
- * choice with a form resting on "Default model".
+ * It used to be an object carrying a per-invocation override, because the
+ * caret menu could pick a model on the WAY to the form — a menu that answered
+ * the Runtime question and then opened a dialog asking it again (VC-406). The
+ * offer is a list now and Run once is a plain button, so there is one place
+ * that question is answered: the form's own Runtime control.
  */
-type RunOnceRequest = { modelOverride: ModelSelection | null } | null;
+type RunOnceRequest = boolean;
 
 export function TicketAutomationsPanel({
   projectId,
@@ -161,7 +160,7 @@ export function TicketAutomationsPanel({
   );
   const ticketDisplayId =
     ticketPrefix === undefined ? "this ticket" : displayTicketId(ticketPrefix, ticket.ticketNumber);
-  const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(null);
+  const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(false);
   const models = useOfferableModels();
 
   // What this column offers, read on arrival and inert until that read lands
@@ -169,13 +168,14 @@ export function TicketAutomationsPanel({
   // board card's own menu).
   const rail = useAutomationRunOffer(projectId, ticket.status);
   const empty = rail.ready && !rail.listsAny;
+  const rows = railAutomationRows(rail);
 
   const run = (action: RailRunAction, modelOverride: ModelSelection | null): void => {
     // Nothing bound starts from an unread rail: the press that reached here
     // named no record, because the rail knew of none to name.
     if (action.kind === "unread") return;
     if (action.kind === "run-once") {
-      setRunOnce({ modelOverride });
+      setRunOnce(true);
       return;
     }
     // Where the Run lands is the roster's business: its Session arrives there
@@ -191,29 +191,37 @@ export function TicketAutomationsPanel({
 
   return (
     <section className={SECTION} aria-label="Automations" data-testid="ticket-rail-automations">
+      {/* The door is in the header at every state, not only the empty one. It
+          was the empty state's consolation prize before, which meant the one
+          reader who could not reach the Automations page from here was the one
+          whose project HAS Automations to arrange. */}
       <RailSectionHeadingRow label="Automations">
-        {empty ? <AutomationsPageDoor projectId={projectId} /> : null}
+        <AutomationsPageDoor projectId={projectId} />
       </RailSectionHeadingRow>
-      <AutomationRunControl
-        rail={rail}
-        models={models}
-        enabledIds={enabledIds}
-        onRun={run}
-        onRunOnce={() => setRunOnce({ modelOverride: null })}
-      />
-      {empty ? (
+      {!rail.ready ? (
+        // Named, and pressing nothing. The rail has not read yet, so it knows
+        // of no Automation — and of no absence either, which is why this is not
+        // the empty sentence (`ticket-rail-automations-model.ts`).
+        <p
+          className="px-2 text-label text-muted-foreground"
+          data-testid="ticket-rail-automations-unread"
+        >
+          {RAIL_UNREAD_LABEL}
+        </p>
+      ) : empty ? (
         // Visible and plain: one line, a report and never an action — the
         // header's own door is 20px above it, and a second copy of the same
         // door inside the empty state would be the same offer twice in one
-        // glance. The button above still presses — Run once names no record,
-        // so an empty project is not an empty control. Both the sentence and
-        // its page door wait for the read: "no automations here" is a claim
-        // about the project, and an unread cache cannot make it.
+        // glance. Run once below still presses: it names no record, so an
+        // empty project is not an empty block.
         <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
-      ) : null}
+      ) : (
+        <AutomationOfferList rows={rows} models={models} enabledIds={enabledIds} onRun={run} />
+      )}
+      <RunOnceControl onRunOnce={() => setRunOnce(true)} />
       <RunOnceDialog
-        request={runOnce}
-        onClose={() => setRunOnce(null)}
+        open={runOnce}
+        onClose={() => setRunOnce(false)}
         projectId={projectId}
         ticketId={ticket.id}
         ticketDisplayId={ticketDisplayId}
@@ -257,182 +265,211 @@ function AutomationsPageDoor({ projectId }: { projectId: string }) {
 }
 
 /**
- * The split button: `[⚡ Armed automation │ ▾]`.
+ * The offer, as a list: one row per Automation this Ticket may be made to run.
  *
- * Drawn as the repository card draws its publish row — a `ButtonGroup` of two
- * `outline` Buttons in the rail's one control recipe (`RAIL_CONTROL`), sized
- * to its label and parked at the left under the eyebrow, at the same `px-2`
- * the eyebrow and the roster's rows share. It used to be a `secondary` pill
- * stretched across the section, which is the shape of a list row here, not
- * of a button (VC-406): the one thing a reader must be able to tell at a
- * glance is which objects on this page are acts, and the rail's acts all
- * wear one costume now. The same rows come up on right-click, so turning to
- * the caret is a convenience rather than the only route; those rows are
- * `automation-run-menu.tsx`'s, which the board card's own `Automations ▸`
- * submenu mounts too.
+ * A `ListRow` per row, deliberately the SAME object the Sessions roster under
+ * it is built from. The rail's rule is that a row opens the thing it names, and
+ * an Automations block that invented its own row — a ghost button with a play
+ * glyph, which is what this block used to draw — made "is that a button or an
+ * item" a question a reader had to answer twice per page.
  *
- * The name truncates rather than the group growing past the rail: the
- * longest Automation name a project can author is longer than the rail is
- * wide, and the full label stays in `title` — the card's own primary keeps
- * the same rule.
+ * WHAT A ROW SAYS AT ITS RIGHT EDGE is which column offers it, except for the
+ * one this Ticket's own column has armed, which says so instead. That is the
+ * useful disambiguation at rail width: the armed row is the press the board
+ * would make on a Deliberate move, and every other row is a hand-run of a
+ * different lane's Automation onto this Ticket. Naming the current column on
+ * the armed row as well would spend the same pixels repeating the status pill
+ * two blocks up.
  *
- * The per-invocation override VC-112 names is reachable from BOTH deliberate
- * surfaces this control offers: the rail's own caret menu, and the nested item
- * in the context menu. Never from the drag path, which has no menu at all.
- *
- * While the rail is still reading, the default half is present, named and
- * disabled: never hidden, and never a press against a cache that has not
- * landed.
+ * THE CAP IS THE POINT. `max-h-40` is five rows and a scroller — enough that a
+ * typical project shows its whole offer without scrolling, and bounded so that
+ * a project which arms every column cannot push the Sessions roster off the
+ * resting view. Hiding all but one row behind a caret bounds the height too,
+ * and answers the block's own question ("what can I run here?") by refusing to.
  */
-function AutomationRunControl({
-  rail,
+function AutomationOfferList({
+  rows,
   models,
   enabledIds,
   onRun,
-  onRunOnce,
 }: {
-  rail: TicketRailAutomations;
+  rows: readonly RailAutomationRow[];
   models: readonly ComposerModel[];
   enabledIds: readonly string[];
   onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
-  onRunOnce(): void;
 }) {
-  const label = railRunLabel(rail.primary);
-  const overrides = modelOverrideRows(models);
-  // Present, named and unpressable while the reads land: the control is never
-  // hidden (VC-112), and it never presses a default it has not read yet.
-  const unread = rail.primary.kind === "unread";
-
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        {/* `max-w-full min-w-0` over the group's own `w-fit`: fit to the
-            label, but never past the column — the primary inside shrinks
-            and truncates before the caret can be pushed off the edge. */}
-        <ButtonGroup
-          aria-label="Run an automation on this ticket"
-          className="max-w-full min-w-0 px-2"
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={unread}
-            title={label}
-            aria-label={unread ? label : `Run ${label} on this ticket`}
-            className={cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate")}
-            onClick={() => onRun(rail.primary, null)}
-          >
-            <LightningIcon />
-            <span>{label}</span>
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                aria-label="Other automations"
-                className={cn(RAIL_CONTROL, "group")}
-              >
-                <CaretDownIcon
-                  weight="bold"
-                  className="size-3 transition-transform duration-150 ease-out group-data-[state=open]:rotate-180 motion-reduce:transition-none"
-                />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              {unread ? <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div> : null}
-              {/* Every column's offer, grouped and labelled (VC-329 item 5):
-                  this Ticket's own column first, the rest in board order. A row
-                  under another column's heading runs here, on THIS Ticket — the
-                  same hand-run as ever, without the detour through the status
-                  chip to make the column match. */}
-              {rail.groups.map((group, index) => (
-                <React.Fragment key={group.status}>
-                  {index > 0 ? <DropdownMenuSeparator /> : null}
-                  <DropdownMenuLabel className="text-label text-muted-foreground">
-                    {group.label}
-                    {group.current ? " · this ticket" : ""}
-                  </DropdownMenuLabel>
-                  {group.automations.map((automation) => (
-                    <DropdownMenuItem
-                      key={automation.id}
-                      onSelect={() => onRun({ kind: "automation", automation }, null)}
-                    >
-                      <LightningIcon />
-                      <span className="min-w-0 flex-1 truncate">{automation.name}</span>
-                      <OffNote automation={automation} enabledIds={enabledIds} />
-                    </DropdownMenuItem>
-                  ))}
-                </React.Fragment>
-              ))}
-              {rail.groups.length > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuItem onSelect={onRunOnce}>
-                <PlayIcon />
-                {UNBOUND_RUN_LABEL}…
-              </DropdownMenuItem>
-              {/* The override on the rail itself, beside the nested
-                  context-menu one below (VC-112 names both). Absent while the
-                  rail is still reading, and on a profile whose catalog offers
-                  no model a Run could name — in both cases there is nothing for
-                  a chosen model to be spent on. */}
-              {overrides.length === 0 || !overridePressable(rail.primary, true) ? null : (
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    <CpuIcon />
-                    Run on model
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {overrides.map(({ model, selections }) =>
-                      selections.length === 1 ? (
-                        <DropdownMenuItem
-                          key={model.id}
-                          onSelect={() => onRun(rail.primary, selections[0] ?? null)}
-                        >
-                          <CpuIcon />
-                          {model.label}
-                        </DropdownMenuItem>
-                      ) : (
-                        <DropdownMenuSub key={model.id}>
-                          <DropdownMenuSubTrigger>
-                            <CpuIcon />
-                            {model.label}
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent>
-                            {selections.map((selection) => (
-                              <DropdownMenuItem
-                                key={selection.reasoningLevel}
-                                onSelect={() => onRun(rail.primary, selection)}
-                              >
-                                <SlidersIcon />
-                                {selection.reasoningLevel}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
-                      ),
-                    )}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </ButtonGroup>
-      </ContextMenuTrigger>
-      {/* Right-click is the nested context-menu surface VC-112 names, drawn by
-          the same component the board card's own `Automations ▸` submenu
-          mounts — one answer to "what may this Ticket run", in two places. */}
-      <ContextMenuContent className="w-56">
-        <AutomationRunMenuItems
-          rail={rail}
-          enabledIds={enabledIds}
+    <ul
+      data-testid="ticket-rail-automation-list"
+      aria-label="Automations this ticket can run"
+      // `max-h-40` with its own scroller, and `overscroll-contain` so reaching
+      // the end of this list does not carry on scrolling the whole Now page
+      // out from under the pointer.
+      className="max-h-40 overflow-y-auto overscroll-contain"
+    >
+      {rows.map((row) => (
+        <AutomationOfferRow
+          key={`${row.columnLabel}:${row.automation.id}`}
+          row={row}
           models={models}
+          enabledIds={enabledIds}
           onRun={onRun}
-          onRunOnce={onRunOnce}
         />
-      </ContextMenuContent>
-    </ContextMenu>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * One offered Automation.
+ *
+ * The bolt is `fill` on the armed row and outline on the rest — the weight
+ * pair the app already uses to mark one item among its peers, and the reason
+ * the armed row needs no second badge beside its trailing word.
+ *
+ * Right-click carries the per-invocation override (VC-112). It is PER ROW
+ * here, which is strictly more than the old caret offered: that menu could
+ * only re-run the split button's own default on another model, so choosing a
+ * model for any other column's Automation meant running it first and changing
+ * it never. The drag path still has no menu and still takes no override.
+ */
+function AutomationOfferRow({
+  row,
+  models,
+  enabledIds,
+  onRun,
+}: {
+  row: RailAutomationRow;
+  models: readonly ComposerModel[];
+  enabledIds: readonly string[];
+  onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
+}) {
+  const action: RailRunAction = { kind: "automation", automation: row.automation };
+  const overrides = modelOverrideRows(models);
+  // Read here as well as inside `OffNote`, because the separator between the
+  // note and the column belongs to the pair rather than to either one.
+  const switchedOff = !enabledIds.includes(row.automation.id);
+  return (
+    <li>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <ListRow
+            data-testid="ticket-rail-automation-row"
+            data-armed={row.armed ? "true" : undefined}
+            aria-label={`Run ${row.automation.name} on this ticket`}
+            onActivate={() => onRun(action, null)}
+            leading={
+              <LightningIcon
+                weight={row.armed ? "fill" : undefined}
+                className={cn(
+                  "size-4 shrink-0",
+                  row.armed ? "text-primary" : "text-muted-foreground",
+                )}
+              />
+            }
+            primary={
+              <span className="min-w-0 flex-1 truncate text-ui" title={row.automation.name}>
+                {row.automation.name}
+              </span>
+            }
+            // ONE PHRASE, not two words that happen to be adjacent. Where the
+            // record is switched off the row says "Manual only · Doing", which
+            // reads as one qualifier; the two set side by side with a plain
+            // gap read as two competing labels, and at the 240px floor as one
+            // run-on string. The note itself stays — running BY HAND is
+            // unaffected by the machine-local switch (VC-112), so it qualifies
+            // the row rather than dimming or withholding it.
+            trailing={
+              <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
+                <OffNote automation={row.automation} enabledIds={enabledIds} />
+                {switchedOff ? <span aria-hidden>·</span> : null}
+                <span className={row.armed ? "text-primary-text" : undefined}>
+                  {row.armed ? "Armed" : row.columnLabel}
+                </span>
+              </span>
+            }
+          />
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem icon={LightningIcon} onSelect={() => onRun(action, null)}>
+            <span className="min-w-0 flex-1 truncate">Run {row.automation.name}</span>
+          </ContextMenuItem>
+          {/* Absent on a profile whose catalog offers no model a Run could
+              name: an override with nothing to pick is a menu that reads as
+              broken rather than as inapplicable. */}
+          {overrides.length === 0 ? null : (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuSub>
+                <ContextMenuSubTrigger icon={CpuIcon}>Run on model</ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {overrides.map(({ model, selections }) =>
+                    selections.length === 1 ? (
+                      <ContextMenuItem
+                        key={model.id}
+                        icon={CpuIcon}
+                        onSelect={() => onRun(action, selections[0] ?? null)}
+                      >
+                        {model.label}
+                      </ContextMenuItem>
+                    ) : (
+                      <ContextMenuSub key={model.id}>
+                        <ContextMenuSubTrigger icon={CpuIcon}>{model.label}</ContextMenuSubTrigger>
+                        <ContextMenuSubContent>
+                          {selections.map((selection) => (
+                            <ContextMenuItem
+                              key={selection.reasoningLevel}
+                              icon={SlidersIcon}
+                              onSelect={() => onRun(action, selection)}
+                            >
+                              {selection.reasoningLevel}
+                            </ContextMenuItem>
+                          ))}
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
+                    ),
+                  )}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            </>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
+    </li>
+  );
+}
+
+/**
+ * Run once — the block's one button, and the only act here that is not a row.
+ *
+ * It wears `RAIL_CONTROL`, the recipe every act on a rail page wears, sized to
+ * its label and parked at the left under the list at the same `px-2` the
+ * eyebrow and the rows share. That is the whole reason it is a button and the
+ * offers are rows: a reader must be able to tell an act from an item without
+ * reading either, and on this page the answer is the costume.
+ *
+ * It takes no pre-chosen model. It opens a FORM, and the form has a Runtime
+ * control in it — a menu that set the model on the way to a dialog that asks
+ * for the model again was two places to answer one question.
+ *
+ * Never hidden, never disabled, and unaffected by an unread rail: an Unbound
+ * Run names no record, so there is nothing here a stale cache could get wrong.
+ */
+function RunOnceControl({ onRunOnce }: { onRunOnce(): void }) {
+  return (
+    <div className="px-2 pt-1">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="ticket-rail-run-once"
+        className={cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate")}
+        onClick={onRunOnce}
+      >
+        <PlayIcon />
+        <span>{UNBOUND_RUN_LABEL}…</span>
+      </Button>
+    </div>
   );
 }
 
@@ -449,38 +486,36 @@ function AutomationRunControl({
  * `/` templates and Skills, same `@` files, same expansion at launch. A second
  * box wired slightly differently would be a second grammar wearing one name.
  *
- * It opens holding whatever override asked for it. Choosing "Run on model ▸
- * Opus" on a column that arms nothing IS a per-invocation override being
- * chosen, and a form that then rested on "Default model" would have quietly
- * discarded the only part of the request the person had already made.
+ * It opens on the resolved default every time. The Runtime is chosen HERE, in
+ * the form, and nowhere on the way to it — a control that pre-answered the
+ * question this form asks would be two places to answer one question, and the
+ * loser would be whichever the reader looked at second.
  */
 function RunOnceDialog({
-  request,
+  open,
   onClose,
   projectId,
   ticketId,
   ticketDisplayId,
   models,
 }: {
-  request: RunOnceRequest;
+  open: RunOnceRequest;
   onClose(): void;
   projectId: string;
   ticketId: string;
   ticketDisplayId: string;
   models: readonly ComposerModel[];
 }) {
-  if (request === null) return null;
+  // Unmounted when closed, which is also what remounts it per opening: a
+  // second Run once starts from a blank form rather than from the last one's
+  // words.
+  if (!open) return null;
   return (
     <RunOnceForm
-      // Remounted per opening, so a second Run once starts from a blank form
-      // rather than from the last one's words — and so the override it opens
-      // holding is this request's, not the previous request's.
-      key={`${request.modelOverride?.providerId ?? ""}:${request.modelOverride?.modelId ?? ""}:${request.modelOverride?.reasoningLevel ?? ""}`}
       projectId={projectId}
       ticketId={ticketId}
       ticketDisplayId={ticketDisplayId}
       models={models}
-      modelOverride={request.modelOverride}
       onClose={onClose}
     />
   );
@@ -491,21 +526,17 @@ function RunOnceForm({
   ticketId,
   ticketDisplayId,
   models,
-  modelOverride,
   onClose,
 }: {
   projectId: string;
   ticketId: string;
   ticketDisplayId: string;
   models: readonly ComposerModel[];
-  modelOverride: ModelSelection | null;
   onClose(): void;
 }) {
   const [instructions, setInstructions] = React.useState("");
-  const [choice, setChoice] = React.useState<OverrideChoice>(
-    modelOverride === null ? "inherit" : "pin",
-  );
-  const [pin, setPin] = React.useState<ModelSelection | null>(modelOverride);
+  const [choice, setChoice] = React.useState<OverrideChoice>("inherit");
+  const [pin, setPin] = React.useState<ModelSelection | null>(null);
   const { templates, skills } = usePromptTemplates(projectId);
   const fileIndex = useFileIndex(projectId);
 

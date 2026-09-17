@@ -1,24 +1,37 @@
 /**
- * The Now page's repository card — the Calm Stack's one worktree surface
+ * The repository card — the Calm Stack's one worktree surface
  * (the retired ticket-right-sidebar lab scratch's `EnvironmentSummary`).
  *
- * Stacked rows inside one framed card, in the order a person asks about them:
- * what changed (and a way into the Diffs page), which branch it is on (and,
- * behind it, the worktree identity), whether CI is happy with it (VC-182 — a
- * row that draws itself only when the PR has a rollup, and lives in
- * `pr-checks-row.tsx`), and what to do about it — the done-flow split button
- * (decision #45) balanced against the outward-facing pull-request link.
+ * IT LIVES ON THE DIFFS PAGE (VC-406), not on Now. The card answers one
+ * question — "what state is this worktree in, and what do I do about it" — and
+ * the page that answers the first half in detail is the one listing the
+ * changes. On Now it was a second, coarser drawing of the Diffs header (a file
+ * count and a ± pair over a list that prints both), and it put the commit
+ * button on a page where the changes it would commit are not on screen. Here
+ * the reading order is the work: the branch it lands on, where that branch
+ * stands, whether CI is happy with it (VC-182 — a row that draws itself only
+ * when the PR has a rollup, and lives in `pr-checks-row.tsx`), the done-flow
+ * split button (decision #45) balanced against the outward-facing PR link,
+ * and under all of it the files themselves.
+ *
+ * Its changes row went with the move: a row whose whole job was to route into
+ * the Diffs page is furniture once the card is ON that page, and the header
+ * two lines above already carries the count and the ± pair. The Git-state
+ * strip came the other way, out of the changes header and into the card as a
+ * row, so the page holds ONE framed worktree object rather than a card beside
+ * a `bg-muted` mini-table with its own radius and its own inset.
  *
  * It replaces the pinned Environment/Sources inspector the icon-mode rail used
  * to stack above every navigator: the Sources half was always a subset of the
  * Files page's own "Referenced" section, and the Environment half's rows all
  * routed into pages this card either shows inline or links to directly.
  *
- * It owns the rail's ONE live read of `worktree.status` + the composed Change
- * Set: the changes row and the publish row are projections of the same
- * snapshot, so the two halves of the card cannot disagree (#108). The rail is
- * exclusive (one page at a time), so this never doubles up with the Diffs
- * page's own watch.
+ * It owns ONE live read of `worktree.status` + the composed Change Set: the
+ * state strip and the publish row are projections of the same snapshot, so the
+ * two halves of the card cannot disagree (#108). It shares a page with the
+ * changes list's own read now, which costs nothing extra — main keeps the last
+ * good answer per ticket while a watcher covers the worktree (VC-372,
+ * `main/worktree/snapshot.ts`), so the second asker is served from it.
  *
  * ONE FAULT, ONE SENTENCE, ONE RECOVERY. The status read and the change watch
  * fail for the same reasons and usually with the same string — a worktree
@@ -54,7 +67,6 @@ import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
@@ -77,7 +89,7 @@ import type { WorktreeCommitInput } from "../../../../ipc/contract";
 import { ExternalAppDropdownMenu } from "@renderer/components/files/external-app-menu";
 import { createTerminalSession } from "@renderer/components/sessions/session-create";
 import {
-  formatChangeSetSummary,
+  formatWorktreeState,
   resolveDoneFlow,
   type DoneFlowStage,
   type MenuAction,
@@ -102,7 +114,6 @@ import {
   RAIL_CARD_SEAM,
   RAIL_CONTROL,
   RAIL_PANEL_INSET,
-  RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
@@ -128,7 +139,6 @@ import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { toastError } from "@renderer/lib/toast";
@@ -664,7 +674,60 @@ function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
 }
 
 /**
- * The Now page's repository card. Lazy-loads `status` + the composed Change Set
+ * Working tree, local commits, and remote state — the card's one row of counts.
+ *
+ * It used to be the changes header's own block, a `bg-muted/50` rounded table
+ * floating above the list. That put two differently-drawn worktree objects on
+ * one page (VC-406), so it is a card row now: same three facts, in the frame
+ * that already owns every other thing this page says about the worktree.
+ */
+export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot }) {
+  const state = formatWorktreeState(status);
+  const items = [
+    {
+      label: "Working",
+      value: state.working,
+      ink: status.uncommitted ? "text-attention" : "text-muted-foreground",
+    },
+    {
+      label: "Local",
+      value: state.local,
+      ink:
+        status.aheadOfBase !== null && status.aheadOfBase > 0
+          ? "text-foreground"
+          : "text-muted-foreground",
+    },
+    {
+      label: "Remote",
+      value: state.remote,
+      ink:
+        status.unpushed === 0 && status.aheadOfBase !== 0
+          ? "text-positive"
+          : (status.unpushed !== null && status.unpushed > 0) ||
+              (status.unpushed === null && status.aheadOfBase !== null && status.aheadOfBase > 0)
+            ? "text-attention"
+            : "text-muted-foreground",
+    },
+  ] as const;
+
+  return (
+    <div
+      data-testid="ticket-changes-git-state"
+      aria-label={`Working: ${state.working}; Local: ${state.local}; Remote: ${state.remote}`}
+      className={cn("grid grid-cols-3 gap-2 px-4 py-2", RAIL_CARD_SEAM)}
+    >
+      {items.map((item) => (
+        <span key={item.label} className="flex min-w-0 flex-col">
+          <span className="text-label text-muted-foreground">{item.label}</span>
+          <span className={cn("truncate text-label font-medium", item.ink)}>{item.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The Diffs page's repository card. Lazy-loads `status` + the composed Change Set
  * on mount (fetch on first appearance rather than riding along in the boot
  * payload) and refetches after every action so the card never goes stale. All
  * fetch/busy state is component-local (dialog-state-local convention: no global
@@ -673,12 +736,9 @@ function RetentionNoticeLine({ notice }: { notice: RetentionNotice }) {
 export function TicketRepositorySummary({
   projectId,
   ticket,
-  onShowChanges,
 }: {
   projectId: string;
   ticket: Ticket;
-  /** Deliberate selection: the changes row is a route into the Diffs page. */
-  onShowChanges(): void;
 }) {
   const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
@@ -960,7 +1020,6 @@ export function TicketRepositorySummary({
 
   const view = resolveDoneFlow(status, ticket.prUrl, stage);
   const retentionView = resolveRetention(retention, ttlDays);
-  const changeSetSummary = diff ? formatChangeSetSummary(diff) : null;
   const fileCount = diff?.files.length ?? 0;
 
   // The status read is the cause and the watch dying is its consequence, so the
@@ -973,21 +1032,13 @@ export function TicketRepositorySummary({
   // the shared sentence main answers every worktree read with, so the two sides
   // cannot drift into disagreeing about what "gone" reads like.
   const worktreeMissing = fault === WORKTREE_MISSING_ON_DISK;
-  // No worktree means no read to wait for: `refreshStatusAndDiff` returns early
-  // and `diff` stays null for good, so "No changes" would be a permanent lie.
-  // What CAN be said honestly is the ticket's worktree scoping (VC-16): before
-  // the first Session boots, a worktree ticket and a Main-checkout ticket used
-  // to read identically here, which made the composer's destination choice
-  // unreadable everywhere after creation.
-  const loadingChanges = hasWorktree && diff === null && fault === null;
-  const changesLabel = !hasWorktree
-    ? ticket.usesWorktree
-      ? "New worktree on first session"
-      : "Runs in the main checkout"
-    : diff === null
-      ? // Never got a snapshot: the banner below carries the fault and its
-        // Retry, so the row states the noun rather than the failure again.
-        "Changes"
+  // What the commit gate names as the breadth of the press. The card no longer
+  // draws a changes row — the page under it is the change list — so this is
+  // the one place the count is still spoken, and it is spoken in a dialog that
+  // only opens once a worktree exists.
+  const changesLabel =
+    diff === null
+      ? "Changes"
       : fileCount === 0
         ? "No changes"
         : `${fileCount} ${fileCount === 1 ? "change" : "changes"}`;
@@ -1097,42 +1148,13 @@ export function TicketRepositorySummary({
     // frame. The lift the scratch intended is `shadow-raised` —
     // one of the three solved tiers, tinted to the canvas in both appearances —
     // and adding it is a visual call, not a revival of the broken string.
-    <section
-      data-testid="ticket-repository-summary"
-      className={cn(RAIL_CARD_FRAME, RAIL_PANEL_MARGIN)}
-    >
-      <button
-        type="button"
-        data-testid="ticket-repository-changes"
-        onClick={onShowChanges}
-        title={changeSetSummary ?? undefined}
-        aria-busy={loadingChanges || undefined}
-        aria-label={`${loadingChanges ? "Reading changes" : changesLabel}, show Diffs`}
-        className={cn(RAIL_CARD_ROW, "pt-4 pb-2 hover:bg-accent/50")}
-      >
-        <GitDiffIcon className="size-4 shrink-0 text-muted-foreground" />
-        {/* One flex child either way, so the label lands where the bar was
-            rather than the row reflowing when the first read returns. `span`
-            because this row is a button: a `div` here is not phrasing content. */}
-        <span className="min-w-0 flex-1">
-          {loadingChanges ? (
-            <Skeleton
-              as="span"
-              aria-hidden
-              data-testid="ticket-repository-changes-loading"
-              className="my-[3px] block h-3.5 w-24"
-            />
-          ) : (
-            <span className="block truncate text-ui font-medium">{changesLabel}</span>
-          )}
-        </span>
-        {diff === null ? null : fileCount === 0 ? (
-          <CheckCircleIcon className="shrink-0 text-positive" />
-        ) : (
-          <DiffTotals diff={diff} />
-        )}
-      </button>
-
+    // No margin: the Diffs header this sits in is already inset to the
+    // column's edge, and a card that carried its own would inset twice
+    // (`RAIL_CARD_FRAME`'s own rule).
+    <section data-testid="ticket-repository-summary" className={RAIL_CARD_FRAME}>
+      {/* The card opens on its identity now that the changes row is gone, so it
+          pays the frame's own top inset rather than a seam it has nothing to be
+          separated from. */}
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -1143,7 +1165,7 @@ export function TicketRepositorySummary({
                 ? "Worktree identity"
                 : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
             }
-            className={cn(RAIL_CARD_ROW, RAIL_CARD_SEAM, "min-h-8 py-2 hover:bg-accent/50")}
+            className={cn(RAIL_CARD_ROW, "min-h-8 pt-3 pb-2 hover:bg-accent/50")}
           >
             <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
             {ticket.baseBranch !== null && ticket.branch !== null ? (
@@ -1163,10 +1185,17 @@ export function TicketRepositorySummary({
         <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
       </Popover>
 
-      {/* Between the branch and the buttons, which is where the question sits:
-          the row above says what is being published, this one says whether it
-          builds, and the block below is what publishes it. Draws nothing until
-          there is a PR with a rollup — see `pr-checks-row.tsx`. */}
+      {/* Where the branch stands — uncommitted work, local commits, what is
+          still unpushed. Under the identity because it is a fact ABOUT that
+          branch, and above CI because CI only has an opinion once something has
+          been pushed. */}
+      {status === null ? null : <WorktreeStateStrip status={status} />}
+
+      {/* Between the state and the buttons, which is where the question sits:
+          the rows above say what is being published and where it stands, this
+          one says whether it builds, and the block below is what publishes it.
+          Draws nothing until there is a PR with a rollup — see
+          `pr-checks-row.tsx`. */}
       <PrChecksRow retention={retention} />
 
       {hasWorktree ? (

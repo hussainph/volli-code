@@ -20,25 +20,33 @@
  * holding", the rail answers "what is happening on this Ticket". A block that
  * would be true of only the front chat is a block in the wrong place.
  *
- * Now is the resting page, and its order is the order attention goes:
+ * Now is the resting page, and it reads in three tiers — what this Ticket IS,
+ * what can be RUN on it, what is HAPPENING on it — with the money last:
  *
- *   1. Sessions — the working set. The most-used thing on the page is the
- *      door to the right chat, so it is the first thing under the pill and
- *      never scrolls out from under a long block above it.
- *   2. The repository card — what the worktree is doing and the one act on it.
- *   3. Properties — what the ticket is; three editable facts as pills.
- *   4. Usage — one row: what it cost. Absent on an unmetered Ticket.
- *   5. Automations — one act: run something on this Ticket.
- *   6. History — the record. Last, because it only grows, and a record that
- *      sat above the acts would push every one of them off the screen.
+ *   1. Properties — what the ticket is; three editable facts as pills, and
+ *      the smallest block on the page. It opens because it is the header of
+ *      the thing everything below is about, and because status is the field
+ *      that decides what the block under it offers.
+ *   2. Automations — what can be started here, as a height-capped list.
+ *      Between the facts and the roster because a Run is how a row appears in
+ *      that roster.
+ *   3. Sessions — the working set, and the door to the right chat.
+ *   4. History — the record. It only grows, so it closes the scroller.
+ *   5. Usage — what it cost, PINNED under the scroller as a footer rather
+ *      than stacked in it. Cost is glanced at, never worked in: a block that
+ *      scrolls away is one you hunt for, and one that costs a row of the
+ *      resting view is one you never have to.
+ *
+ * The worktree is NOT here (VC-406). The repository card moved to the Diffs
+ * page, where the changes it commits are on screen underneath it — see
+ * `ticket-repository-summary.tsx` for why the act belongs beside its subject.
  *
  * The page stacks with ONE `gap` and no block pays its own top padding: an
- * absent block (usage on a fresh Ticket, History on a new one) then leaves no
- * hole behind it, and a block cannot drift from its neighbours by carrying a
- * different inset than theirs. Two object kinds carry the page — a section
- * (an eyebrow row over list rows) and the framed card — and every act on it
- * wears one control recipe (`RAIL_CONTROL`), so "is this a button" is
- * answered by the drawing.
+ * absent block (History on a new Ticket) then leaves no hole behind it, and a
+ * block cannot drift from its neighbours by carrying a different inset than
+ * theirs. Two object kinds carry the page — a section (an eyebrow row over
+ * list rows) and the framed card — and every act on it wears one control
+ * recipe (`RAIL_CONTROL`), so "is this a button" is answered by the drawing.
  *
  * Nothing in here collapses the rail. That is deliberate, not an omission — a
  * panel cannot reopen itself, so the collapse control lives outside it, in the
@@ -63,8 +71,7 @@ import type { Ticket } from "@volli/shared";
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
-import { TicketUsageRailBlock } from "@renderer/components/usage/usage-rail";
-import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
+import { TicketUsageRailFooter } from "@renderer/components/usage/usage-rail";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
   TICKET_RAIL_MODE_LABELS,
@@ -157,8 +164,6 @@ export function TicketRail({
     [mode, activeTabId, setRailMode],
   );
 
-  const showChanges = React.useCallback(() => onSelectMode("changes"), [onSelectMode]);
-
   return (
     // The narrow flag travels ONE way: as a group attribute on the column, read
     // by every block through `RAIL_PANEL_INSET`. Not also as a prop — the two
@@ -185,40 +190,42 @@ export function TicketRail({
         className="flex min-h-0 flex-1 flex-col"
       >
         {mode === "now" ? (
-          // `pb-8` here rather than on the last block: the scratch hangs it off
-          // its session list, but that list is the one block this file does not
-          // own, so the page keeps its own floor.
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
-            {/* The roster opens the page and History closes it; what stands
-                between them is this panel's `children` — see its comment for
-                why one component still owns both ends. */}
-            <TicketSessionsPanel
-              projectId={projectId}
-              ticketId={ticket.id}
-              creating={creating}
-              onNewSession={onNewSession}
-              onNewChat={onNewChat}
-              onNewBrowser={onNewBrowser}
-              onActivateSession={onActivateSession}
-              onActivateChat={onActivateChat}
-            >
-              <TicketRepositorySummary
-                projectId={projectId}
-                ticket={ticket}
-                onShowChanges={showChanges}
-              />
+          // The scroller and its footer. Only the first scrolls: the page's
+          // blocks stack in it, and what is pinned under it stays readable at
+          // any scroll position.
+          <>
+            {/* `pb-8` here rather than on the last block: the scratch hangs it
+                off its session list, but that list is the one block this file
+                does not own, so the page keeps its own floor. */}
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
+              {/* What this Ticket IS: status, priority, labels. First because
+                  the block under it offers what THIS column arms. */}
               <TicketProperties projectId={projectId} ticket={ticket} />
-              {/* What this Ticket cost (VC-87), as one row under the facts
-                  about it. Absent — not empty — when cost is turned off or
-                  nothing was metered, and the column's gap closes over it. */}
-              <TicketUsageRailBlock ticketId={ticket.id} />
-              {/* What can be STARTED on this Ticket (VC-129): one press. Its
-                  Runs are Sessions, and they are listed where Sessions are —
-                  in the roster above, wearing the bolt — not under this
-                  block. The rail never authors: it runs and links to the page. */}
+              {/* What can be STARTED on this Ticket (VC-129), height-capped so
+                  a project with thirty Automations cannot push the roster off
+                  the page. Its Runs are Sessions, and they are listed where
+                  Sessions are — in the roster below, wearing the bolt — not
+                  under this block. The rail never authors: it runs, and links
+                  to the page. */}
               <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
-            </TicketSessionsPanel>
-          </div>
+              {/* The working set and, under it, the record. One component owns
+                  both — see its comment for why. */}
+              <TicketSessionsPanel
+                projectId={projectId}
+                ticketId={ticket.id}
+                creating={creating}
+                onNewSession={onNewSession}
+                onNewChat={onNewChat}
+                onNewBrowser={onNewBrowser}
+                onActivateSession={onActivateSession}
+                onActivateChat={onActivateChat}
+              />
+            </div>
+            {/* What this Ticket cost (VC-87), pinned under the scroller.
+                Absent — not empty — when cost is turned off or nothing was
+                metered, and then the page simply ends at its scroller. */}
+            <TicketUsageRailFooter ticketId={ticket.id} />
+          </>
         ) : null}
         {mode === "changes" ? changesContent : null}
         {mode === "files" ? filesContent : null}

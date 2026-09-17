@@ -228,7 +228,7 @@ export default function UsageSurfaces() {
         </Caption>
       </Group>
 
-      <Group heading="2 · Ticket rail — the card and its breakdown">
+      <Group heading="2 · Ticket rail — the pinned footer and its breakdown">
         <Rail>
           <TicketUsageBlock
             summary={TICKET}
@@ -241,7 +241,9 @@ export default function UsageSurfaces() {
           the caret. Everything the hero used to carry — the bar and its legend, the cached share,
           the basis sentence, the top model, the per-session ranking — is behind that one press.
           “Terminal (claude)” stays in the ranking at `—`: dropping it would make the rows fail to
-          add up to the total above them.
+          add up to the total above them. It is pinned UNDER the Now page rather than stacked in it,
+          so it wears a top rule instead of a frame: cost is the one thing on that page that is only
+          ever read, and a footer&rsquo;s boundary is with the page above it.
         </Caption>
       </Group>
 

@@ -185,8 +185,16 @@ export function HomeUsageRailCard({
   );
 }
 
-/** What a Ticket cost, and which of its Sessions spent it. */
-export function TicketUsageRailBlock({ ticketId }: { ticketId: string }) {
+/**
+ * What a Ticket cost, and which of its Sessions spent it — the Now page's
+ * pinned footer (VC-406).
+ *
+ * Named for where it sits, because where it sits is the decision: it is not a
+ * block in the page's stack and must not be mounted as one. See
+ * `ticket-usage-block.tsx` for why cost is the one thing on Now that is read
+ * rather than worked in, and therefore the one thing that is pinned.
+ */
+export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const costVisible = useCostVisible();
   const scope = React.useMemo<SessionUsageScope>(() => ({ kind: "ticket", ticketId }), [ticketId]);
   const bySession = useUsageReport({ scope, groupBy: "session" });

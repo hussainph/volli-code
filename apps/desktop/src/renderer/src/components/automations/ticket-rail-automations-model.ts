@@ -188,6 +188,68 @@ export function automationGroupsFor(input: {
   return [...groups.filter((group) => group.current), ...groups.filter((group) => !group.current)];
 }
 
+/**
+ * One row of the rail's Automations list (VC-406): what it is, whose column
+ * offers it, and whether it is the one this Ticket's column has ARMED.
+ *
+ * The rail draws the offer as a list rather than as a name inside a split
+ * button with the rest behind a caret. A caret menu answers "what else?" only
+ * for a reader who already suspects there is an else; the block's whole job is
+ * to say what this Ticket can be made to do, and a list says it without being
+ * asked. The list is height-capped instead (the view's business), which is the
+ * honest way to bound a block that grows with the project rather than hiding
+ * all but one of its rows.
+ */
+export interface RailAutomationRow {
+  automation: Automation;
+  /** The column that offers it, in the board's own words — or "Any column". */
+  columnLabel: string;
+  /** Whether this row is this column's armed default — what a Deliberate move would start. */
+  armed: boolean;
+}
+
+/**
+ * The groups flattened into rows, this Ticket's own column first.
+ *
+ * Flattened, not drawn as grouped sections with their own headings: at rail
+ * width a heading per column costs a row per column, and in a project that
+ * arms every lane the headings would outnumber the Automations. Each row names
+ * its own column at the right instead, which is the same fact at a quarter of
+ * the height and stays true when the list is scrolled halfway.
+ *
+ * ONE ROW PER RECORD, which is where this parts company with the menu it
+ * replaces. The groups repeat a record that several columns offer, and that is
+ * right for a MENU: the heading is the subject there, and "what may I run from
+ * Done" is a question worth listing twice to answer. Here every row reaches
+ * the same `runAutomationOnTicket` with the same Automation id, so two rows
+ * for one record are two identical presses wearing different words — the
+ * reader is invited to choose between them and there is nothing to choose.
+ * The first occurrence wins, and since the Ticket's own column is ordered
+ * first, the column a row names is the NEAREST one that offers it.
+ *
+ * ARMED IS STILL A PROPERTY OF THE PAIR, not of the Automation. A row is the
+ * armed one only where it sits under the Ticket's OWN column — matching on id
+ * alone would mark a record armed on a Ticket whose column arms nothing, which
+ * is a claim that pressing it is what the board would have done.
+ */
+export function railAutomationRows(rail: TicketRailAutomations): readonly RailAutomationRow[] {
+  const armedId = rail.primary.kind === "automation" ? rail.primary.automation.id : null;
+  const seen = new Set<string>();
+  const rows: RailAutomationRow[] = [];
+  for (const group of rail.groups) {
+    for (const automation of group.automations) {
+      if (seen.has(automation.id)) continue;
+      seen.add(automation.id);
+      rows.push({
+        automation,
+        columnLabel: group.label,
+        armed: group.current && automation.id === armedId,
+      });
+    }
+  }
+  return rows;
+}
+
 /** What the control's default half is labelled — the Automation's name, "Run once", or the wait. */
 export function railRunLabel(action: RailRunAction): string {
   if (action.kind === "automation") return action.automation.name;

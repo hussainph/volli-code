@@ -5,19 +5,18 @@
  * (`automations-smoke.mjs`); whether the rail is wired to them is this one's.
  *
  * What it proves, in dependency order:
- *   1. With no Automations in the project at all, the rail still draws its run
- *      control, says so in one line, and its header's door reaches the
- *      Automations page — the button is never hidden when empty, and the empty
+ *   1. With no Automations in the project at all, the rail still draws its Run
+ *      once control, says so in one line, and its header's door reaches the
+ *      Automations page — the block is never hidden when empty, and the empty
  *      state itself carries no link (VC-257: the word "Automations" once sat
  *      two lines under the eyebrow AUTOMATIONS).
- *   2. With a column armed, the split button's default half names that
- *      Automation, because the Ticket sits in that column — without expanding
- *      the old empty-state page door into a new populated-state control.
- *   3. The caret menu groups every column's Offered list with the Ticket's
- *      current column first, plus "Run once…" — a switched-off Automation
- *      among them is offered with its own note rather than withheld (running
- *      by hand is universal, VC-112).
- *   4. Pressing the default half reaches the Run door.
+ *   2. With a column armed, the offer list leads with that Automation and
+ *      marks it Armed, because the Ticket sits in that column.
+ *   3. The list draws every column's Offered work as its own row, the Ticket's
+ *      current column first and each row naming the column that offers it — a
+ *      switched-off Automation among them is offered with its own note rather
+ *      than withheld (running by hand is universal, VC-112).
+ *   4. Pressing the Armed row reaches the Run door.
  *   5. "Run once…" takes Instructions and offers this invocation its own
  *      Runtime, and starting it reaches the Run door while writing NO record:
  *      the project's Automation list is unchanged and the git repo is
@@ -26,8 +25,9 @@
  *      no save, no delete.
  *   7. This Ticket's Runs are drawn from this Ticket's own read: with nothing
  *      run yet the rail draws no list, and the door it reads agrees.
- *   8. Right-clicking the control opens the nested context menu — the other
- *      deliberate surface VC-112 names for the per-invocation override.
+ *   8. Right-clicking a ROW opens its own nested menu — the other deliberate
+ *      surface VC-112 names for the per-invocation override, now per
+ *      Automation rather than only for the column's default (VC-406).
  *   9. The board card's own `Automations ▸` submenu offers every column's
  *      grouped list without opening the Ticket, and holds the same nested
  *      override.
@@ -156,15 +156,18 @@ try {
 
   const rail = () => page.locator('[data-testid="ticket-rail-automations"]');
 
-  /** The empty rail's page door, moved into its header row (VC-257). */
+  /** The rail's page door, in its header row at every state (VC-257/VC-406). */
   const pageDoor = () => rail().getByRole("button", { name: "Open Automations", exact: true });
+
+  /** The offer list's rows — one per Automation this Ticket may be made to run. */
+  const offerRows = () => rail().locator('[data-testid="ticket-rail-automation-row"]');
 
   await must(
     1,
     "with nothing to run, the control is still there and the header's door reaches the page",
     async () => {
       await openTicket();
-      const control = page.getByLabel("Run Run once on this ticket");
+      const control = rail().locator('[data-testid="ticket-rail-run-once"]');
       await control.waitFor({ timeout: 15000 });
       const said = await rail().innerText();
       const heading = rail().getByRole("heading", { name: "Automations", exact: true });
@@ -247,40 +250,33 @@ try {
     detail: created.fail ?? `armed=${created.armedId}`,
   }));
 
-  await must(
-    3,
-    "the default half of the split button is this column's Armed automation",
-    async () => {
-      await openTicket();
-      // The visible choices below repeat the same run label deliberately; the
-      // first match is the split button's default half above those choices.
-      const armed = page.getByLabel("Run Review sweep on this ticket").first();
-      await armed.waitFor({ timeout: 15000 });
-      // VC-257 moves the existing empty-state door; it does not add a new door
-      // to states where the rail already has an Automation to offer.
-      const pageDoors = await pageDoor().count();
-      return {
-        ok: pageDoors === 0,
-        detail: `Doing is armed with Review sweep, the button says so, and populated-state page doors: ${pageDoors}`,
-      };
-    },
-  );
+  await must(3, "the offer list leads with this column's Armed automation", async () => {
+    await openTicket();
+    const armed = offerRows().first();
+    await armed.waitFor({ timeout: 15000 });
+    const label = await armed.getAttribute("aria-label");
+    const marked = await armed.getAttribute("data-armed");
+    // The door is in the header at EVERY state now (VC-406) — it used to be
+    // the empty state's consolation prize, which left the one reader who could
+    // not reach the page from here as the one with lanes to arrange.
+    const pageDoors = await pageDoor().count();
+    return {
+      ok: label === "Run Review sweep on this ticket" && marked === "true" && pageDoors === 1,
+      detail: `first=${label} armed=${marked} pageDoors=${pageDoors}`,
+    };
+  });
 
-  await attempt(4, "its menu groups every column's Offered list plus Run once…", async () => {
-    await page.getByLabel("Other automations").click();
-    const menu = page.getByRole("menu").first();
-    await menu.waitFor({ timeout: 10000 });
-    const items = await menu.innerText();
-    await page.keyboard.press("Escape");
+  await attempt(4, "the list draws every column's Offered work as a row", async () => {
+    const items = await rail().locator('[data-testid="ticket-rail-automation-list"]').innerText();
     return {
       ok:
         items.includes("Review sweep") &&
         items.includes("Nightly sweep") &&
         // Cross-column hand-runs remain available without moving this Ticket;
-        // headings explain where each Automation is normally offered.
+        // each row names the column where it is normally offered.
         items.includes("Done sweep") &&
-        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
-        items.includes("Run once") &&
+        items.includes("Armed") &&
+        items.indexOf("Armed") < items.indexOf("Done") &&
         // Nobody switched anything on here, and a switched-off Automation is
         // still offered — with the note that says what off means.
         items.includes("Manual only"),
@@ -288,7 +284,7 @@ try {
     };
   });
 
-  await attempt(5, "pressing the default half reaches the Run door", async () => {
+  await attempt(5, "pressing the Armed row reaches the Run door", async () => {
     // No default model on this profile, so the Run's own refusal opens Model
     // Access — which is the evidence the press reached the door.
     await page.getByLabel("Run Review sweep on this ticket").first().click();
@@ -302,8 +298,7 @@ try {
     "Run once takes Instructions and its own Runtime, and saves nothing",
     async () => {
       await openTicket();
-      await page.getByLabel("Other automations").click();
-      await page.getByRole("menuitem", { name: /Run once/ }).click();
+      await rail().locator('[data-testid="ticket-rail-run-once"]').click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel("Instructions").waitFor({ timeout: 10000 });
       const form = await dialog.innerText();
@@ -358,23 +353,21 @@ try {
     },
   );
 
-  await attempt(8, "right-clicking the control opens the nested context menu", async () => {
-    // The second deliberate surface VC-112 names beside the rail itself. The
-    // override row rides here when the profile has a catalog; this profile has
-    // none, so the row is printed rather than required.
-    await page.getByLabel("Run Review sweep on this ticket").first().click({ button: "right" });
+  await attempt(8, "right-clicking a row opens that row's own nested menu", async () => {
+    // The second deliberate surface VC-112 names beside the rail itself, and
+    // since VC-406 it is PER ROW: the old caret could only re-run the column's
+    // default on another model. The override row rides here when the profile
+    // has a catalog; this profile has none, so it is printed, not required.
+    await offerRows().first().click({ button: "right" });
     const menu = page.getByRole("menu").first();
     await menu.waitFor({ timeout: 10000 });
     const items = await menu.innerText();
     await page.keyboard.press("Escape");
     await backToBoard();
     return {
-      ok:
-        items.includes("Review sweep") &&
-        items.includes("Nightly sweep") &&
-        items.includes("Done sweep") &&
-        items.indexOf("DOING · THIS TICKET") < items.indexOf("DONE") &&
-        items.includes("Run once"),
+      // The row's menu is about THAT row: it runs the Automation it was opened
+      // on, and offers no sibling's name to run by mistake.
+      ok: items.includes("Review sweep") && !items.includes("Done sweep"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),
     };
   });

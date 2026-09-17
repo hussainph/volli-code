@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
 
 import { TicketRail } from "./ticket-rail";
-import { WorktreeDestinationControl } from "./ticket-repository-summary";
+import { TicketRepositorySummary, WorktreeDestinationControl } from "./ticket-repository-summary";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -115,22 +115,35 @@ describe("TicketRail header", () => {
 // which drives the real tabs; what is left to prove here is that Now is that
 // default and that it is one page holding all three blocks.
 describe("TicketRail's Now page", () => {
-  it("is the default page, and folds repository, properties and sessions into it", () => {
+  it("is the default page, and folds properties, automations and sessions into it", () => {
     expect(useUiStore.getInitialState().railMode).toBe("now");
     const html = render();
 
     expect(html).toContain('id="ticket-rail-page-now"');
     expect(html).toContain('aria-labelledby="ticket-rail-tab-now"');
-    expect(html).toContain('data-testid="ticket-repository-summary"');
     expect(html).toContain('data-testid="ticket-rail-properties"');
+    expect(html).toContain('data-testid="ticket-rail-automations"');
     expect(html).toContain("Sessions");
   });
 
-  // The order IS the design (VC-406): attention goes to the roster first, so
-  // it opens the page; the record only grows, so it closes it. Asserted on the
-  // markup's own sequence because a reorder in the composition is a one-line
-  // change that no other test would notice.
-  it("opens with the Sessions roster, then the repository card, then the facts, and keeps the acts last", () => {
+  // The worktree is a Diffs-page subject now (VC-406) — the act that commits
+  // belongs on the page showing what it would commit. Asserted as an ABSENCE
+  // here because re-adding the card to Now is a one-line change that would
+  // otherwise leave two worktree surfaces one tab apart, which is the state
+  // this ticket exists to end.
+  it("carries no worktree surface — that moved to the Diffs page", () => {
+    const html = render();
+
+    expect(html).not.toContain('data-testid="ticket-repository-summary"');
+    expect(html).not.toContain('data-testid="ticket-changes-git-state"');
+    expect(html).not.toContain("volli/VC-6-calm-stack");
+  });
+
+  // The order IS the design (VC-406), and it is a hierarchy rather than a
+  // ranking: what the ticket IS, what can be run on it, what is happening on
+  // it. Asserted on the markup's own sequence because a reorder in the
+  // composition is a one-line change that no other test would notice.
+  it("opens with the facts, then the acts, then the roster", () => {
     const html = render();
     const at = (needle: string) => {
       const index = html.indexOf(needle);
@@ -138,14 +151,25 @@ describe("TicketRail's Now page", () => {
       return index;
     };
 
-    const sessions = at('aria-label="New chat"');
-    const repository = at('data-testid="ticket-repository-summary"');
     const properties = at('data-testid="ticket-rail-properties"');
     const automations = at('data-testid="ticket-rail-automations"');
+    const sessions = at('aria-label="New chat"');
 
-    expect(sessions).toBeLessThan(repository);
-    expect(repository).toBeLessThan(properties);
     expect(properties).toBeLessThan(automations);
+    expect(automations).toBeLessThan(sessions);
+  });
+
+  // Pinned, not stacked: it is a sibling of the scroller rather than a block
+  // inside it, which is what keeps one row of cost on screen at any scroll
+  // position. `renderToStaticMarkup` runs no effects, so the ledger read never
+  // lands and the footer is correctly absent — what can be proved here is that
+  // the scroller is not the page's only child.
+  it("hangs its usage footer outside the scrolling column", () => {
+    const page = render().slice(render().indexOf('id="ticket-rail-page-now"'));
+    const scroller = page.indexOf("overflow-y-auto pb-8");
+
+    expect(scroller).toBeGreaterThan(-1);
+    expect(page.indexOf("</section>", scroller)).toBeGreaterThan(scroller);
   });
 
   it("stacks the page with one gap, so no block pays its own top padding", () => {
@@ -179,46 +203,51 @@ describe("TicketRail's Now page", () => {
   });
 });
 
-// `renderToStaticMarkup` runs no effects, so the card is frozen in the state it
-// holds on the very first frame — which is exactly the state that used to lie.
-describe("TicketRail's repository card before the first read lands", () => {
-  it("waits rather than claiming the worktree is clean", () => {
-    const html = render();
+// The card itself, rendered as the Diffs page mounts it. `renderToStaticMarkup`
+// runs no effects, so it is frozen in the state it holds on the very first
+// frame — before `worktree.status` or the Change Set has answered.
+const renderCard = (subject: Ticket = ticket) =>
+  renderToStaticMarkup(
+    <TooltipProvider>
+      <TicketRepositorySummary projectId="project-1" ticket={subject} />
+    </TooltipProvider>,
+  );
 
-    // The Change Set has not arrived, so there is no count to state — the row
-    // draws the wait. It used to compute `diff?.files.length ?? 0` and announce
-    // "No changes" for the whole first fetch, on a worktree with 40 edits in it.
-    expect(html).toContain('data-testid="ticket-repository-changes-loading"');
-    expect(html).toContain('aria-label="Reading changes, show Diffs"');
-    expect(html).not.toContain("No changes");
+describe("the repository card", () => {
+  it("opens on the branch, and draws no changes row of its own", () => {
+    const html = renderCard();
+
+    // The page under it IS the change list, and its header two lines up
+    // already carries the count and the ± pair (VC-406). A card row saying
+    // "12 changes" over that list was the same fact drawn twice, coarser, with
+    // a button that routed to the page it was already on.
+    expect(html).not.toContain('data-testid="ticket-repository-changes"');
+    expect(html).not.toContain("show Diffs");
+    expect(html).toContain('data-testid="ticket-repository-branch"');
+    expect(html).toContain('aria-label="Branch main to volli/VC-6-calm-stack"');
   });
 
-  it("signals the pending worktree on a worktree-scoped ticket, not a bare 'no worktree yet'", () => {
-    // VC-16: before the worktree materializes, a worktree-scoped ticket and a
-    // Main-checkout ticket were pixel-identical — the card said "No worktree
-    // yet" for both, and the scoping chosen in the composer was unreadable
-    // everywhere. The row now states the scoping while it still matters.
-    const html = render(ticketWithoutWorktree);
-
-    expect(html).toContain('aria-label="New worktree on first session, show Diffs"');
-    expect(html).not.toContain("No worktree yet");
-    expect(html).not.toContain("No changes");
-    expect(html).not.toContain('data-testid="ticket-repository-changes-loading"');
+  it("holds no Git-state block until a status read has landed", () => {
+    // The strip is a row of this card now rather than a floating mini-table in
+    // the changes header — and a row about counts nobody has read yet would be
+    // three dashes pretending to be a measurement.
+    expect(renderCard()).not.toContain('data-testid="ticket-changes-git-state"');
   });
 
-  it("says a Main-checkout ticket runs in the main checkout, permanently and honestly", () => {
-    // Nothing is ever fetched here (`refreshStatusAndDiff` returns early), so
-    // "No changes" would not have been a slow frame — it would have been the
-    // ticket's whole answer, contradicting the Diffs page beside it.
-    const html = render({ ...ticketWithoutWorktree, usesWorktree: false });
+  it("still names the worktree identity before one exists", () => {
+    // VC-16: the scoping chosen in the composer stays readable — and
+    // changeable — until the worktree is a fact on disk, and this card's
+    // identity popover is where that control lives. The Diffs page therefore
+    // draws the card even with no worktree, instead of replacing the whole
+    // page with an empty state that would take the control off screen.
+    const html = renderCard(ticketWithoutWorktree);
 
-    expect(html).toContain('aria-label="Runs in the main checkout, show Diffs"');
-    expect(html).not.toContain("No worktree yet");
-    expect(html).not.toContain("No changes");
+    expect(html).toContain('data-testid="ticket-repository-branch"');
+    expect(html).toContain('aria-label="Worktree identity"');
   });
 
   it("offers no publish controls until the ticket has a worktree", () => {
-    expect(render(ticketWithoutWorktree)).not.toContain('aria-label="More repository actions"');
+    expect(renderCard(ticketWithoutWorktree)).not.toContain('aria-label="More repository actions"');
   });
 });
 

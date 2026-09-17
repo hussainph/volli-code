@@ -409,18 +409,19 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     // The same door with the other answer it can give (VC-112). It is its own
     // case because the override travels on the request: a door that dropped it
     // would reach the seam asking for a different Run than the one pressed.
+    // The offer is a list now (VC-406), so the override is the ROW's own menu.
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     await act(async () => {
-      control("Other automations").dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-      );
+      document
+        .querySelector('[data-testid="ticket-rail-automation-row"]')
+        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 }));
     });
     await act(async () => {
-      itemContaining("dropdown-menu-sub-trigger", "Run on model").click();
+      itemContaining("context-menu-sub-trigger", "Run on model").click();
     });
     await act(async () => {
-      itemContaining("dropdown-menu-item", "claude-opus").click();
+      itemContaining("context-menu-item", "claude-opus").click();
     });
 
     expect(run).toHaveBeenCalledWith(
@@ -436,16 +437,17 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     await act(async () => {
-      control("Other automations").dispatchEvent(
-        new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-      );
-    });
-    await act(async () => {
-      itemContaining("dropdown-menu-item", "Run once").click();
+      (document.querySelector('[data-testid="ticket-rail-run-once"]') as HTMLElement).click();
     });
     await typeInstructions("/review the diff once");
     await act(async () => {
-      buttonContaining("Run").click();
+      // EXACTLY "Run" — the form's submit. The block behind the dialog now
+      // draws a "Run once…" button of its own (VC-406), so a substring match
+      // finds the trigger again instead of the control that starts the Run.
+      const submit = [...document.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent === "Run",
+      );
+      submit?.click();
     });
 
     // The Unbound Run's own words are the payload — this is the door where the

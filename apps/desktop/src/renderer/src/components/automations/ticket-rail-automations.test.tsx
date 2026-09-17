@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
- * The ticket rail's Automations block (VC-129): what one press starts, that the
- * control is there when the project lists nothing.
+ * The ticket rail's Automations block (VC-129/VC-406): what the list offers,
+ * what a row's press starts, and that the block is there when the project
+ * lists nothing.
  *
  * A real jsdom ENVIRONMENT rather than a static render, for the reason the
- * Automations page's own test states: the promises here are CLICKS — the split
- * button's default half, a Run once that starts an unbound Run, a history row
- * that opens a Session — and a static render would prove the markup and none of
+ * Automations page's own test states: the promises here are CLICKS — a row
+ * that runs, a Run once that starts an unbound Run, an override chosen from a
+ * row's own menu — and a static render would prove the markup and none of
  * them. It is also why the Run glue is mocked: where a Run LANDS is that
  * module's decision and is tested there; what this file owns is whether the
  * rail asks for the right one.
@@ -164,17 +165,27 @@ function control(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
-/** Open the caret menu — Radix mounts its content only once it is asked for. */
-async function openMenu(): Promise<void> {
+/** Every offered row, in the order the list draws them. */
+function rows(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="ticket-rail-automation-row"]')];
+}
+
+/** One offered row, by the Automation it names. */
+function row(name: string): HTMLElement {
+  const found = rows().find((candidate) => candidate.textContent?.includes(name));
+  if (found === undefined) throw new Error(`no row named ${name}`);
+  return found;
+}
+
+/** Open a row's context menu — where the per-invocation override lives (VC-112). */
+async function openRowMenu(name: string): Promise<void> {
   await act(async () => {
-    control("Other automations").dispatchEvent(
-      new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
-    );
+    row(name).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 }));
   });
 }
 
 function menuItem(label: string): HTMLElement {
-  const found = [...document.querySelectorAll('[data-slot="dropdown-menu-item"]')].find(
+  const found = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find(
     (candidate) => candidate.textContent?.includes(label),
   );
   if (found === undefined) throw new Error(`no menu item named ${label}`);
@@ -183,13 +194,20 @@ function menuItem(label: string): HTMLElement {
 
 /** Open a nested menu — where the per-invocation override lives (VC-112). */
 async function openSubmenu(label: string): Promise<void> {
-  const trigger = [...document.querySelectorAll('[data-slot="dropdown-menu-sub-trigger"]')].find(
+  const trigger = [...document.querySelectorAll('[data-slot="context-menu-sub-trigger"]')].find(
     (candidate) => candidate.textContent?.includes(label),
   );
   if (trigger === undefined) throw new Error(`no submenu named ${label}`);
   await act(async () => {
     (trigger as HTMLElement).click();
   });
+}
+
+/** The block's one button. */
+function runOnceControl(): HTMLElement {
+  const found = document.querySelector('[data-testid="ticket-rail-run-once"]');
+  if (found === null) throw new Error("no Run once control");
+  return found as HTMLElement;
 }
 
 /** Type into the Run once form's controlled textarea the way React sees it. */
@@ -246,23 +264,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("the split button", () => {
-  it("keeps the other columns' work behind the caret, not on the face (VC-406)", async () => {
+describe("the offer list", () => {
+  it("draws every column's work as a row, not behind a caret (VC-406)", async () => {
     await mount({
       automations: [automation({ trigger: { kind: "columns", columns: ["needs_review"] } })],
     });
-    // The face is the one control: with nothing armed here it presses Run
-    // once, and no column's roster is drawn under it — the rows that used to
-    // repeat the caret's menu in the open are gone.
-    expect(control("Run Run once on this ticket")).not.toBeNull();
-    expect(text()).not.toContain("Needs Review");
-    expect(document.querySelector('[aria-label="Run on this ticket"]')).toBeNull();
-    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
 
-    await openMenu();
+    // The list IS the answer to "what can I run here". It used to be one split
+    // button naming this column's armed record, with every other column's work
+    // reachable only by opening a caret a reader had no reason to suspect.
+    expect(rows()).toHaveLength(1);
+    expect(row("Review sweep").getAttribute("aria-label")).toBe("Run Review sweep on this ticket");
+    // Each row names the column that offers it, so a hand-run across lanes is
+    // readable without a heading per column.
     expect(text()).toContain("Needs Review");
+    // And running it is the row's own press — no menu in the way.
     await act(async () => {
-      menuItem("Review sweep").click();
+      row("Review sweep").click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith(
@@ -272,14 +290,39 @@ describe("the split button", () => {
         modelOverride: null,
       }),
     );
+    // A hand-run moves nothing: the Ticket stays in the column it was in.
     expect(TICKET.status).toBe("doing");
+  });
+
+  it("marks this column's Armed automation, and leads with it", async () => {
+    await mount({
+      automations: [
+        automation({
+          id: "a2",
+          name: "Nightly sweep",
+          trigger: { kind: "columns", columns: ["done"] },
+        }),
+        automation(),
+      ],
+      armings: [ARMING],
+    });
+
+    // This Ticket's own column first, and inside it the armed record says so
+    // rather than repeating the status pill two blocks up.
+    const [first, second] = rows();
+    expect(first?.textContent).toContain("Review sweep");
+    expect(first?.dataset.armed).toBe("true");
+    expect(first?.textContent).toContain("Armed");
+    expect(second?.textContent).toContain("Nightly sweep");
+    expect(second?.dataset.armed).toBeUndefined();
+    expect(second?.textContent).toContain("Done");
   });
 
   it("presses the Armed automation of this Ticket's current column", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
 
     await act(async () => {
-      control("Run Review sweep on this ticket").click();
+      row("Review sweep").click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
@@ -291,15 +334,14 @@ describe("the split button", () => {
     });
   });
 
-  it("runs an Automation this column merely offers, from the menu", async () => {
+  it("runs an Automation this column merely offers", async () => {
     await mount({
       automations: [automation(), automation({ id: "a2", name: "Nightly sweep" })],
       armings: [ARMING],
     });
 
-    await openMenu();
     await act(async () => {
-      menuItem("Nightly sweep").click();
+      row("Nightly sweep").click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
@@ -311,16 +353,30 @@ describe("the split button", () => {
     });
   });
 
+  it("caps its own height instead of growing with the project", async () => {
+    await mount({
+      automations: Array.from({ length: 12 }, (_, index) =>
+        automation({ id: `a${index}`, name: `Sweep ${index}` }),
+      ),
+    });
+
+    // Twelve rows, all of them present and reachable — bounded by a scroller
+    // rather than by hiding eleven of them. The cap is what keeps the roster
+    // under this block from being pushed off the resting view.
+    expect(rows()).toHaveLength(12);
+    const list = document.querySelector('[data-testid="ticket-rail-automation-list"]');
+    expect(list?.className).toContain("max-h-40");
+    expect(list?.className).toContain("overflow-y-auto");
+  });
+
   it("offers a switched-off Automation and says so, rather than withholding it", async () => {
     // VC-112: running by hand is universal; the switch governs what starts an
     // Automation BESIDES a person.
     await mount({ automations: [automation()], armings: [ARMING] });
 
-    await openMenu();
-
     expect(text()).toContain("Manual only");
     await act(async () => {
-      menuItem("Review sweep").click();
+      row("Review sweep").click();
     });
     expect(runAutomationOnTicket).toHaveBeenCalled();
   });
@@ -328,16 +384,16 @@ describe("the split button", () => {
   it("drops that note once the Automation is switched on here", async () => {
     await mount({ automations: [automation()], armings: [ARMING], enabled: ["a1"] });
 
-    await openMenu();
-
     expect(text()).not.toContain("Manual only");
   });
 
-  it("presses Run once where the column arms nothing", async () => {
+  it("offers Run once where the column arms nothing", async () => {
     await mount({ automations: [automation()] });
 
+    // Nothing is marked Armed, and the block's one button is still there.
+    expect(rows()[0]?.dataset.armed).toBeUndefined();
     await act(async () => {
-      control("Run Run once on this ticket").click();
+      runOnceControl().click();
     });
 
     // The press opens the form rather than starting anything: an Unbound Run
@@ -346,10 +402,9 @@ describe("the split button", () => {
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
   });
 
-  it("moves the empty state's one page door into the heading row", async () => {
+  it("keeps its page door in the heading row, at every state", async () => {
     await mount({});
 
-    expect(control("Run Run once on this ticket")).not.toBeNull();
     expect(text()).toContain("No automations in this project yet.");
 
     const panel = document.querySelector('[data-testid="ticket-rail-automations"]');
@@ -373,13 +428,16 @@ describe("the split button", () => {
     expect(useWorkspaceStore.getState().byProject.p1?.nav).toBe("automations");
   });
 
-  it("does not expand the empty-state page door into a populated rail", async () => {
+  it("keeps that door when the project HAS automations to arrange", async () => {
+    // It used to be the empty state's consolation prize, which left the one
+    // reader who could not reach the page from here as the one whose project
+    // has lanes to arrange (VC-406).
     await mount({ automations: [automation()], armings: [ARMING] });
 
-    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Open Automations"]')).not.toBeNull();
   });
 
-  it("does not claim an empty state or offer its page door before reads land", async () => {
+  it("does not claim an empty state before reads land", async () => {
     const list = deferred<{ ok: true; automations: Automation[] }>();
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [] });
@@ -387,15 +445,14 @@ describe("the split button", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    expect(document.querySelector('[aria-label="Open Automations"]')).toBeNull();
     expect(text()).not.toContain("No automations in this project yet.");
+    expect(text()).toContain("Reading automations…");
   });
 
-  it("presses nothing, and claims nothing, until its own reads have landed", async () => {
+  it("lists nothing, and claims nothing, until its own reads have landed", async () => {
     // The race the rail must not lose: this Ticket's column IS armed, and for
-    // the frame before the read lands an ungated rail would offer a clickable
-    // Run once instead — or, from a cache filled elsewhere, press whatever was
-    // armed then.
+    // the frame before the read lands an ungated rail would draw rows from
+    // whatever a cache filled elsewhere happened to hold.
     const list = deferred<{ ok: true; automations: Automation[] }>();
     doors.list.mockReturnValue(list.promise);
     doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
@@ -403,27 +460,28 @@ describe("the split button", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    const reading = control("Reading automations…") as HTMLButtonElement;
-    expect(reading.disabled).toBe(true);
-    await act(async () => {
-      reading.click();
-    });
-    expect(runAutomationOnTicket).not.toHaveBeenCalled();
-    // Not the Run once form either: an unread rail starts nothing on a press.
-    expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
+    expect(rows()).toHaveLength(0);
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
     // And no claim about the project, which it has not read.
     expect(text()).not.toContain("No automations in this project yet.");
+
+    // Run once is unaffected: it names no record, so there is nothing a stale
+    // cache could get wrong about it.
+    await act(async () => {
+      runOnceControl().click();
+    });
+    expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
 
     await act(async () => {
       list.resolve({ ok: true, automations: [automation()] });
     });
 
-    expect(control("Run Review sweep on this ticket")).not.toBeNull();
+    expect(row("Review sweep").dataset.armed).toBe("true");
   });
 
-  it("does not press an arming this rail inherited from an earlier read", async () => {
+  it("does not list an arming this rail inherited from an earlier read", async () => {
     // A cache filled before someone re-armed the column in another window. The
-    // rail re-reads on arrival, and until that read lands it presses nothing:
+    // rail re-reads on arrival, and until that read lands it lists nothing:
     // "nothing armed" and "not asked yet" are one value in the cache.
     useAutomationsStore.setState({
       byProject: { p1: [automation()] },
@@ -437,22 +495,22 @@ describe("the split button", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    expect(document.querySelector('[aria-label="Run Review sweep on this ticket"]')).toBeNull();
-    expect(control("Reading automations…")).not.toBeNull();
+    expect(rows()).toHaveLength(0);
+    expect(text()).toContain("Reading automations…");
 
     // The read lands on the truth: nothing arms this column any more.
     await act(async () => {
       list.resolve({ ok: true, automations: [automation()] });
     });
-    expect(control("Run Run once on this ticket")).not.toBeNull();
+    expect(row("Review sweep").dataset.armed).toBeUndefined();
   });
 
-  it("does not press a stale arming its re-read FAILED to replace", async () => {
+  it("does not mark a stale arming its re-read FAILED to replace", async () => {
     // The warm-cache half of the same rule. The caches have landed, so
     // `selectPlanningLoaded` is true and stays true — a failed read toasts and
     // leaves the old value exactly where it was. If the rail counted a settled
     // read as a read, the arming this column dropped an hour ago in another
-    // window would become pressable the moment the toast appeared.
+    // window would be drawn as this column's default.
     useAutomationsStore.setState({
       byProject: { p1: [automation()] },
       armingByProject: { p1: [ARMING] },
@@ -464,22 +522,16 @@ describe("the split button", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    // Landed caches, and still nothing to press: the rail says what it knows.
+    // Landed caches, and still nothing listed: the rail says what it knows.
     expect(useAutomationsStore.getState().armingByProject.p1).toEqual([ARMING]);
-    expect(document.querySelector('[aria-label="Run Review sweep on this ticket"]')).toBeNull();
-    const reading = control("Reading automations…") as HTMLButtonElement;
-    expect(reading.disabled).toBe(true);
-
-    await act(async () => {
-      reading.click();
-    });
+    expect(rows()).toHaveLength(0);
+    expect(text()).toContain("Reading automations…");
     expect(runAutomationOnTicket).not.toHaveBeenCalled();
-    expect(document.querySelector('[aria-label="Instructions"]')).toBeNull();
   });
 
   it("holds no authoring form: nothing here creates, edits or deletes a record", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
-    await openMenu();
+    await openRowMenu("Review sweep");
 
     expect(text()).not.toContain("New Automation");
     expect(text()).not.toContain("Edit");
@@ -492,9 +544,8 @@ describe("the split button", () => {
 describe("Run once", () => {
   async function openRunOnce(): Promise<void> {
     await mount({ automations: [automation()], armings: [ARMING] });
-    await openMenu();
     await act(async () => {
-      menuItem("Run once").click();
+      runOnceControl().click();
     });
   }
 
@@ -536,58 +587,25 @@ describe("Run once", () => {
     expect(useAutomationsStore.getState().editor).toBeNull();
   });
 
-  it("offers this invocation its own Runtime, defaulting to the resolved one", async () => {
+  it("asks the Runtime question once, in the form, and rests on the default", async () => {
+    // The caret menu used to be able to pick a model on the WAY here, so the
+    // dialog opened already pinned and then asked again with its own control
+    // (VC-406). One place asks now, and it opens on the resolved default.
     await openRunOnce();
 
-    // The choice exists and rests on inherit — the override is per invocation
-    // and is stored nowhere, so "Default model" is the resting answer.
     expect(text()).toContain("Default model");
     expect(text()).toContain("This run");
-  });
-
-  it("opens holding the model the nested override named, and runs on it", async () => {
-    // A column with nothing armed: the default press IS Run once, so choosing
-    // "Run on model ▸ claude-opus" is a person choosing the Runtime for the Run
-    // they are about to describe. The form must open already holding it.
-    await mount({ automations: [automation()] });
-    await openMenu();
-    await openSubmenu("Run on model");
-    await openSubmenu("claude-opus");
-    await act(async () => {
-      menuItem("high").click();
-    });
-
-    expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="model-pill"]')).toBeNull();
     expect(document.querySelector("[data-composer-container]")?.className).toContain(
       "@container/composer",
     );
-    expect(document.querySelector('[data-testid="model-pill"]')?.getAttribute("aria-label")).toBe(
-      "Model and effort: claude-opus · Anthropic · High",
-    );
-    expect(document.querySelector(".composer-separate-effort")).not.toBeNull();
-    await typeInstructions("/sweep this once");
-    await act(async () => {
-      runButton().click();
-    });
-
-    expect(runAutomationOnTicket).toHaveBeenCalledWith({
-      target: { kind: "unbound", instructions: "/sweep this once" },
-      automationName: "Run once",
-      ticketId: "t1",
-      ticketDisplayId: "VC-6",
-      modelOverride: {
-        providerId: "anthropic",
-        modelId: "claude-opus",
-        reasoningLevel: "high",
-      },
-    });
   });
 });
 
 describe("the per-invocation override", () => {
-  it("spends the model it names on the Armed automation's own Run", async () => {
+  it("spends the model it names on that row's own Run", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
-    await openMenu();
+    await openRowMenu("Review sweep");
     await openSubmenu("Run on model");
     await openSubmenu("claude-opus");
     await act(async () => {
@@ -605,5 +623,39 @@ describe("the per-invocation override", () => {
         reasoningLevel: "high",
       },
     });
+  });
+
+  it("is reachable on a row this column merely offers, not only on the Armed one", async () => {
+    // Strictly more than the caret offered: that menu could only re-run the
+    // split button's own default on another model, so choosing a model for any
+    // other column's Automation meant running it first and changing it never.
+    await mount({
+      automations: [
+        automation(),
+        automation({
+          id: "a2",
+          name: "Nightly sweep",
+          trigger: { kind: "columns", columns: ["done"] },
+        }),
+      ],
+      armings: [ARMING],
+    });
+    await openRowMenu("Nightly sweep");
+    await openSubmenu("Run on model");
+    await openSubmenu("claude-opus");
+    await act(async () => {
+      menuItem("high").click();
+    });
+
+    expect(runAutomationOnTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "automation", automationId: "a2" },
+        modelOverride: {
+          providerId: "anthropic",
+          modelId: "claude-opus",
+          reasoningLevel: "high",
+        },
+      }),
+    );
   });
 });

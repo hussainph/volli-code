@@ -17,7 +17,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { summarizeSessionUsage, type SessionUsage } from "@volli/shared";
 
-import { RAIL_CARD_FRAME } from "@renderer/components/ticket/rail-panel-parts";
+import { RAIL_CARD_FRAME, RAIL_CARD_ROW } from "@renderer/components/ticket/rail-panel-parts";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import type { UsageGroupRow } from "@renderer/usage/usage-format";
@@ -80,20 +80,37 @@ describe("the usage card's face", () => {
     // used to be `rounded-row border-border bg-card` beside a `rounded-xl`
     // sidebar-bordered Git card. Both now compose the one shared constant, so a
     // retune of that frame cannot move one card and leave the other behind.
-    for (const markup of [
-      home(),
-      renderToStaticMarkup(
-        <TicketUsageBlock
-          summary={METERED}
-          sessions={TICKET_SESSIONS}
-          topModelLabel="Claude Opus 4.1"
-        />,
-      ),
-    ]) {
-      for (const utility of RAIL_CARD_FRAME.split(" ")) {
-        expect(markup).toContain(utility);
-      }
+    //
+    // HOME ONLY. The Ticket's block is the Now page's pinned FOOTER now
+    // (VC-406) and is deliberately not a card: a footer's boundary is with the
+    // page above it, so it wears a top rule rather than a frame around itself.
+    // Its row inside is still the card's row — asserted below.
+    const markup = home();
+    for (const utility of RAIL_CARD_FRAME.split(" ")) {
+      expect(markup).toContain(utility);
     }
+  });
+
+  it("pins the Ticket's figure under the page as a footer, not as a card in it", () => {
+    const markup = renderToStaticMarkup(
+      <TicketUsageBlock
+        summary={METERED}
+        sessions={TICKET_SESSIONS}
+        topModelLabel="Claude Opus 4.1"
+      />,
+    );
+
+    expect(markup).toContain("<footer");
+    // The seam it does wear, and the one it must not: a rounded frame here
+    // would read as a block that happens to be last rather than as the page's
+    // floor, and `shrink-0` is what stops flexbox compressing it when the
+    // roster above grows.
+    expect(markup).toContain("border-t");
+    expect(markup).toContain("shrink-0");
+    expect(markup).not.toContain("rounded-xl");
+    // Still the card's own row inside, so the figure sits where every other
+    // rail row's mark does.
+    expect(markup).toContain(RAIL_CARD_ROW);
   });
 
   it("names no model until asked", () => {

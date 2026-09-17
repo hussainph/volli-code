@@ -1,6 +1,6 @@
 /**
- * The Ticket rail's usage card — what this Ticket cost, and which of its
- * Sessions spent it — at one row (VC-406).
+ * The Ticket rail's usage footer — what this Ticket cost, and which of its
+ * Sessions spent it — at one row, PINNED under the Now page (VC-406).
  *
  * WHY ONE ROW. The card used to open with the hero: an 18px figure, the token
  * bar, a caption, then a seamed "N sessions" row with its own popover — about
@@ -11,6 +11,17 @@
  * behind that one row, in one popover — the bar and its legend, the cached
  * share, the basis sentence, the top model and the per-Session ranking — so
  * nothing the surface used to say has been retired, only demoted to an answer.
+ *
+ * WHY A FOOTER AND NOT A BLOCK. The other four blocks on Now are things a
+ * person works IN: they edit the properties, press the automations, open the
+ * sessions. Cost is the one thing on the page that is only ever read, and a
+ * read-only fact stacked among acts has the worst of both — it takes a turn in
+ * the reading order it does not need, and it scrolls out of sight exactly when
+ * the roster above it has grown long enough to make the question interesting.
+ * Pinned under the scroller it costs one row of the resting view, always, and
+ * is never somewhere you have to scroll to find. It wears a top rule instead
+ * of the card frame for the same reason a footer is not a card: the boundary
+ * it needs is with the page above it, not around itself.
  *
  * ONE POPOVER, NOT TWO. The Sessions row used to open a ranking of its own
  * beside the face's breakdown, and at rail width the two answered adjacent
@@ -31,10 +42,10 @@ import type { SessionUsageSummary } from "@volli/shared";
 import {
   UsageBreakdown,
   UsageBreakdownFact,
-  UsageCard,
   UsageCardFace,
   UsageRankList,
 } from "@renderer/components/usage/usage-card";
+import { cn } from "@renderer/lib/utils";
 import { formatUsageCost, type UsageGroupRow } from "@renderer/usage/usage-format";
 
 export function TicketUsageBlock({
@@ -52,13 +63,21 @@ export function TicketUsageBlock({
 }) {
   const cost = formatUsageCost(summary);
   // Absent, not empty. A Ticket whose Sessions never called a model has nothing
-  // to report, and a card saying so would be furniture on every fresh Ticket in
-  // the project — the same silence the repository card keeps at a clean tree.
-  // The Now page stacks with `gap`, so an absent card leaves no gap behind it.
+  // to report, and a footer saying so would be furniture on every fresh Ticket
+  // in the project — the same silence the repository card keeps at a clean
+  // tree. The page then simply ends at its scroller.
   if (cost === null) return null;
 
   return (
-    <UsageCard testId="ticket-usage-card" className={className}>
+    <footer
+      data-testid="ticket-usage-card"
+      // `shrink-0` for the reason the card frame carries it: this sits beside a
+      // `min-h-0 flex-1` scroller, and a footer that could shrink would be the
+      // member flexbox compresses first when the roster inside that scroller
+      // grows. The rule is the page's boundary; the row inside keeps the card's
+      // own geometry, so the figure sits where every other rail row's mark does.
+      className={cn("shrink-0 border-t border-sidebar-border/70 bg-background/30", className)}
+    >
       <UsageCardFace name="Ticket usage" summary={summary} icon={ReceiptIcon} testId="ticket-usage">
         <div className="flex flex-col gap-4">
           {/* `picture`: the bar the hero used to carry, now above the legend
@@ -75,6 +94,6 @@ export function TicketUsageBlock({
           {sessions.length > 0 ? <UsageRankList heading="By session" rows={sessions} /> : null}
         </div>
       </UsageCardFace>
-    </UsageCard>
+    </footer>
   );
 }

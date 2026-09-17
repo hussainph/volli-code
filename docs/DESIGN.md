@@ -389,7 +389,7 @@ file… `⌘P`, Close pane. Icon, label, right-aligned chord hint in the menus' 
 No heading, no explanation, and above all no "drag a tab here": every row is a verb that already
 works from the keyboard, and the chord beside it is how the menu teaches itself.
 
-## The ticket rail — the Now page (VC-406)
+## The ticket rail (VC-406)
 
 The rail is the Ticket's hub, and its scope is the line that decides what goes on it: **everything
 on the rail is true of the whole Ticket or its worktree; nothing on it is true of one chat in
@@ -399,38 +399,63 @@ Subagent Session and the island lists no sibling chat; the two surfaces split on
 scope rather than overlapping on it. A block that would only be true of the front chat is a block
 in the wrong place.
 
-**Now is ordered by attention, not by subject.** The most-used thing on the page is the door to
-the right chat, so it opens the page; the record only grows, so it closes it:
+**Every subject lives on the page that shows it.** The rail has four pages, and the reason a thing
+is on one rather than another is that its page is where its evidence is. The worktree is the
+worked example: the repository card — branch, Git state, CI, and the commit/push/PR split button —
+sits in the **Diffs** header, over the list of files it would commit. On Now it was a second,
+coarser drawing of that same header (a file count and a ± pair, above a button routing to the page
+that prints both), and it offered an irreversible act on a surface that could not show its
+subject. One worktree object, on the page about the worktree.
+
+**Now is what is left, in three tiers**: what this Ticket *is*, what can be *run* on it, what is
+*happening* on it — and the money last.
 
 | # | Block | What it is | Object kind |
 |---|---|---|---|
-| 1 | Sessions | the working set — one row per live Session, `+ Chat ▾` in the eyebrow | section |
-| 2 | Repository | what the worktree is doing, and the one act on it (commit / push / PR) | the card |
-| 3 | Properties | status, priority, labels — three editable facts as pills | chip run |
-| 4 | Usage | what it cost, at one row; absent on an unmetered Ticket | the card |
-| 5 | Automations | one act: run something on this Ticket | section |
-| 6 | History | the record; searchable past four rows | section |
+| 1 | Properties | status, priority, labels — three editable facts as pills | chip run |
+| 2 | Automations | what this Ticket can be made to run, height-capped | section |
+| 3 | Sessions | the working set — one row per live Session, `+ Chat ▾` in the eyebrow | section |
+| 4 | History | the record; searchable past four rows | section |
+| 5 | Usage | what it cost, at one row | pinned footer |
 
-**Two object kinds carry the page**, and a block is one or the other. A *section* is an eyebrow
-row (`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
+Properties opens because it is the header of the thing every block below is about, and because the
+status it sets is what decides which Automation the next block marks Armed. Automations sits above
+the roster because a Run is how a row *appears* in that roster. History closes the scroller
+because a record only grows.
+
+**Usage is pinned, not stacked.** It is the one block on Now that is only ever read — the other
+four are worked in — and a read-only fact stacked among acts has the worst of both: it takes a
+turn in the reading order it does not need, and it scrolls out of sight exactly when the roster
+above it has grown long enough to make the question interesting. It is a sibling of the scroller,
+wearing a top rule rather than a card frame, because a footer's boundary is with the page above it
+rather than around itself.
+
+**Two object kinds carry a page**, and a block is one or the other. A *section* is an eyebrow row
+(`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
 `ListRow`s at the rows' own `px-2`. *The card* is `RAIL_CARD_FRAME` — seamed rows inside one
-`rounded-xl` frame — and the rail has exactly one recipe for it, so the repository card and the
-usage card are plainly the same kind of thing. The page stacks with **one `gap-4`** and no block
-pays its own top padding: an absent block (usage on a fresh Ticket, History on a new one) then
+`rounded-xl` frame — and the rail has exactly one recipe for it. The page stacks with **one
+`gap-4`** and no block pays its own top padding: an absent block (History on a new Ticket) then
 leaves no hole behind it, and no block can drift from its neighbours by carrying a different inset.
 
-**Every act wears one costume.** `RAIL_CONTROL` (`outline`, the sidebar's border, a `/30` wash,
-`shadow-raised`) is the recipe for every button a rail page presses — the repository card's publish
-split, its `⋯`, its PR link, and the Automations split button. A control is sized to its label and
-parked at the left under its eyebrow, never stretched across the column: a full-width pill is the
-shape of a row here, and "is this a button" has to be answered by the drawing, not inferred.
+**A list bounds itself by height, never by hiding rows.** The Automations block is the case: it
+answers "what can I run here", so it draws every offered Automation as a row, with the current
+column's armed record first and marked, and caps itself at `max-h-40` with its own scroller. A
+project with thirty Automations therefore costs the same vertical space as one with three, and the
+roster underneath never moves. The alternative — one name on a button and the rest behind a caret
+— bounds the height too, by refusing to answer the block's own question.
+
+**Every act wears one costume, and a row is not an act.** `RAIL_CONTROL` (`outline`, the sidebar's
+border, a `/30` wash, `shadow-raised`) is the recipe for every button a rail page presses — the
+repository card's publish split, its `⋯`, its PR link, and Automations' Run once. A control is
+sized to its label and parked at the left, never stretched across the column. Everything else that
+is pressable is a `ListRow`, and a row opens or runs the thing it names. That pair is the whole
+answer to "is this a button": on this surface you can tell without reading either.
 
 **What a block does not draw.** Runs are Sessions, so they are listed once, in the roster, wearing
-the bolt (`SessionProvenanceMark`) — never a second time under Automations. The other columns'
-Automations live behind the caret and the right-click menu, never as a visible list under the
-button. The usage card's face is the figure, the token count and a caret; the bar, its legend, the
-cached share, the basis sentence, the top model and the per-Session ranking are one popover
-behind it, not lines on the page.
+the bolt (`SessionProvenanceMark`) — never a second time under Automations. The usage footer's
+face is the figure, the token count and a caret; the bar, its legend, the cached share, the basis
+sentence, the top model and the per-Session ranking are one popover behind it, not lines on the
+page.
 
 **Cost notation.** A hedged figure carries a small word *after* the money, a step down and muted
 (`UsageCostFigure`): `$8.42 est.` for a catalogue estimate or a mixed basis, `$8.42 unverified`

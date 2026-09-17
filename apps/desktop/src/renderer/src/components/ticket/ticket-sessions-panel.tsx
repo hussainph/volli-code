@@ -441,15 +441,17 @@ function SessionList({
  * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
  * the rail's edge is one straight line at every width.
  *
- * THEY ARE NOT ADJACENT ANY MORE (VC-406). The working set is the block a
- * person reads most — it is the door to the right chat — so it opens the Now
- * page; History is a record, so it closes the page. Everything the page
- * stacks between the two (the repository card, the properties fold, usage,
- * Automations) arrives as `children`, which is why one component still owns
- * both sections: they are two views of ONE read of the durable roster and one
- * pair of clocks, and splitting them into two components would either read
- * the roster twice or hoist its whole state into the page. The slot is the
- * cheaper seam.
+ * They are ADJACENT, and one component owns both: they are two views of ONE
+ * read of the durable roster and one pair of clocks, and splitting them would
+ * either read the roster twice or hoist its whole state into the page.
+ *
+ * They were briefly split apart, with the rest of the Now page threaded
+ * between them as `children` (VC-406's first pass), to put the working set at
+ * the very top. The page is ordered by tier now — facts, acts, then the
+ * roster — so the two halves of one roster sit together again and the slot is
+ * gone. A live Session and the record of a dead one are the same list read at
+ * two ages; a block about labels standing between them was the page borrowing
+ * a component's insides to lay itself out.
  *
  * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
  * this owns no scroller of its own. The durable list
@@ -466,7 +468,6 @@ export function TicketSessionsPanel({
   onNewBrowser,
   onActivateSession,
   onActivateChat,
-  children,
 }: {
   /** Whose project this ticket is — half of a row's drag payload (VC-202 §4). */
   projectId: string;
@@ -478,8 +479,6 @@ export function TicketSessionsPanel({
   onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
-  /** What the page stacks between the working set and its History. */
-  children?: React.ReactNode;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const parkState = useSessionsStore((state) => state.parkState);
@@ -713,7 +712,6 @@ export function TicketSessionsPanel({
           <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
         )}
       </section>
-      {children}
       {history.length > 0 ? (
         <section className={SECTION} data-testid="session-history">
           <RailSectionHeadingRow label="History">

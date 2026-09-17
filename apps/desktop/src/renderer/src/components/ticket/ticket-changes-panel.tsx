@@ -8,6 +8,21 @@
  * filename over its muted parent, and the two line counts in a fixed column so
  * the numbers line up down the list.
  *
+ * THE REPOSITORY CARD LIVES IN THAT HEADER (VC-406). This page used to list
+ * what changed while the Now page, one tab away, carried the branch it lands
+ * on and the button that commits it — so the act was on the surface that could
+ * not show its own subject. The card is here now, between the count and the
+ * files: branch, where it stands, whether CI is happy, and the done-flow
+ * button, read top to bottom into the list underneath. The card's own Git-state
+ * strip used to float in this header as a `bg-muted` mini-table; it is a row
+ * inside the card now, so the page draws ONE worktree object.
+ *
+ * That costs no extra git: main keeps the last good `status` + Change Set per
+ * ticket while a watcher covers the worktree (VC-372), so the card's read is
+ * served from the answer this panel's own read just took. What this panel no
+ * longer does is ask for `worktree.status` at all — the strip was its only
+ * reader, and the card asks for its own.
+ *
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
  * open, close, or focus a tab. Files navigator uses preview/pin (decision #56).
@@ -57,10 +72,7 @@ import {
 } from "@renderer/components/ticket/ticket-changes-model";
 import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
-import {
-  formatWorktreeState,
-  type WorktreeStatusSnapshot,
-} from "@renderer/components/ticket/worktree-done-flow-model";
+import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -205,52 +217,6 @@ function useRowReveal(lines: readonly React.RefObject<HTMLElement | null>[]): {
     setOpen(next && linesRef.current.some((line) => isTextClipped(line.current)));
   }, []);
   return { open, onOpenChange };
-}
-
-/** Working tree, local commits, and remote state — visible without opening another page. */
-export function WorktreeStateStrip({ status }: { status: WorktreeStatusSnapshot }) {
-  const state = formatWorktreeState(status);
-  const items = [
-    {
-      label: "Working",
-      value: state.working,
-      ink: status.uncommitted ? "text-attention" : "text-muted-foreground",
-    },
-    {
-      label: "Local",
-      value: state.local,
-      ink:
-        status.aheadOfBase !== null && status.aheadOfBase > 0
-          ? "text-foreground"
-          : "text-muted-foreground",
-    },
-    {
-      label: "Remote",
-      value: state.remote,
-      ink:
-        status.unpushed === 0 && status.aheadOfBase !== 0
-          ? "text-positive"
-          : (status.unpushed !== null && status.unpushed > 0) ||
-              (status.unpushed === null && status.aheadOfBase !== null && status.aheadOfBase > 0)
-            ? "text-attention"
-            : "text-muted-foreground",
-    },
-  ] as const;
-
-  return (
-    <div
-      data-testid="ticket-changes-git-state"
-      aria-label={`Working: ${state.working}; Local: ${state.local}; Remote: ${state.remote}`}
-      className="grid grid-cols-3 gap-2 rounded-md bg-muted/50 px-2 py-1.5"
-    >
-      {items.map((item) => (
-        <span key={item.label} className="flex min-w-0 flex-col">
-          <span className="text-label text-muted-foreground">{item.label}</span>
-          <span className={cn("truncate text-label font-medium", item.ink)}>{item.value}</span>
-        </span>
-      ))}
-    </div>
-  );
 }
 
 function HeaderAction({
@@ -512,7 +478,6 @@ export function TicketChangesPanel({
     hiddenCount: 0,
   }));
   const [diff, setDiff] = React.useState<DiffStat | null>(null);
-  const [status, setStatus] = React.useState<WorktreeStatusSnapshot | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [watchError, setWatchError] = React.useState<string | null>(null);
@@ -543,7 +508,6 @@ export function TicketChangesPanel({
         setError(null);
         setNav((prev) => ({ ...prev, revision: null, files: [] }));
         setDiff(null);
-        setStatus(null);
         setLoaded(true);
         return;
       }
@@ -553,11 +517,10 @@ export function TicketChangesPanel({
       }
       loading.current = true;
       try {
-        const [result, statusResult] = await Promise.all([
-          window.api.worktree.changeSet(ticket.id),
-          window.api.worktree.status(ticket.id),
-        ]);
-        setStatus(statusResult.ok ? statusResult.status : null);
+        // The Change Set alone. `worktree.status` was only ever read for the
+        // Git-state strip, and the strip is the repository card's row now
+        // (VC-406) — the card asks for its own, off main's shared snapshot.
+        const result = await window.api.worktree.changeSet(ticket.id);
         if (!result.ok) {
           setError(result.error);
           if (notify) toastError(`Couldn't load changes: ${result.error}`);
@@ -622,19 +585,6 @@ export function TicketChangesPanel({
     [onOpenDiff],
   );
 
-  if (!loaded && ticket.worktreePath !== null) {
-    return <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />;
-  }
-
-  if (ticket.worktreePath === null) {
-    return (
-      <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
-        <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
-        <p className="text-ui text-muted-foreground/70">Move this ticket to Doing to start one</p>
-      </div>
-    );
-  }
-
   const needle = query.trim().toLowerCase();
   const visible =
     needle === ""
@@ -647,8 +597,8 @@ export function TicketChangesPanel({
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         {/* Nothing to refine or total up on a clean branch, so the first row
-            keeps only its name and zero. The Git-state strip still distinguishes
-            a clean pushed branch from a branch with nothing committed yet. */}
+            keeps only its name and zero. The card's Git-state row still
+            distinguishes a clean pushed branch from one with nothing committed. */}
         <div className="flex min-h-7 items-center gap-1">
           <ChangesTitle count={total} />
           {total === 0 ? null : (
@@ -676,7 +626,12 @@ export function TicketChangesPanel({
             </>
           )}
         </div>
-        {status === null ? null : <WorktreeStateStrip status={status} />}
+        {/* The worktree the list below belongs to, and the one act on it
+            (VC-406). Drawn on a ticket with no worktree too — that is the only
+            window in which the worktree/main-checkout scoping is still
+            changeable, and its control lives in this card's identity popover
+            (VC-16). */}
+        <TicketRepositorySummary projectId={ticket.projectId} ticket={ticket} />
         {filtering ? (
           <Input
             autoFocus
@@ -689,15 +644,37 @@ export function TicketChangesPanel({
         ) : null}
       </header>
       {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
-      <TicketChangesList
-        rows={rows}
-        // Never a remembered click: a diff the person closed stops being the
-        // current row the moment its tab is gone.
-        currentPath={parseDiffTabId(activeTabId)}
-        onSelectRow={handleSelect}
-        error={error}
-        hiddenCount={nav.hiddenCount}
-      />
+      {/* The BODY swaps; the header above never does (VC-406). It carries the
+          repository card, and the card is where a ticket with no worktree yet
+          still reaches its scoping choice — an early return that replaced the
+          whole page would take that control off screen in exactly the state it
+          exists for. */}
+      {ticket.worktreePath === null ? (
+        <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
+          <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>
+          {/* VC-16: the two scopings do not become one sentence here. A
+             worktree ticket is waiting for a Session to cut one; a
+             main-checkout ticket is never going to have one, and telling it to
+             move to Doing would be an instruction that does nothing. */}
+          <p className="text-ui text-muted-foreground/70">
+            {ticket.usesWorktree
+              ? "Move this ticket to Doing to start one"
+              : "This ticket runs in the project checkout"}
+          </p>
+        </div>
+      ) : !loaded ? (
+        <RailPanelSkeleton label="changes" testId="ticket-changes-loading" />
+      ) : (
+        <TicketChangesList
+          rows={rows}
+          // Never a remembered click: a diff the person closed stops being the
+          // current row the moment its tab is gone.
+          currentPath={parseDiffTabId(activeTabId)}
+          onSelectRow={handleSelect}
+          error={error}
+          hiddenCount={nav.hiddenCount}
+        />
+      )}
     </div>
   );
 }
