@@ -1,6 +1,6 @@
 {
   "name": "volli-code",
-  "version": "0.2.0-canary.10",
+  "version": "0.2.0-canary.11",
   "private": true,
   "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
   "license": "Apache-2.0",
@@ -23,7 +23,8 @@
     "test:performance-harness": "pnpm -C apps/desktop test:performance-harness",
     "lint": "vp lint",
     "fmt": "vp fmt",
-    "check": "vp check"
+    "check": "vp check",
+    "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
