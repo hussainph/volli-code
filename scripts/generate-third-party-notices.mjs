@@ -122,6 +122,9 @@ const ARTIFACTS = [
   {
     id: "desktop",
     description: "the macOS arm64 Volli Code application bundle (app id app.volli.desktop)",
+    // What the ARTIFACT targets, never what the build host happens to be: this
+    // check runs on Linux CI, and the .app is macOS arm64 either way.
+    target: { os: "darwin", cpu: "arm64" },
     // The two roots whose code reaches the bundle. The CLI is not a dependency
     // of the desktop app: copy-cli.mjs drops its bundle into dist-electron, so
     // its production closure ships too.
@@ -464,6 +467,7 @@ function generate(artifact) {
     // that no reviewed entry pins.
     ...uncoveredPlatformPackages({
       skipped: model.skippedPlatformPackages,
+      target: artifact.target,
       shippedNames,
       registeredNames: new Set(model.platformNative.map((entry) => entry.name)),
     }),
@@ -570,7 +574,9 @@ function main({ check }) {
   // actually ship are the pinned entries in notices/sources.json.
   console.log(
     `Skipped ${model.skippedPlatformPackages.length} platform-specific package(s) ` +
-      `installed here: ${model.skippedPlatformPackages.join(", ")}`,
+      `installed here: ${model.skippedPlatformPackages
+        .map((pkg) => `${pkg.name}@${pkg.version}`)
+        .join(", ")}`,
   );
 }
 
@@ -632,7 +638,11 @@ function selfTestClosure() {
     closure.firstParty.map((pkg) => pkg.name),
     ["@volli/shared"],
   );
-  assert.deepEqual(closure.platformSpecific, ["native@3.0.0"], "os/cpu packages leave the walk");
+  assert.deepEqual(
+    closure.platformSpecific,
+    [{ name: "native", version: "3.0.0", os: ["darwin"], cpu: ["arm64"] }],
+    "os/cpu packages leave the walk, carrying the constraints the target is judged against",
+  );
   assert.deepEqual(
     closure.notInstalled,
     ["gone"],
@@ -1074,42 +1084,68 @@ function selfTestPackageNotices() {
   assert.equal(unresolved.include[0].document, null, "it renders as vendored, not as a document");
 }
 
-/** The platform-exclusion hole: skipped, shipped, and pinned by nobody. */
+/** A skipped package that installs for the desktop artifact's own target. */
+function darwinArm64(name, version) {
+  return { name, version, os: ["darwin"], cpu: ["arm64"] };
+}
+
+/** The platform-exclusion hole: skipped, shipped on the TARGET, pinned by nobody. */
 function selfTestPlatformCoverage() {
   const shippedNames = new Set(["@img", "node-pty"]);
-  assert.deepEqual(
+  const target = { os: "darwin", cpu: "arm64" };
+  const run = (skipped, registered) =>
     uncoveredPlatformPackages({
-      skipped: ["@img/sharp-darwin-arm64@0.35.4"],
+      skipped,
+      target,
       shippedNames,
-      registeredNames: new Set(["@img/sharp-darwin-arm64"]),
-    }),
+      registeredNames: new Set(registered),
+    });
+
+  assert.deepEqual(
+    run([darwinArm64("@img/sharp-darwin-arm64", "0.35.4")], ["@img/sharp-darwin-arm64"]),
     [],
     "a skipped platform package the registry pins is covered",
   );
+
+  // THE LINUX-CI REGRESSION. The runner installs its own @img variant, which
+  // falls under the shipped `@img` scope and is pinned by nobody — but it does
+  // not install for darwin/arm64, so it ships in no artifact this describes.
   assert.deepEqual(
-    uncoveredPlatformPackages({
-      skipped: ["@esbuild/linux-x64@0.25.0"],
-      shippedNames,
-      registeredNames: new Set(),
-    }),
+    run([{ name: "@img/sharp-linux-x64", version: "0.35.4", os: ["linux"], cpu: ["x64"] }], []),
     [],
-    "a skipped platform package that ships nowhere needs no notice",
+    "the BUILD HOST's own platform variants are not the artifact's, and never fail",
   );
-  const uncovered = uncoveredPlatformPackages({
-    skipped: ["@img/sharp-libvips-darwin-arm64@1.3.3"],
-    shippedNames,
-    registeredNames: new Set(["@img/sharp-darwin-arm64"]),
-  });
+  assert.deepEqual(
+    run([{ name: "@img/sharp-darwin-x64", version: "0.35.4", os: ["darwin"], cpu: ["x64"] }], []),
+    [],
+    "right OS, wrong CPU: still not this artifact",
+  );
+
+  const uncovered = run(
+    [darwinArm64("@img/sharp-libvips-darwin-arm64", "1.3.3")],
+    ["@img/sharp-darwin-arm64"],
+  );
   assert.equal(uncovered.length, 1, "a fourth native package under a shipped scope is named");
   assert.match(uncovered[0], /@img\/sharp-libvips-darwin-arm64@1\.3\.3.*platformNative/s);
-  assert.deepEqual(
-    uncoveredPlatformPackages({
-      skipped: ["node-pty@1.0.0"],
-      shippedNames,
-      registeredNames: new Set(),
-    }).length,
+  assert.equal(
+    run([{ name: "node-pty", version: "1.0.0", os: [], cpu: [] }], []).length,
     1,
-    "a shipped package named outright, not by scope, is caught too",
+    "a package constraining neither os nor cpu matches every target",
+  );
+  assert.equal(
+    run([{ name: "node-pty", version: "1.0.0", os: ["!win32"], cpu: [] }], []).length,
+    1,
+    "a negated constraint that does not exclude the target still matches it",
+  );
+  assert.deepEqual(
+    run([{ name: "node-pty", version: "1.0.0", os: ["!darwin"], cpu: [] }], []),
+    [],
+    "a negated constraint that excludes the target is not the artifact's package",
+  );
+  assert.deepEqual(
+    run([{ name: "lonely", version: "1.0.0", os: ["darwin"], cpu: ["arm64"] }], []),
+    [],
+    "a target-matching platform package the config does not ship needs no notice",
   );
 }
 

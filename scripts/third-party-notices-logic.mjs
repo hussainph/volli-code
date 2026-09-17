@@ -282,8 +282,8 @@ export function collectPackageClosure({
   const thirdParty = new Map();
   /** @type {Map<string, { name: string, version: string, dir: string }>} */
   const firstParty = new Map();
-  /** @type {Set<string>} */
-  const platformSpecific = new Set();
+  /** @type {Map<string, { name: string, version: string, os: string[], cpu: string[] }>} */
+  const platformSpecific = new Map();
   /** @type {Set<string>} */
   const notInstalled = new Set();
 
@@ -321,8 +321,14 @@ export function collectPackageClosure({
       const key = `${name}@${version}`;
       if (visited.has(key)) continue;
       visited.add(key);
-      if (/** @type {any} */ (manifest).os || /** @type {any} */ (manifest).cpu) {
-        platformSpecific.add(key);
+      const { os, cpu } = /** @type {any} */ (manifest);
+      if (os || cpu) {
+        platformSpecific.set(key, {
+          name,
+          version,
+          os: Array.isArray(os) ? os : [],
+          cpu: Array.isArray(cpu) ? cpu : [],
+        });
         continue;
       }
       if (isFirstParty(name)) {
@@ -337,7 +343,7 @@ export function collectPackageClosure({
   return {
     thirdParty: [...thirdParty.values()].toSorted(comparePackages),
     firstParty: [...firstParty.values()].toSorted(comparePackages),
-    platformSpecific: [...platformSpecific].toSorted(),
+    platformSpecific: [...platformSpecific.values()].toSorted(comparePackages),
     notInstalled: [...notInstalled].toSorted(),
   };
 }
@@ -527,7 +533,7 @@ export function packagingFailures({
 
 /**
  * Platform packages the walk skipped that the packaging config nevertheless
- * ships, and that the reviewed registry does not pin.
+ * ships ON THE ARTIFACT'S TARGET PLATFORM, and that the registry does not pin.
  *
  * WHY THIS RULE EXISTS. Excluding every `os`/`cpu` package is what makes the
  * document render identically on macOS and on Linux CI, but on its own it is
@@ -539,26 +545,53 @@ export function packagingFailures({
  * turns that into a named failure at the moment the packaging config starts
  * shipping it.
  *
+ * WHY THE TARGET, NOT THE HOST. The first version of this rule asked only
+ * "does the packaging config ship this name", and went red on Linux CI: the
+ * runner installs @img/sharp-linux-x64, the `@img` scope is shipped, and the
+ * registry pins only the darwin-arm64 set — so the host's own irrelevant
+ * variants were reported as uncovered. The artifact is macOS arm64 whatever
+ * machine builds it, so a skipped package is only interesting when its own
+ * `os`/`cpu` say it would be installed FOR THAT TARGET. A package declaring
+ * neither is treated as matching, because it constrains nothing.
+ *
  * @param {{
- *   skipped: string[],                 // `name@version` keys the walk excluded
+ *   skipped: { name: string, version: string, os: string[], cpu: string[] }[],
+ *   target: { os: string, cpu: string },
  *   shippedNames: Set<string>,         // what the packaging config ships
  *   registeredNames: Set<string>,      // what the reviewed registry pins
  * }} options
  * @returns {string[]}
  */
-export function uncoveredPlatformPackages({ skipped, shippedNames, registeredNames }) {
+export function uncoveredPlatformPackages({ skipped, target, shippedNames, registeredNames }) {
   const failures = [];
-  for (const key of skipped) {
-    const name = key.slice(0, key.lastIndexOf("@"));
-    if (registeredNames.has(name)) continue;
-    if (!isNameCovered(name, shippedNames) && !isNameShipped(name, shippedNames)) continue;
+  for (const pkg of skipped) {
+    if (registeredNames.has(pkg.name)) continue;
+    if (!constraintAdmits(pkg.os, target.os) || !constraintAdmits(pkg.cpu, target.cpu)) {
+      continue;
+    }
+    if (!isNameCovered(pkg.name, shippedNames) && !isNameShipped(pkg.name, shippedNames)) continue;
     failures.push(
-      `${key} is a platform-specific package the dependency walk skips, it ships in the ` +
-        `packaged app (electron-builder.yml), and no entry in notices/sources.json pins ` +
-        `its licence text. Add it to platformNative, or stop shipping it.`,
+      `${pkg.name}@${pkg.version} installs on this artifact's target (${target.os}/${target.cpu}), ` +
+        `the dependency walk skips it as platform-specific, it ships in the packaged app ` +
+        `(electron-builder.yml), and no entry in notices/sources.json pins its licence text. ` +
+        `Add it to platformNative, or stop shipping it.`,
     );
   }
   return [...new Set(failures)].toSorted();
+}
+
+/**
+ * Does an npm `os`/`cpu` constraint admit `value`?
+ *
+ * Empty admits everything (the package constrains nothing). A list of `!x`
+ * negations means "every platform except those"; a positive list means "only
+ * these". npm does not mix the two forms, and neither does this.
+ * @param {string[]} declared @param {string} value
+ */
+function constraintAdmits(declared, value) {
+  if (declared.length === 0) return true;
+  if (declared.some((entry) => entry.startsWith("!"))) return !declared.includes(`!${value}`);
+  return declared.includes(value);
 }
 
 /**
