@@ -3985,3 +3985,64 @@ describe("listSessions over a project roster (VC-388)", () => {
     },
   );
 });
+
+/**
+ * The cache's other half: the SAME object is handed to every caller of a
+ * listing while its entry survives (VC-388), so a caller that mutated a
+ * returned row would corrupt every later read rather than its own copy
+ * (VC-393). Nothing in the engine or its known callers does this today, but
+ * the cache must not depend on that staying true.
+ */
+describe("listSessions cached projections are frozen (VC-393)", () => {
+  it("throws when a caller mutates a top-level field of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-top"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    expect(() => {
+      // Not a type error: `turnActive` is not declared `readonly`, so this
+      // is exactly the assignment that a mutating caller would write. The
+      // runtime freeze is the only thing that stops it.
+      row.turnActive = true;
+    }).toThrow(TypeError);
+  });
+
+  it("throws when a caller mutates a nested array of a returned row", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-nested"));
+
+    const [row] = await plane.listSessions({ projectId: "project-1", scope: "all" });
+
+    expect(() => {
+      // @ts-expect-error -- readonly at the type level too; this is the
+      // runtime backstop for code that gets past that (e.g. `any`).
+      row.commands.push(row.commands[0]);
+    }).toThrow(TypeError);
+    expect(() => {
+      // @ts-expect-error -- same backstop, one level deeper (attention is an
+      // object nested inside the row, holding its own frozen array).
+      row.attention.active.push(row.attention.active[0]);
+    }).toThrow(TypeError);
+  });
+
+  it("keeps serving the original values after a rejected mutation attempt", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-freeze-stable"));
+
+    const first = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    try {
+      // Not a type error either, for the same reason as above.
+      first[0].session.title = "Mutated by a caller";
+    } catch {
+      // Expected: the assignment above throws in strict mode. Even if a
+      // caller swallowed that, the cache below proves nothing leaked.
+    }
+
+    const second = await plane.listSessions({ projectId: "project-1", scope: "all" });
+    // Cache hit (nothing else happened to the Session): the SAME object is
+    // handed back, and it still reads the pre-mutation value.
+    expect(second[0]).toBe(first[0]);
+    expect(second[0].session.title).toBe("Durable Session");
+  });
+});

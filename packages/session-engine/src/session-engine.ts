@@ -189,6 +189,13 @@ export interface SessionEnginePorts {
    * that reads are quietly slow forever. Reporting the miss is what makes that
    * condition observable. Seam failures are isolated, exactly as the runtime's
    * {@link SessionRuntimePorts.onSubscriberFailure} is.
+   *
+   * A listing's fold cache (VC-388) changes how often this fires without
+   * changing whether it does: a cache hit answers straight from {@link
+   * ListingFold} and never calls {@link projectStoredSession}, so a checkpoint
+   * failure for a Session that stays cached is reported once — on the fold
+   * that populated the entry — rather than once per listing, until the entry
+   * is evicted or the Session's log moves again.
    */
   onProjectionCheckpointFailure?: (error: unknown) => void;
   /**
@@ -261,7 +268,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       listingFolds.set(session.id, cached);
       return cached.projection;
     }
-    const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
+    const projection = deepFreezeListingProjection(
+      projectStoredSession(transaction, session, reportCheckpointFailure),
+    );
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     for (const oldest of listingFolds.keys()) {
@@ -906,6 +915,46 @@ interface ListingFold {
   /** Log head at the moment of the fold, from the metadata-only read. */
   throughSequence: number;
   projection: SessionProjection;
+}
+
+/**
+ * Freezes a freshly folded projection, deeply, before it enters {@link
+ * ListingFold} (VC-393).
+ *
+ * `listingProjection` hands the SAME object to every caller that lists this
+ * Session while its entry survives, which is the cache's entire value: a
+ * fold's cost is paid once, not once per listing. That sharing makes a
+ * mutating caller a corruption of every later read rather than a bug local to
+ * itself, and nothing here needs to be mutable — a projection is a pure fold
+ * of immutable events, never edited in place by the engine after it is built
+ * (`foldSessionProjection` always produces a fresh object graph, even a base
+ * checkpoint's unchanged nested values are read, not written). Freezing once
+ * per fold — not once per listing, and never on the cache-hit path — turns a
+ * would-be mutation into a loud `TypeError` in strict-mode code instead of
+ * silent aliasing, at a cost bounded by the same fold the cache already paid
+ * for.
+ *
+ * A plain recursive freeze is sufficient because a `SessionProjection` is
+ * JSON-shaped data (the same contract `docs/BOUNDARIES.md` requires of every
+ * durable payload): plain objects and arrays of strings, numbers, booleans,
+ * and nulls, with no `Date`, `Map`, `Set`, or class instance anywhere in the
+ * tree. If a future field ever needs one of those, it cannot be safely frozen
+ * this way and must fall back to a copy on read instead.
+ */
+function deepFreezeListingProjection(projection: SessionProjection): SessionProjection {
+  deepFreeze(projection);
+  return projection;
+}
+
+/**
+ * No cycle guard: a `SessionProjection` is JSON-shaped data, which cannot
+ * contain a reference cycle by construction, so an unconditional recursion
+ * only ever terminates.
+ */
+function deepFreeze(value: unknown): void {
+  if (value === null || typeof value !== "object") return;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
 }
 
 interface StoredSessionProjection {
