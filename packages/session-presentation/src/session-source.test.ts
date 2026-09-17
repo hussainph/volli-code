@@ -8,7 +8,7 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "./session-source";
+import { sessionSourceHarness, sessionSourceLabel } from "./session-source";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
   return {
@@ -128,5 +128,44 @@ describe("sessionSourceLabel", () => {
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ role: "subagent" }) })).toBe(
       "Subagent",
     );
+  });
+});
+
+describe("sessionSourceHarness", () => {
+  const sourceHarness = (session: SessionRecord) => sessionSourceHarness(terminalRow(session));
+
+  // The id half of the label's own verdict, reached by the same rule: a glyph
+  // and the words beside it must never name two different harnesses.
+  it("names the harness an agent launch is running", () => {
+    expect(sourceHarness(record({ launchKind: "agent", harnessId: "codex" }))).toBe("codex");
+    expect(
+      sourceHarness(
+        record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
+      ),
+    ).toBe("claude-code");
+  });
+
+  // A custom slug round-trips rather than collapsing to the default harness —
+  // the caller decides what artwork an unknown harness gets, and it can only
+  // decide that if it is told the slug.
+  it("hands back an unrecognized slug verbatim", () => {
+    expect(
+      sourceHarness(record({ launchKind: "agent", harnessId: "my-custom-harness" as HarnessId })),
+    ).toBe("my-custom-harness");
+  });
+
+  // Everything the label refuses to call a harness, this refuses to name one
+  // for — including the shell that later ran an agent.
+  it("names none for a session that did not launch one", () => {
+    expect(sourceHarness(record({ launchKind: "shell" }))).toBeNull();
+    expect(
+      sourceHarness(record({ launchKind: "shell", activeHarnessId: "claude-code" })),
+    ).toBeNull();
+    expect(sourceHarness(record())).toBeNull();
+  });
+
+  // A structured Session runs the Agent Runtime, not a CLI.
+  it("names none for a chat row", () => {
+    expect(sessionSourceHarness({ kind: "chat", record: chatRecord() })).toBeNull();
   });
 });

@@ -13,10 +13,11 @@
  * provider mirrors the real tree — `SidebarProvider` wraps the whole app, and
  * `SidebarMenuButton` reads its context unconditionally.
  */
+import { AsteriskIcon } from "@phosphor-icons/react/dist/csr/Asterisk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import { PERSON_STARTED } from "@volli/shared";
-import type { Ticket } from "@volli/shared";
+import type { HarnessId, Ticket } from "@volli/shared";
 
 import type { ActiveSessionRow, PreviousSessionRow } from "./active-session-listing";
 import {
@@ -53,6 +54,7 @@ function row(overrides: Partial<ActiveSessionRow> = {}): ActiveSessionRow {
     ticket,
     title: "Session 1",
     source: "Claude Code",
+    harnessId: "claude-code",
     activity: "working",
     activitySource: "reported",
     attention: null,
@@ -128,7 +130,12 @@ describe("ActiveBandRow", () => {
 
   it("says where a ticketed chat Session lives and keeps its source plain", () => {
     const markup = render(
-      row({ id: "chat:c1", source: "Chat", ticket: { ...ticket, status: "needs_review" } }),
+      row({
+        id: "chat:c1",
+        source: "Chat",
+        harnessId: null,
+        ticket: { ...ticket, status: "needs_review" },
+      }),
     );
 
     expect(stateLine(markup)).toBe("Needs Review · Working");
@@ -137,7 +144,9 @@ describe("ActiveBandRow", () => {
   });
 
   it("keeps the source on a ticketless row, which has no column to name", () => {
-    const markup = render(row({ ticket: null, source: "Shell", activity: "idle" }));
+    const markup = render(
+      row({ ticket: null, source: "Shell", harnessId: null, activity: "idle" }),
+    );
 
     expect(stateLine(markup)).toBe("Shell · Idle");
   });
@@ -317,6 +326,7 @@ describe("PreviousBandRow identity", () => {
     ticket,
     title: "Review fixes",
     kind: "chat",
+    harnessId: null,
     endedOrQuietAt: 0,
     activity: "idle",
     provenance: PERSON_STARTED,
@@ -407,5 +417,111 @@ describe("PreviousBandRow identity", () => {
 
     expect(interrupted).toContain('class="sr-only">Interrupted</span>');
     expect(idle).not.toContain("Interrupted");
+  });
+});
+
+/**
+ * VC-402: WHICH CLI a companion is running, as a mark rather than as words.
+ *
+ * The acceptance is exactly what these assert — two companion rows on different
+ * harnesses are told apart with their titles hidden — so the tests read the
+ * glyph's own SVG path rather than only its accessible name: a mapping that
+ * handed two harnesses the same drawing would still announce two names.
+ */
+// `Array.from` rather than a spread of `.matchAll().map()`: the iterator
+// helper's `map` hands back another ITERATOR, which has no length and compares
+// equal to every other one.
+const glyphPaths = (markup: string): string[] =>
+  Array.from(markup.matchAll(/<path d="([^"]*)"/g), (match) => match[1]!);
+
+describe("companion harness glyph", () => {
+  function renderPrevious(overrides: Partial<PreviousSessionRow>): string {
+    return renderToStaticMarkup(
+      <SidebarProvider>
+        <PreviousBandRow
+          row={{
+            id: "session:s1",
+            ticket,
+            title: "Session 1",
+            kind: "terminal",
+            harnessId: null,
+            endedOrQuietAt: 0,
+            activity: null,
+            provenance: PERSON_STARTED,
+            target: null,
+            cleaned: false,
+            ...overrides,
+          }}
+          projectId="proj-1"
+          ticketPrefix="VC"
+          now={60_000}
+          selected={false}
+          onSelect={() => {}}
+        />
+      </SidebarProvider>,
+    );
+  }
+
+  it("draws a different glyph for each first-class harness, in both bands", () => {
+    const claude = render(row({ harnessId: "claude-code" }));
+    const codex = render(row({ harnessId: "codex" }));
+
+    expect(claude).toContain('aria-label="Claude Code"');
+    expect(codex).toContain('aria-label="Codex"');
+    // The whole point: with every word hidden, the two rows still differ.
+    expect(glyphPaths(claude)).not.toEqual(glyphPaths(codex));
+
+    const cursor = glyphPaths(renderPrevious({ harnessId: "cursor" }));
+    const opencode = glyphPaths(renderPrevious({ harnessId: "opencode" }));
+    expect(cursor).not.toEqual(opencode);
+    expect(cursor).not.toEqual(glyphPaths(renderPrevious({ harnessId: "claude-code" })));
+  });
+
+  // Outline at the band's small-glyph tier, pinned against the drawing itself:
+  // `bold` is a DIFFERENT path from `regular`, and `fill` is a different one
+  // again — the mark a row's one exception wears, which no companion row is.
+  it("draws the mark bold rather than filling it", () => {
+    const markup = render(row({ harnessId: "claude-code" }));
+
+    expect(glyphPaths(markup)).toEqual(
+      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="bold" />)),
+    );
+    expect(glyphPaths(markup)).not.toEqual(
+      glyphPaths(renderToStaticMarkup(<AsteriskIcon weight="fill" />)),
+    );
+    expect(/aria-label="Claude Code"[^>]*/.exec(markup)?.[0]).toContain('class="size-3"');
+  });
+
+  // A bring-your-own harness gets the generic terminal, not a second invented
+  // mark that would only mean "not one of the four".
+  it("keeps the generic terminal for a harness this build does not know", () => {
+    const custom = renderPrevious({ harnessId: "my-custom-harness" as HarnessId });
+
+    expect(custom).toContain('aria-label="my-custom-harness"');
+    expect(glyphPaths(custom)).toEqual(glyphPaths(renderPrevious({ harnessId: null })));
+  });
+
+  // The words the mark stands for, in the one place this one-line row can
+  // afford them. The Active row has carried them in its `title` all along.
+  it("decodes the mark in the row's hover title", () => {
+    expect(renderPrevious({ harnessId: "codex" })).toContain('title="Session 1\nCodex"');
+    expect(renderPrevious({ harnessId: null })).toContain('title="Session 1"');
+  });
+
+  // No change to structured rows: a chat keeps its own glyph in Previous and
+  // gains nothing at all in Active.
+  it("leaves structured rows exactly as they were", () => {
+    const chatPrevious = renderPrevious({ kind: "chat", harnessId: null });
+    expect(chatPrevious).toContain('aria-label="Chat"');
+    expect(glyphPaths(chatPrevious)).toHaveLength(1);
+
+    const chatActive = render(row({ id: "chat:c1", source: "Chat", harnessId: null }));
+    expect(glyphPaths(chatActive)).toHaveLength(0);
+  });
+
+  // A shell names no CLI, so the Active row says nothing rather than claiming
+  // the default harness.
+  it("stays silent on an Active row with no harness to name", () => {
+    expect(render(row({ source: "Shell", harnessId: null }))).not.toContain('aria-label="Claude');
   });
 });

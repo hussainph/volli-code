@@ -14,6 +14,7 @@ import {
   harnessLabel,
   isSubagentSession,
   shortSessionId,
+  type HarnessId,
   type SessionListingIdentity,
 } from "@volli/shared";
 
@@ -65,4 +66,27 @@ export function sessionSourceLabel(row: SessionListingIdentity): string {
         ? "Shell"
         : "Terminal";
   return record.placement === "split" ? `${source} · Split` : source;
+}
+
+/**
+ * WHICH CLI is running here, as an id rather than as words — or `null` for a
+ * Session that runs none: a chat, a bare shell, a pane that predates launch
+ * metadata.
+ *
+ * The harness half of {@link sessionSourceLabel}, split out rather than
+ * re-derived at the call site, because a surface that draws Claude Code apart
+ * from Codex has to reach the same verdict the label does. Same input, the same
+ * `launchKind` gate and the same {@link effectiveHarnessId} fallback: a shell
+ * launch that later ran an agent still names no harness here, exactly as it
+ * still reads "Shell" above, and a pane whose agent was replaced names what is
+ * in it now.
+ *
+ * An id and not a label because the caller is drawing artwork. Words are a
+ * client-neutral fact this contract owns; which glyph stands for `codex` is the
+ * client's, and handing a label back would have every client parsing English to
+ * pick one.
+ */
+export function sessionSourceHarness(row: SessionListingIdentity): HarnessId | null {
+  if (row.kind === "chat") return null;
+  return row.record.launchKind === "agent" ? effectiveHarnessId(row.record) : null;
 }
