@@ -61,8 +61,17 @@ That matters to how much each row below is worth, and it is not uniform:
   explain.
 - **`tickets-300` is the weakest.** Its "after" ran at roughly half the load of
   its "before", so some of that improvement is the machine.
-- **`real` is strong in the other direction.** It improved while the load went
-  UP, so its delta is if anything understated.
+- **`real` was re-taken, and its first pair is withdrawn.** The two sweeps put
+  it at 265.2 → 205.2 ms, and neither number reproduced: a later run of the
+  same build against the same fixture read 641.8 ms. Both halves of that pair
+  had caught an unusually quiet window. It was therefore re-measured as a
+  back-to-back pair — unwindowed build, then windowed build, same machine
+  state, thirteen minutes apart (loads 7.84 and 9.57) — and that pair is what
+  the table below quotes. The withdrawn pair is recorded here rather than
+  deleted, because the lesson generalises: a single arm on this host moved by
+  3× between takes, so a before and an after measured an hour apart are not a
+  comparison. The three ticket-scale pairs were each taken within minutes of
+  their partner, which is why they are the ones to lean on.
 - Every absolute number here is **pessimistic**, and none of them is comparable
   with `docs/performance-baselines/vc-353-owner-real/benchmark.md`, which was
   taken on the same machine in a different state.
@@ -92,8 +101,16 @@ and why it is the arm the owner's reported stutter lives in.
 | **3,000 after** | 200 / 3,000 | 608.3 ms | 1,035.4 ms | 100.1 ms | 39 | 2 | 318.9 MB |
 | **10,000 before** | 10,000 / 10,000 | 5,797.6 ms | 9,978.0 ms | 233.4 ms | 568 | 4 | 1,133.1 MB |
 | **10,000 after** | 200 / 10,000 | 365.6 ms | 750.8 ms | 83.3 ms | 30 | 2 | 333.3 MB |
-| **`real` (392) before** | 392 / 392 | 265.2 ms | 480.8 ms | 83.2 ms | 11 | 1 | 371.3 MB |
-| **`real` (392) after** | 200 / 392 | 205.2 ms | 320.9 ms | 49.9 ms | 3 | 1 | 314.5 MB |
+| **`real` (392) before** | 392 / 392 | 775.7 ms | 1,060.6 ms | 167.2 ms | 31 | 2 | 367.1 MB |
+| **`real` (392) after** | 200 / 392 | 668.1 ms | 825.7 ms | 66.7 ms | 21 | 2 | 306.6 MB |
+
+The `real` row is the back-to-back re-take described above, not the sweep. At
+the owner's scale the latency win is modest — 14% at p50, 22% at p95 — and the
+frame time is the number that actually moved: p95 167.2 → 66.7 ms, which is the
+difference between a visible hitch on the switch and one that is not. 392
+tickets is close enough to the 200-card floor that the bound has little left to
+remove; its value at this scale is the long frame, and its value at 3,000 and
+above is the whole curve.
 
 ### Board column scroll (idle arm, 8 repetitions, 60-frame gesture)
 
@@ -102,16 +119,14 @@ and why it is the arm the owner's reported stutter lives in.
 | 300 before / after | 1,039.4 / 1,030.1 ms | 1,057.7 / 1,040.5 ms | 18.4 / 18.5 ms | 0 / 0 |
 | 3,000 before / after | 1,036.5 / 1,028.2 ms | 1,056.3 / 1,046.1 ms | 18.5 / 18.4 ms | 0 / 0 |
 | 10,000 before / after | 1,093.2 / 1,029.7 ms | 1,248.3 / 1,083.9 ms | 33.0 / 18.5 ms | 13 / 1 |
-| `real` before / after | 1,031.3 / 1,030.7 ms | 1,092.0 / 1,101.3 ms | 18.2 / 18.5 ms | 0 / 3 |
+| `real` before / after | 1,030.4 / 1,036.4 ms | 1,038.6 / 1,039.2 ms | 18.5 / 18.5 ms | 0 / 0 |
 
 Latency is not the metric here — the gesture is a fixed 60 frames, so p50 is
 ~1,030 ms by construction. The frame times are the metric, and the answer is
 that the bound did not sell the scroll to buy the mount: every arm still lands
 on one refresh interval, and the 10,000-card column got BETTER (frame p95 33 →
 18.5 ms, 13 dropped → 1) because it is no longer scrolling ten thousand
-composited cards. `real`'s 0 → 3 dropped frames is the one number that moved
-the wrong way; at three frames over eight repetitions and a p95 frame time
-still inside one refresh interval, it is inside this host's noise.
+composited cards. `real` is unchanged on every scroll figure.
 
 ### What the numbers decided
 
@@ -119,7 +134,9 @@ still inside one refresh interval, it is inside this host's noise.
 count and worse than linearly at the top: 918 → 1,789 → 5,798 ms at 300 →
 3,000 → 10,000, with dropped frames going 39 → 121 → 568 and renderer RSS
 reaching 1.1 GB. Bounded, it is flat in the ticket count — 337 / 608 / 366 ms
-— because what the column mounts no longer depends on how much it holds.
+— because what the column mounts no longer depends on how much it holds. That
+SHAPE is what survives this host's noise; no single pair of absolute numbers
+here, `real` included, does on its own.
 
 **The residue at 3,000 is honest and expected.** 608 ms with 200 cards mounted
 is not the cards; it is the per-render pipeline over the whole ticket list
@@ -206,7 +223,10 @@ re-register the droppable on every render of the column.
 
 No first-mount arm (cold launch already covers the board's first paint, and
 the stutter this ticket was opened for is the return); no loaded arm, so every
-number here is the idle one; no owner-machine re-take; no measurement of a
+number here is the idle one; no repeat of the 300 / 3,000 / 10,000 pairs to
+bound their run-to-run spread the way `real` got — the 10,000 pair is a 16×
+delta and needs no such defence, the 300 pair is the one a repeat would help
+most; no owner-machine re-take; no measurement of a
 board mid-drag at ten thousand cards, which the monotonic window makes a
 bounded worry rather than an unbounded one but does not make free. Keyboard
 drag across a window boundary is covered by the mount rules and by unit tests,
