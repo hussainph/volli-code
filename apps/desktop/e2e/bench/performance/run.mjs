@@ -49,6 +49,7 @@ const INTERACTIONS = Object.freeze([
   ["ticket_switch", "Switch between ticket workspaces"],
   ["board_render", "Board render"],
   ["board_scroll", "Board column scroll"],
+  ["board_filter", "Board filter apply"],
   ["rpc_round_trip", "Session RPC projection round trip"],
 ]);
 /** Every interaction id, in order — what a run with no `--interactions` covers. */
@@ -231,6 +232,8 @@ export function aggregateInteraction(id, label, samples) {
     // latency they explain.
     "boardTickets",
     "mountedCards",
+    // What one facet filter cut the board down to (VC-316).
+    "filteredTickets",
     // How long each Session band actually was (VC-316).
     "sidebarRows_active",
     "sidebarRows_previous",
@@ -922,6 +925,71 @@ async function measureBoardScroll(page, app) {
   ).then(async (sample) => ({ ...sample, ...(await boardMountCounts(page)) }));
 }
 
+/**
+ * Applying one facet filter to a board that is already up.
+ *
+ * VC-316 asks for filter latency beside the mount and scroll numbers, and it is
+ * a different question from either: filtering re-derives every column's list,
+ * every count badge and every window from the whole ticket set, so its cost
+ * tracks what the board HOLDS and not what it mounts. A bound on the mount is
+ * not expected to move it — recording it is how that stays a measurement
+ * rather than an assumption.
+ *
+ * The Priority facet, because the fixture assigns priorities round-robin, so
+ * one of the three always cuts a board of any size to roughly a third and the
+ * arm is comparable across presets. Readiness is the board's own published
+ * count going DOWN: the filter has landed when the board says it holds fewer
+ * tickets than it did, which is a statement about the filtered list itself
+ * rather than about any card being drawn.
+ */
+async function measureBoardFilter(page, app) {
+  const boardCount = async () =>
+    page.evaluate(() => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      return board === null ? null : Number(board.getAttribute("data-board-ticket-count"));
+    });
+  const before = await boardCount();
+  if (before === null || before === 0) {
+    throw new Error("board_filter needs a board holding tickets; none was in front");
+  }
+  const chip = page.getByRole("button", { name: "Priority", exact: true });
+  await chip.waitFor({ state: "visible", timeout: 30_000 });
+  await chip.click();
+  const option = page.getByRole("menuitemcheckbox", { name: "High", exact: true });
+  await option.waitFor({ state: "visible", timeout: 30_000 });
+
+  const sample = await measured(
+    page,
+    app,
+    async () => option.click(),
+    async () =>
+      page.waitForFunction(
+        (full) => {
+          const board = document.querySelector("[data-board-ticket-count]");
+          if (board === null) return false;
+          const now = Number(board.getAttribute("data-board-ticket-count"));
+          return now > 0 && now < full;
+        },
+        before,
+        { timeout: 60_000 },
+      ),
+  );
+  const filtered = await boardCount();
+  // Put the board back the way it was found, so a later arm in the same run
+  // does not inherit a filtered board.
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await page.waitForFunction(
+    (full) => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      return board !== null && Number(board.getAttribute("data-board-ticket-count")) === full;
+    },
+    before,
+    { timeout: 60_000 },
+  );
+  await settleFrames(page);
+  return { ...sample, boardTickets: before, filteredTickets: filtered };
+}
+
 async function measureRpc(page, app, sessionId) {
   await startCapture(page);
   try {
@@ -1053,15 +1121,24 @@ async function fullAppIteration({
     // After the board render arm by construction: it needs the board in front,
     // and `measureBoardRender` is what puts it there. When board render is
     // filtered out, this puts the board in front itself.
+    const bringBoardForward = async () => {
+      await page.getByRole("button", { name: "Home", exact: true }).first().click();
+      await waitForBoard(page, manifest.counts.tickets);
+      await settleFrames(page);
+    };
     let boardScroll = null;
     if (wanted.has("board_scroll")) {
-      if (board === null) {
-        await page.getByRole("button", { name: "Home", exact: true }).first().click();
-        await waitForBoard(page, manifest.counts.tickets);
-        await settleFrames(page);
-      }
+      if (board === null) await bringBoardForward();
       console.log("  measuring board scroll");
       boardScroll = await measureBoardScroll(page, app);
+    }
+    // Same precondition, and it restores the unfiltered board before returning,
+    // so it is safe wherever it falls in the order.
+    let boardFilter = null;
+    if (wanted.has("board_filter")) {
+      if (board === null && boardScroll === null) await bringBoardForward();
+      console.log("  measuring board filter");
+      boardFilter = await measureBoardFilter(page, app);
     }
     return {
       samples: {
@@ -1073,6 +1150,7 @@ async function fullAppIteration({
         ticket_switch: ticketSwitch,
         board_render: board,
         board_scroll: boardScroll,
+        board_filter: boardFilter,
         rpc_round_trip: rpc,
       },
       rendererErrors: errors.slice(0, 20),
