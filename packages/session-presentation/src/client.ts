@@ -23,6 +23,7 @@ import type { SessionStreamCompactionProgress, SessionStreamOverlay } from "@vol
 import { autoTitleFromMessage, blobUrl, errorMessage, skillResourcePart } from "@volli/shared";
 import type {
   BlobLinkView,
+  CommandRefusalSeverity,
   ModelSelection,
   SessionInteractionResolution,
   SessionPresentationProjection,
@@ -36,6 +37,7 @@ import {
   chatSessionCompactionProgress,
   chatSessionFrame,
   chatSessionOverlay,
+  commandRefusal,
   rejectedReceipt,
 } from "./wire";
 
@@ -301,6 +303,10 @@ export interface ChatSessionRpc {
     subscribe: {
       subscribe(input: ChatStreamCursor, handlers: ChatStreamHandlers): { unsubscribe(): void };
     };
+    // Deliberately `unknown`-shaped past the session id: every reader of a
+    // command result goes through `wire.ts`, which reads it structurally
+    // because this crosses the RPC edge as JSON. A declared field here would
+    // be a promise the transport never made.
     command: { mutate(input: ChatCommandRequest): Promise<{ sessionId: string }> };
     cancelInteraction: {
       mutate(input: { sessionId: string; interactionId: string }): Promise<unknown>;
@@ -407,14 +413,32 @@ export interface ChatSessionTransport {
   attachSession(input: { operationId: string; sessionId: string }): Promise<ProductSessionResult>;
 }
 
+/**
+ * How loud one {@link ChatSessionClientDeps.notify} line is.
+ *
+ * The presentation half of {@link CommandRefusalSeverity}: `"failure"` is a
+ * thing that went wrong and reads as `"error"`, `"benign"` is a thing that
+ * simply did not happen and reads as `"neutral"`. Two vocabularies on purpose
+ * — the host judges what a refusal WAS, and the client decides how loudly to
+ * say it, which is the one of the two a second client may reasonably differ on.
+ */
+export type NotifyTone = "error" | "neutral";
+
 export interface ChatSessionClientDeps extends ChatSessionTransport {
   store: ChatSessionStore;
   /**
-   * One line to a person about a command that failed as a moment, not a state
+   * One line to a person about a command that ended as a moment, not a state
    * — the surface {@link ChatSessionClient.#eventRun} speaks to. The desktop
    * passes its error toast; nothing here assumes what the line becomes.
+   *
+   * `tone` is required rather than defaulted, so a second client cannot ship a
+   * `notify` that quietly drops the distinction: `"error"` is a stopped turn,
+   * a decision that did not land, a model that would not change. `"neutral"`
+   * is a refusal the host vouched for as benign — a history with nothing left
+   * to summarize is an outcome the person chose to ask about, not a failure
+   * (CLAUDE.md's line between the two).
    */
-  notify(message: string): void;
+  notify(message: string, tone: NotifyTone): void;
   /**
    * Retitle the durable Session everywhere it is named — the auto-title's one
    * write ({@link ChatSessionClient.#autoTitle}). Fire-and-forget by
@@ -426,6 +450,12 @@ export interface ChatSessionClientDeps extends ChatSessionTransport {
 }
 
 export type ProductSessionResult = SessionStartResult;
+
+/** The tone a refusal of each weight is said in. */
+const TONE_OF: Readonly<Record<CommandRefusalSeverity, NotifyTone>> = {
+  benign: "neutral",
+  failure: "error",
+};
 
 export class ChatSessionClient {
   readonly sessionId: string;
@@ -713,17 +743,32 @@ export class ChatSessionClient {
   /**
    * Summarize this Session's context now, because someone typed `/compact`.
    *
-   * Every way it does not happen comes back as a rejected receipt — a turn
-   * still running, a history with nothing left to summarize, a summary the
-   * provider refused — and {@link #run} settles all of them onto the Session
-   * as one readable line. That is the whole difference between this and the
-   * two compactions nobody asked for: those report to the ledger, and this
-   * reports to a person.
+   * Every way it does not happen comes back as a refused receipt — a turn
+   * still running, a compaction already running, a history with nothing left
+   * to summarize, a summary the provider refused. VC-141: all of them are a
+   * one-shot toast, never the `sessionError` band {@link #run} would have
+   * latched. A refusal is not a failure of the Session's plumbing, and a
+   * persistent error row with a Retry button that re-attaches a perfectly fine
+   * executor is the wrong report for any of them — least of all for the one a
+   * person's own `/compact` simply ran into (CLAUDE.md's line between the two).
+   *
+   * Which refusals are benign is not decided here. The host marks each one,
+   * and {@link #eventRun} says it in that weight using the runtime's own
+   * sentence — which is why a context busy with a live turn and a context busy
+   * with another compaction read differently, as the runtime wrote them.
    */
   compactContext(instructions: string | null): Promise<boolean> {
     const attachmentId = this.#liveAttachmentId();
-    if (attachmentId === null) return Promise.resolve(false);
-    return this.#run("Compact", () =>
+    if (attachmentId === null) {
+      // The one refusal this side can see, and it still owes a person a word
+      // (VC-141): a `/compact` that vanished because nothing was attached is
+      // the same "did that work?" silence the rest of this method exists to
+      // end. Said in the composer verb's own voice, which refuses the sibling
+      // case — a turn already live — in the same breath.
+      this.#notify("Compaction can't run until the Session is live", "error");
+      return Promise.resolve(false);
+    }
+    return this.#eventRun("Compact", () =>
       this.#rpc.session.command.mutate({
         commandId: this.#newCommandId(),
         sessionId: this.sessionId,
@@ -1227,17 +1272,23 @@ export class ChatSessionClient {
    * failure of the Session's plumbing, and a success of it does not repair
    * one either — clearing a latched transport error on an unrelated command's
    * round trip is how a frozen transcript ended up looking healthy.
+   *
+   * Two weights, not one (VC-141). A refusal the host marked benign is read
+   * out in the host's own words at a neutral tone and nothing is prefixed onto
+   * it: it is a whole sentence about the thing the person asked for, and
+   * naming the command again would be calling an outcome a fault. Every other
+   * refusal — including every refusal nobody vouched for — keeps the
+   * `Label: reason` shape that says which command went wrong.
    */
   async #eventRun(label: string, call: () => Promise<unknown>): Promise<boolean> {
     try {
-      const refusal = rejectedReceipt(await call());
-      if (refusal !== null) {
-        this.#notify(`${label}: ${refusal}`);
-        return false;
-      }
-      return true;
+      const refusal = commandRefusal(await call());
+      if (refusal === null) return true;
+      const tone = TONE_OF[refusal.severity];
+      this.#notify(tone === "neutral" ? refusal.message : `${label}: ${refusal.message}`, tone);
+      return false;
     } catch (failure) {
-      this.#notify(`${label}: ${errorMessage(failure)}`);
+      this.#notify(`${label}: ${errorMessage(failure)}`, "error");
       return false;
     }
   }

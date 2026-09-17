@@ -7,6 +7,7 @@ import { internSessionEventProvenance } from "../db/session-event-provenance";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
+import { workingSessionCount } from "../session-concurrency";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 
 let ctx: TestDb;
@@ -1931,5 +1932,212 @@ describe("the Session usage projection", () => {
         "command.receipt.recorded",
       ]);
     });
+  });
+});
+
+/**
+ * The concurrency budget's narrowing (VC-403).
+ *
+ * The budget asks one question — who is working — and used to answer it by
+ * folding every Session of every project. These hold the ledger's replacement:
+ * an indexed read of the Sessions holding an OPEN attachment, which is a
+ * superset of the working ones and never a subset, so the count that folds
+ * only these is the same count.
+ */
+describe("listAttachedSessions (VC-403)", () => {
+  /** Opens an attachment on a fresh Session and hands back both ids. */
+  async function sessionWithAttachment(
+    control: ReturnType<typeof createSessionEngine>,
+    projectId: string,
+    name: string,
+    adapterId: "terminal" | "opencode",
+  ): Promise<{ sessionId: string; attachmentId: string }> {
+    const created = await control.createSession({
+      commandId: `create-${name}`,
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: name,
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: `start-${name}`,
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId, continuity: "fresh" },
+      provenance,
+    });
+    const attachmentId = `attachment-${name}`;
+    await control.observe({
+      id: `opened-${name}`,
+      kind: "attachment.opened",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance,
+      attachment: {
+        id: attachmentId,
+        sessionId: created.session.id,
+        adapterId,
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native:
+          adapterId === "terminal"
+            ? { id: null, detail: { kind: "volli.terminal.v1", cwd: "/repo" } }
+            : null,
+        authority: null,
+      },
+    });
+    return { sessionId: created.session.id, attachmentId };
+  }
+
+  it("returns a Session while its attachment is open and drops it once closed", async () => {
+    const { ledger, control, projectId } = setup();
+    const open = await sessionWithAttachment(control, projectId, "open", "terminal");
+    const closed = await sessionWithAttachment(control, projectId, "closed", "terminal");
+    // A Session that never attached at all: the case the narrowing exists for.
+    await control.createSession({
+      commandId: "create-bare",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Never attached",
+      provenance,
+    });
+
+    await expect(
+      ledger.transaction((transaction) => transaction.listAttachedSessions().map(({ id }) => id)),
+    ).resolves.toEqual(expect.arrayContaining([open.sessionId, closed.sessionId]));
+
+    await control.observe({
+      id: "closed-closed",
+      kind: "attachment.closed",
+      sessionId: closed.sessionId,
+      occurredAt: 300,
+      provenance,
+      attachmentId: closed.attachmentId,
+      outcome: "completed",
+    });
+
+    const attached = await ledger.transaction((transaction) =>
+      transaction.listAttachedSessions().map(({ id }) => id),
+    );
+    expect(attached).toEqual([open.sessionId]);
+  });
+
+  it("agrees with the fold it replaces, for terminals and chats alike", async () => {
+    const { ledger, control, projectId } = setup();
+    const terminal = await sessionWithAttachment(control, projectId, "terminal", "terminal");
+    const chat = await sessionWithAttachment(control, projectId, "chat", "opencode");
+    await control.createSession({
+      commandId: "create-quiet",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Never attached",
+      provenance,
+    });
+
+    // The narrow read and the full listing must agree about who is attached:
+    // every Session the fold shows holding an open attachment is here, and
+    // nothing else is. This is the property the budget's correctness rests on.
+    const folded = await control.listSessions({ projectId, scope: "all" });
+    const attachedByFold = folded
+      .filter((projection) =>
+        projection.attachments.some((attachment) => attachment.status === "open"),
+      )
+      .map((projection) => projection.session.id);
+    const narrow = await ledger.transaction((transaction) =>
+      transaction.listAttachedSessions().map(({ id }) => id),
+    );
+
+    expect(narrow.toSorted()).toEqual(attachedByFold.toSorted());
+    expect(narrow.toSorted()).toEqual([terminal.sessionId, chat.sessionId].toSorted());
+  });
+
+  it("counts the same as folding the whole fleet, which is the point", async () => {
+    const { control, projectId } = setup();
+    const live = await sessionWithAttachment(control, projectId, "live", "terminal");
+    const exited = await sessionWithAttachment(control, projectId, "exited", "terminal");
+    await control.observe({
+      id: "closed-exited",
+      kind: "attachment.closed",
+      sessionId: exited.sessionId,
+      occurredAt: 300,
+      provenance,
+      attachmentId: exited.attachmentId,
+      outcome: "completed",
+    });
+    // Sessions that never attached at all: the bulk of any real machine, and
+    // the whole set the narrowing drops.
+    for (const name of ["quiet-one", "quiet-two", "quiet-three"]) {
+      await control.createSession({
+        commandId: `create-${name}`,
+        projectId,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: name,
+        provenance,
+      });
+    }
+
+    // The invariant the budget rests on: counting the narrow read and counting
+    // the entire fleet give the same number, because every Session the narrow
+    // read omits contributes zero. If this ever parts, the budget is fast and
+    // wrong, which is worse than slow and right.
+    const narrow = workingSessionCount({ projections: await control.listAttachedSessions() });
+    const whole = workingSessionCount({
+      projections: await control.listSessions({ projectId, scope: "all" }),
+    });
+
+    expect(narrow).toBe(whole);
+    // Not vacuously equal at zero: the live terminal is counted, the exited one
+    // is not, and the three that never attached are not.
+    expect(narrow).toBe(1);
+    expect(live.sessionId).not.toBe(exited.sessionId);
+  });
+
+  it("keeps a failed attachment out: it never opened", async () => {
+    const { ledger, control, projectId } = setup();
+    const created = await control.createSession({
+      commandId: "create-failed",
+      projectId,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Failed",
+      provenance,
+    });
+    const start = await control.submit({
+      commandId: "start-failed",
+      sessionId: created.session.id,
+      intent: { kind: "executor.start", adapterId: "terminal", continuity: "fresh" },
+      provenance,
+    });
+    await control.observe({
+      id: "failed",
+      kind: "attachment.failed",
+      sessionId: created.session.id,
+      commandId: start.command.id,
+      occurredAt: 200,
+      provenance,
+      attachment: {
+        id: "attachment-failed",
+        sessionId: created.session.id,
+        adapterId: "terminal",
+        venue: { id: "local", kind: "local" },
+        continuity: "fresh",
+        native: null,
+        authority: null,
+      },
+      failure: { code: "terminal_start_failed", detail: "no pty", diagnostic: null },
+    });
+
+    await expect(
+      ledger.transaction((transaction) => transaction.listAttachedSessions()),
+    ).resolves.toEqual([]);
   });
 });

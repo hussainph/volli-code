@@ -533,8 +533,15 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/css-color.ts",
         "src/terminal/appearance.ts",
         "src/terminal/engine.ts",
-        "src/terminal/gpu-pressure-model.ts",
         "src/terminal/appearance-model.ts",
+        // The Ghostty-config → xterm.js option mapping (VC-107). Enrolled for
+        // `appearance-model.ts`'s reason one line up: it is pure translation
+        // whose failures are silent. A palette slot mapped to the wrong xterm
+        // key, a selection keyword that resolves to nothing, or a DECSET filter
+        // one mode too wide all render a terminal that merely looks slightly
+        // different — nothing throws, and no screenshot says which half of the
+        // mapping was asked.
+        "src/terminal/xterm-appearance.ts",
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",

@@ -1,5 +1,6 @@
 import type {
   AuthoritySnapshot,
+  CommandRefusalSeverity,
   DeliveryOutcome,
   ModelSelection,
   RuntimeMessageSettle,
@@ -144,6 +145,20 @@ export type DeliveryReceipt =
       code: string;
       detail: string | null;
       native: SessionNativeReference | null;
+      /**
+       * Whether this refusal is a failure or an outcome the request simply ran
+       * into (VC-141). The adapter decides, because only it can read the
+       * runtime's own reason; a client re-deriving it from {@link code} would
+       * be carrying one adapter's vocabulary.
+       *
+       * Transport detail, not durable receipt content: `#recordDelivery` maps
+       * named fields into the ledger's own receipt and this is not one of
+       * them. The durable record keeps the code and the runtime's sentence,
+       * which is what a later reader needs. Absent from every adapter that
+       * does not answer the question, and absent means {@link
+       * CommandRefusalSeverity} `"failure"`.
+       */
+      severity?: CommandRefusalSeverity;
     }
   | {
       commandId: string;
