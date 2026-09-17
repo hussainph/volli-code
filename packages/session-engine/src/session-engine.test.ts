@@ -3992,6 +3992,109 @@ describe("listSessions over a project roster (VC-388)", () => {
 });
 
 /**
+ * The concurrency budget's read (VC-403).
+ *
+ * `listSessions` folds a project's whole roster to answer how many Sessions are
+ * working — thousands of folds, on a machine with history, for a number bounded
+ * by how many things are actually attached. This is the narrowed read that
+ * replaces it, and what these hold is that narrowing it did not change what it
+ * MEANS: the Sessions it returns are exactly the attached ones, folded the
+ * ordinary way, in the ordinary order.
+ */
+describe("listAttachedSessions (VC-403)", () => {
+  /** Opens an attachment on a fresh Session, and optionally closes it again. */
+  async function attached(
+    plane: ReturnType<typeof createSessionEngine>,
+    name: string,
+    close: boolean,
+  ) {
+    const { session } = await plane.createSession(createRequest(`command-${name}`));
+    await plane.observe({
+      id: `${name}-opened`,
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: adapterProvenance,
+      kind: "attachment.opened",
+      attachment: attachment(session.id, `attachment-${name}`),
+    });
+    if (close) {
+      await plane.observe({
+        id: `${name}-closed`,
+        sessionId: session.id,
+        occurredAt: 2,
+        provenance: adapterProvenance,
+        kind: "attachment.closed",
+        attachmentId: `attachment-${name}`,
+        outcome: "completed",
+      });
+    }
+    return session;
+  }
+
+  it("returns only the Sessions still holding an open attachment", async () => {
+    const { plane } = composition();
+    const open = await attached(plane, "open", false);
+    await attached(plane, "closed", true);
+    // Created and never attached: the bulk of a real machine, and the whole set
+    // the narrowing exists to skip folding.
+    await plane.createSession(createRequest("command-never-attached"));
+
+    const rows = await plane.listAttachedSessions();
+
+    expect(rows.map(({ session }) => session.id)).toEqual([open.id]);
+    // Ordinary projections, not a reduced shape: the caller counts these with
+    // exactly the code that counts a listing.
+    expect(rows[0]?.attachments.map(({ status }) => status)).toEqual(["open"]);
+  });
+
+  it("is empty when nothing is attached, rather than falling back to the roster", async () => {
+    const { plane } = composition();
+    await plane.createSession(createRequest("command-quiet"));
+
+    await expect(plane.listAttachedSessions()).resolves.toEqual([]);
+  });
+
+  it("breaks a tie on id, descending, exactly as the SQL ordering does", async () => {
+    // A clock that does not move, so both Sessions share a creation stamp and
+    // the tie-break is the only thing left to order them. The SQLite ledger
+    // orders `created_at DESC, id COLLATE BINARY DESC`; this double has to
+    // agree, or a roster read through the two stores would differ by store.
+    const plane = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => 100 },
+      ids: ids(),
+    });
+    const first = await attached(plane, "tie-first", false);
+    const second = await attached(plane, "tie-second", false);
+
+    const rows = await plane.listAttachedSessions();
+
+    expect(first.createdAt).toBe(second.createdAt);
+    expect(rows.map(({ session }) => session.id)).toEqual(
+      [first.id, second.id].toSorted((left, right) => (left < right ? 1 : -1)),
+    );
+  });
+
+  it("returns to the host's event loop between chunks, as the listing does", async () => {
+    const { plane } = composition();
+    // More than one fold chunk, so the yield between chunks is exercised: this
+    // runs on the one main thread, behind the UI's IPC.
+    const opened = [];
+    for (let index = 0; index < SESSION_LISTING_FOLD_CHUNK + 4; index += 1) {
+      opened.push(await attached(plane, `chunked-${index}`, false));
+    }
+    let hostRan = false;
+
+    const listing = plane.listAttachedSessions();
+    setTimeout(() => (hostRan = true), 0);
+    const rows = await listing;
+
+    expect(rows).toHaveLength(opened.length);
+    expect(hostRan).toBe(true);
+  });
+});
+
+/**
  * A ledger that answers every read of the same event with the SAME object.
  *
  * Both ledgers in this repository happen to hand out fresh objects — the

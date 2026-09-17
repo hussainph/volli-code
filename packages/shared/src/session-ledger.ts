@@ -2106,6 +2106,28 @@ export interface SessionLedgerTransaction {
   /** Counts base Sessions without reading their event histories or building projections. */
   countSessions(query: ListSessionsQuery): number;
   /**
+   * Every Session holding at least one OPEN attachment, across EVERY project.
+   *
+   * Unscoped on purpose, exactly as {@link listSessionStarts} is: this answers
+   * a question about the MACHINE rather than about any one project — a build
+   * in another project's Session competes for the same cores (VC-339).
+   *
+   * It exists so the concurrency budget can stop folding the fleet to count it
+   * (VC-403). The count needs open terminal attachments and chat activity, and
+   * BOTH require an open attachment: a terminal Session is working only while
+   * its latest terminal attachment is open, and a chat is working only while a
+   * structured attachment is open and a turn is running under it. A Session
+   * with no open attachment therefore cannot be working, and dropping it here
+   * costs no fold. The handful that survive are folded by the caller through
+   * the ordinary projection path, which is what keeps the count's terminal/chat
+   * precedence identical to the listing's rather than a second opinion about
+   * it.
+   *
+   * Base Sessions, like {@link listSessions}: this narrows WHICH Sessions are
+   * worth folding and never folds one itself.
+   */
+  listAttachedSessions(): readonly Session[];
+  /**
    * Creation stamps of every Session started at or after `sinceMs`, ascending,
    * across every project — see {@link ListSessionStartsQuery}.
    */
