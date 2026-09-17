@@ -99,12 +99,21 @@ function useColumnWindow({
   // Read inside the scroll handler, which must not be re-bound on every one of
   // these changing — a listener re-registered per commit is its own cost, and
   // the handler wants the LATEST value rather than the one it closed over.
+  //
+  // Synchronised in a LAYOUT effect rather than during render. React 19 renders
+  // concurrently and may abandon a render it started; a ref written during one
+  // publishes a value that never committed, and every reader here would then be
+  // describing a column the DOM does not have. A layout effect runs only for a
+  // commit that happened — and, being declared first, runs before the effects
+  // below that read these.
   const strideRef = React.useRef(rowStride);
-  strideRef.current = rowStride;
   const dragRef = React.useRef(dragActive);
-  dragRef.current = dragActive;
   const countRef = React.useRef(count);
-  countRef.current = count;
+  React.useLayoutEffect(() => {
+    strideRef.current = rowStride;
+    dragRef.current = dragActive;
+    countRef.current = count;
+  }, [rowStride, dragActive, count]);
 
   const recompute = React.useCallback(() => {
     const scroller = scrollerRef.current;

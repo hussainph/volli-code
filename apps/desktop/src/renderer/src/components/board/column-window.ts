@@ -60,8 +60,6 @@ export interface ColumnWindowInput {
   viewportHeight: number;
   /** Measured average row height including the gap below it. */
   rowStride: number;
-  overscan?: number;
-  minimum?: number;
 }
 
 function clamp(value: number, low: number, high: number): number {
@@ -69,33 +67,48 @@ function clamp(value: number, low: number, high: number): number {
 }
 
 /**
- * The window a column at this scroll offset needs.
+ * Clamp a candidate range into `[0, count]` and spend {@link
+ * COLUMN_WINDOW_MINIMUM} on it — the tail both windows below end with.
  *
- * Grows to {@link COLUMN_WINDOW_MINIMUM} by extending DOWNWARD first and only
- * then upward, because a column is read from the top: when the minimum is what
- * is binding, the rows a reader is about to reach matter more than the ones
- * they have already passed.
+ * Shared rather than written twice because the two callers have to agree: one
+ * decides what the SCROLLER asks for and the other what the RENDER may show,
+ * and a column whose two answers disagreed would mount a different slice than
+ * the one it had measured itself against.
+ *
+ * Extends DOWNWARD first and only then upward, because a column is read from
+ * the top: when the minimum is what binds, the rows a reader is about to reach
+ * matter more than the ones they have already passed.
+ *
+ * Both callers return early when `count <= COLUMN_WINDOW_MINIMUM`, so the
+ * minimum is always satisfiable by the time this runs.
  */
+function honourMinimum(candidateFirst: number, candidateLast: number, count: number): ColumnWindow {
+  let first = clamp(candidateFirst, 0, count);
+  let last = clamp(candidateLast, first, count);
+  if (last - first < COLUMN_WINDOW_MINIMUM) last = Math.min(count, first + COLUMN_WINDOW_MINIMUM);
+  if (last - first < COLUMN_WINDOW_MINIMUM) first = Math.max(0, last - COLUMN_WINDOW_MINIMUM);
+  return { first, last };
+}
+
+/** The window a column at this scroll offset needs. */
 export function columnWindow({
   count,
   scrollTop,
   viewportHeight,
   rowStride,
-  overscan = COLUMN_WINDOW_OVERSCAN,
-  minimum = COLUMN_WINDOW_MINIMUM,
 }: ColumnWindowInput): ColumnWindow {
-  if (count <= minimum) return { first: 0, last: count };
+  if (count <= COLUMN_WINDOW_MINIMUM) return { first: 0, last: count };
   // A non-finite or non-positive stride is a column that has not been measured
   // yet, never a reason to divide by zero.
   const stride =
     Number.isFinite(rowStride) && rowStride > 0 ? rowStride : COLUMN_ROW_STRIDE_FALLBACK;
   const top = Number.isFinite(scrollTop) && scrollTop > 0 ? scrollTop : 0;
   const height = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0;
-  let first = clamp(Math.floor(top / stride) - overscan, 0, count);
-  let last = clamp(Math.ceil((top + height) / stride) + overscan, first, count);
-  if (last - first < minimum) last = Math.min(count, first + minimum);
-  if (last - first < minimum) first = Math.max(0, last - minimum);
-  return { first, last };
+  return honourMinimum(
+    Math.floor(top / stride) - COLUMN_WINDOW_OVERSCAN,
+    Math.ceil((top + height) / stride) + COLUMN_WINDOW_OVERSCAN,
+    count,
+  );
 }
 
 /**
@@ -115,17 +128,9 @@ export function columnWindow({
  * minimum. Same two rules as {@link columnWindow}, applied to a window that has
  * already been computed.
  */
-export function boundedWindow(
-  window: ColumnWindow,
-  count: number,
-  minimum = COLUMN_WINDOW_MINIMUM,
-): ColumnWindow {
-  if (count <= minimum) return { first: 0, last: count };
-  let first = clamp(window.first, 0, count);
-  let last = clamp(window.last, first, count);
-  if (last - first < minimum) last = Math.min(count, first + minimum);
-  if (last - first < minimum) first = Math.max(0, last - minimum);
-  return { first, last };
+export function boundedWindow(window: ColumnWindow, count: number): ColumnWindow {
+  if (count <= COLUMN_WINDOW_MINIMUM) return { first: 0, last: count };
+  return honourMinimum(window.first, window.last, count);
 }
 
 /**
@@ -141,6 +146,16 @@ export function boundedWindow(
  * card still brings it in, and nothing the gesture has already measured can go
  * away underneath it. The union is discarded on drop, when the scroll-derived
  * window takes over again.
+ *
+ * The cost of that rule is that ONE GESTURE CAN SUSPEND THE BOUND. A drag
+ * carried the length of a ten-thousand-card column — by dnd-kit's
+ * `KeyboardSensor`, which walks the sorted rects a step per arrow press, or by
+ * a long pointer auto-scroll — mounts everything it passes and holds it until
+ * the card lands. That is accepted rather than overlooked: the alternative is
+ * unmounting a rect mid-gesture, which is the crash above, and the exposure is
+ * one gesture long rather than the whole time the board is open. If it ever
+ * needs bounding, bound it by RELEASING rects dnd-kit no longer indexes, not
+ * by shrinking the window underneath it.
  */
 export function mergeColumnWindows(a: ColumnWindow, b: ColumnWindow): ColumnWindow {
   return { first: Math.min(a.first, b.first), last: Math.max(a.last, b.last) };
