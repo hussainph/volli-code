@@ -154,10 +154,9 @@ function ownershipNoteFrom(licenseText) {
   if (holder === null) {
     return [
       "Copyright holder: not recorded in this repository. The root LICENSE carries the",
-      'Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]"), no package',
-      "manifest names an author, and there is no NOTICE file. That is an ownership",
-      "decision to record rather than a value to derive, so nothing is asserted here;",
-      "apps/desktop/notices/README.md tracks it as open.",
+      'Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]") rather than a',
+      "name. That is an ownership decision to record in the LICENSE, not a value this",
+      "document may derive, so nothing is asserted here.",
     ].join("\n");
   }
   return [

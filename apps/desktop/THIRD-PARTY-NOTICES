@@ -29,11 +29,9 @@ at LICENSE in the repository and ships inside the application bundle at:
   Contents/Resources/THIRD-PARTY-NOTICES.txt
   Contents/Resources/LICENSES.chromium.html
 
-Copyright holder: not recorded in this repository. The root LICENSE carries the
-Apache-2.0 appendix placeholder ("[yyyy] [name of copyright owner]"), no package
-manifest names an author, and there is no NOTICE file. That is an ownership
-decision to record rather than a value to derive, so nothing is asserted here;
-apps/desktop/notices/README.md tracks it as open.
+Copyright 2026 Hussain Phalasiya, as recorded in the root LICENSE's Apache-2.0 appendix. This
+document reproduces that line rather than restating it, so the LICENSE remains the
+single place the holder is named.
 
 The workspace packages below are part of Volli Code itself and carry that licence;
 they are listed so the index accounts for every module in the bundle.
