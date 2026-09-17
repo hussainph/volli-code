@@ -7,6 +7,7 @@ import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
 import {
+  boundedWindow,
   COLUMN_ROW_STRIDE_FALLBACK,
   COLUMN_WINDOW_MINIMUM,
   columnWindow,
@@ -186,15 +187,11 @@ function useColumnWindow({
     recompute();
   }, [selectedIndex, range, scrollerRef, recompute]);
 
-  // Clamped at the edge rather than trusted: `count` can shrink between a
-  // scroll event and the commit that reads this (a filter keystroke, an agent
-  // moving a ticket out), and a slice past the end would silently mount less
-  // than the window claims.
-  const bounded: ColumnWindow = {
-    first: Math.max(0, Math.min(range.first, count)),
-    last: Math.max(0, Math.min(range.last, count)),
-  };
-  return { window: bounded, rowStride };
+  // Reconciled against THIS render's count rather than trusted: `range` is
+  // state and state is a commit behind the props that moved it, so a drop that
+  // grew this column would otherwise render the pre-drop window and leave the
+  // cards that just landed out of the DOM. See `boundedWindow`.
+  return { window: boundedWindow(range, count), rowStride };
 }
 
 /**

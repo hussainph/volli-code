@@ -99,6 +99,36 @@ export function columnWindow({
 }
 
 /**
+ * The window to actually RENDER, given the one tracked against the scroller and
+ * the column's count right now.
+ *
+ * The tracked window is state, and state is always one commit behind the props
+ * that moved: a drop grows `tickets` in the render that the effects only get to
+ * correct afterwards. That gap is not cosmetic. It shipped as a real bug — a
+ * multi-card drop rendered its destination column with the PRE-drop window, so
+ * the cards that had just landed were not in the DOM when `board.tsx`'s layout
+ * effect went looking for their slots to run the drop's FLIP animation, and the
+ * flourish was silently skipped (`board-smoke.mjs` check 8.5).
+ *
+ * So the render heals itself rather than trusting the state: a column that fits
+ * is whole THIS render, and a column that does not still mounts at least the
+ * minimum. Same two rules as {@link columnWindow}, applied to a window that has
+ * already been computed.
+ */
+export function boundedWindow(
+  window: ColumnWindow,
+  count: number,
+  minimum = COLUMN_WINDOW_MINIMUM,
+): ColumnWindow {
+  if (count <= minimum) return { first: 0, last: count };
+  let first = clamp(window.first, 0, count);
+  let last = clamp(window.last, first, count);
+  if (last - first < minimum) last = Math.min(count, first + minimum);
+  if (last - first < minimum) first = Math.max(0, last - minimum);
+  return { first, last };
+}
+
+/**
  * The smallest window containing both — how a window is prevented from ever
  * shrinking while a drag is in flight.
  *

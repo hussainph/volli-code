@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  boundedWindow,
   COLUMN_ROW_STRIDE_FALLBACK,
   COLUMN_WINDOW_MINIMUM,
   columnWindow,
@@ -77,6 +78,34 @@ describe("columnWindow", () => {
       expect(Number.isFinite(range.last)).toBe(true);
       expect(range.last).toBeGreaterThan(range.first);
     }
+  });
+});
+
+describe("boundedWindow", () => {
+  /**
+   * The regression this function exists for: a multi-card drop grows the
+   * destination column in the same render the tracked window is still the
+   * pre-drop one. Rendering that stale window left the just-landed cards out of
+   * the DOM, so `board.tsx`'s FLIP layout effect found no slot for them and the
+   * drop animation was silently skipped.
+   */
+  it("mounts rows the count grew by in the same render", () => {
+    expect(boundedWindow({ first: 0, last: 3 }, 5)).toEqual({ first: 0, last: 5 });
+    expect(boundedWindow({ first: 0, last: COLUMN_WINDOW_MINIMUM }, 2_000).last).toBe(
+      COLUMN_WINDOW_MINIMUM,
+    );
+  });
+
+  it("renders a column that fits whole, whatever the tracked window says", () => {
+    expect(boundedWindow({ first: 12, last: 14 }, 20)).toEqual({ first: 0, last: 20 });
+    expect(boundedWindow({ first: 0, last: 0 }, 0)).toEqual({ first: 0, last: 0 });
+  });
+
+  it("clamps a window the count shrank underneath, and keeps the minimum", () => {
+    expect(boundedWindow({ first: 10, last: 900 }, 100)).toEqual({ first: 10, last: 100 });
+    const narrowed = boundedWindow({ first: 90, last: 95 }, 100);
+    expect(narrowed.last - narrowed.first).toBe(COLUMN_WINDOW_MINIMUM);
+    expect(narrowed.last).toBe(100);
   });
 });
 
