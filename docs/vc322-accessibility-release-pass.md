@@ -8,6 +8,10 @@ This patch does not change terminal shortcuts or terminal source.
 ## Candidate and method
 
 - Baseline: fetched `origin/main` **3bf58945273ea876fac744f2f50483eec69ab378**, canary.11.
+- Re-synced with `origin/main` **10e8ada5** (VC-412 included), then installed and rebuilt.
+  Clean candidate **3497b6786f3c9fed770a5159862c84732a139405** passed the built
+  `--gate-fixes` rerun; `evidence/vc322/synced/report.json` retains the same remaining
+  board/list/terminal failures and 3.27:1 primary contrast. VC-343/344 are not integrated yet.
 - `pnpm install` (including native rebuild) and `pnpm run build` passed.
 - Real Electron main/preload and `volli-app://bundle/index.html`, not the UI lab.
   Disposable database, HOME, project repository, and profile live inside this worktree's
@@ -79,7 +83,12 @@ all-controls contrast audit or a verdict on user-selected colors.
 - Ticket title gains a keyboard-only semantic focus ring.
 - Focused unit run: **3 files / 7 tests passed** (dialog focus lifecycle, title, palette order).
 - Focus-hook coverage: **100% statements/branches/functions/lines**, 5 tests passed.
-- Renderer TypeScript check passed. Full monorepo coverage/CI and signed candidate not claimed.
+- Renderer TypeScript, changed-file lint and whitespace checks passed after sync.
+- An additional combined composer-form/palette-model/palette-search test invocation timed out
+  at 45s before producing test results; it is not counted as passed. Full monorepo coverage/CI
+  and signed candidate not claimed.
+- Draft PR: https://github.com/hussainph/volli-code/pull/579. CI was pending when submitted;
+  keep merge held for the terminal integration order and rerun the integrated candidate.
 
 Reproduce (workspace-local artifacts):
 
