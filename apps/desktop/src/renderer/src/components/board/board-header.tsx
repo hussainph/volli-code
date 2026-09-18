@@ -122,7 +122,7 @@ function ViewToggle({ projectId }: { projectId: string }) {
         // hand-rolled control, segmented look unchanged at rest. `scale` is
         // named in the transition list and cancelled by `scale-100!` under
         // reduced motion for the reason spelled out there.
-        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring/45",
+        "flex size-6 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,transform,scale,box-shadow] duration-150 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:scale-100! focus-visible:ring-2 focus-visible:ring-ring",
         view === value && "bg-accent text-foreground",
       )}
     >

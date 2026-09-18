@@ -198,7 +198,7 @@ export function ValueReveal({
           // wrapping a 60-character value turns a caption into a paragraph.
           aria-label={`${term} · ${full}`}
           className={cn(
-            "cursor-default outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+            "cursor-default outline-none focus-visible:ring-2 focus-visible:ring-ring",
             className,
           )}
         >

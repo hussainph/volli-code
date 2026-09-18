@@ -217,7 +217,7 @@ function TriggerChoice({
       onClick={() => onSelect(value)}
       className={cn(
         "flex h-7 w-full items-center gap-2 rounded-lg border px-2 text-left text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        "focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "border-ring bg-accent text-foreground"
           : "border-border text-muted-foreground hover:text-foreground",
@@ -253,7 +253,7 @@ function ColumnPicker({
         <button
           type="button"
           aria-label="Columns"
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/45"
+          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-transparent px-4 text-ui text-foreground shadow-raised outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>

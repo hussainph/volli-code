@@ -63,7 +63,7 @@ import {
  * than a row, so it cannot take that constant and takes this half of it.
  */
 const USAGE_CARD_PRESSABLE =
-  "outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45";
+  "outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The width every one of the card's popovers opens at, matching the rail's others. */
 const USAGE_POPOVER = "w-72 p-4";
