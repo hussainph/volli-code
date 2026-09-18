@@ -4,6 +4,17 @@
 // Vendored verbatim from Ghostty.app's bundled theme collection (463 files
 // at generation time), read from:
 //     /Applications/Ghostty.app/Contents/Resources/ghostty/themes
+// Ghostty version: 1.3.0 (CFBundleVersion 15112)
+//
+// THIRD-PARTY MATERIAL. These themes are not Volli's: the chain is
+// Ghostty -> iTerm2-Color-Schemes (MIT, Copyright (c) 2011 to Present Mark
+// Badolato), and the per-theme terms behind that collection license are an
+// open question with at least one known conflict. Source, release pins,
+// full license text and the open question are in
+//     packages/shared/THIRD-PARTY-THEMES.md
+// Re-pin that notice before regenerating against a different Ghostty; the
+// version above is what `check:theme-provenance` holds it to.
+//
 // One entry per theme file, keyed by filename (the theme's own name) and
 // sorted case-insensitively. `ghostty-theme.ts` parses these lazily through
 // `getGhosttyTheme`; nothing here is hand-authored.

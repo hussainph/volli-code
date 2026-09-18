@@ -162,6 +162,10 @@ const description =
         <a href={repositoryUrl}>GitHub</a>
         <a href={releasesUrl}>Releases</a>
         <a href={`${repositoryUrl}/security/policy`}>Security</a>
+        {/* The OFL notices for the fonts this site self-hosts, emitted by
+            src/pages/licenses.txt.ts. Linked so the notice is reachable, which
+            is what redistributing font software asks of us. */}
+        <a href="/licenses.txt">Licenses</a>
         <a href={issuesUrl}>Feedback</a>
       </nav>
     </footer>

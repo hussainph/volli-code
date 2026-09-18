@@ -48,6 +48,34 @@ function resolveThemesDir(argv) {
 }
 
 /**
+ * The Ghostty release these themes were read out of, or null when the themes
+ * directory is not inside an app bundle (`--themes-dir` at a bare folder).
+ *
+ * The catalog is third-party material and its license chain
+ * (`packages/shared/THIRD-PARTY-THEMES.md`) is pinned to one Ghostty release,
+ * which pins one iTerm2-Color-Schemes release in turn. Without the version in
+ * the generated header there is nothing tying the file's 463 themes to the
+ * end of that chain, and a regeneration against a newer Ghostty would silently
+ * replace the material the notice describes. Stamped here so
+ * `check-theme-provenance.mjs` can refuse the mismatch.
+ *
+ * Parsed rather than shelled out to `defaults`/`plutil`: one regex over an XML
+ * plist, and a bundle that turns out to be binary reports null instead of
+ * inventing a version.
+ */
+function readGhosttyVersion(themesDir) {
+  // <bundle>/Contents/Resources/ghostty/themes -> <bundle>/Contents/Info.plist
+  const plist = resolvePath(themesDir, "../../../Info.plist");
+  if (!existsSync(plist)) return null;
+  const xml = readFileSync(plist, "utf8");
+  const value = (key) =>
+    new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)?.[1] ?? null;
+  const short = value("CFBundleShortVersionString");
+  const build = value("CFBundleVersion");
+  return short === null ? null : { short, build };
+}
+
+/**
  * Every theme name paired with its raw file text, sorted case-insensitively
  * (locale-aware compare matches how the previous, restty-supplied catalog was
  * ordered — same rule `Intl.Collator` gives for a plain alphabetical list).
@@ -69,10 +97,15 @@ function readThemes(themesDir) {
 }
 
 /** The generated module's full source text. */
-function render(themes, themesDir) {
+function render(themes, themesDir, version) {
   const entries = themes
     .map(([name, text]) => `  ${JSON.stringify(name)}: ${JSON.stringify(text)},`)
     .join("\n");
+
+  const stamped =
+    version === null
+      ? "// Ghostty version: unknown (themes read from a directory outside an app bundle)\n"
+      : `// Ghostty version: ${version.short} (CFBundleVersion ${version.build})\n`;
 
   return (
     "// GENERATED — do not hand-edit. Regenerate with:\n" +
@@ -81,6 +114,17 @@ function render(themes, themesDir) {
     `// Vendored verbatim from Ghostty.app's bundled theme collection (${themes.length} files\n` +
     `// at generation time), read from:\n` +
     `//     ${themesDir}\n` +
+    stamped +
+    "//\n" +
+    "// THIRD-PARTY MATERIAL. These themes are not Volli's: the chain is\n" +
+    "// Ghostty -> iTerm2-Color-Schemes (MIT, Copyright (c) 2011 to Present Mark\n" +
+    "// Badolato), and the per-theme terms behind that collection license are an\n" +
+    "// open question with at least one known conflict. Source, release pins,\n" +
+    "// full license text and the open question are in\n" +
+    "//     packages/shared/THIRD-PARTY-THEMES.md\n" +
+    "// Re-pin that notice before regenerating against a different Ghostty; the\n" +
+    "// version above is what `check:theme-provenance` holds it to.\n" +
+    "//\n" +
     "// One entry per theme file, keyed by filename (the theme's own name) and\n" +
     "// sorted case-insensitively. `ghostty-theme.ts` parses these lazily through\n" +
     "// `getGhosttyTheme`; nothing here is hand-authored.\n" +
@@ -115,7 +159,7 @@ const isCheck = argv.includes("--check");
 const themesDir = resolveThemesDir(argv);
 
 const themes = readThemes(themesDir);
-const body = render(themes, themesDir);
+const body = render(themes, themesDir, readGhosttyVersion(themesDir));
 
 // Read-or-null in one call rather than exists-then-read: the file is only
 // ever absent on a fresh checkout, and a single read cannot race a check.

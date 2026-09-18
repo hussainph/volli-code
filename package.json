@@ -25,12 +25,15 @@
     "fmt": "vp fmt",
     "check": "vp check",
     "check:excluded-dependencies": "node scripts/check-excluded-dependencies.mjs --self-test && node scripts/check-excluded-dependencies.mjs",
-    "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs"
+    "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs",
+    "check:notices": "node scripts/generate-third-party-notices.mjs --self-test && node scripts/generate-third-party-notices.mjs --check",
+    "generate:notices": "node scripts/generate-third-party-notices.mjs"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
     "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "yaml": "2.9.0"
   },
   "engines": {
     "node": "^24.13.0"
