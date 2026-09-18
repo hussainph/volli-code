@@ -9,6 +9,8 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { Command } from "cmdk";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import { useDialogFocusReturn } from "@renderer/hooks/use-dialog-focus-return";
 import { sessionProvenanceHoverLine } from "@volli/shared";
 
 import { runAutomationOnTicket } from "@renderer/components/automations/run-automation";
@@ -57,6 +59,39 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange(open: boolean): void;
+}
+
+/** cmdk's convenience Dialog hides Radix's focus lifecycle callbacks. Keep the
+ * same chrome, but own the scope so keyboard dismissal can restore its invoker.
+ */
+function PaletteDialog({
+  children,
+  open,
+  onOpenChange,
+  onCloseAutoFocus,
+}: CommandPaletteProps & {
+  children: React.ReactNode;
+  onCloseAutoFocus(event: Event): void;
+}) {
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]" />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          onCloseAutoFocus={onCloseAutoFocus}
+          className="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
+        >
+          <DialogPrimitive.Title className="sr-only">
+            Search tickets and sessions
+          </DialogPrimitive.Title>
+          <Command label="Search tickets and sessions" filter={commandPaletteFilter} loop>
+            {children}
+          </Command>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
 }
 
 /** No tickets/sessions to show while closed — keeps the derivation below free. */
@@ -132,6 +167,8 @@ function ShowAllRow({ sectionId, total, noun, onExpand }: ShowAllRowProps) {
  * surfaces — narrows the palette to one section.
  */
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
+  const { restoreFocus, skipFocusReturn } = useDialogFocusReturn(open);
+
   const projects = useProjectsStore((state) => state.projects);
   const selectedProjectId = useProjectsStore((state) => state.selectedProjectId);
   const ticketsByProject = useBoardStore((state) => state.ticketsByProject);
@@ -340,25 +377,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }, [open, projectIds]);
 
   const finishNavigation = React.useCallback(() => {
+    // Navigation intentionally hands focus to the destination rather than the
+    // palette's invoker. Ordinary dismissal restores after the focus scope closes.
+    skipFocusReturn();
     useUiStore.getState().setSettingsOpen(false);
     onOpenChange(false);
-  }, [onOpenChange]);
+  }, [onOpenChange, skipFocusReturn]);
 
   return (
-    <Command.Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      label="Search tickets and sessions"
-      filter={commandPaletteFilter}
-      loop
-      // The app's one `--scrim`, plus a blur no other overlay takes. This used
-      // to be a notch heavier than the dialog's — 35/55 against 30/50, a
-      // difference nobody could name behind a backdrop it also blurs, and the
-      // third and fourth spellings of one wash. The blur is what makes this
-      // overlay the exception; the wash is not.
-      overlayClassName="fixed inset-0 z-50 bg-scrim backdrop-blur-[2px]"
-      contentClassName="fixed top-[18%] left-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover text-foreground shadow-overlay outline-none"
-    >
+    <PaletteDialog open={open} onOpenChange={onOpenChange} onCloseAutoFocus={restoreFocus}>
       {/* 36px, matching the footer strip: the header was 48 — a full rung taller
           than any control this app draws — so the field read as a hero banner
           rather than as the search box the rows answer to. `text-ui` is the
@@ -655,6 +682,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         <span>↑↓ navigate</span>
         <span>↵ open</span>
       </div>
-    </Command.Dialog>
+    </PaletteDialog>
   );
 }
