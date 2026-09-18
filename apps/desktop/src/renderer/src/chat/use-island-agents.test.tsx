@@ -56,6 +56,7 @@ function record(over: Partial<ChatSessionRecord> & { sessionId: string }): ChatS
     bornTicketless: true,
     role: "subagent",
     parentSessionId: SESSION,
+    model: null,
     ...over,
   };
 }
@@ -249,12 +250,36 @@ describe("what a row says", () => {
     store.setState({ openTabs: { "some-ticket": ["b"] } });
     const probe = await mount({ store });
     expect(probe.agents()).toEqual([
-      { id: "a", label: "Read the docs", progress: 0, state: "working", promoted: false },
-      { id: "b", label: "Read the docs", progress: 0, state: "working", promoted: true },
+      {
+        id: "a",
+        label: "Read the docs",
+        progress: 0,
+        state: "working",
+        promoted: false,
+        model: null,
+      },
+      {
+        id: "b",
+        label: "Read the docs",
+        progress: 0,
+        state: "working",
+        promoted: true,
+        model: null,
+      },
     ]);
 
     await act(async () => store.setState({ openTabs: { [PROJECT]: ["a"] } }));
     expect(probe.agents().map((one) => one.promoted)).toEqual([true, false]);
+  });
+
+  // VC-416. The row is the only place a parent can read what it picked for a
+  // helper: a Subagent Session has no listing row of its own and no resident
+  // chat client until someone peeks it, so a lookup is not available here.
+  it("carries the child's model policy off the listing row, unchanged", async () => {
+    const model = { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" } as const;
+    listing([record({ sessionId: "a", model }), record({ sessionId: "b" })]);
+    const probe = await mount();
+    expect(probe.agents().map((one) => one.model)).toEqual([model, null]);
   });
 
   it("reads promotion off the app's own store when the mount supplies none", async () => {

@@ -30,6 +30,7 @@ import {
   getHarnessAdapter,
   PERSON_STARTED,
   type ChatSessionRecord,
+  type ModelSelection,
   type Project,
   type SessionHarnessState,
   type SessionListingRow,
@@ -152,6 +153,18 @@ function terminalRecord(index: number): SessionRecord {
   };
 }
 
+/**
+ * One policy object shared by every generated row. The sidebar draws no model,
+ * so the rows differ in nothing this scratch measures — and a scale fixture
+ * that minted a fresh object per row would be charging its own allocations to
+ * the render it exists to time.
+ */
+const PERF_MODEL: ModelSelection = {
+  providerId: "anthropic",
+  modelId: "sonnet-4.5",
+  reasoningLevel: "medium",
+};
+
 function chatRecord(index: number): ChatSessionRecord {
   const ticket = PERF_TICKETS[(index * 17) % PERF_TICKETS.length]!;
   const live = index < LIVE_CHATS;
@@ -172,6 +185,7 @@ function chatRecord(index: number): ChatSessionRecord {
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: PERF_MODEL,
     lastActivityAt,
   };
 }

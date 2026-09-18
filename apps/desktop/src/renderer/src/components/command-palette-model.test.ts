@@ -99,6 +99,7 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
 }

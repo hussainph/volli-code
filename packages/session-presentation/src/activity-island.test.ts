@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ACTIVITY_ISLAND_FEEL,
   agentDimmed,
+  agentModelFacts,
   agentProgressMeasured,
   agentsDone,
   agentsHeading,
@@ -60,6 +61,7 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     progress: 0.5,
     state: "working",
     promoted: false,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -252,6 +254,43 @@ describe("subagents", () => {
     expect(agentDimmed(agent({ state: "stopped" }))).toBe(true);
     expect(agentDimmed(agent({ state: "done" }))).toBe(false);
     expect(agentDimmed(agent())).toBe(false);
+  });
+
+  // VC-416. The question a parent's glance surfaces could not answer: which
+  // model and effort the agent picked for this helper.
+  it("says what a child is running, as two separate words", () => {
+    expect(agentModelFacts(agent())).toEqual({ model: "sonnet-4.5", effort: "High" });
+  });
+
+  // NOT one joined string, and the separation is the contract rather than the
+  // drawing's taste: `sonnet-4.5 · Low` reads as a claim about the model, which
+  // is why the composer moved effort out of its model pill in the first place.
+  // A client that receives two fields can draw the gauge between them; one that
+  // received `"sonnet-4.5 · Low"` could only take it apart again.
+  it("never joins the model to the effort", () => {
+    const facts = agentModelFacts(
+      agent({ model: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" } }),
+    );
+    expect(facts).toEqual({ model: "haiku-4.5", effort: "Low" });
+  });
+
+  // The composer's own copy, not Pi's wire spelling: two surfaces naming one
+  // setting differently is how a reader concludes they are two settings.
+  it("names the level the way the composer's effort control names it", () => {
+    expect(
+      agentModelFacts(
+        agent({
+          model: { providerId: "openai", modelId: "o5-mini", reasoningLevel: "xhigh" },
+        }),
+      ),
+    ).toEqual({ model: "o5-mini", effort: "Extra high" });
+  });
+
+  // The one-beat newborn case: a row exists before its Session has recorded a
+  // policy. Nothing to draw beats `— · —`, which would report an absence as a
+  // reading.
+  it("answers nothing at all for a child with no recorded policy", () => {
+    expect(agentModelFacts(agent({ model: null }))).toBeNull();
   });
 });
 
