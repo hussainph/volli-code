@@ -148,12 +148,16 @@ export function renderNoticeInputs(facts) {
     "Section 4(a) wants prominent notice that the library is used and is covered by the LGPL;",
     "4(c) wants libvips named among any copyright notices the app shows while running.",
     "",
-    "**This draft is conditional, and the condition is not met yet.** The two sentences marked",
-    "below assert facts about the shipped artifact that are only true once the notices ticket has",
-    "acted: §1b's license copies must actually be in the bundle, and the relink freedom in §B2 of",
-    "`dependency-license-review.md` is still an open product decision. Publishing this text",
-    "unchanged would turn an open obligation into a false compliance claim, which is worse than",
-    "shipping no notice at all. Delete or amend the marked lines if the condition does not hold.",
+    "**One line in this draft is still conditional.** The sentence marked below asserts a fact",
+    "about the shipped artifact that is only true once the notices ticket has acted: §1b's license",
+    "copies must actually be in the bundle. Publishing it unchanged would turn an open obligation",
+    "into a false compliance claim, which is worse than shipping no notice at all. Delete or amend",
+    "the marked line if the condition does not hold.",
+    "",
+    "The relink sentence is NO LONGER conditional. VC-409 ruled on §B2: Volli keeps LGPL libvips",
+    "and keeps the packaged app's hardened runtime, and discharges 4(d)/4(e) by shipping",
+    "Corresponding Source directions and working Installation Information inside the bundle, at",
+    "`Contents/Resources/licensing/`. The replaceability claim now has something behind it.",
     "",
     "```text",
     "This application uses libvips, bundled as a prebuilt shared library together with its",
@@ -169,15 +173,18 @@ export function renderNoticeInputs(facts) {
     "[ONLY IF §1b IS DONE] Copies of the GNU General Public License v3 and the GNU Lesser",
     "General Public License v3 accompany this application.",
     "",
-    "[ONLY IF B2 IS RULED ON] The library is dynamically linked and ships as a separate,",
-    "unmodified file inside the application bundle, so it can be replaced with a compatible",
-    "build.",
+    "The library is dynamically linked and ships as a separate, unmodified file inside the",
+    "application bundle, so it can be replaced with a compatible build. Instructions for doing so,",
+    "and directions to the source it is built from, accompany this application in its licensing",
+    "folder.",
     "```",
     "",
-    "On the second marked line: the library genuinely is dynamically linked and genuinely does",
-    "ship unpacked — `check:licenses` asserts both. What is not yet true is the *consequence* the",
-    "sentence invites a reader to draw, because macOS library validation and bundle signing stand",
-    "between a user and a replacement dylib. See blocker B2.",
+    "On the relink sentence: the library genuinely is dynamically linked and genuinely does ship",
+    "unpacked — `check:licenses` asserts both. macOS library validation does still stand between a",
+    "user and a replacement dylib, which is why the sentence points at instructions rather than",
+    "implying a drag-and-drop swap: `licensing/RELINK-LIBVIPS.md` ships beside the notice and was",
+    "verified end to end against a signed build. The About surface 4(c) engages should point at",
+    "that folder too.",
     "",
     "### 1b. License texts that must accompany the app (LGPLv3 section 4(b))",
     "",
@@ -458,8 +465,15 @@ function selfTest() {
     "does not assert the license copies ship",
     !/^Copies of the GNU General Public License/m.test(rendered),
   );
-  expect("marks the conditional lines", rendered.includes("[ONLY IF \u00a71b IS DONE]"));
-  expect("marks the relink claim as conditional", rendered.includes("[ONLY IF B2 IS RULED ON]"));
+  expect("marks the conditional line", rendered.includes("[ONLY IF \u00a71b IS DONE]"));
+  // The relink claim was conditional until VC-409 ruled on B2. It is now stated
+  // outright, and it must point at the shipped instructions rather than leaving
+  // a reader to believe the library can simply be swapped in place.
+  expect("no longer marks the relink claim as conditional", !rendered.includes("[ONLY IF B2"));
+  expect(
+    "points the relink claim at the shipped instructions",
+    rendered.includes("RELINK-LIBVIPS.md"),
+  );
 
   // Determinism, tested as the properties that could actually break it rather
   // than by rendering the same literals twice and comparing — a pure function

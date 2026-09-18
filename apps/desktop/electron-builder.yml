@@ -132,6 +132,19 @@ asarUnpack:
   # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
 
+# LGPL compliance material, shipped INSIDE the bundle rather than kept in the
+# repository (VC-409). libvips is LGPLv3, and section 4 of that license is not
+# satisfied by documents a user cannot reach: 4(a)'s notice, the Corresponding
+# Source directions 4(d)(0) reaches through GPLv3 6(d), and the Installation
+# Information 4(e) asks for all have to ACCOMPANY the binary.
+#
+# Lands at Contents/Resources/licensing/. relink-libvips.sh is executable and
+# is meant to be run from there — the path is quoted in RELINK-LIBVIPS.md.
+# `check:licenses` fails if this block or any of those files goes missing.
+extraResources:
+  - from: licensing
+    to: licensing
+
 electronLanguages:
   - en
 

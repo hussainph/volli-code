@@ -12,10 +12,13 @@ here should be read as a sign-off.
 ## How to re-run the evidence
 
 ```
-pnpm -C apps/desktop run check:licenses        # the gate, plus its own self-test
-pnpm -C apps/desktop run licenses:report       # every installed package, grouped by license
-pnpm -C apps/desktop run check:notice-inputs   # docs/licensing/notice-inputs.md is current
-pnpm -C apps/website run check:licenses        # GSAP notices survived into the built site
+pnpm -C apps/desktop run check:licenses            # the gate, plus its own self-test
+pnpm -C apps/desktop run licenses:report           # every installed package, grouped by license
+pnpm -C apps/desktop run check:notice-inputs       # docs/licensing/notice-inputs.md is current
+pnpm -C apps/desktop run check:lgpl-source         # the SHIPPED LGPL notice is current
+pnpm -C apps/desktop run check:library-validation  # the shipped relink instructions still hold
+pnpm -C apps/desktop run licenses:verify-sources   # every source address still resolves (network)
+pnpm -C apps/website run check:licenses            # GSAP notices survived into the built site
 ```
 
 `docs/licensing/notice-inputs.md` is generated from the installed tree and holds the exact
@@ -31,12 +34,14 @@ therefore keyed with a trailing `*` in the policy — the libvips binaries (LGPL
 binaries (MPL-2.0), and the yuku bindings (no license field). Every other platform-specific package
 in the tree is MIT or Apache-2.0.
 
-**What only runs on macOS.** Two assertions need the darwin binaries: the Mach-O dynamic-linking
-check, and the notice-inputs generator (which reads the shipped libvips package). Both say out loud
-that they skipped rather than passing quietly, so a green CI run on Linux is not mistaken for
-having checked them — and CI runs both for real on the `macos-15` boot-tier lane, so they are
-enforced rather than left to a developer Mac. Everything else — the store scan, manifests, imports,
-and electron-builder's packaging lists — runs everywhere.
+**What only runs on macOS.** Four assertions need a Mac: the Mach-O dynamic-linking check, the
+notice-inputs generator and the LGPL source offer (both read the shipped libvips package), and
+`check:library-validation`, which compiles and signs a probe and therefore needs `clang` and
+`codesign`. All of them say out loud that they skipped rather than passing quietly, so a green CI
+run on Linux is not mistaken for having checked them — and CI runs them for real on the `macos-15`
+boot-tier lane, so they are enforced rather than left to a developer Mac. Everything else — the
+store scan, manifests, imports, electron-builder's packaging lists, the shipped-compliance files
+and the entitlements assertion — runs everywhere.
 
 **What fails rather than skips.** A skip is only honest when the reason is a fact about the
 *machine* the reviewer already accounted for. An unreadable or renamed `electron-builder.yml` is a
@@ -49,7 +54,7 @@ library unpacked and shipped, and a gate that cannot read the packaging config h
 
 | Dependency | License | Where it lives | State |
 | --- | --- | --- | --- |
-| `@img/sharp-libvips-*` | LGPL-3.0-or-later | Shipped inside the packaged desktop app | **Blocked** — notice and relink obligations need a decision |
+| `@img/sharp-libvips-*` | LGPL-3.0-or-later | Shipped inside the packaged desktop app | **Resolved, except 4(b)** — the library is kept, the hardening is kept, source directions and relink instructions ship; the GPL/LGPL texts are still missing (B1) |
 | `apca-w3` | Bespoke "Limited W3 License" | Test-only oracle | **Blocked** — scope and commercial-use reading need a decision |
 | `colorparsley` | AGPL v3 | Transitive under `apca-w3` | Contained; contingent on `apca-w3` staying test-only |
 | `gsap` | GreenSock Standard License | Marketing website bundle | **Fixed** — notices were being stripped; one product question left open |
@@ -64,9 +69,12 @@ What changed in this ticket, in one line each:
   that record — including a relicense, an unreviewed version bump, or a containment rule breaking.
 - The LGPL library's replaceability is asserted mechanically rather than assumed.
 - The exact notice text the LGPL requires is generated from the installed package.
+- **§B2 was ruled on and implemented.** libvips stays, the hardened runtime stays, and the LGPL's
+  source and relink obligations are discharged by material that ships inside the app — verified
+  against a real signed build rather than reasoned about. See §B2 below.
 
-What did **not** change: no dependency was removed, no license was accepted on anyone's behalf, and
-the two blockers below are still blockers.
+What did **not** change: no dependency was removed, no security property was weakened, no license
+was accepted on anyone's behalf, and the blockers below that are still marked open are still open.
 
 ---
 
@@ -100,11 +108,11 @@ load failure already degrades to `[Image omitted]` rather than failing the runti
 
 | Clause | Requirement | State |
 | --- | --- | --- |
-| 4(a) | Prominent notice that the library is used and is LGPL-covered | Text generated in `notice-inputs.md` §1a. **Shipping it is the notices ticket's job.** |
-| 4(b) | Ship a copy of the GNU GPL *and* of the LGPL | Named in `notice-inputs.md` §1b. **Neither file is in this repository.** See blocker B1. |
+| 4(a) | Prominent notice that the library is used and is LGPL-covered | **Ships.** `apps/desktop/licensing/LGPL-LIBVIPS.md`, generated from the installed package and copied into the bundle. The centralized-notice wording is still the notices ticket's job. |
+| 4(b) | Ship a copy of the GNU GPL *and* of the LGPL | Named in `notice-inputs.md` §1b. **Neither file is in this repository.** See blocker B1 — the only part of section 4 still open. |
 | 4(c) | Name the library among copyright notices shown during execution | **Engaged.** See below. |
-| 4(d) | Let the user relink against a modified library | Structurally available, practically obstructed. See blocker B2. |
-| 4(e) | Installation Information, where GPLv3 §6 would require it | Depends on B2. |
+| 4(d) | Let the user relink against a modified library | **Discharged**, by B2-a + B2-c. Corresponding Source directions ship; the relink procedure ships and was verified end to end. |
+| 4(e) | Installation Information, where GPLv3 §6 would require it | **Discharged.** `apps/desktop/licensing/RELINK-LIBVIPS.md` and `relink-libvips.sh`. |
 
 **4(c) is engaged, and that is a finding, not a formality.** `apps/desktop/src/main/menu.ts` builds
 the menu with `{ role: "appMenu" }` and never calls `setAboutPanelOptions`, so the app gets macOS's
@@ -122,6 +130,14 @@ the notices ticket — it means the About surface, not only a text file.
   ships no libvips at all.
 - `electron-builder.yml` still lists `**/node_modules/@img/**` under `asarUnpack`, so the dylib
   lands on disk as an ordinary replaceable file rather than sealed inside `app.asar`.
+- Every shipped compliance file (`LGPL-LIBVIPS.md`, `RELINK-LIBVIPS.md`, `relink-libvips.sh`) still
+  exists, and `electron-builder.yml` still copies `licensing/` into the bundle. Compliance material
+  that does not reach the user discharges nothing.
+- `build/entitlements.mac.plist` still does **not** grant
+  `com.apple.security.cs.disable-library-validation`. That is the security half of the §B2 ruling,
+  and it is also what makes the shipped relink instructions correct. The matcher distinguishes a
+  grant from a mention — the plist names the entitlement in a comment explaining why it is omitted,
+  and the first version of the rule failed the build over that sentence.
 - The addon still names `@rpath/libvips-cpp` in its load commands. If a future `sharp` statically
   linked libvips, the obligation would jump from 4(d)(1)'s shared-library mechanism to 4(d)(0)'s
   much heavier "convey relinkable object code" duty — with nothing else in the build saying so.
@@ -141,11 +157,28 @@ programmatically would produce exactly that. `notice-inputs.md` §1b names the t
 canonical sources.
 
 **Needs:** someone to add verbatim `GPL-3.0.txt` and `LGPL-3.0.txt` from <https://www.gnu.org/licenses/>
-to the packaged app's resources. That is a notices-ticket change, which this ticket is scoped out of.
+to the packaged app's resources. The wording of the centralized notices is a notices-ticket change,
+which this ticket is scoped out of — but the *plumbing* is now done, so this is a two-command job:
 
-### Blocker B2 — the relink freedom collides with macOS code signing
+```sh
+curl -o apps/desktop/licensing/GPL-3.0.txt  https://www.gnu.org/licenses/gpl-3.0.txt
+curl -o apps/desktop/licensing/LGPL-3.0.txt https://www.gnu.org/licenses/lgpl-3.0.txt
+# then set licenseTexts.state to "shipped" in dependency-license-policy.json
+```
 
-This is the real decision, and it cannot be settled by code.
+`apps/desktop/licensing/` is already copied into `Contents/Resources/licensing/`, so the files
+accompany the app the moment they exist. They must be downloaded verbatim rather than generated:
+a re-flowed GPL is not a copy of the GPL. `check:licenses` holds the record to the filesystem in
+both directions — while the state says `missing`, the files *appearing* fails the gate and tells
+you to flip it; once it says `shipped`, losing them fails. It cannot sit at `shipped` over an
+empty directory, which is the failure mode that would publish a false compliance claim.
+
+### §B2 — the relink freedom collides with macOS code signing (RULED, and implemented)
+
+**This was the ticket's open decision. It has been made:** Volli keeps LGPL libvips, does not
+weaken the packaged app's hardened runtime, and discharges 4(d)/4(e) with **B2-a + B2-c**.
+B2-b (grant `disable-library-validation`) and B2-d (drop the library) were both declined.
+The rest of this section is the reasoning and the evidence; what was built is at the end.
 
 LGPLv3 §4(d) offers two ways to preserve the user's ability to run a modified library. Option
 **4(d)(1)** — "use a suitable shared library mechanism" — requires a mechanism that "(a) uses at run
@@ -170,18 +203,69 @@ distribution model. The options are genuinely different products:
 
 | # | Option | What it costs | What it settles |
 | --- | --- | --- | --- |
-| B2-a | Publish the Minimal Corresponding Source for libvips and its seven LGPL components (the exact upstream tarballs `sharp-libvips` builds from), plus a written offer, alongside each release | A release-process step and hosting; no product change | The 4(d)(0) source half. Leaves the practical relink still blocked by signing |
-| B2-b | Add `com.apple.security.cs.disable-library-validation` to the entitlements | Gives up a hardening property for the whole app, including every Electron helper | Lets a user-built dylib load once the bundle is re-signed |
-| B2-c | Publish relink Installation Information: how to rebuild libvips, replace the dylib, and re-sign the app ad-hoc (`codesign --force --deep --sign -`) | Documentation only | Arguably discharges 4(e); relies on the reader having Xcode tools |
-| B2-d | Drop `sharp`/libvips and downscale images another way | Real engineering; the read path already degrades gracefully, so the failure mode is known | Removes the obligation entirely |
+| # | Option | Ruling |
+| --- | --- | --- |
+| B2-a | Convey the Minimal Corresponding Source for libvips and its seven LGPL components, plus a written offer | **ADOPTED** |
+| B2-b | Add `com.apple.security.cs.disable-library-validation` to the entitlements | **DECLINED** — it would drop a hardening property for every user of the published build, including every Electron helper, to serve the few who relink. The user's freedom is delivered on the user's own copy instead. |
+| B2-c | Publish relink Installation Information | **ADOPTED**, as a document *and* a script |
+| B2-d | Drop `sharp`/libvips and downscale images another way | **DECLINED** — the library stays |
 
-B2-a and B2-c are additive and compatible with each other; B2-b is a security trade; B2-d is a
-product decision about image handling.
+#### What was actually verified, against a real signed build
 
-**Needs:** a product/legal ruling on whether Volli keeps LGPL libvips at all, and if so which of
-B2-a…B2-c it relies on. **Until that ruling exists, the LGPL obligations for the packaged desktop
-app are NOT discharged.** What this ticket has done is make the facts true, checked, and
-regression-proof — not resolved.
+The B2-c row above used to read "re-sign the app ad-hoc (`codesign --force --deep --sign -`)".
+**That recipe does not work, and shipping it would have been shipping instructions that fail.**
+It was tested against a Developer ID-signed, notarized `Volli Code.app` (0.1.2, hardened runtime,
+Team `Y54F649NH4`), driving the real `sharp` addon through the packaged Electron binary with
+`ELECTRON_RUN_AS_NODE=1` and `process.dlopen`. What the runs showed:
+
+1. **Baseline.** The shipped app loads its own libvips: `{"semver":"8.18.3"}`.
+2. **The obstruction is real.** Replacing the dylib with an identical one carrying an ad-hoc
+   signature (what a user's own build has — no Team ID) fails at the loader with
+   `code signature ... not valid for use in process: mapping process and mapped file
+   (non-platform) have different Team IDs`.
+3. **`--deep` is not enough.** It does not re-sign Mach-O files under `Resources/app.asar.unpacked`
+   — exactly where libvips lives — so the library keeps its old signature while the app around it
+   gets a new one. Signing must go inside-out: nested Mach-O, then executables, then frameworks,
+   then helper apps, then the app.
+4. **Ad-hoc alone is not enough either.** With every nested binary re-signed ad-hoc and the
+   hardened runtime kept, the load still fails: a teamless process and a teamless library are
+   *not* treated as matching. Hardened runtime + ad-hoc is a dead end by itself.
+5. **What works**, and is what ships: re-sign the bundle inside-out, keeping the hardened runtime,
+   with `com.apple.security.cs.disable-library-validation` added **to the user's own copy**. The
+   user-built dylib then loads.
+6. **It is genuinely the user's file that runs.** Installing a stub library at the same path
+   changes the failure from a signature error to `Symbol not found: __ZTVN4vips7VOptionE ...
+   Expected in: .../libvips-cpp.8.18.3.dylib` — dyld maps and resolves against the replacement.
+7. **A caching gotcha, found the hard way.** macOS serves a cached code signature for a path it has
+   already executed, so a bundle re-signed in place can keep behaving like the old one. The same
+   effect made the first version of `check-library-validation.mjs` pass a deliberately broken
+   mutant; both the gate and the shipped instructions now account for it.
+
+#### What that turned into
+
+- `apps/desktop/licensing/LGPL-LIBVIPS.md` — **generated** from the installed package: the 4(a)
+  notice, the eight LGPL components, and a source address per component. Every URL template is
+  read out of `lovell/sharp-libvips`'s own `build/posix.sh` at the tag we ship, not reconstructed
+  from project homepages, and the document also names the build recipe and the two external
+  patches applied to glib and libvips — without which the tarballs are not the whole Corresponding
+  Source. All 11 addresses were fetched and returned 200; `licenses:verify-sources` re-checks them.
+- `apps/desktop/licensing/RELINK-LIBVIPS.md` and `relink-libvips.sh` — the 4(e) Installation
+  Information, and a script that performs it. Verified end to end: the script was run against a
+  pristine signed app with a user-supplied ad-hoc dylib, and the result loads.
+- `electron-builder.yml` copies `licensing/` to `Contents/Resources/licensing/`, so the material
+  **accompanies the binary** rather than sitting in a repository the user never sees.
+- `check:licenses` fails if a compliance file disappears, if the packaging stops shipping the
+  directory, or if the entitlements ever grant `disable-library-validation` — the security half of
+  this ruling, held mechanically.
+- `check:library-validation` compiles and signs a probe on macOS CI and asserts the two OS facts
+  the shipped instructions depend on, so an Apple behaviour change surfaces as a failed build
+  rather than as false instructions in a released app.
+
+**Legal reading still worth a human's eye:** whether 4(d)(0)'s "in a form that permits relinking"
+is fully answered by directions-plus-procedure rather than by shipping relinkable object code.
+The position taken here is that GPLv3 §6(d) permits third-party hosting with clear directions, and
+that a verified re-signing procedure is what "permits relinking" means on a code-signed platform.
+That is a defensible reading, not a certainty, and it is now at least a *documented* one.
 
 ---
 

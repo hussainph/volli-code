@@ -248,9 +248,132 @@ export function matchesPackagePattern(name, pattern) {
  * @property {Array<{ name: string, version: string, license: string | null }>} installed
  * @property {Array<{ name: string, path: string, deps: Record<string, Record<string, string>> }>} manifests
  * @property {Array<{ path: string, source: string }>} sources
- * @property {{ asarUnpack: string[], files: string[] } | null} packaging
+ * @property {{ asarUnpack: string[], files: string[], extraResources: Array<string | { from?: string, to?: string }> } | null} packaging
  * @property {Array<{ package: string, resolved: boolean, loadPaths: string[] }>} nativeLibraries
+ * @property {string[]} desktopFiles apps/desktop-relative compliance files that exist
+ * @property {string | null} entitlements the hardened-runtime entitlements plist, as text
  */
+
+/**
+ * Whether an entitlements plist actually GRANTS an entitlement.
+ *
+ * A substring search is the obvious implementation and it is wrong here, for a
+ * reason this repository already knows about in its import scan: the file that
+ * most needs checking is the one that DISCUSSES the entitlement. Our own
+ * entitlements plist names
+ * `com.apple.security.cs.disable-library-validation` in a comment explaining
+ * why it is deliberately omitted — and the first version of this rule failed
+ * the build over that sentence.
+ *
+ * So: strip comments, then require the key to be followed by `<true/>`. A key
+ * set to `<false/>`, or named in prose, is not a grant.
+ * @param {string} plist
+ * @param {string} entitlement
+ */
+export function grantsEntitlement(plist, entitlement) {
+  const withoutComments = plist.replaceAll(/<!--[\s\S]*?-->/g, "");
+  const escaped = entitlement.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`<key>\\s*${escaped}\\s*</key>\\s*<true\\s*/>`).test(withoutComments);
+}
+
+/**
+ * The LGPL compliance material has to REACH the user, and the hardening that
+ * makes it necessary has to stay in place. Four assertions, each of which a
+ * routine change could quietly break:
+ *
+ *   1. Every shipped compliance file exists. A packaging list that names a
+ *      missing file ships a directory with a hole in it.
+ *   2. electron-builder still copies that directory into the bundle. Without
+ *      it the files exist only in the repository, which discharges nothing.
+ *   3. The entitlements still OMIT disable-library-validation. Adding it is a
+ *      security decision, and it would also make the shipped relink
+ *      instructions wrong — they tell a user to do work macOS would no longer
+ *      require.
+ *   4. The 4(b) license texts match what the record claims about them, in both
+ *      directions. See `licenseTexts` in the policy for why this is a claim to
+ *      be checked rather than a file to be generated.
+ *
+ * @param {{ files: string[], electronBuilderExtraResource: string, hardening: { entitlementsFile: string, forbiddenEntitlement: string }, licenseTexts: { state: string, expected: Array<{ file: string, canonical: string }> } }} compliance
+ * @param {WorkspaceFacts} facts
+ * @returns {string[]}
+ */
+export function shippedComplianceProblems(compliance, facts) {
+  const problems = [];
+
+  for (const file of compliance.files) {
+    if (!facts.desktopFiles.includes(file)) {
+      problems.push(
+        `apps/desktop/${file} is missing. It ships inside the application as LGPL compliance ` +
+          `material — the notice, the Corresponding Source directions, or the Installation ` +
+          `Information — and the packaging config copies the directory wholesale, so a deleted ` +
+          `file leaves a gap in what a user receives rather than failing the build.`,
+      );
+    }
+  }
+
+  if (facts.packaging === null) {
+    problems.push(
+      "apps/desktop/electron-builder.yml could not be read or parsed, so it is unknown whether " +
+        "the LGPL compliance directory still ships. A gate that cannot read the packaging config " +
+        "has not checked it.",
+    );
+  } else {
+    const shipped = facts.packaging.extraResources.some(
+      (resource) =>
+        resource === compliance.electronBuilderExtraResource ||
+        resource?.from === compliance.electronBuilderExtraResource,
+    );
+    if (!shipped) {
+      problems.push(
+        `electron-builder.yml no longer copies "${compliance.electronBuilderExtraResource}" into ` +
+          `the bundle as an extra resource. The LGPL notice, the Corresponding Source directions ` +
+          `and the relink instructions would then exist only in this repository — LGPLv3 section ` +
+          `4 requires that they accompany the binary a user receives.`,
+      );
+    }
+  }
+
+  const entitlements = facts.entitlements;
+  const { forbiddenEntitlement, entitlementsFile } = compliance.hardening;
+  if (entitlements === null) {
+    problems.push(
+      `apps/desktop/${entitlementsFile} could not be read, so it is unknown whether the packaged ` +
+        `app still enforces library validation. That is the premise of the shipped relink ` +
+        `instructions, so an unreadable entitlements file is a failure, not a skip.`,
+    );
+  } else if (grantsEntitlement(entitlements, forbiddenEntitlement)) {
+    problems.push(
+      `apps/desktop/${entitlementsFile} now grants ${forbiddenEntitlement}. VC-409 ruled the ` +
+        `opposite way on purpose: the packaged app keeps library validation, and a user who wants ` +
+        `their own libvips re-signs their OWN copy (licensing/RELINK-LIBVIPS.md). Granting it ` +
+        `here drops that protection for every user and makes the shipped instructions wrong. If ` +
+        `this is deliberate, update the ruling, the instructions and this record together.`,
+    );
+  }
+
+  const { state, expected } = compliance.licenseTexts;
+  const presentTexts = expected.filter((text) => facts.desktopFiles.includes(text.file));
+  if (state === "shipped" && presentTexts.length !== expected.length) {
+    const missing = expected.filter((text) => !facts.desktopFiles.includes(text.file));
+    problems.push(
+      `the record says the LGPLv3 4(b) license texts ship, but ${missing
+        .map((text) => `apps/desktop/${text.file}`)
+        .join(" and ")} ${missing.length === 1 ? "is" : "are"} not there. A notice that claims ` +
+        `the GPL accompanies the app when it does not is worse than shipping no notice.`,
+    );
+  }
+  if (state === "missing" && presentTexts.length > 0) {
+    problems.push(
+      `the LGPLv3 4(b) license texts are now present (${presentTexts
+        .map((text) => `apps/desktop/${text.file}`)
+        .join(", ")}) but the record still says they are missing. Set licenseTexts.state to ` +
+        `"shipped" — 4(b) is then discharged, and the conditional line in the notice draft can ` +
+        `become unconditional.`,
+    );
+  }
+
+  return problems;
+}
 
 /**
  * @param {WorkspaceFacts} facts
@@ -482,6 +605,10 @@ export function auditDependencyLicenses(facts, policy) {
       }
     }
 
+    if (entry.shippedCompliance !== undefined) {
+      problems.push(...shippedComplianceProblems(entry.shippedCompliance, facts));
+    }
+
     const native = facts.nativeLibraries.find((candidate) => candidate.package === name);
     if (native === undefined || !native.resolved) {
       notes.push(
@@ -618,10 +745,51 @@ async function readPackagingConfig() {
     return {
       asarUnpack: Array.isArray(config.asarUnpack) ? config.asarUnpack : [],
       files: Array.isArray(config.files) ? config.files : [],
+      // Entries are either a bare path or a `{ from, to }` mapping; both are
+      // valid electron-builder and both have to count as shipping.
+      extraResources: Array.isArray(config.extraResources) ? config.extraResources : [],
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * The compliance files that exist, as desktop-relative paths, and the
+ * entitlements plist as text.
+ *
+ * Read here rather than inside the audit so the audit stays a pure function of
+ * facts — the shape every other rule in this file already follows, and what
+ * lets the self-test drive these rules against fixtures instead of the disk.
+ * @param {{ reviewed: Record<string, any> }} policy
+ */
+function readShippedCompliance(policy) {
+  const desktopFiles = [];
+  let entitlements = null;
+
+  for (const entry of Object.values(policy.reviewed)) {
+    const compliance = entry.shippedCompliance;
+    if (compliance === undefined) continue;
+
+    const candidates = [
+      ...compliance.files,
+      ...compliance.licenseTexts.expected.map((text) => text.file),
+    ];
+    for (const file of candidates) {
+      if (existsSync(resolve(DESKTOP_ROOT, file))) desktopFiles.push(file);
+    }
+
+    try {
+      entitlements = readFileSync(
+        resolve(DESKTOP_ROOT, compliance.hardening.entitlementsFile),
+        "utf8",
+      );
+    } catch {
+      entitlements = null;
+    }
+  }
+
+  return { desktopFiles, entitlements };
 }
 
 /**
@@ -676,6 +844,7 @@ async function gate() {
     sources: readSources(),
     packaging: await readPackagingConfig(),
     nativeLibraries: readNativeLibraryLoadPaths(policy),
+    ...readShippedCompliance(policy),
   };
 
   if (facts.installed.length === 0) {
@@ -1233,6 +1402,134 @@ function selfTest() {
   expect(
     "and does not quietly note it instead",
     !unreadableResult.notes.some((n) => n.includes("electron-builder")),
+  );
+
+  // --- the LGPL compliance material a user actually receives ---------------
+  const compliance = {
+    directory: "licensing",
+    electronBuilderExtraResource: "licensing",
+    files: ["licensing/LGPL-LIBVIPS.md", "licensing/relink-libvips.sh"],
+    hardening: {
+      entitlementsFile: "build/entitlements.mac.plist",
+      forbiddenEntitlement: "com.apple.security.cs.disable-library-validation",
+    },
+    licenseTexts: {
+      state: "missing",
+      expected: [
+        { file: "licensing/GPL-3.0.txt", canonical: "https://www.gnu.org/licenses/gpl-3.0.txt" },
+        { file: "licensing/LGPL-3.0.txt", canonical: "https://www.gnu.org/licenses/lgpl-3.0.txt" },
+      ],
+    },
+  };
+  const complianceFacts = {
+    desktopFiles: ["licensing/LGPL-LIBVIPS.md", "licensing/relink-libvips.sh"],
+    entitlements: "<key>com.apple.security.cs.allow-jit</key><true/>",
+    packaging: {
+      asarUnpack: [],
+      files: [],
+      extraResources: [{ from: "licensing", to: "licensing" }],
+    },
+  };
+  const complianceWith = (overrides) =>
+    shippedComplianceProblems(
+      { ...compliance, ...overrides.compliance },
+      { ...complianceFacts, ...overrides.facts },
+    );
+
+  expect("intact compliance material is clean", complianceWith({}).length === 0);
+  expect(
+    "a bare extraResources path counts as shipping it",
+    complianceWith({
+      facts: { packaging: { asarUnpack: [], files: [], extraResources: ["licensing"] } },
+    }).length === 0,
+  );
+  expect(
+    "a deleted compliance file is caught",
+    complianceWith({ facts: { desktopFiles: ["licensing/LGPL-LIBVIPS.md"] } }).some((p) =>
+      p.includes("relink-libvips.sh is missing"),
+    ),
+  );
+  expect(
+    "dropping the directory from the bundle is caught",
+    complianceWith({
+      facts: { packaging: { asarUnpack: [], files: [], extraResources: [] } },
+    }).some((p) => p.includes("no longer copies")),
+  );
+  expect(
+    "unreadable packaging fails the compliance rules too",
+    complianceWith({ facts: { packaging: null } }).some((p) => p.includes("has not checked it")),
+  );
+
+  // The security half of the VC-409 ruling. This is the assertion that keeps
+  // the shipped relink instructions true, so it has to bite on the entitlement
+  // appearing ANYWHERE in the plist, not on a particular formatting of it.
+  const LV = "com.apple.security.cs.disable-library-validation";
+  expect(
+    "granting disable-library-validation is caught",
+    complianceWith({
+      facts: { entitlements: `<key>${LV}</key>\n\t<true/>` },
+    }).some((p) => p.includes("keeps library validation")),
+  );
+  // The real plist NAMES this entitlement in a comment explaining why it is
+  // omitted. A substring match failed the build over that sentence.
+  expect(
+    "naming it in a comment is not granting it",
+    complianceWith({
+      facts: {
+        entitlements:
+          `<!-- Deliberately omitted: ${LV}. Our native modules are signed with the same ` +
+          `Developer ID, so library validation holds without it. -->\n` +
+          `<key>com.apple.security.cs.allow-jit</key>\n\t<true/>`,
+      },
+    }).length === 0,
+  );
+  expect("grantsEntitlement reads a grant", grantsEntitlement(`<key>${LV}</key><true/>`, LV));
+  expect(
+    "grantsEntitlement tolerates whitespace between key and value",
+    grantsEntitlement(`<key>${LV}</key>\n\t<true />`, LV),
+  );
+  expect(
+    "grantsEntitlement does not read a false value as a grant",
+    !grantsEntitlement(`<key>${LV}</key>\n\t<false/>`, LV),
+  );
+  expect(
+    "grantsEntitlement does not read a commented-out grant",
+    !grantsEntitlement(`<!-- <key>${LV}</key><true/> -->`, LV),
+  );
+  expect(
+    "grantsEntitlement does not confuse a different entitlement",
+    !grantsEntitlement("<key>com.apple.security.cs.allow-jit</key><true/>", LV),
+  );
+  expect(
+    "an unreadable entitlements file fails rather than passes",
+    complianceWith({ facts: { entitlements: null } }).some((p) => p.includes("could not be read")),
+  );
+
+  // The 4(b) claim, held in both directions.
+  expect(
+    "claiming the license texts ship while they do not is caught",
+    complianceWith({
+      compliance: { licenseTexts: { ...compliance.licenseTexts, state: "shipped" } },
+    }).some((p) => p.includes("worse than shipping no notice")),
+  );
+  expect(
+    "the texts arriving while the record still says missing is caught",
+    complianceWith({
+      facts: { desktopFiles: [...complianceFacts.desktopFiles, "licensing/GPL-3.0.txt"] },
+    }).some((p) => p.includes('Set licenseTexts.state to "shipped"')),
+  );
+  expect(
+    "and the texts shipping with the record updated is clean",
+    complianceWith({
+      compliance: { licenseTexts: { ...compliance.licenseTexts, state: "shipped" } },
+      facts: {
+        desktopFiles: [
+          ...complianceFacts.desktopFiles,
+          "licensing/GPL-3.0.txt",
+          "licensing/LGPL-3.0.txt",
+        ],
+      },
+    }).length === 0,
   );
 
   // --- the elected half of a dual license ---------------------------------

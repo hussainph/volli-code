@@ -156,6 +156,12 @@ jobs:
       #   check:notice-inputs  — docs/licensing/notice-inputs.md still matches
       #                          the installed tree, so the attribution text
       #                          handed to the notice tickets cannot go stale.
+      #   check:lgpl-source    — apps/desktop/licensing/LGPL-LIBVIPS.md, which
+      #                          SHIPS inside the app as the LGPL notice and
+      #                          the Corresponding Source directions, still
+      #                          describes the installed library.
+      #   check:library-validation — the two macOS facts the shipped relink
+      #                          instructions rest on still hold.
       # Two assertions need the darwin-arm64 binaries, which pnpm skips on this
       # Linux runner by os/cpu: the Mach-O dynamic-linking check and the whole
       # of check:notice-inputs. Both PRINT that they skipped rather than passing
@@ -173,6 +179,8 @@ jobs:
         run: |
           vp run --filter @volli/desktop check:licenses
           vp run --filter @volli/desktop check:notice-inputs
+          vp run --filter @volli/desktop check:lgpl-source
+          vp run --filter @volli/desktop check:library-validation
 
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
@@ -242,8 +250,11 @@ jobs:
       # The half of the license gates that Linux CANNOT run (VC-409). pnpm
       # installs only the sibling matching the runner's os/cpu, so on ubuntu
       # the Mach-O dynamic-linking assertion and the whole of check:notice-
-      # inputs skip — they print that they skipped, but a green Linux run has
-      # not checked them. This is the lane that has the darwin binaries.
+      # inputs and check:lgpl-source skip — they print that they skipped, but a
+      # green Linux run has not checked them. check:library-validation is a
+      # third: it compiles and signs a probe to confirm the two macOS facts the
+      # shipped relink instructions depend on, which only means anything here.
+      # This is the lane that has the darwin binaries and codesign.
       #
       # It is here rather than in its own macOS job because this runner has
       # already paid for the checkout and the install; the checks themselves
@@ -257,6 +268,8 @@ jobs:
         run: |
           vp run --filter @volli/desktop check:licenses
           vp run --filter @volli/desktop check:notice-inputs
+          vp run --filter @volli/desktop check:lgpl-source
+          vp run --filter @volli/desktop check:library-validation
 
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4

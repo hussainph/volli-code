@@ -76,6 +76,143 @@
         "electronBuilderAsarUnpackPattern": "**/node_modules/@img/**",
         "electronBuilderFilesToken": "@img"
       },
+      "correspondingSource": {
+        "$comment": [
+          "GPLv3 section 6(d), reached through LGPLv3 4(d)(0): the object code may be offered from a",
+          "network server as long as CLEAR DIRECTIONS to the Corresponding Source sit next to it, and",
+          "the source may live on a third party's server. These are those directions.",
+          "",
+          "PROVENANCE. Every template below was read out of the build script that produced the binary",
+          "we ship — lovell/sharp-libvips at tag v1.3.3, build/posix.sh, which is the same script the",
+          "darwin-arm64 dylib is compiled by. They are NOT reconstructed from project homepages: a",
+          "plausible-looking upstream URL that is not the one the build used is not Corresponding",
+          "Source. Re-read that script when the package is bumped and a template stops matching.",
+          "",
+          "COMPLETENESS. Upstream tarballs alone are NOT the whole Corresponding Source. The build",
+          "patches glib and libvips before compiling, and applies further in-tree edits from the build",
+          "script itself, so the script (buildRecipe) and the external patches are part of what a user",
+          "needs to reproduce the shipped library. `patches` carries the external ones.",
+          "",
+          "SCOPE. Only the LGPL-covered components are listed: those are the ones whose license",
+          "obliges us to convey source. The permissive components in the same dylib do not.",
+          "",
+          "PLACEHOLDERS, matching the helpers in upstream's own build script:",
+          "  {version} — the version verbatim from the package's versions.json",
+          "  {minor}   — {version} minus its last dot-component (upstream `without_patch`), the",
+          "              directory GNOME's download server files a release under",
+          "  {release} — {version} minus any prerelease suffix (upstream `without_prerelease`)"
+        ],
+        "versionsFile": "versions.json",
+        "contact": "https://github.com/hussainph/volli-code/issues",
+        "$contactComment": [
+          "Where a user asks us for the source directly, when one of the third-party addresses",
+          "above has gone. GPLv3 6(d) leaves the duty to keep source reachable with US, so this",
+          "has to be a channel that actually reaches someone — hence the public issue tracker of",
+          "the repository this app is built from, which demonstrably exists, rather than a",
+          "plausible-looking mailbox nobody has created. Replace it with a dedicated address if",
+          "one is ever set up; do not point it at an unmonitored inbox."
+        ],
+        "buildRecipe": {
+          "name": "sharp-libvips build scripts",
+          "url": "https://github.com/lovell/sharp-libvips/archive/refs/tags/v{packageVersion}.tar.gz",
+          "note": "The recipe the dylib was built by, at the tag matching the installed package version. Carries build/posix.sh and its in-tree source edits."
+        },
+        "components": {
+          "fribidi": {
+            "library": "fribidi",
+            "url": "https://github.com/fribidi/fribidi/releases/download/v{version}/fribidi-{version}.tar.xz"
+          },
+          "glib": {
+            "library": "glib",
+            "url": "https://download.gnome.org/sources/glib/{minor}/glib-{version}.tar.xz",
+            "patches": [
+              "https://gist.github.com/kleisauke/284d685efa00908da99ea6afbaaf39ae/raw/bdad5489a61c217850631571caf57f5db6ea8b2c/glib-without-gregex.patch"
+            ]
+          },
+          "exif": {
+            "library": "libexif",
+            "url": "https://github.com/libexif/libexif/releases/download/v{version}/libexif-{version}.tar.xz"
+          },
+          "heif": {
+            "library": "libheif",
+            "url": "https://github.com/strukturag/libheif/releases/download/v{version}/libheif-{version}.tar.gz"
+          },
+          "rsvg": {
+            "library": "librsvg",
+            "url": "https://download.gnome.org/sources/librsvg/{minor}/librsvg-{version}.tar.xz"
+          },
+          "pango": {
+            "library": "pango",
+            "url": "https://download.gnome.org/sources/pango/{minor}/pango-{version}.tar.xz"
+          },
+          "proxy-libintl": {
+            "library": "proxy-libintl",
+            "url": "https://github.com/frida/proxy-libintl/archive/{version}.tar.gz"
+          },
+          "vips": {
+            "library": "libvips",
+            "url": "https://github.com/libvips/libvips/releases/download/v{version}/vips-{release}.tar.xz",
+            "patches": [
+              "https://gist.githubusercontent.com/lovell/313a6901e9db1bf285f2a1f1180499e4/raw/3988223c7dfa4d22745d9392034b0117abef1446/libvips-cpp-soversion.patch"
+            ]
+          }
+        }
+      },
+      "shippedCompliance": {
+        "$comment": [
+          "VC-409 ruling: Volli keeps LGPL libvips (option B2-d, dropping it, was declined) and does",
+          "NOT weaken the packaged app's hardened runtime (option B2-b was declined). 4(d)/4(e) are",
+          "therefore discharged by B2-a + B2-c: convey the Corresponding Source directions, and ship",
+          "Installation Information that a user can actually follow on their own copy.",
+          "",
+          "These assertions keep that ruling true. The documents have to REACH the user: a compliance",
+          "file that exists in the repository but is not in the bundle discharges nothing."
+        ],
+        "directory": "licensing",
+        "electronBuilderExtraResource": "licensing",
+        "files": [
+          "licensing/LGPL-LIBVIPS.md",
+          "licensing/RELINK-LIBVIPS.md",
+          "licensing/relink-libvips.sh"
+        ],
+        "hardening": {
+          "$comment": [
+            "The other half of the same ruling, and the reason RELINK-LIBVIPS.md says what it says.",
+            "The packaged app keeps library validation ON, so a user's own libvips cannot load into",
+            "the build we sign — which is exactly why we owe them instructions for re-signing their",
+            "own copy. If this entitlement is ever added, the shipped instructions become wrong (they",
+            "would tell a user to do work macOS no longer requires) and a deliberate hardening",
+            "property is gone. Either change is a decision, not a drive-by."
+          ],
+          "entitlementsFile": "build/entitlements.mac.plist",
+          "forbiddenEntitlement": "com.apple.security.cs.disable-library-validation"
+        },
+        "licenseTexts": {
+          "$comment": [
+            "LGPLv3 4(b): the packaged app must be accompanied by a copy of BOTH the GPL and the LGPL.",
+            "The upstream package ships neither, and neither is generated here — a copy of the GPL has",
+            "to be the canonical text byte for byte, and anything assembled or re-flowed by a script",
+            "is a paraphrase with a license's name on it.",
+            "",
+            "`state` is the claim this record makes about the bundle, and the gate holds the claim to",
+            "the filesystem in BOTH directions: while it is \"missing\", finding the files fails and",
+            "tells you to flip it to \"shipped\" (4(b) is then discharged and the notice text may say",
+            "so); once it is \"shipped\", losing them fails. What it must never do is sit at",
+            "\"shipped\" over an empty directory."
+          ],
+          "state": "missing",
+          "expected": [
+            {
+              "file": "licensing/GPL-3.0.txt",
+              "canonical": "https://www.gnu.org/licenses/gpl-3.0.txt"
+            },
+            {
+              "file": "licensing/LGPL-3.0.txt",
+              "canonical": "https://www.gnu.org/licenses/lgpl-3.0.txt"
+            }
+          ]
+        }
+      },
       "blocked": "docs/licensing/dependency-license-review.md#lgpl-libvips"
     },
 
