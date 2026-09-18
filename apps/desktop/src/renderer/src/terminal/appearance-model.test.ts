@@ -100,27 +100,26 @@ describe("overlayGhosttyTheme", () => {
 });
 
 describe("resolveGhosttyThemeChoice", () => {
-  it("resolves a builtin theme by name (the owner's real config case)", () => {
+  it("resolves the theme FILE main read off the user's own disk", () => {
     const theme = resolveGhosttyThemeChoice(
-      payload({ themeName: "Front End Delight" }),
-      FALLBACK,
-      "dark",
-    );
-    expect(theme.colors.background).toEqual({ r: 27, g: 28, b: 29 });
-  });
-
-  it("prefers an explicit theme file over the builtin catalog", () => {
-    const theme = resolveGhosttyThemeChoice(
-      payload({ themeName: "Front End Delight" }, { themeSource: "background = #123456" }),
+      payload({ themeName: "user-theme" }, { themeSource: "background = #123456" }),
       FALLBACK,
       "dark",
     );
     expect(theme.colors.background).toEqual({ r: 0x12, g: 0x34, b: 0x56 });
   });
 
-  it("falls back to the token theme for an unknown name", () => {
+  /**
+   * VC-413. A name used to be looked up in a theme catalog vendored out of
+   * Ghostty.app when no file answered to it; the app ships no catalog, so a name
+   * with no file behind it is an UNAVAILABLE override rather than an error. The
+   * terminal wears the app's own token-derived palette — nothing is written and
+   * the name stays in the user's config, so it starts painting again the moment
+   * a file by that name exists.
+   */
+  it("falls back to the token theme for a name no file on this machine answers to", () => {
     const theme = resolveGhosttyThemeChoice(
-      payload({ themeName: "No Such Theme" }),
+      payload({ themeName: "a-theme-with-no-file" }),
       FALLBACK,
       "dark",
     );
@@ -133,15 +132,20 @@ describe("resolveGhosttyThemeChoice", () => {
   // user's DARK ghostty theme and nothing anywhere reports a problem.
   it("re-picks the half of a light/dark theme pair that matches the live mode", () => {
     const paired = payload(
-      { themeName: "Nord" },
-      { configText: "theme = light:GitHub Light Default,dark:Nord" },
+      { themeName: "night-theme" },
+      {
+        configText: "theme = light:day-theme,dark:night-theme",
+        themeSource: "background = #123456",
+      },
     );
 
     const dark = resolveGhosttyThemeChoice(paired, FALLBACK, "dark");
     const light = resolveGhosttyThemeChoice(paired, FALLBACK, "light");
 
-    expect(dark.colors.background).toEqual({ r: 0x2e, g: 0x34, b: 0x40 });
-    expect(light.colors.background).toEqual({ r: 0xff, g: 0xff, b: 0xff });
+    // Dark is the half main resolved, so its file answers. Light is the other
+    // half, whose file main never read — the token fallback answers instead.
+    expect(dark.colors.background).toEqual({ r: 0x12, g: 0x34, b: 0x56 });
+    expect(light.colors.background).toEqual(FALLBACK.colors.background);
   });
 
   // The file main read belongs to the half main resolved. Reusing it for the
@@ -150,9 +154,9 @@ describe("resolveGhosttyThemeChoice", () => {
   it("ignores main's theme file when the live mode picks the other half", () => {
     const theme = resolveGhosttyThemeChoice(
       payload(
-        { themeName: "Nord" },
+        { themeName: "night-theme" },
         {
-          configText: "theme = light:No Such Theme,dark:Nord",
+          configText: "theme = light:day-theme,dark:night-theme",
           themeSource: "background = #123456",
         },
       ),
@@ -166,8 +170,23 @@ describe("resolveGhosttyThemeChoice", () => {
   it("overlays explicit config color keys on the chosen theme (ghostty: user keys win)", () => {
     const theme = resolveGhosttyThemeChoice(
       payload(
-        { themeName: "Front End Delight" },
-        { configText: 'theme = "Front End Delight"\nbackground = #101010' },
+        { themeName: "user-theme" },
+        {
+          configText: 'theme = "user-theme"\nbackground = #101010',
+          themeSource: "background = #123456",
+        },
+      ),
+      FALLBACK,
+      "dark",
+    );
+    expect(theme.colors.background).toEqual({ r: 0x10, g: 0x10, b: 0x10 });
+  });
+
+  it("overlays explicit config color keys on the token fallback too", () => {
+    const theme = resolveGhosttyThemeChoice(
+      payload(
+        { themeName: "a-theme-with-no-file" },
+        { configText: "theme = a-theme-with-no-file\nbackground = #101010" },
       ),
       FALLBACK,
       "dark",

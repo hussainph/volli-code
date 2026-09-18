@@ -10,6 +10,14 @@
  * the `local-fonts` permission) is what lets the settings picker LIST those
  * families; it is not how a terminal loads one.
  */
+import {
+  gamutMap,
+  hexChannels,
+  hexToOklch,
+  oklchToHex,
+  rgbToHex,
+  solveLightnessOrCeiling,
+} from "@volli/shared";
 import type {
   GhosttyAppearancePayload,
   GhosttyTheme,
@@ -87,74 +95,141 @@ const SELECTION_BACKGROUND: Record<ResolvedAppearance, ThemeColor> = {
 };
 
 /**
- * The 16-entry ANSI palette is terminal-domain color with no matching app
- * tokens, so it is authored per mode — except normal red, which mirrors
- * `--destructive` in both.
+ * The dark ANSI set: terminal-domain color with no matching app tokens, so it
+ * is authored — except normal red, which mirrors `--destructive`.
  *
- * `dark` is the original restrained set, tuned to sit on the near-black
- * background.
- *
- * `light` is **GitHub Light Default**, taken verbatim from Ghostty's own theme
- * catalog (vendored in `ghostty-theme.ts`, so this is a set the app can already
- * render). A reference set rather than a derivation because how the dark one
- * was picked is recorded nowhere, so there is no rule here to mirror — and a
- * light ANSI palette is not a lightened dark one anyway: every hue has to be
- * pushed DOWN in lightness to survive a light ground, which re-picks all
- * sixteen entries. GitHub's is the light set that holds up best on the two
- * things that matter here. Its chromatic entries clear the contrast floor even
- * on the lightest canvas the app generates, where Solarized Light and One Half
- * Light both fall through it (their bright rows are pale by design, which reads
- * as washed-out on white). And its grey ramp runs black → bright-white *toward*
- * the background — the exact mirror of the dark set's ramp — so `bright black`
- * still means "dim" and `bright white` still means "faint" after a mode flip,
- * which is the meaning programs actually attach to those two slots.
+ * The app's own restrained set, tuned to sit on a near-black background. It is
+ * also the SOURCE OF HUE for the light set below, which is why it is named
+ * rather than inlined.
  */
-const ANSI_PALETTES: Record<ResolvedAppearance, readonly ThemeColor[]> = {
-  dark: [
-    // Normal (0-7)
-    rgb(0x1c, 0x1c, 0x1c), // black
-    rgb(0xe5, 0x48, 0x4d), // red — replaced by --destructive
-    rgb(0x46, 0xa7, 0x58), // green
-    rgb(0xf0, 0xc0, 0x00), // yellow
-    rgb(0x53, 0x91, 0xf5), // blue
-    rgb(0xb1, 0x6b, 0xf5), // magenta
-    rgb(0x2a, 0xc0, 0xc7), // cyan
-    rgb(0xd6, 0xd6, 0xd6), // white
-    // Bright (8-15)
-    rgb(0x6b, 0x6b, 0x6b), // bright black
-    rgb(0xff, 0x6b, 0x6f), // bright red
-    rgb(0x6c, 0xd9, 0x75), // bright green
-    rgb(0xff, 0xd5, 0x43), // bright yellow
-    rgb(0x7d, 0xac, 0xff), // bright blue
-    rgb(0xc9, 0x8d, 0xff), // bright magenta
-    rgb(0x5a, 0xe0, 0xe6), // bright cyan
-    rgb(0xff, 0xff, 0xff), // bright white
-  ],
-  light: [
-    // Normal (0-7)
-    rgb(0x24, 0x29, 0x2f), // black
-    rgb(0xcf, 0x22, 0x2e), // red — replaced by --destructive
-    rgb(0x11, 0x63, 0x29), // green
-    rgb(0x4d, 0x2d, 0x00), // yellow
-    rgb(0x09, 0x69, 0xda), // blue
-    rgb(0x82, 0x50, 0xdf), // magenta
-    rgb(0x1b, 0x7c, 0x83), // cyan
-    rgb(0x6e, 0x77, 0x81), // white
-    // Bright (8-15)
-    rgb(0x57, 0x60, 0x6a), // bright black
-    rgb(0xa4, 0x0e, 0x26), // bright red
-    rgb(0x1a, 0x7f, 0x37), // bright green
-    rgb(0x63, 0x3c, 0x01), // bright yellow
-    rgb(0x21, 0x8b, 0xff), // bright blue
-    rgb(0xa4, 0x75, 0xf9), // bright magenta
-    rgb(0x31, 0x92, 0xaa), // bright cyan
-    rgb(0x8c, 0x95, 0x9f), // bright white
-  ],
-};
+const DARK_ANSI_PALETTE: readonly ThemeColor[] = [
+  // Normal (0-7)
+  rgb(0x1c, 0x1c, 0x1c), // black
+  rgb(0xe5, 0x48, 0x4d), // red — replaced by --destructive
+  rgb(0x46, 0xa7, 0x58), // green
+  rgb(0xf0, 0xc0, 0x00), // yellow
+  rgb(0x53, 0x91, 0xf5), // blue
+  rgb(0xb1, 0x6b, 0xf5), // magenta
+  rgb(0x2a, 0xc0, 0xc7), // cyan
+  rgb(0xd6, 0xd6, 0xd6), // white
+  // Bright (8-15)
+  rgb(0x6b, 0x6b, 0x6b), // bright black
+  rgb(0xff, 0x6b, 0x6f), // bright red
+  rgb(0x6c, 0xd9, 0x75), // bright green
+  rgb(0xff, 0xd5, 0x43), // bright yellow
+  rgb(0x7d, 0xac, 0xff), // bright blue
+  rgb(0xc9, 0x8d, 0xff), // bright magenta
+  rgb(0x5a, 0xe0, 0xe6), // bright cyan
+  rgb(0xff, 0xff, 0xff), // bright white
+];
+
+/**
+ * The paper the light set is solved against: the shipped canvas's own light
+ * background, read from the generated table above rather than restated, so the
+ * palette and the canvas it was solved for cannot drift apart.
+ */
+const LIGHT_GROUND = rgbToHex({
+  r: FALLBACK_TOKENS.light.background.r / 255,
+  g: FALLBACK_TOKENS.light.background.g / 255,
+  b: FALLBACK_TOKENS.light.background.b / 255,
+});
+
+/**
+ * The four grey slots' APCA contrast targets against light paper, by palette
+ * index.
+ *
+ * A RAMP, and the numbers are its shape: black hardest, then bright black,
+ * then white, then bright white faintest. That descent is what keeps the light
+ * ramp's luminance order (0 < 8 < 7 < 15) identical to the dark set's while the
+ * ground moves to the other end of it — so `bright black` still means "dim" and
+ * `bright white` still means "faint", which is the meaning programs actually
+ * attach to those two slots. 58 for `white` is the load-bearing one: ordinary
+ * program output, held well clear of the 3:1 floor `appearance.test.ts` pins.
+ */
+const LIGHT_GREY_TARGET_LC: Record<number, number> = { 0: 86, 8: 70, 7: 58, 15: 42 };
+
+/** APCA targets for the twelve chromatic slots: the bright row sits one step off the paper. */
+const LIGHT_CHROMATIC_TARGET_LC = { normal: 72, bright: 56 } as const;
+
+/** Solved on first use; see {@link lightAnsiPalette}. */
+let cachedLightPalette: readonly ThemeColor[] | null = null;
+
+/** Chroma the color space can actually deliver at this lightness and hue. */
+function maxChroma(L: number, h: number): number {
+  // 0.5 is past the sRGB chroma ceiling at every hue, so gamutMap answers with
+  // the ceiling itself rather than the ask.
+  return gamutMap(L, 0.5, h).C;
+}
+
+/**
+ * The light ANSI set, DERIVED FROM THE DARK ONE rather than adopted (VC-413).
+ *
+ * What used to be here was GitHub Light Default, copied verbatim out of the
+ * vendored Ghostty theme catalog. The catalog is gone because nobody had
+ * verified what any of it was licensed under, and a sixteen-colour excerpt of it
+ * is no more ours to ship than the whole. Replacing it with some other
+ * established light set would only move the same question, so this set is
+ * SOLVED, from material the app already owns:
+ *
+ *   • HUE comes from `DARK_ANSI_PALETTE`. That is the app's own statement of
+ *     what its ANSI green *is*, and keeping it means a mode flip does not
+ *     change which colour a program asked for — only how it is rendered.
+ *   • LIGHTNESS is solved so each entry clears its APCA target against the
+ *     light ground, by the same solver the canvas ladder uses. A light palette
+ *     is not a lightened dark one: every hue has to be pushed DOWN to survive
+ *     light paper, and solving for the target is what makes that survival a
+ *     measured fact rather than a hand-picked hope.
+ *   • CHROMA keeps each entry's RELATIVE saturation — its share of the chroma
+ *     the space allows at its own lightness. Holding the raw chroma instead
+ *     would mute every colour on the way down, because the sRGB cone is widest
+ *     in the middle; holding the share is what keeps a vivid dark magenta a
+ *     vivid light one. The lightness is re-solved once after the chroma is
+ *     restored, since a more saturated ink reaches the same target at a
+ *     slightly different lightness.
+ *
+ * The greys are solved at chroma 0 — neutral, exactly as the dark set's are,
+ * rather than tinted toward the paper.
+ *
+ * Computed once, on first use, and never again: the ground is a constant, so
+ * there is nothing for a repaint to change. ~30 solver runs, a few milliseconds,
+ * and only when a config-less terminal actually paints in light mode — which is
+ * why the cache matters, since a canvas drag invalidates the token theme on
+ * every frame.
+ */
+function lightAnsiPalette(): readonly ThemeColor[] {
+  if (cachedLightPalette !== null) return cachedLightPalette;
+
+  cachedLightPalette = DARK_ANSI_PALETTE.map((entry, index) => {
+    const { L: darkL, C: darkC, h } = hexToOklch(rgbToHex(toUnit(entry)));
+    const greyTarget = LIGHT_GREY_TARGET_LC[index];
+    if (greyTarget !== undefined) {
+      return themeColor(oklchToHex(solveLightnessOrCeiling(greyTarget, 0, h, LIGHT_GROUND), 0, h));
+    }
+
+    const target = index < 8 ? LIGHT_CHROMATIC_TARGET_LC.normal : LIGHT_CHROMATIC_TARGET_LC.bright;
+    const share = darkC / maxChroma(darkL, h);
+    const firstPass = solveLightnessOrCeiling(target, darkC, h, LIGHT_GROUND);
+    const C = share * maxChroma(firstPass, h);
+    const L = solveLightnessOrCeiling(target, C, h, LIGHT_GROUND);
+    return themeColor(oklchToHex(L, share * maxChroma(L, h), h));
+  });
+  return cachedLightPalette;
+}
+
+/** 0-255 {@link ThemeColor} → the 0-1 channels the color module works in. */
+function toUnit({ r, g, b }: ThemeColor): { r: number; g: number; b: number } {
+  return { r: r / 255, g: g / 255, b: b / 255 };
+}
+
+/** `#rrggbb` → {@link ThemeColor}. */
+function themeColor(hex: string): ThemeColor {
+  const [r, g, b] = hexChannels(hex);
+  return { r, g, b };
+}
 
 /** The mode's ANSI set with normal red replaced by the app's `--destructive`. */
 function terminalPalette(red: ThemeColor, appearance: ResolvedAppearance): ThemeColor[] {
-  const palette = [...ANSI_PALETTES[appearance]];
+  const palette = [...(appearance === "dark" ? DARK_ANSI_PALETTE : lightAnsiPalette())];
   palette[1] = red;
   return palette;
 }
@@ -235,16 +310,13 @@ function tokenTheme(): GhosttyTheme {
 
 let payload: GhosttyAppearancePayload | null = null;
 let cachedAppearance: TerminalAppearance | null = null;
-let previewedTheme: GhosttyTheme | null = null;
-let cachedPreviewAppearance: TerminalAppearance | null = null;
 let initStarted = false;
 
 const changeListeners = new Set<() => void>();
 
-/** Drop every derived appearance and tell live terminals to re-read it. */
+/** Drop the derived appearance and tell live terminals to re-read it. */
 function invalidateAndNotify(): void {
   cachedAppearance = null;
-  cachedPreviewAppearance = null;
   for (const listener of changeListeners) listener();
 }
 
@@ -258,9 +330,7 @@ export function getCurrentAppearance(): TerminalAppearance {
   // in the user's ghostty config is a statement about the appearance they chose,
   // and it must be re-answered on every mode flip without re-reading the file.
   cachedAppearance ??= resolveAppearance(payload, tokenTheme(), resolvedAppearance());
-  if (previewedTheme === null) return cachedAppearance;
-  cachedPreviewAppearance ??= { ...cachedAppearance, theme: previewedTheme };
-  return cachedPreviewAppearance;
+  return cachedAppearance;
 }
 
 /** Subscribe to appearance changes (initial config load + live file edits). */
@@ -288,22 +358,6 @@ function acceptPayload(next: GhosttyAppearancePayload): void {
  */
 export function refreshTerminalTokenTheme(): void {
   cachedTokenTheme = null;
-  invalidateAndNotify();
-}
-
-/**
- * Paints every live terminal with `theme` without persisting anything; `null`
- * puts the resolved config chain back in charge.
- *
- * We render the terminal, so a theme preview here is a REAL palette swap
- * rather than a sample panel — the same standard the app-surface picker holds
- * itself to. Memory-only by construction: the overlay file is only ever
- * touched by an explicit save, so an abandoned preview leaves the user's
- * config exactly as it was.
- */
-export function previewTerminalTheme(theme: GhosttyTheme | null): void {
-  if (previewedTheme === theme) return;
-  previewedTheme = theme;
   invalidateAndNotify();
 }
 

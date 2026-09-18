@@ -2,22 +2,15 @@ import * as React from "react";
 import { FileTextIcon } from "@phosphor-icons/react/dist/csr/FileText";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { getGhosttyTheme, resolveAppearance, type Project } from "@volli/shared";
+import { resolveAppearance, type Project } from "@volli/shared";
 
-import {
-  fallbackTerminalThemeLabel,
-  revealPath,
-  terminalThemeItems,
-} from "@renderer/components/theme/appearance-catalog";
+import { fallbackTerminalThemeLabel, revealPath } from "@renderer/components/theme/appearance-rows";
 import { OverrideControl, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import { describeAppearance } from "@renderer/components/theme/canvas-editor-model";
-import { ThemeComboBox } from "@renderer/components/theme/theme-combo-box";
 import {
   projectTerminalChoice,
   projectTerminalOverlayEdits,
-  terminalCustomSeed,
-  type ProjectTerminalChoice,
 } from "@renderer/components/theme/project-appearance-model";
 import {
   buildTerminalSettingRows,
@@ -27,21 +20,24 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
-import { previewTerminalTheme } from "@renderer/terminal/appearance";
 
 /**
  * Configure → Appearance: one project's per-surface theming (#69).
  *
  * Handoff: same UI slop pass as appearance-settings.tsx — see AGENTS.md.
  *
- * The vocabulary is a tri-state PER SURFACE, and the section — not the picker —
- * owns it. Every surface starts on **Inherit** (#72: per-project theming is off
- * by default), which is the ABSENCE of a stored value rather than a stored
- * "inherit" marker, so a project that has been reset reads exactly like one
- * that was never touched. **Custom** opens on whatever the terminal is already
- * showing, so switching modes pins the look rather than changing it: the theme
- * name the Ghostty chain resolves, or nothing when the chain names none —
- * Volli will not invent a name to write into a file the user owns.
+ * Every surface starts on **Inherit** (#72: per-project theming is off by
+ * default), which is the ABSENCE of a stored value rather than a stored
+ * "inherit" marker, so a project that has been reset reads exactly like one that
+ * was never touched.
+ *
+ * The terminal surface has no **Custom** any more (VC-413). Entering Custom used
+ * to open a picker over a theme catalog vendored out of Ghostty.app; with no
+ * catalog there is nothing for a project to pick, and Volli will not write a
+ * theme name into a file the user owns just to have something to show. What the
+ * row does instead is report the resolved theme and, when this project's own
+ * overlay is what set it — by hand, in the file below — offer the revert that
+ * removes the key.
  *
  * The app surface is TWO tri-states rather than one, because a project's
  * gradient and its light/dark choice are two independent columns on its row
@@ -91,9 +87,9 @@ export function ProjectAppearanceSettings({ project }: { project: Project }) {
   }
 
   // Keyed on the project so switching projects while this pane is open remounts
-  // the sections: the local "opening the library" / "Custom, nothing written
-  // yet" states describe ONE project's session with this pane, and carrying
-  // them across would show project B a picker project A had opened.
+  // the sections: the canvas editor's in-flight preview state describes ONE
+  // project's session with this pane, and carrying it across would show project
+  // B a gesture that was aimed at project A.
   return (
     <>
       <ProjectAppThemeSection key={project.id} project={project} />
@@ -203,12 +199,6 @@ function ProjectAppThemeSection({ project }: { project: Project }) {
   );
 }
 
-/** Repaints every live terminal in `name`'s palette, writing nothing. */
-const previewTerminal = (name: string): void => previewTerminalTheme(getGhosttyTheme(name));
-
-/** Puts the resolved palette back, ending a preview. */
-const endTerminalPreview = (): void => previewTerminalTheme(null);
-
 /**
  * Terminal surface: this project's ghostty overlay.
  *
@@ -219,17 +209,18 @@ const endTerminalPreview = (): void => previewTerminalTheme(null);
  * last layer, so leaving a key behind would pin the terminal to whatever Volli
  * last wrote instead of letting the config chain win again.
  *
- * `pending` covers the one case Custom cannot pre-select: a chain that names no
- * theme at all. The terminal is then wearing the token-derived fallback, which
- * has no catalog name — so Custom opens the picker with nothing written, and
- * the first pick is the first write.
+ * WHAT THIS SECTION CAN STILL DO, after the catalog left (VC-413): report, and
+ * revert. "Is this project overriding its terminal theme?" is still answered
+ * honestly — from the resolved chain's PROVENANCE, so a key the user hand-wrote
+ * into this project's overlay counts exactly like one Volli wrote, which is what
+ * #68 promised. The revert is still a key REMOVAL. What is gone is the only
+ * thing that needed a catalog: choosing a name from a list.
  */
 function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   const terminal = useThemeStore((state) => state.terminal);
   // The fallback palette carries a name per mode, so the label has to follow the
   // resolved appearance — see `fallbackTerminalThemeLabel`.
   const resolved = useThemeStore(effectiveAppearance);
-  const items = React.useMemo(() => terminalThemeItems(), []);
   const rows = React.useMemo(
     () =>
       Object.fromEntries(buildTerminalSettingRows(terminal).map((row) => [row.key, row])) as Record<
@@ -240,36 +231,18 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
   );
 
   const choice = projectTerminalChoice(terminal);
-  const [pending, setPending] = React.useState(false);
-  const custom = choice.kind === "theme" || pending;
+  const overridden = choice.kind === "theme";
+  const shown = rows.theme.value ?? fallbackTerminalThemeLabel(resolved);
 
-  const write = async (next: ProjectTerminalChoice): Promise<boolean> => {
-    const result = await writeThrough("update this project's terminal theme", () =>
-      window.api.theme.writeProjectOverlay(projectId, projectTerminalOverlayEdits(next)),
-    );
-    if (result === null) return false;
-    useThemeStore.getState().acceptTerminal(result.terminal);
-    return true;
-  };
-
-  const setMode = (mode: "inherit" | "custom"): void => {
-    if (mode === "inherit") {
-      setPending(false);
-      // Nothing of this project's is in the file yet, so there is no key to
-      // remove — don't touch the user's overlay to say nothing.
-      if (choice.kind === "theme") void write({ kind: "inherit" });
-      return;
-    }
-    const seed = terminalCustomSeed(terminal);
-    setPending(true);
-    if (seed !== null) {
-      // A write that didn't land stored nothing, so Inherit is still the truth
-      // — roll the section back rather than leave it claiming Custom over an
-      // overlay that has no key in it.
-      void write({ kind: "theme", name: seed }).then((saved) => {
-        if (!saved) setPending(false);
-      });
-    }
+  const revert = (): void => {
+    void writeThrough("update this project's terminal theme", () =>
+      window.api.theme.writeProjectOverlay(
+        projectId,
+        projectTerminalOverlayEdits({ kind: "inherit" }),
+      ),
+    ).then((result) => {
+      if (result !== null) useThemeStore.getState().acceptTerminal(result.terminal);
+    });
   };
 
   return (
@@ -278,40 +251,14 @@ function ProjectTerminalThemeSection({ projectId }: { projectId: string }) {
       icon={TerminalWindowIcon}
       hint={<>Volli writes an overlay file. It never edits your Ghostty config.</>}
     >
-      {/*
-       * The scope switch was in the header, governing one row. It is the row's
-       * own revert now — same three states, one control instead of two, and
-       * the section header goes back to being a header.
-       */}
       <PrefRow label={rows.theme.label} testId="project-appearance-terminal-row">
         <OverrideControl
           label="Terminal theme"
-          inheritedValue={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
-          overridden={custom}
-          onRevert={() => setMode("inherit")}
+          inheritedValue={shown}
+          overridden={overridden}
+          onRevert={revert}
         >
-          {custom ? (
-            <ThemeComboBox
-              ariaLabel="Project terminal theme"
-              searchLabel="Search terminal themes"
-              buttonLabel={rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
-              empty="No matching theme."
-              items={items}
-              activeValue={choice.kind === "theme" ? choice.name : null}
-              onPreview={previewTerminal}
-              onEndPreview={endTerminalPreview}
-              onSelect={(name) => write({ kind: "theme", name })}
-            />
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              data-testid="project-appearance-terminal-mode"
-              onClick={() => setMode("custom")}
-            >
-              {rows.theme.value ?? fallbackTerminalThemeLabel(resolved)}
-            </Button>
-          )}
+          <span className="text-ui text-muted-foreground">{shown}</span>
         </OverrideControl>
       </PrefRow>
       <PrefRow label="Config file">
