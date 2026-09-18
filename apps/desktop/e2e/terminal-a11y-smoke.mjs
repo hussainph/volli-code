@@ -104,7 +104,7 @@ try {
       inside: Boolean(document.activeElement?.closest("[data-terminal-renderer]")),
     }));
 
-  async function macDump(label, expected) {
+  async function macDump(label, expected, outputs) {
     try {
       const dump = execFileSync(nativeProbe, [String(record.appPid)], {
         encoding: "utf8",
@@ -116,27 +116,91 @@ try {
       const chrome = native.nodes.some((node) =>
         /Home|Board|terminal focus/.test(`${node.AXTitle ?? ""} ${node.AXDescription ?? ""}`),
       );
-      check(`mac-AX-${label}`, native.trusted && chrome && dump.includes(marker) === expected, {
-        trusted: native.trusted,
-        nodes: native.nodes.length,
-        exposesChrome: chrome,
-        containsMarker: dump.includes(marker),
+      const containsMarkers = outputs.map((output) => {
+        let nodes = native.nodes;
+        if ("region" in output) {
+          const regions = nodes.filter(
+            (node) => node.AXRole === "AXGroup" && node.AXDescription === output.region,
+          );
+          if (!output.region || regions.length !== 1) return false;
+          const start = nodes.indexOf(regions[0]);
+          let end = start + 1;
+          while (end < nodes.length && nodes[end].depth > regions[0].depth) end++;
+          nodes = nodes.slice(start, end);
+        }
+        return nodes.some((node) =>
+          [node.AXValue, node.AXTitle, node.AXDescription].some((value) =>
+            String(value ?? "").includes(output.marker),
+          ),
+        );
       });
+      check(
+        `mac-AX-${label}`,
+        native.trusted && chrome && containsMarkers.every((contains) => contains === expected),
+        {
+          trusted: native.trusted,
+          nodes: native.nodes.length,
+          exposesChrome: chrome,
+          containsMarkers,
+        },
+      );
     } catch (error) {
       check(`mac-AX-${label}`, false, { unavailable: String(error.message) });
     }
   }
 
-  async function capture(label, expected = true) {
-    await sleep(1200); // xterm debounces accessible rows for up to one second.
-    const tree = await ax.send("Accessibility.getFullAXTree");
+  async function capture(label, expected = true, outputs = [{ marker }]) {
+    let tree = { nodes: [] };
+    let matches = [];
+    let synchronizationError;
+    // Split/refit and xterm's debounced accessibility update can settle on
+    // different frames under CI load. Wait on real non-ignored AX output,
+    // never a fixed delay or DOM text presented as accessibility evidence.
+    const sample = async () => {
+      tree = await ax.send("Accessibility.getFullAXTree");
+      const byId = new Map(tree.nodes.map((node) => [node.nodeId, node]));
+      matches = outputs.map((output) => {
+        const scoped = "region" in output;
+        const roots = scoped
+          ? tree.nodes.filter(
+              (node) =>
+                !node.ignored &&
+                node.role?.value === "region" &&
+                node.name?.value === output.region,
+            )
+          : tree.nodes;
+        if (scoped && (!output.region || roots.length !== 1)) return false;
+        const pending = [...roots];
+        const visited = new Set();
+        while (pending.length) {
+          const node = pending.pop();
+          if (!node || visited.has(node.nodeId)) continue;
+          visited.add(node.nodeId);
+          if (
+            !node.ignored &&
+            String(node.name?.value ?? node.value?.value ?? "").includes(output.marker)
+          )
+            return true;
+          for (const id of node.childIds ?? []) pending.push(byId.get(id));
+        }
+        return false;
+      });
+      return matches.every((contains) => contains === expected);
+    };
+    if (baseline) {
+      await sleep(1200);
+      await sample();
+    } else {
+      await waitUntil(`AX output ${label}`, sample, { timeout: 10000 }).catch((error) => {
+        synchronizationError = String(error.message);
+      });
+    }
     await fs.writeFile(join(evidence, `chromium-ax-${label}.json`), JSON.stringify(tree, null, 2));
     const exposed = tree.nodes.filter((node) => !node.ignored);
-    const containsMarker = exposed.some((node) =>
-      String(node.name?.value ?? node.value?.value ?? "").includes(marker),
-    );
-    check(`AX-${label}`, containsMarker === expected, {
-      containsMarker,
+    check(`AX-${label}`, !synchronizationError && matches.every((value) => value === expected), {
+      outputs,
+      matches,
+      synchronizationError,
       exposedNodes: exposed.length,
     });
     if (expected) {
@@ -169,7 +233,7 @@ try {
         semantics,
       );
     }
-    if (macAx) await macDump(label, expected);
+    if (macAx) await macDump(label, expected, outputs);
   }
 
   // Blur without switching the tab: terminal output must remain readable.
@@ -245,7 +309,26 @@ try {
   await host.click();
   await page.keyboard.press("Meta+d");
   await waitUntil("two visible terminals", async () => (await hosts.count()) === 2);
-  await capture("split");
+  // Reflow may legitimately push the old marker above the visible viewport:
+  // xterm's AX rows represent the viewport, not the whole scrollback. Emit new
+  // output in BOTH live PTYs, then require each marker in its own AX region.
+  // Octal encoding keeps literal markers out of echoed input, as above.
+  const splitOutputs = [];
+  for (let i = 0; i < 2; i++) {
+    const pane = hosts.nth(i);
+    const paneMarker = `VC344-SPLIT-${i + 1}`;
+    const encoded = [...paneMarker]
+      .map((c) => `\\${c.codePointAt(0).toString(8).padStart(3, "0")}`)
+      .join("");
+    await pane.locator("textarea").focus();
+    await page.keyboard.type(`printf '\\033[2J\\033[H${encoded}\\n'`);
+    await page.keyboard.press("Enter");
+    await waitUntil(`split pane ${i + 1} PTY output`, async () =>
+      (await pane.locator(".xterm-rows").textContent()).includes(paneMarker),
+    );
+    splitOutputs.push({ marker: paneMarker, region: await pane.getAttribute("aria-label") });
+  }
+  await capture("split", true, splitOutputs);
   const names = await hosts.evaluateAll((elements) =>
     elements.map((el) => el.getAttribute("aria-label")),
   );

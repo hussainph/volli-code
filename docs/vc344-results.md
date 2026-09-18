@@ -140,6 +140,32 @@ Checks on the reconciled source:
   skipped. The worker count came from the background shell's
   `VOLLI_CONCURRENCY_HINT`; workspace packages ran serially.
 
+### CI split-probe synchronization correction
+
+PR #584's first final-head CI run passed the core and other smoke lanes but
+failed `AX-split`: the original output marker was absent, while split names,
+semantics and both directions of keyboard navigation passed. The probe had
+assumed a fixed 1.2-second delay was sufficient and that old output would remain
+inside xterm's accessible viewport after a width-changing split.
+
+The probe now waits (bounded to 10 seconds) for real non-ignored Chromium AX
+output instead of assuming a delay. After splitting it emits a fresh octal-encoded
+marker through **each** live PTY, waits for each visible output, and requires each
+unique marker beneath its own named AX region in the same snapshot. Native AX
+also checks both markers beneath their named groups; missing/duplicate region
+names fail rather than falling back to a global search. This measures readability in both resized panes;
+it does **not** claim that the original marker stays in the visible viewport or
+prove interactive scrollback reading. A timeout remains a failed assertion with
+the final snapshot retained; no CI job was merely rerun to turn the failure green.
+
+Reruns with the updated probe passed: quiet Chromium **29/29**, native/Chromium
+**35/35**, focused engine/view/registry/appearance **42/42**, and `vp check`.
+Records: [`scoped-quiet.json`](vc344-evidence/scoped-quiet.json),
+[`scoped-native.json`](vc344-evidence/scoped-native.json), and
+[`scoped-split-ax-excerpts.json`](vc344-evidence/scoped-split-ax-excerpts.json).
+These records identify base commit `1896d3a4`; the probe correction was a working
+copy change when measured, while the built product code was unchanged.
+
 Spoken VoiceOver wording and interactive row/scrollback navigation still require
 human acceptance as described above; native AX exposure does not certify them.
 
