@@ -111,7 +111,7 @@ Do not mark that human checklist item passed from these automated results.
 - `pnpm run build`: passed, including standalone preload and packed-require checks.
 - `pnpm -C apps/desktop typecheck`: passed.
 - Focused engine/view/registry/appearance tests: **40 passed**.
-- `terminal-a11y-smoke.mjs ... --mac-ax`: **38 assertions passed**, including native AX.
+- `terminal-a11y-smoke.mjs ... --mac-ax`: **35 assertions passed**, including native AX.
 - Existing `terminal-smoke.mjs` with workspace-local HOME/TMPDIR: **14 checks passed**.
 - Targeted `vp lint` and `git diff --check`: passed.
 - `vp run -r test:coverage --maxWorkers=1`: **failed** on the unchanged
