@@ -220,6 +220,17 @@ export function renderSourceOffer(facts) {
     "The other components in the same library are under permissive licenses; they are listed,",
     "with their terms, in the application\u2019s third-party notices.",
     "",
+    ...(facts.licenseTextsShipped
+      ? [
+          "## The license itself",
+          "",
+          "Verbatim copies of both documents the LGPL requires accompany this application, in this",
+          "same folder:",
+          "",
+          ...facts.licenseTextFiles.map((file) => `  - ${file}`),
+          "",
+        ]
+      : []),
     "## Getting the source code",
     "",
     "The LGPL gives you the right to the source of the LGPL-covered parts, so that you can study,",
@@ -308,6 +319,13 @@ function gatherFacts(libvipsRoot) {
     license: manifest.license,
     repository: manifest.repository?.url?.replace(/^git\+/, "").replace(/\.git$/, "") ?? "",
     binary: manifest.exports?.["./binary"]?.replace(/^\.\//, "") ?? "(none declared)",
+    // Read from the same record `check:licenses` holds to the filesystem and to
+    // the files' hashes, so this document cannot tell a user the license texts
+    // are beside it while the gate knows they are not.
+    licenseTextsShipped: entry.shippedCompliance.licenseTexts.state === "shipped",
+    licenseTextFiles: entry.shippedCompliance.licenseTexts.expected.map((text) =>
+      text.file.replace(/^licensing\//, ""),
+    ),
     lgplLibraries: lgplComponents(parseComponentLicenseTable(readme)),
     versions,
     correspondingSource: entry.correspondingSource,
@@ -515,7 +533,7 @@ function selfTest() {
   );
 
   // --- the rendered document ---
-  const rendered = renderSourceOffer({
+  const offerFixture = {
     appVersion: "0.1.2",
     packageVersion: "1.3.3",
     license: "LGPL-3.0-or-later",
@@ -524,6 +542,8 @@ function selfTest() {
     lgplLibraries: ["glib", "libvips"],
     versions: { glib: "2.89.4", vips: "8.18.6" },
     sourceContact: "source@volli.app",
+    licenseTextsShipped: true,
+    licenseTextFiles: ["GPL-3.0.txt", "LGPL-3.0.txt"],
     correspondingSource: {
       buildRecipe: {
         name: "sharp-libvips build scripts",
@@ -542,7 +562,8 @@ function selfTest() {
         },
       },
     },
-  });
+  };
+  const rendered = renderSourceOffer(offerFixture);
   expect("states the license", rendered.includes("LGPL-3.0-or-later"));
   expect("names the shipped binary", rendered.includes("lib/libvips-cpp.8.18.6.dylib"));
   expect(
@@ -560,6 +581,13 @@ function selfTest() {
   expect("lists the patches", rendered.includes("https://example.invalid/glib.patch"));
   expect("carries the written offer contact", rendered.includes("source@volli.app"));
   expect("points at the relink instructions", rendered.includes("RELINK-LIBVIPS.md"));
+  expect("names the license texts beside it", rendered.includes("GPL-3.0.txt"));
+  // A user reads this file to find out what their rights are and where the
+  // documents are. It must not point at texts that are not there.
+  expect(
+    "and says nothing about them when they do not ship",
+    !renderSourceOffer({ ...offerFixture, licenseTextsShipped: false }).includes("GPL-3.0.txt"),
+  );
   expect("leaves no unfilled placeholder", !/\{\w+\}/.test(rendered));
 
   if (failures.length > 0) {

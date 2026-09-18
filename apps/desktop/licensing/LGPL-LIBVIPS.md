@@ -35,6 +35,14 @@ them through the “any later version” clause of the LGPLv2 or LGPLv2.1.
 The other components in the same library are under permissive licenses; they are listed,
 with their terms, in the application’s third-party notices.
 
+## The license itself
+
+Verbatim copies of both documents the LGPL requires accompany this application, in this
+same folder:
+
+  - GPL-3.0.txt
+  - LGPL-3.0.txt
+
 ## Getting the source code
 
 The LGPL gives you the right to the source of the LGPL-covered parts, so that you can study,

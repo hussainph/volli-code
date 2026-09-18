@@ -198,67 +198,38 @@
             "the filesystem in BOTH directions: while it is \"missing\", finding the files fails and",
             "tells you to flip it to \"shipped\" (4(b) is then discharged and the notice text may say",
             "so); once it is \"shipped\", losing them fails. What it must never do is sit at",
-            "\"shipped\" over an empty directory."
+            "\"shipped\" over an empty directory.",
+            "",
+            "NOW SHIPPED. Both files were downloaded verbatim from gnu.org, never retyped or passed",
+            "through any transformation — the failure mode 4(b) actually cares about is a re-flowed",
+            "or truncated GPL that still calls itself the GPL. `sha256` pins exactly what was",
+            "downloaded, and the gate hashes the files on disk, so an edit, a truncation or a",
+            "well-meaning reformat fails by name instead of shipping quietly.",
+            "",
+            "Corroboration, recorded because 'I downloaded it' is not by itself evidence: 74 of 77",
+            "distinctive GPL paragraphs and 17 of 18 LGPL ones appear verbatim in the copy Chromium",
+            "vendors independently (electron/dist/LICENSES.chromium.html). The only difference is the",
+            "FSF header URL — Chromium's older copy says <http://fsf.org/>, current gnu.org says",
+            "<https://fsf.org/>. Ours is the FSF's current text, 674 and 165 lines, pure ASCII, LF."
           ],
-          "state": "missing",
+          "state": "shipped",
           "expected": [
             {
               "file": "licensing/GPL-3.0.txt",
-              "canonical": "https://www.gnu.org/licenses/gpl-3.0.txt"
+              "canonical": "https://www.gnu.org/licenses/gpl-3.0.txt",
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+              "firstLine": "                    GNU GENERAL PUBLIC LICENSE"
             },
             {
               "file": "licensing/LGPL-3.0.txt",
-              "canonical": "https://www.gnu.org/licenses/lgpl-3.0.txt"
+              "canonical": "https://www.gnu.org/licenses/lgpl-3.0.txt",
+              "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+              "firstLine": "                   GNU LESSER GENERAL PUBLIC LICENSE"
             }
           ]
         }
       },
       "blocked": "docs/licensing/dependency-license-review.md#lgpl-libvips"
-    },
-
-    "apca-w3": {
-      "license": "Limited W3 License",
-      "versions": ["0.1.9"],
-      "disposition": "development-only",
-      "summary": [
-        "Bespoke license, not an SPDX one. It permits use only for predicting contrast for WEB content",
-        "on self-illuminated displays, prohibits commercial use without a signed agreement except under",
-        "the W3 cooperative agreement, forbids altering the algorithm's constants, and obliges a",
-        "licensee to track the latest non-breaking version.",
-        "Volli uses it in exactly one role: the independent oracle that packages/shared's own APCA math",
-        "is cross-checked against in tests, plus the desktop canvas-theming smoke. No source under any",
-        "src/ imports it, and nothing distributed contains it."
-      ],
-      "obligations": [
-        "Stay development-only: the commercial-use prohibition and the AGPL fallback below only bite on",
-        "distribution or commercial use.",
-        "Keep current: the range must stay a caret range so the latest non-breaking 0.1.x is installable."
-      ],
-      "direct": {
-        "@volli/desktop": "devDependencies",
-        "@volli/shared": "devDependencies"
-      },
-      "rangeMustBeCaret": true,
-      "imports": ["packages/shared/src/theme/*.test.ts", "apps/desktop/e2e/*.mjs"],
-      "blocked": "docs/licensing/dependency-license-review.md#apca-w3"
-    },
-
-    "colorparsley": {
-      "license": "AGPL v3",
-      "versions": ["0.1.8"],
-      "disposition": "development-only",
-      "summary": [
-        "apca-w3's only runtime dependency, and the sharpest license in the tree: AGPL v3, whose",
-        "source-offer obligation is triggered by conveying the work OR by letting users interact with",
-        "it over a network.",
-        "Neither happens. It arrives transitively under a devDependency, and the containment rule below",
-        "is what keeps it that way — this is the entry that makes apca-w3's dev-only status load-bearing",
-        "rather than merely true today."
-      ],
-      "obligations": ["Never becomes a direct dependency and never enters a distributed artifact."],
-      "direct": {},
-      "imports": [],
-      "blocked": null
     },
 
     "gsap": {

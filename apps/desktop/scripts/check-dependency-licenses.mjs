@@ -37,6 +37,7 @@
  * docs/licensing/dependency-license-review.md — not resolved here.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -179,9 +180,10 @@ export function matchesPathPattern(path, pattern) {
 
 /**
  * Whether `source` actually imports `packageName`, as opposed to merely
- * mentioning it. The distinction matters: `packages/shared/src/theme/color.ts`
- * discusses apca-w3 in its header comment and `apca-w3.d.ts` declares ambient
- * types for it, and neither is a use of the package.
+ * mentioning it. The distinction matters: prose in a header comment and a
+ * `declare module "x"` ambient type are both mentions, not uses, and a scan
+ * that cannot tell them apart reports the file documenting a rule as the file
+ * breaking it.
  * @param {string} source
  * @param {string} packageName
  */
@@ -252,6 +254,7 @@ export function matchesPackagePattern(name, pattern) {
  * @property {Array<{ package: string, resolved: boolean, loadPaths: string[] }>} nativeLibraries
  * @property {string[]} desktopFiles apps/desktop-relative compliance files that exist
  * @property {string | null} entitlements the hardened-runtime entitlements plist, as text
+ * @property {Record<string, string>} licenseTextDigests sha256 by desktop-relative path
  */
 
 /**
@@ -293,7 +296,7 @@ export function grantsEntitlement(plist, entitlement) {
  *      directions. See `licenseTexts` in the policy for why this is a claim to
  *      be checked rather than a file to be generated.
  *
- * @param {{ files: string[], electronBuilderExtraResource: string, hardening: { entitlementsFile: string, forbiddenEntitlement: string }, licenseTexts: { state: string, expected: Array<{ file: string, canonical: string }> } }} compliance
+ * @param {{ files: string[], electronBuilderExtraResource: string, hardening: { entitlementsFile: string, forbiddenEntitlement: string }, licenseTexts: { state: string, expected: Array<{ file: string, canonical: string, sha256?: string }> } }} compliance
  * @param {WorkspaceFacts} facts
  * @returns {string[]}
  */
@@ -353,6 +356,22 @@ export function shippedComplianceProblems(compliance, facts) {
 
   const { state, expected } = compliance.licenseTexts;
   const presentTexts = expected.filter((text) => facts.desktopFiles.includes(text.file));
+
+  // Presence is the weak half. 4(b) asks for a COPY of the GPL, and a
+  // truncated, re-flowed or hand-edited file is still present while no longer
+  // being one — so what is shipped is hashed against what was downloaded.
+  for (const text of presentTexts) {
+    const digest = facts.licenseTextDigests?.[text.file];
+    if (text.sha256 === undefined || digest === undefined) continue;
+    if (digest !== text.sha256) {
+      problems.push(
+        `apps/desktop/${text.file} no longer matches the canonical text recorded for it ` +
+          `(sha256 ${digest.slice(0, 12)}…, expected ${text.sha256.slice(0, 12)}…). LGPLv3 4(b) ` +
+          `requires a copy of the license, and a re-flowed or truncated one is not a copy of it. ` +
+          `Restore it from ${text.canonical} rather than editing it, and never format this file.`,
+      );
+    }
+  }
   if (state === "shipped" && presentTexts.length !== expected.length) {
     const missing = expected.filter((text) => !facts.desktopFiles.includes(text.file));
     problems.push(
@@ -765,6 +784,8 @@ async function readPackagingConfig() {
  */
 function readShippedCompliance(policy) {
   const desktopFiles = [];
+  /** @type {Record<string, string>} */
+  const licenseTextDigests = {};
   let entitlements = null;
 
   for (const entry of Object.values(policy.reviewed)) {
@@ -779,6 +800,15 @@ function readShippedCompliance(policy) {
       if (existsSync(resolve(DESKTOP_ROOT, file))) desktopFiles.push(file);
     }
 
+    // Hashed as BYTES, not as decoded text: the point is byte-for-byte
+    // identity with what the FSF publishes, and decoding would paper over an
+    // encoding change that is exactly the kind of damage worth catching.
+    for (const text of compliance.licenseTexts.expected) {
+      const path = resolve(DESKTOP_ROOT, text.file);
+      if (!existsSync(path)) continue;
+      licenseTextDigests[text.file] = createHash("sha256").update(readFileSync(path)).digest("hex");
+    }
+
     try {
       entitlements = readFileSync(
         resolve(DESKTOP_ROOT, compliance.hardening.entitlementsFile),
@@ -789,7 +819,7 @@ function readShippedCompliance(policy) {
     }
   }
 
-  return { desktopFiles, entitlements };
+  return { desktopFiles, entitlements, licenseTextDigests };
 }
 
 /**
@@ -1012,18 +1042,24 @@ function selfTest() {
   expect("escapes regex metacharacters", matchesPathPattern("a+b/c.ts", "a+b/c.ts"));
 
   // --- import detection ---
-  expect("sees a static import", importsPackage('import { x } from "apca-w3";', "apca-w3"));
+  // The fixture package is fictional on purpose. These assertions used to name
+  // apca-w3, which VC-412 then banned outright — and a literal `import ... from
+  // "apca-w3"` in this file, fixture or not, is what scripts/check-excluded-
+  // dependencies.mjs is built to find. A test for a matcher does not need a
+  // real package name, and naming a retired one puts a tripwire in the tree.
+  expect("sees a static import", importsPackage('import { x } from "oracle-pkg";', "oracle-pkg"));
   expect("sees a subpath import", importsPackage('import { Flip } from "gsap/Flip";', "gsap"));
   expect("sees a dynamic import", importsPackage('const m = await import("sharp");', "sharp"));
   expect("sees a require", importsPackage('const m = require("sharp");', "sharp"));
   expect("sees a bare side-effect import", importsPackage('import "gsap";', "gsap"));
   expect(
     "ignores prose",
-    importsPackage("// verified against `apca-w3` itself", "apca-w3") === false,
+    importsPackage("// verified against `oracle-pkg` itself", "oracle-pkg") === false,
   );
   expect(
     "ignores an ambient declaration",
-    importsPackage('declare module "apca-w3" { export function f(): void; }', "apca-w3") === false,
+    importsPackage('declare module "oracle-pkg" { export function f(): void; }', "oracle-pkg") ===
+      false,
   );
   expect(
     "does not match a longer name",
@@ -1416,8 +1452,16 @@ function selfTest() {
     licenseTexts: {
       state: "missing",
       expected: [
-        { file: "licensing/GPL-3.0.txt", canonical: "https://www.gnu.org/licenses/gpl-3.0.txt" },
-        { file: "licensing/LGPL-3.0.txt", canonical: "https://www.gnu.org/licenses/lgpl-3.0.txt" },
+        {
+          file: "licensing/GPL-3.0.txt",
+          canonical: "https://www.gnu.org/licenses/gpl-3.0.txt",
+          sha256: "aaaa",
+        },
+        {
+          file: "licensing/LGPL-3.0.txt",
+          canonical: "https://www.gnu.org/licenses/lgpl-3.0.txt",
+          sha256: "bbbb",
+        },
       ],
     },
   };
@@ -1429,7 +1473,31 @@ function selfTest() {
       files: [],
       extraResources: [{ from: "licensing", to: "licensing" }],
     },
+    licenseTextDigests: {},
   };
+  /** Both 4(b) texts shipped, hashes matching — the discharged state. */
+  const bothTextsShipped = {
+    compliance: { licenseTexts: { ...compliance.licenseTexts, state: "shipped" } },
+    facts: {
+      desktopFiles: [
+        ...complianceFacts.desktopFiles,
+        "licensing/GPL-3.0.txt",
+        "licensing/LGPL-3.0.txt",
+      ],
+      licenseTextDigests: { "licensing/GPL-3.0.txt": "aaaa", "licensing/LGPL-3.0.txt": "bbbb" },
+    },
+  };
+  /** @param {string} digest */
+  const withTamperedGpl = (digest) => ({
+    ...bothTextsShipped,
+    facts: {
+      ...bothTextsShipped.facts,
+      licenseTextDigests: {
+        ...bothTextsShipped.facts.licenseTextDigests,
+        "licensing/GPL-3.0.txt": digest,
+      },
+    },
+  });
   const complianceWith = (overrides) =>
     shippedComplianceProblems(
       { ...compliance, ...overrides.compliance },
@@ -1520,16 +1588,26 @@ function selfTest() {
   );
   expect(
     "and the texts shipping with the record updated is clean",
-    complianceWith({
-      compliance: { licenseTexts: { ...compliance.licenseTexts, state: "shipped" } },
-      facts: {
-        desktopFiles: [
-          ...complianceFacts.desktopFiles,
-          "licensing/GPL-3.0.txt",
-          "licensing/LGPL-3.0.txt",
-        ],
-      },
-    }).length === 0,
+    complianceWith(bothTextsShipped).length === 0,
+  );
+
+  // Presence is the weak half of 4(b): what it asks for is a COPY of the
+  // licence, and an edited, re-flowed or truncated GPL is still "present".
+  expect(
+    "an edited license text is caught by its hash",
+    complianceWith(withTamperedGpl("cccc")).some((p) =>
+      p.includes("no longer matches the canonical text"),
+    ),
+  );
+  expect(
+    "and the failure names where to restore it from",
+    complianceWith(withTamperedGpl("cccc")).some((p) =>
+      p.includes("https://www.gnu.org/licenses/gpl-3.0.txt"),
+    ),
+  );
+  expect(
+    "a matching hash does not fire",
+    !complianceWith(withTamperedGpl("aaaa")).some((p) => p.includes("no longer matches")),
   );
 
   // --- the elected half of a dual license ---------------------------------

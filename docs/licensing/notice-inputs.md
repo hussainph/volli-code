@@ -26,11 +26,10 @@ Payload: `./lib/libvips-cpp.8.18.6.dylib`, loaded at run time by `@img/sharp-dar
 Section 4(a) wants prominent notice that the library is used and is covered by the LGPL;
 4(c) wants libvips named among any copyright notices the app shows while running.
 
-**One line in this draft is still conditional.** The sentence marked below asserts a fact
-about the shipped artifact that is only true once the notices ticket has acted: §1b's license
-copies must actually be in the bundle. Publishing it unchanged would turn an open obligation
-into a false compliance claim, which is worse than shipping no notice at all. Delete or amend
-the marked line if the condition does not hold.
+**Nothing in this draft is conditional any more.** Both facts it asserts about the
+shipped artifact are true and mechanically checked: the GPL and LGPL texts §1b names are
+in the bundle (hash-pinned against gnu.org), and the relink freedom has Installation
+Information behind it.
 
 The relink sentence is NO LONGER conditional. VC-409 ruled on §B2: Volli keeps LGPL libvips
 and keeps the packaged app's hardened runtime, and discharges 4(d)/4(e) by shipping
@@ -55,8 +54,8 @@ Components used under an LGPL license:
 libvips itself is available from https://github.com/libvips/libvips and the prebuilt
 package from https://github.com/lovell/sharp-libvips.
 
-[ONLY IF §1b IS DONE] Copies of the GNU General Public License v3 and the GNU Lesser
-General Public License v3 accompany this application.
+Copies of the GNU General Public License v3 and the GNU Lesser General Public License v3
+accompany this application.
 
 The library is dynamically linked and ships as a separate, unmodified file inside the
 application bundle, so it can be replaced with a compatible build. Instructions for doing so,
@@ -73,11 +72,16 @@ that folder too.
 
 ### 1b. License texts that must accompany the app (LGPLv3 section 4(b))
 
-Section 4(b) requires a copy of BOTH documents. They are not in this repository and are not
-generated here on purpose — they must be byte-verbatim canonical copies, and a reflowed or
-paraphrased GPL is not a copy of it.
+Section 4(b) requires a copy of BOTH documents. They are not generated here, on purpose —
+they must be byte-verbatim canonical copies, and a reflowed or paraphrased GPL is not a copy
+of it.
 
-| File to ship | Canonical source |
+**Both now ship**, downloaded verbatim from gnu.org and copied into the bundle at
+`Contents/Resources/licensing/`. `check:licenses` hashes them against the recorded
+sha256, so an edit, a truncation or a reformat fails the build rather than shipping a
+document that is no longer a copy of the license it names.
+
+| File | Canonical source |
 | --- | --- |
 | `GPL-3.0.txt` | <https://www.gnu.org/licenses/gpl-3.0.txt> |
 | `LGPL-3.0.txt` | <https://www.gnu.org/licenses/lgpl-3.0.txt> |
