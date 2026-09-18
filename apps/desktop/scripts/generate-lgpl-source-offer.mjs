@@ -140,6 +140,67 @@ export function sourceUrlRefusal(url, allowedHosts) {
   return null;
 }
 
+/** How many redirects a source address may take before it is refused. */
+export const MAX_REDIRECTS = 5;
+
+/** Statuses that mean “look somewhere else”. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * Requests a source address, validating EVERY hop against the allowlist.
+ *
+ * `fetch(url, { redirect: "follow" })` was the hole. It checks the address you
+ * hand it and then follows wherever that address points, so an allowlisted host
+ * answering `302 Location: http://169.254.169.254/...` walks straight past the
+ * allowlist into whatever network the runner sits in. Validating the first URL
+ * is not validating the request.
+ *
+ * So redirects are followed here instead of by the client: bounded, resolved
+ * against the URL that issued them (a `Location` may be relative), and each hop
+ * checked for https and an exactly-matching reviewed host BEFORE it is
+ * requested.
+ * @param {string} startUrl
+ * @param {string[]} allowedHosts
+ * @param {(url: string, init: { redirect: "manual" }) => Promise<{ status: number, headers: { get(name: string): string | null }, body?: { cancel(): Promise<void> } | null }>} request
+ * @returns {Promise<{ status: number | string, finalUrl: string, hops: number }>}
+ */
+export async function requestThroughReviewedHosts(startUrl, allowedHosts, request) {
+  let url = startUrl;
+  for (let hop = 0; ; hop++) {
+    const refusal = sourceUrlRefusal(url, allowedHosts);
+    if (refusal !== null) {
+      return { status: `refused: ${refusal}`, finalUrl: url, hops: hop };
+    }
+    if (hop > MAX_REDIRECTS) {
+      return {
+        status: `refused: more than ${MAX_REDIRECTS} redirects, starting at ${startUrl}`,
+        finalUrl: url,
+        hops: hop,
+      };
+    }
+
+    const response = await request(url, { redirect: "manual" });
+    await response.body?.cancel();
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return { status: response.status, finalUrl: url, hops: hop };
+    }
+
+    const location = response.headers.get("location");
+    if (location === null || location === "") {
+      return {
+        status: `${response.status} with no Location header`,
+        finalUrl: url,
+        hops: hop,
+      };
+    }
+    try {
+      url = new URL(location, url).toString();
+    } catch {
+      return { status: `unresolvable redirect to "${location}"`, finalUrl: url, hops: hop };
+    }
+  }
+}
+
 /**
  * Where the reviewed source directions and the installed library disagree.
  *
@@ -405,18 +466,24 @@ async function verifySources() {
   const gone = [];
   for (const target of targets) {
     let status;
+    let hops = 0;
     try {
       // GET, not HEAD: several of these hosts answer HEAD with 403 or 405
       // while serving the file perfectly well, and a check that reports a
       // reachable tarball as missing gets switched off within a week.
-      const response = await fetch(target.url, { redirect: "follow" });
-      status = response.status;
-      await response.body?.cancel();
+      const outcome = await requestThroughReviewedHosts(
+        target.url,
+        facts.allowedSourceHosts,
+        fetch,
+      );
+      status = outcome.status;
+      hops = outcome.hops;
     } catch (error) {
       status = `network error: ${error instanceof Error ? error.message : String(error)}`;
     }
     const ok = status === 200;
-    console.log(`  ${ok ? "ok  " : "GONE"}  ${String(status).padEnd(14)} ${target.what}`);
+    const trail = hops > 0 ? ` (${hops} redirect${hops === 1 ? "" : "s"})` : "";
+    console.log(`  ${ok ? "ok  " : "GONE"}  ${String(status).padEnd(14)} ${target.what}${trail}`);
     if (!ok) gone.push(`${target.what}: ${target.url} (${status})`);
   }
 
@@ -508,7 +575,27 @@ function main() {
   console.log(`Wrote ${OUT_PATH}`);
 }
 
-function selfTest() {
+/**
+ * A fake client. `routes` maps a URL to either a status or a redirect.
+ * @param {Record<string, number | { status: number, location?: string }>} routes
+ */
+const client = (routes) => {
+  const seen = [];
+  /** @type {any} */
+  const request = async (url) => {
+    seen.push(url);
+    const route = routes[url] ?? 404;
+    const { status, location } = typeof route === "number" ? { status: route } : route;
+    return {
+      status,
+      headers: { get: (name) => (name === "location" ? (location ?? null) : null) },
+      body: null,
+    };
+  };
+  return { request, seen };
+};
+
+async function selfTest() {
   const failures = [];
   /** @param {string} what @param {boolean} ok */
   const expect = (what, ok) => {
@@ -595,6 +682,91 @@ function selfTest() {
   expect(
     "refuses a link-local address",
     sourceUrlRefusal("https://169.254.169.254/latest/meta-data/", hosts) !== null,
+  );
+
+  // --- redirects, which is where the allowlist was actually bypassable ---
+  const plain = client({ "https://github.com/a.tar.gz": 200 });
+  const direct = await requestThroughReviewedHosts(
+    "https://github.com/a.tar.gz",
+    hosts,
+    plain.request,
+  );
+  expect("a direct 200 is reported", direct.status === 200 && direct.hops === 0);
+
+  const hopped = client({
+    "https://github.com/a.tar.gz": { status: 302, location: "https://download.gnome.org/a.tar.gz" },
+    "https://download.gnome.org/a.tar.gz": 200,
+  });
+  const followed = await requestThroughReviewedHosts(
+    "https://github.com/a.tar.gz",
+    hosts,
+    hopped.request,
+  );
+  expect("a redirect to a reviewed host is followed", followed.status === 200);
+  expect("and the hop is counted", followed.hops === 1);
+
+  // THE HOLE: `redirect: "follow"` validated only the address we handed the
+  // client, so an allowlisted host could bounce the request into the runner's
+  // own network. The metadata endpoint is the canonical target.
+  const ssrf = client({
+    "https://github.com/a.tar.gz": {
+      status: 302,
+      location: "http://169.254.169.254/latest/meta-data/",
+    },
+    "http://169.254.169.254/latest/meta-data/": 200,
+  });
+  const blocked = await requestThroughReviewedHosts(
+    "https://github.com/a.tar.gz",
+    hosts,
+    ssrf.request,
+  );
+  expect(
+    "a redirect to a link-local address is refused",
+    String(blocked.status).startsWith("refused:"),
+  );
+  expect(
+    "and the internal address is never requested",
+    !ssrf.seen.some((url) => url.includes("169.254.169.254")),
+  );
+
+  const offlist = client({
+    "https://github.com/a.tar.gz": { status: 302, location: "https://evil.invalid/a.tar.gz" },
+  });
+  expect(
+    "a redirect to any unreviewed host is refused",
+    String(
+      (await requestThroughReviewedHosts("https://github.com/a.tar.gz", hosts, offlist.request))
+        .status,
+    ).includes("not one of the reviewed"),
+  );
+
+  // A relative Location is resolved against the URL that issued it, so it
+  // cannot smuggle a host past the check by being host-less.
+  const relative = client({
+    "https://github.com/dir/a.tar.gz": { status: 301, location: "/other/b.tar.gz" },
+    "https://github.com/other/b.tar.gz": 200,
+  });
+  expect(
+    "a relative redirect resolves against the current URL",
+    (await requestThroughReviewedHosts("https://github.com/dir/a.tar.gz", hosts, relative.request))
+      .status === 200,
+  );
+
+  // A loop must end, and end as a refusal rather than a hang.
+  const loop = client({
+    "https://github.com/a": { status: 302, location: "https://github.com/b" },
+    "https://github.com/b": { status: 302, location: "https://github.com/a" },
+  });
+  const looped = await requestThroughReviewedHosts("https://github.com/a", hosts, loop.request);
+  expect("a redirect loop is bounded", String(looped.status).includes("more than"));
+  expect("and stops at the bound", loop.seen.length <= MAX_REDIRECTS + 1);
+
+  const headerless = client({ "https://github.com/a": { status: 302 } });
+  expect(
+    "a redirect with no Location is reported, not followed",
+    String(
+      (await requestThroughReviewedHosts("https://github.com/a", hosts, headerless.request)).status,
+    ).includes("no Location"),
   );
 
   // --- coverage against the installed library ---
@@ -694,7 +866,7 @@ function selfTest() {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.includes("--self-test")) {
-    selfTest();
+    await selfTest();
   } else {
     await main();
   }

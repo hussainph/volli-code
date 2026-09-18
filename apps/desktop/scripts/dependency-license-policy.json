@@ -107,6 +107,8 @@
           "github.com",
           "gist.github.com",
           "gist.githubusercontent.com",
+          "codeload.github.com",
+          "release-assets.githubusercontent.com",
           "download.gnome.org"
         ],
         "$allowedSourceHostsComment": [
@@ -117,7 +119,18 @@
           "",
           "Every URL must be https and its host must be on this list, checked BEFORE any request and",
           "again offline in the generator, so a bad host fails `check:lgpl-source` rather than only",
-          "failing the day someone runs the network check. Adding a host is a deliberate edit here."
+          "failing the day someone runs the network check. Adding a host is a deliberate edit here.",
+          "",
+          "EVERY HOP IS CHECKED, not just the first. `redirect: \"follow\"` would validate the address",
+          "we hand the client and then go wherever it is sent, so an allowlisted host answering",
+          "302 Location: http://169.254.169.254/... would walk past this list into the runner's own",
+          "network. requestThroughReviewedHosts follows redirects itself and re-checks each one.",
+          "",
+          "The last three hosts are here because GitHub actually redirects to them, observed rather",
+          "than assumed: release downloads answer 302 -> release-assets.githubusercontent.com,",
+          "archive tarballs 302 -> codeload.github.com, and gist.github.com 301 ->",
+          "gist.githubusercontent.com. Re-check with `licenses:verify-sources`, which prints the hop",
+          "count per address, if GitHub ever moves them."
         ],
         "contact": "https://github.com/hussainph/volli-code/issues",
         "$contactComment": [
