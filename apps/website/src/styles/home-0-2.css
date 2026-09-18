@@ -16,53 +16,6 @@
  * illustration movement, with reduced-motion fallbacks.
  */
 
-/* Reviewer bar. Deliberately thinner and quieter than a banner — it explains
-   the route, it does not announce anything about the product. */
-.comparison-note {
-  display: flex;
-  margin: 0;
-  padding: 9px 24px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: center;
-  gap: 4px 10px;
-  border-bottom: 1px solid #202020;
-  color: var(--quiet);
-  font-size: 12px;
-  font-weight: 380;
-  line-height: 1.5;
-  text-align: center;
-}
-
-/* The label reads like .alpha-pill's text, without the pill: a bordered
-   capsule up here would compete with the real status marker in the hero. */
-.comparison-note span {
-  color: #ff9a68;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.comparison-note a {
-  color: #ff966c;
-  text-decoration: underline;
-  text-decoration-color: rgb(255 150 108 / 38%);
-  text-underline-offset: 3px;
-  white-space: nowrap;
-  transition: text-decoration-color 180ms ease;
-}
-
-.comparison-note a:hover {
-  text-decoration-color: #ff966c;
-}
-
-/* Hero — three sentences, not one clause, so the column and the headline
-   measure both need more room than the single-promise hero they inherit. */
-.hero--comparison {
-  max-width: 860px;
-}
-
 /* The headline's one entrance: each clause rises once behind its own mask on
    load, 110ms apart, and rests exactly where static text would sit. The mask
    keeps a little room below the baseline so descenders are not clipped. */
@@ -501,10 +454,6 @@ section[id] {
 }
 
 @media (max-width: 560px) {
-  .comparison-note {
-    padding: 9px 20px;
-  }
-
   .release,
   .workspace,
   .trust,

@@ -88,6 +88,16 @@ volli label list [--project <name>]
 
 A project's labels. Agents use it to check a label exists before applying it.
 
+### volli label merge
+
+```sh
+volli label merge --from <name> --into <name> [--apply] [--project <name>]
+```
+
+Folds one label into another. Without `--apply` it previews the affected
+tickets; with it, every association moves onto the surviving label and the
+merged-away name is retired as an alias that still resolves.
+
 ### volli model list
 
 ```sh
@@ -95,8 +105,21 @@ volli model list [--all]
 ```
 
 Lists signed-in providers, model IDs, and reasoning levels. `--all` also shows
-signed-out providers and unavailable models. Copy a printed `provider/model`
-value into `volli session start --model`.
+signed-out providers and unavailable models. A printed `provider/model` value is
+what a model override elsewhere expects — an Automation's **Runtime**, or an
+agent's `session_start` tool.
+
+### volli cost
+
+```sh
+volli cost [--ticket <id>] [--session <handle>] [--project <name>] [--all-projects]
+           [--since <when>] [--group-by ticket|session|model|day]
+```
+
+What Sessions consumed: tokens, cost, and cache class. This is Volli's own
+measurement of its Sessions, not a provider account balance or an invoice. `~`
+marks a catalogue estimate, `+` a total only partly priced, and `—` that nothing
+could be priced.
 
 ## Tickets
 
@@ -172,8 +195,9 @@ volli ticket move <id> --to <column>
 ```
 
 Columns are `backlog`, `todo`, `doing`, `needs-review`, and `done`. Moving a
-ticket updates the board; it does not select Model Access or start a structured
-Session.
+ticket updates the board and selects no model itself. The move counts as a
+**Deliberate move**, so it starts a Session only when the destination column has
+an armed, enabled Automation.
 
 ### volli ticket comment
 
@@ -184,13 +208,25 @@ volli ticket comment <id> (-m <text> | --file <path>)
 Adds a comment to the ticket's activity feed, attributed to the session it ran
 in.
 
-### volli ticket archive
+### volli ticket signal
 
 ```sh
-volli ticket archive <id>
+volli ticket signal <id> --kind <kind> --verdict <verdict> [--detail <text>] [--dry-run]
 ```
 
-Takes the ticket off the board. The worktree and history are kept.
+Records a typed verdict on a ticket: which stage, and how it went. `--kind` is
+`validate`, `implement`, `review`, `merge`, `human-gate`, or `budget`;
+`--verdict` is `pass`, `fail`, or `blocked`. `--detail` carries one line of
+prose for a reader, while the verdict is what machines read.
+
+Signals are append-only and orthogonal to the board: a later signal of the same
+kind supersedes an earlier one by being newer, and no signal moves the ticket.
+
+<Aside type="note" title="Archiving is app-only">
+  There is no `volli ticket archive`. Archiving is a person's curation of the
+  board, so it stays in the app; the CLI answers `WRONG_DOOR` rather than
+  pretending the command does not exist.
+</Aside>
 
 ## Worktrees
 
@@ -259,13 +295,23 @@ volli session list [--project <name>] [--ticket <id>]
 
 Active terminal and chat sessions, each with its title and short handle. `session peek` takes the short handle.
 
-### volli session start
+<Aside type="note" title="Starting a Session is not a shell command">
+  There is no `volli session start` at a terminal. A person starts a Session in
+  the app; an agent starts one through its `session_start` tool, which carries
+  the caller in its binding rather than in a socket request. The CLI answers
+  `WRONG_DOOR` and names the door that works.
+</Aside>
+
+### volli session answer
 
 ```sh
-volli session start <id> [-m <text>] [--title <text>] [--model <provider/model>] [--reasoning <level>]
+volli session answer <handle>
 ```
 
-Starts an attended chat on a ticket. The kickoff message supplies a deterministic title when `--title` is absent; an explicit title is kept unchanged. Model overrides are validated against Model Access before the Session is created.
+A chat session's final message, in full — how a delegating agent reads a
+subagent's answer. It reports the state of the latest turn (completed, running,
+interrupted, stopped, failed, not-started) and then the last assistant message,
+untruncated and quoted as another Session's prose.
 
 ### volli session peek
 
