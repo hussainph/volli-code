@@ -14,11 +14,6 @@ and accent in the app derives from that canvas and repaints when you change it.
 The default canvas starts with one color stop, `#e8652a`, at 60% vibrancy and
 15% grain.
 
-{/* TODO: capture Settings → Appearance with the canvas editor open (mode,
-    pad, stop chips, swatch row, vibrancy slider, and grain dial). No screenshot
-    exists yet and docs-shots.mjs has no step for this pane, so the page
-    references no image. */}
-
 ## What a canvas is
 
 A canvas has four parts:
@@ -37,6 +32,8 @@ so one canvas covers both modes.
 
 ## Edit the canvas
 
+![Settings → Appearance with the App theme canvas editor open: one orange color stop on the placement pad, light/dark/auto controls, plus and minus stop controls, color swatches, two faders, and the `#e8652a` field.](../../../assets/screenshots/canvas-editor.png)
+
 Go to **Settings → Appearance → App theme**. Every edit paints the real app as
 you make it and saves when you release the control. There's no apply button.
 
@@ -54,37 +51,32 @@ darker version of each, depending on the mode.
 
 ### Colors
 
-Below the pad, one chip per stop shows its hex, a swatch of what it paints as
-in the current mode, and which stop is the primary. Click a chip to promote it.
-
-**+** adds a color, up to three. **−** removes the last stop that isn't the
-primary, so it never changes the color the rest of the app derives from.
+**+** and **−** at the pad's foot add a color, up to three, or remove the
+last stop that isn't primary.
 
 Only the primary's color is editable. The others follow it around the color
 wheel: two stops sit opposite each other, three sit at even thirds. Changing a
 color never moves a stop, so positions stay where you put them.
 
-The row under the chips sets the primary's color. It holds nine presets a page,
-two pages, with chevrons to move between them, and a hex field. The field takes
-`#rgb` and `#rrggbb`, with or without the `#`. A value that parses previews as
-you type; `Enter` or leaving the field keeps it, and `Esc` puts the previous
-color back. A half-typed value is never applied.
+The row below the pad holds nine primary-color presets at a time, with chevrons
+for the second page and a hex field. The field takes `#rgb` and `#rrggbb`, with
+or without the `#`. A value that parses previews as you type; `Enter` or leaving
+the field keeps it, and `Esc` puts the previous color back. A half-typed value
+is never applied.
 
 ### Vibrancy and grain
 
-Both run from 0 to 100%. Vibrancy is a slider, with a swatch beside it showing
-the color at that setting. Grain is a dial: drag it round, or focus it and use
-the arrow keys.
-
-Vibrancy also affects contrast. The more saturated the canvas, the lower the
-contrast text on it can reach, and the readout below picks that up.
+Both run from 0 to 100%. Vibrancy and grain are matching vertical faders that
+flank the pad. Grain appears as texture on the pad and the window, so the canvas
+itself shows the setting as you adjust it; the faders also support keyboard
+arrows.
 
 ### Contrast
 
-Volli stays quiet while the canvas meets its contrast floors. If a canvas makes
-body copy, secondary copy, or sidebar navigation unreachable, an alert names
-the affected surface. **Ease vibrancy to …** appears when a lower vibrancy can
-clear the floor. If no vibrancy clears it, change the color.
+The rest of the app derives its text, border, and surface tiers from the canvas,
+and keeps each as legible as that surface allows. A more saturated canvas leaves
+less separation; lower vibrancy or choose another primary color when you want
+more.
 
 ## Light, dark, and auto
 
