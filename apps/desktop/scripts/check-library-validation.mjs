@@ -37,8 +37,9 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { release, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /** dlopen a path named on the command line and say which way it went. */
 const HOST_SOURCE = `#include <dlfcn.h>
@@ -81,6 +82,98 @@ export function classifyLoadResult(output) {
   if (/^LOADED$/m.test(output.trim())) return "loaded";
   if (/different Team IDs/.test(output)) return "library-validation";
   return "other-failure";
+}
+
+/**
+ * The code-signing flags codesign reports, e.g. `adhoc,runtime`.
+ *
+ * `codesign -dv` writes to stderr and prints `flags=0x10002(adhoc,runtime)`.
+ * Returns null when no flags line is present, which is itself a finding: it
+ * means the binary is not signed the way this probe requires.
+ * @param {string} output
+ */
+export function parseCodesignFlags(output) {
+  const match = /\bflags=0x[\da-f]+\(([^)]*)\)/i.exec(output);
+  return match === null ? null : match[1];
+}
+
+/**
+ * Turns one probe run into problems, notes and a summary line.
+ *
+ * WHY THIS IS NOT "BLOCKED, THEREFORE PASS" ANY MORE. The first version
+ * asserted that a hardened-runtime host refuses a differently-signed library,
+ * and it went red on the macOS 15 CI runner while passing on macOS 26. The
+ * probe was not modelling the shipped situation on either.
+ *
+ * The packaged app is signed with an Apple Developer ID, so it HAS a Team ID,
+ * and library validation compares that against the library's. This probe signs
+ * ad hoc, and an ad-hoc signature has no Team ID at all. macOS 26 treats
+ * absent-vs-absent as a mismatch and refuses; macOS 15 does not. Neither
+ * answers what the shipped Developer ID build does — and the probe CANNOT
+ * answer it, because creating a Team ID needs an Apple-issued certificate that
+ * no CI runner has and that a gate must not reach into a keychain for.
+ *
+ * So the assertion that survives on every version is the one the shipped
+ * instructions actually promise: WITH the entitlement, a differently-signed
+ * library loads. A refusal without it is recorded as confirmation where the OS
+ * happens to give it, and its absence is reported as "not modelled here"
+ * rather than as "macOS stopped enforcing this", which is a claim this probe
+ * has never been in a position to make.
+ * @param {{ hardened: { result: string, flags: string | null }, withEntitlement: { result: string, flags: string | null } }} observation
+ */
+export function judgeProbe(observation) {
+  const problems = [];
+  const notes = [];
+
+  // A probe whose host was not signed as asked proves nothing in either
+  // direction, so it fails rather than being read as evidence.
+  for (const [phase, outcome] of Object.entries(observation)) {
+    const flags = outcome.flags ?? "";
+    if (!flags.includes("runtime") || !flags.includes("adhoc")) {
+      problems.push(
+        `the ${phase} probe host was signed as "${outcome.flags ?? "(no flags reported)"}", not ` +
+          `as an ad-hoc hardened-runtime binary. The probe did not test what it claims to test, ` +
+          `so neither its success nor its failure is evidence about library validation.`,
+      );
+    }
+  }
+
+  if (observation.withEntitlement.result !== "loaded") {
+    problems.push(
+      "with com.apple.security.cs.disable-library-validation, a differently-signed library still " +
+        `did not load (${observation.withEntitlement.result}). That entitlement is exactly what ` +
+        "licensing/relink-libvips.sh adds when it re-signs a user's copy, so the shipped " +
+        "Installation Information no longer works and LGPLv3 4(e) is no longer discharged by it.",
+    );
+  }
+
+  if (observation.hardened.result === "other-failure") {
+    problems.push(
+      "the hardened-runtime probe failed to load the library for a reason unrelated to library " +
+        "validation. The probe itself is broken, and a broken probe must not be read as evidence.",
+    );
+  }
+
+  const blockObserved = observation.hardened.result === "library-validation";
+  if (!blockObserved && observation.hardened.result === "loaded") {
+    notes.push(
+      "this macOS admits a library whose ad-hoc signature differs from the host's, so the " +
+        "Team ID mismatch the PACKAGED app produces was not modelled here. The packaged app is " +
+        "signed with a Developer ID and therefore has a Team ID; an ad-hoc probe has none, and a " +
+        "Team ID cannot be manufactured without an Apple-issued certificate. The refusal is " +
+        "recorded against a real signed build in docs/licensing/dependency-license-review.md.",
+    );
+  }
+
+  return {
+    problems,
+    notes,
+    summary: blockObserved
+      ? "hardened runtime blocks a differently-signed library, and disable-library-validation " +
+        "admits it — both halves the shipped relink instructions rest on still hold"
+      : "disable-library-validation admits a differently-signed library, which is what the " +
+        "shipped relink instructions promise; this OS did not reproduce the refusal (see note)",
+  };
 }
 
 /**
@@ -148,8 +241,16 @@ function runProbe(workspace) {
     const hostPath = join(phaseDirectory, "host");
     execFileSync("clang", ["-o", hostPath, hostSourcePath], quiet);
     execFileSync("codesign", ["--force", "--sign", "-", ...signOptions, hostPath], quiet);
+    // What the host was ACTUALLY signed as, read back rather than assumed. A
+    // load that succeeds because the hardening never got applied looks exactly
+    // like a load that succeeds because the OS stopped enforcing it, and the
+    // difference decides whether a compliance document is wrong.
+    const described = spawnSync("codesign", ["-dv", hostPath], { encoding: "utf8" });
     const { stdout } = spawnSync(hostPath, [libraryPath], { encoding: "utf8", timeout: 30_000 });
-    return classifyLoadResult(stdout ?? "");
+    return {
+      result: classifyLoadResult(stdout ?? ""),
+      flags: parseCodesignFlags(`${described.stdout ?? ""}${described.stderr ?? ""}`),
+    };
   };
 
   return {
@@ -189,34 +290,15 @@ function gate() {
   }
 
   const workspace = mkdtempSync(join(tmpdir(), "volli-library-validation-"));
-  let result;
+  let observation;
   try {
-    result = runProbe(workspace);
+    observation = runProbe(workspace);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
 
-  const problems = [];
-  if (result.hardened !== "library-validation") {
-    problems.push(
-      `Under the hardened runtime, a differently-signed library ${
-        result.hardened === "loaded" ? "LOADED" : "failed for an unrelated reason"
-      }. RELINK-LIBVIPS.md tells users that Volli Code's own hardening is what stops their ` +
-        "build of libvips from loading, and that is the premise of the whole document. " +
-        (result.hardened === "loaded"
-          ? "If macOS no longer enforces this, the relink instructions are unnecessary work " +
-            "and should be simplified."
-          : "The probe itself may be broken — re-run with the probe kept to see the loader error."),
-    );
-  }
-  if (result.withEntitlement !== "loaded") {
-    problems.push(
-      "With com.apple.security.cs.disable-library-validation, the differently-signed library " +
-        `still did not load (${result.withEntitlement}). That entitlement is exactly what ` +
-        "licensing/relink-libvips.sh adds when it re-signs a user's copy, so the shipped " +
-        "Installation Information no longer works and LGPLv3 4(e) is no longer discharged by it.",
-    );
-  }
+  const { problems, notes, summary } = judgeProbe(observation);
+  for (const note of notes) console.log(`  note: ${note}`);
 
   if (problems.length > 0) {
     console.error("\nmacOS no longer behaves the way the shipped relink instructions say:\n");
@@ -228,10 +310,7 @@ function gate() {
     process.exit(1);
   }
 
-  console.log(
-    "check-library-validation: hardened runtime blocks a differently-signed library, and " +
-      "disable-library-validation admits it — the shipped relink instructions still hold.",
-  );
+  console.log(`check-library-validation (macOS ${release()}): ${summary}.`);
 }
 
 function selfTest() {
@@ -265,6 +344,71 @@ function selfTest() {
     "does not read the word LOADED inside an error as success",
     classifyLoadResult("BLOCKED dlopen: library NOT LOADED, bad image") !== "loaded",
   );
+  // --- codesign flag parsing ---
+  expect(
+    "reads the flags codesign reports",
+    parseCodesignFlags("CodeDirectory v=20500 size=434 flags=0x10002(adhoc,runtime) hashes=3+7") ===
+      "adhoc,runtime",
+  );
+  expect(
+    "reads a runtime-only binary",
+    parseCodesignFlags("CodeDirectory v=20500 flags=0x10000(runtime) hashes=3+7") === "runtime",
+  );
+  expect("reports no flags line as null", parseCodesignFlags("Signature=adhoc") === null);
+
+  // --- the judgement, including the case that took CI red ---
+  const ok = { result: "loaded", flags: "adhoc,runtime" };
+  const blocked = { result: "library-validation", flags: "adhoc,runtime" };
+
+  const confirmed = judgeProbe({ hardened: blocked, withEntitlement: ok });
+  expect("a refusal plus an admission is clean", confirmed.problems.length === 0);
+  expect("and says both halves hold", confirmed.summary.includes("both halves"));
+  expect("and needs no note", confirmed.notes.length === 0);
+
+  // macOS 15 loaded here where macOS 26 refuses. Two ad-hoc signatures are not
+  // the Team ID mismatch the packaged app produces, so this is NOT evidence
+  // that macOS stopped enforcing library validation, and must not fail.
+  const notModelled = judgeProbe({ hardened: ok, withEntitlement: ok });
+  expect(
+    "an OS that admits two ad-hoc signatures does not fail the gate",
+    notModelled.problems.length === 0,
+  );
+  expect(
+    "but it says the shipped Team ID case was not modelled",
+    notModelled.notes.some((note) => note.includes("not modelled here")),
+  );
+  expect("and does not claim both halves held", !notModelled.summary.includes("both halves"));
+
+  // The load-bearing assertion, on every version: the entitlement must work.
+  expect(
+    "the entitlement failing to admit the library is always a failure",
+    judgeProbe({ hardened: blocked, withEntitlement: { ...blocked } }).problems.some((p) =>
+      p.includes("4(e) is no longer discharged"),
+    ),
+  );
+  expect(
+    "an unrelated loader failure is a broken probe, not evidence",
+    judgeProbe({
+      hardened: { result: "other-failure", flags: "adhoc,runtime" },
+      withEntitlement: ok,
+    }).problems.some((p) => p.includes("broken probe")),
+  );
+  // A host that never got hardened would "load" for a reason that says nothing
+  // about library validation — the ambiguity that made the CI failure hard to
+  // read in the first place.
+  expect(
+    "a host that was not hardened invalidates the probe",
+    judgeProbe({
+      hardened: { result: "loaded", flags: "adhoc" },
+      withEntitlement: ok,
+    }).problems.some((p) => p.includes("did not test what it claims to test")),
+  );
+  expect(
+    "and so does a host codesign reported no flags for",
+    judgeProbe({ hardened: { result: "loaded", flags: null }, withEntitlement: ok }).problems
+      .length > 0,
+  );
+
   expect("accepts a working tool", toolIsUsable({ status: 0 }));
   expect("rejects a missing tool", !toolIsUsable({ error: new Error("ENOENT"), status: null }));
   expect("rejects a failing tool", !toolIsUsable({ status: 1 }));
@@ -274,8 +418,15 @@ function selfTest() {
     for (const failure of failures) console.error(`  - ${failure}`);
     process.exit(1);
   }
-  console.log(`check-library-validation --self-test: ${8 - failures.length}/8 assertions pass.`);
+  console.log("check-library-validation --self-test: all assertions pass.");
 }
 
-if (process.argv.includes("--self-test")) selfTest();
-else gate();
+// Guarded like its sibling gates: without this, importing the module to reuse
+// `judgeProbe` compiles and signs a probe as a side effect.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.argv.includes("--self-test")) {
+    selfTest();
+  } else {
+    gate();
+  }
+}

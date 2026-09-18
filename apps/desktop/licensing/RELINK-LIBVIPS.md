@@ -51,7 +51,7 @@ entitlement. With that combination, macOS enforces _library validation_: a proce
 load libraries signed by the same Apple Team ID as the process itself.
 
 You cannot sign anything with our Team ID — that is the point of a Team ID. So a libvips you
-built will be refused by the operating system, with this error:
+built is normally refused by the operating system, with this error:
 
 ```
 Library not loaded: @rpath/libvips-cpp.8.18.6.dylib
@@ -64,6 +64,13 @@ protects every user of the published build against a class of code-injection att
 turning it off for everyone in order to serve the few people who relink libvips would be a
 bad trade. What we can do — and what the license asks of us — is tell you exactly how to
 lift it **on your own copy**, which is what the rest of this file does.
+
+> **How strictly this is enforced varies by macOS version.** The refusal above was reproduced
+> against a Developer ID-signed, notarized build on macOS 26. Some older versions are less
+> strict about certain signature combinations, so depending on your macOS and on how your
+> library is signed, your replacement may simply load. **Try it first.** If it works, you are
+> done and the re-signing below is work you do not need. If you get the error above, the two
+> methods below are how you get past it.
 
 ## Method 1 — re-sign your copy ad hoc (no Apple account needed)
 

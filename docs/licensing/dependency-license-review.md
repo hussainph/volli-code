@@ -262,6 +262,25 @@ Team `Y54F649NH4`), driving the real `sharp` addon through the packaged Electron
    already executed, so a bundle re-signed in place can keep behaving like the old one. The same
    effect made the first version of `check-library-validation.mjs` pass a deliberately broken
    mutant; both the gate and the shipped instructions now account for it.
+8. **Library validation is stricter on macOS 26 than on macOS 15, and the probe was measuring the
+   wrong thing.** CI caught this, not local work: `check-library-validation` passed on macOS 26 and
+   failed on the `macos-15` runner, reporting that a differently-signed library *loaded* under the
+   hardened runtime. Neither run was modelling the shipped situation. The packaged app is signed
+   with a Developer ID and therefore has a **Team ID**; the probe signs **ad hoc**, which has none.
+   macOS 26 treats absent-vs-absent as a mismatch and refuses; macOS 15 does not. A Team ID cannot
+   be manufactured — it comes from an Apple-issued certificate no CI runner has, and that a gate
+   must not reach into a keychain for — so the probe *cannot* reproduce the packaged app's case on
+   any runner.
+
+   The gate now asserts what is true on every version and is what the shipped instructions actually
+   promise: **with** the entitlement, a differently-signed library loads. A refusal without it is
+   recorded as confirmation where the OS gives one, and its absence is reported as “the shipped Team
+   ID case was not modelled here” rather than as “macOS stopped enforcing this” — a claim the probe
+   was never in a position to make. It also reads back the probe host's own signing flags, because a
+   load that succeeds because the hardening never got applied is indistinguishable from one that
+   succeeds because the OS allowed it, and the difference decides whether a compliance document is
+   wrong. `RELINK-LIBVIPS.md` now tells the reader to try the swap first, since on some versions it
+   may simply work.
 
 #### What that turned into
 
