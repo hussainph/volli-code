@@ -128,10 +128,17 @@ Checks on the reconciled source:
 - `pnpm -C apps/desktop typecheck`: passed.
 - Focused engine/view/registry/appearance tests with `--maxWorkers=1`: **42 passed**.
 - `node apps/desktop/e2e/terminal-a11y-smoke.mjs evidence/vc344/reconciled-native --mac-ax`: **35 passed**.
+- Default quiet-window Chromium AX smoke: **29 passed** (the CI-compatible
+  mode without native permission).
+- Existing `terminal-smoke.mjs` with workspace-local HOME/TMPDIR: **14 passed**.
 - Initial parallel workspace coverage run failed at the unchanged CLI
   `src/index.test.ts` build hook's 10-second timeout; dependent tasks were
-  interrupted. This attempt is not a green gate. A serial-workspace rerun is
-  recorded separately below.
+  interrupted. This attempt was not a green gate.
+- `pnpm -r --workspace-concurrency=1 run test:coverage --maxWorkers=2`:
+  **passed**, including the unchanged CLI build hook. All nine coverage suites
+  report 100% on their protected surfaces; desktop has **10,280 passed**, 2
+  skipped. The worker count came from the background shell's
+  `VOLLI_CONCURRENCY_HINT`; workspace packages ran serially.
 
 Spoken VoiceOver wording and interactive row/scrollback navigation still require
 human acceptance as described above; native AX exposure does not certify them.
