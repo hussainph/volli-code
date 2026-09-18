@@ -13262,7 +13262,9 @@ Note: The prebuilt libvips-cpp dylib sharp's addon loads, shipped and unpacked w
       licensing notice, reproduced verbatim, listing every library inside the binary and
       the terms each is used under. Bundled library versions are in the package's
       versions.json. The LGPL entries in that table are declarations, not a compliance
-      conclusion — see section 10 and notices/README.md.
+      conclusion — see section 10 and notices/README.md. The source, replacement, and
+      macOS re-signing record is maintained at
+      https://github.com/hussainph/volli-code/blob/main/docs/licensing/libvips-relink-and-resign.md
 ---------------------------------------------------------------------------------------------------------
 ## Licensing
 
