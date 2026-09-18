@@ -103,6 +103,22 @@
           "  {release} — {version} minus any prerelease suffix (upstream `without_prerelease`)"
         ],
         "versionsFile": "versions.json",
+        "allowedSourceHosts": [
+          "github.com",
+          "gist.github.com",
+          "gist.githubusercontent.com",
+          "download.gnome.org"
+        ],
+        "$allowedSourceHostsComment": [
+          "Where Corresponding Source may be fetched from. `--verify-sources` reads URLs out of this",
+          "file and requests them, which is file data reaching the network: CodeQL flags it, and it",
+          "is a fair flag. A mistyped or tampered entry could otherwise point the check at an",
+          "internal address, and 'it is only a repo file' is the assumption worth not making.",
+          "",
+          "Every URL must be https and its host must be on this list, checked BEFORE any request and",
+          "again offline in the generator, so a bad host fails `check:lgpl-source` rather than only",
+          "failing the day someone runs the network check. Adding a host is a deliberate edit here."
+        ],
         "contact": "https://github.com/hussainph/volli-code/issues",
         "$contactComment": [
           "Where a user asks us for the source directly, when one of the third-party addresses",

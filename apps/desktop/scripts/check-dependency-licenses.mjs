@@ -274,9 +274,49 @@ export function matchesPackagePattern(name, pattern) {
  * @param {string} entitlement
  */
 export function grantsEntitlement(plist, entitlement) {
-  const withoutComments = plist.replaceAll(/<!--[\s\S]*?-->/g, "");
   const escaped = entitlement.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`<key>\\s*${escaped}\\s*</key>\\s*<true\\s*/>`).test(withoutComments);
+  return new RegExp(`<key>\\s*${escaped}\\s*</key>\\s*<true\\s*/>`).test(stripXmlComments(plist));
+}
+
+/**
+ * A plist with its XML comments removed, scanned rather than pattern-replaced.
+ *
+ * The first version was `replaceAll(/<!--[\s\S]*?-->/g, "")`, and CodeQL was
+ * right to flag it (js/incomplete-multi-character-sanitization): a single
+ * replace pass over a multi-character delimiter can leave the delimiter behind,
+ * so the “sanitized” string is not guaranteed free of `<!--`. For a rule whose
+ * whole job is telling a GRANT from a MENTION, that is a bypass: text crafted
+ * to survive the strip decides whether a security entitlement is reported.
+ *
+ * This walks the string instead, which is exactly what XML specifies — comments
+ * do not nest, and each one ends at the first `-->` after it.
+ *
+ * ON MALFORMED INPUT it errs toward being seen. An unterminated `<!--` makes the
+ * document invalid, and the remainder is kept rather than discarded, so a grant
+ * hidden behind a broken comment is still found. A gate that protects a
+ * hardening property must fail loudly on input it cannot parse, never pass
+ * quietly.
+ * @param {string} xml
+ */
+export function stripXmlComments(xml) {
+  const OPEN = "<!--";
+  const CLOSE = "-->";
+  let out = "";
+  let index = 0;
+  for (;;) {
+    const start = xml.indexOf(OPEN, index);
+    if (start === -1) {
+      out += xml.slice(index);
+      return out;
+    }
+    out += xml.slice(index, start);
+    const end = xml.indexOf(CLOSE, start + OPEN.length);
+    if (end === -1) {
+      out += xml.slice(start + OPEN.length);
+      return out;
+    }
+    index = end + CLOSE.length;
+  }
 }
 
 /**
@@ -1567,6 +1607,41 @@ function selfTest() {
   expect(
     "grantsEntitlement does not confuse a different entitlement",
     !grantsEntitlement("<key>com.apple.security.cs.allow-jit</key><true/>", LV),
+  );
+
+  // --- comment stripping, the way XML actually defines it ---
+  // CodeQL (js/incomplete-multi-character-sanitization) flagged the original
+  // single-pass replace: a `<!--` can survive it. These are the inputs that
+  // separate "scans the string" from "replaces a pattern once".
+  expect("removes a comment", stripXmlComments("a<!--b-->c") === "ac");
+  expect("removes several comments", stripXmlComments("a<!--b-->c<!--d-->e") === "ace");
+  expect("leaves comment-free text alone", stripXmlComments("<key>x</key>") === "<key>x</key>");
+  // Comments do not nest in XML: this one ends at the FIRST `-->`, so the tail
+  // is live markup and a grant in it is a real grant.
+  expect(
+    "treats a second <!-- inside a comment as text, per XML",
+    stripXmlComments(`<!-- outer <!-- inner --><key>${LV}</key><true/>`) ===
+      `<key>${LV}</key><true/>`,
+  );
+  expect(
+    "and therefore still sees that grant",
+    grantsEntitlement(`<!-- outer <!-- inner --><key>${LV}</key><true/>`, LV),
+  );
+  // An unterminated comment makes the document invalid. The remainder is kept,
+  // so a grant cannot be hidden behind a broken comment.
+  expect(
+    "keeps the tail of an unterminated comment",
+    stripXmlComments(`<!-- oops <key>${LV}</key><true/>`) === ` oops <key>${LV}</key><true/>`,
+  );
+  expect(
+    "so a grant behind a broken comment is still caught",
+    grantsEntitlement(`<!-- oops <key>${LV}</key><true/>`, LV),
+  );
+  expect("handles an empty comment", stripXmlComments("a<!---->b") === "ab");
+  expect("handles a bare open delimiter", stripXmlComments("<!--") === "");
+  expect(
+    "no <!-- survives the strip",
+    !stripXmlComments("<!-- a <!-- b --> c <!-- d").includes("<!--"),
   );
   expect(
     "an unreadable entitlements file fails rather than passes",

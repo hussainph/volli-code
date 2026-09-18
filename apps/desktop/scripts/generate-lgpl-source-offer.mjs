@@ -101,6 +101,46 @@ export function expandSourceUrl(template, values) {
 }
 
 /**
+ * Why a source URL may not be requested, or null when it may.
+ *
+ * `--verify-sources` takes URLs out of dependency-license-policy.json and asks
+ * the network for them — file data reaching an outbound request, which CodeQL
+ * flags (js/file-access-to-http-resource) and which is a fair flag. A mistyped
+ * or tampered entry would otherwise aim this check at whatever it names,
+ * including an address inside a network the runner can reach.
+ *
+ * So the destination is checked against a reviewed allowlist before any
+ * request, and the same check runs offline in the generator, so a bad host
+ * fails `check:lgpl-source` rather than lying in wait for the day someone runs
+ * the network check. https only: Corresponding Source fetched over a channel
+ * anyone can rewrite is not evidence of anything.
+ * @param {string} url
+ * @param {string[]} allowedHosts
+ * @returns {string | null}
+ */
+export function sourceUrlRefusal(url, allowedHosts) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `${url} is not a URL`;
+  }
+  if (parsed.protocol !== "https:") {
+    return `${url} is not https`;
+  }
+  // Compared against the host EXACTLY. A suffix test would accept
+  // `github.com.example.invalid`, which is the whole trick such a check exists
+  // to refuse.
+  if (!allowedHosts.includes(parsed.hostname)) {
+    return (
+      `${url} points at ${parsed.hostname}, which is not one of the reviewed Corresponding ` +
+      `Source hosts (${allowedHosts.join(", ")})`
+    );
+  }
+  return null;
+}
+
+/**
  * Where the reviewed source directions and the installed library disagree.
  *
  * Three ways they can, and each one silently produces a wrong legal document:
@@ -326,6 +366,7 @@ function gatherFacts(libvipsRoot) {
     licenseTextFiles: entry.shippedCompliance.licenseTexts.expected.map((text) =>
       text.file.replace(/^licensing\//, ""),
     ),
+    allowedSourceHosts: entry.correspondingSource.allowedSourceHosts,
     lgplLibraries: lgplComponents(parseComponentLicenseTable(readme)),
     versions,
     correspondingSource: entry.correspondingSource,
@@ -347,6 +388,18 @@ async function verifySources() {
     // Patches count: without them the tarballs are not the Corresponding
     // Source of the library we actually ship.
     for (const patch of row.patches) targets.push({ what: `${row.library} patch`, url: patch });
+  }
+
+  // Re-checked here as well as in the generator: this is the function that
+  // actually reaches the network, and it must not depend on another code path
+  // having validated its input first.
+  const refusals = targets
+    .map((target) => sourceUrlRefusal(target.url, facts.allowedSourceHosts))
+    .filter((refusal) => refusal !== null);
+  if (refusals.length > 0) {
+    console.error("\nRefusing to request these Corresponding Source addresses:\n");
+    for (const refusal of refusals) console.error(`  - ${refusal}`);
+    process.exit(1);
   }
 
   const gone = [];
@@ -408,6 +461,20 @@ function main() {
     versions: facts.versions,
     components: facts.correspondingSource.components,
   });
+
+  // Every address this document will publish, checked offline. A URL nobody may
+  // fetch is also a URL nobody should be handed in a legal notice.
+  const { rows, recipe } = sourceRows(facts);
+  for (const { what, url } of [
+    { what: recipe.name, url: recipe.url },
+    ...rows.map((row) => ({ what: row.library, url: row.url })),
+    ...rows.flatMap((row) =>
+      row.patches.map((patch) => ({ what: `${row.library} patch`, url: patch })),
+    ),
+  ]) {
+    const refusal = sourceUrlRefusal(url, facts.allowedSourceHosts);
+    if (refusal !== null) gaps.push(`${what}: ${refusal}`);
+  }
   if (gaps.length > 0) {
     console.error("\nThe recorded Corresponding Source no longer matches the installed library:\n");
     for (const gap of gaps) console.error(`  - ${gap}`);
@@ -501,6 +568,33 @@ function selfTest() {
         return true;
       }
     })(),
+  );
+
+  // --- the destinations this tool may request ---
+  const hosts = ["github.com", "download.gnome.org"];
+  expect(
+    "allows a reviewed host",
+    sourceUrlRefusal("https://github.com/x/y.tar.gz", hosts) === null,
+  );
+  expect(
+    "refuses an unreviewed host",
+    sourceUrlRefusal("https://evil.invalid/x.tar.gz", hosts)?.includes("not one of the reviewed"),
+  );
+  // The reason the check compares the host exactly rather than by suffix.
+  expect(
+    "refuses a lookalike host",
+    sourceUrlRefusal("https://github.com.evil.invalid/x", hosts) !== null,
+  );
+  expect("refuses http", sourceUrlRefusal("http://github.com/x", hosts)?.includes("not https"));
+  expect("refuses a file URL", sourceUrlRefusal("file:///etc/passwd", hosts) !== null);
+  expect(
+    "refuses something that is not a URL",
+    sourceUrlRefusal("not a url", hosts)?.includes("not a URL"),
+  );
+  // The shape an SSRF attempt against a CI runner would actually take.
+  expect(
+    "refuses a link-local address",
+    sourceUrlRefusal("https://169.254.169.254/latest/meta-data/", hosts) !== null,
   );
 
   // --- coverage against the installed library ---
