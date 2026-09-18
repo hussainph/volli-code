@@ -111,6 +111,7 @@ function chatSession(
       overrides.role ??
       ((overrides.bornTicketless ?? overrides.ticketId === null) ? "project" : "ticket"),
     parentSessionId: overrides.parentSessionId ?? null,
+    model: overrides.model ?? null,
   };
 }
 

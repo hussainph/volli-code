@@ -23,7 +23,9 @@
  * leaves it empty — and its state is projected from `activity` and `outcome`
  * by {@link islandAgentState}, which is where the two folds the ticket ruled
  * on live. `progress` is 0: indeterminate, by decision; the arc orbits on
- * its own and `agentStateWord` prints a word for it.
+ * its own and `agentStateWord` prints a word for it. `model` is the listing
+ * row's own policy field (VC-416) — the model and effort the parent picked for
+ * this helper, which no glance surface could reach before it existed.
  *
  * THE NOW CHANNEL IS A DIFF, exactly as the tab feed's is: the listing is a
  * push cache with no history, so "delegated" and "done" are what changed
@@ -135,6 +137,10 @@ export function islandAgentOf(record: ChatSessionRecord, promoted: boolean): Isl
     progress: 0,
     state: islandAgentState(record),
     promoted,
+    // The policy the parent picked for this child (VC-416), carried straight
+    // off the listing row. Null until the Session has recorded one, which is
+    // the beat between a row appearing and its start settling.
+    model: record.model,
   };
 }
 

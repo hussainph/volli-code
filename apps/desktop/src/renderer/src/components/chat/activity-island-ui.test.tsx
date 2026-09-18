@@ -52,6 +52,7 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     progress: 0.5,
     state: "working",
     promoted: false,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -561,6 +562,43 @@ describe("row verbs", () => {
     await settle();
     click(rowIn("shells", "s1"));
     expect(actions.openShell).toHaveBeenCalledWith("s1");
+  });
+
+  // VC-416. The card row is one of the two surfaces that could not say which
+  // model and effort the parent picked for its helper.
+  it("says what each subagent is running, under its name", async () => {
+    await render({
+      ...EMPTY_ACTIVITY_ISLAND,
+      agents: [
+        agent(),
+        agent({
+          id: "a2",
+          label: "Grep the tests",
+          model: { providerId: "openai", modelId: "o5-mini", reasoningLevel: "xhigh" },
+        }),
+      ],
+    });
+    click(cluster("agents"));
+
+    // The model id and the composer's own word for the level — never `xhigh`,
+    // which is Pi's wire spelling and nobody's label.
+    expect(rowIn("agents", "a1").textContent).toContain("sonnet-4.5");
+    expect(rowIn("agents", "a1").textContent).toContain("High");
+    expect(rowIn("agents", "a2").textContent).toContain("o5-mini");
+    expect(rowIn("agents", "a2").textContent).toContain("Extra high");
+    expect(rowIn("agents", "a2").textContent).not.toContain("xhigh");
+  });
+
+  // Nothing at all, rather than a placeholder: the gap is the one beat between
+  // a delegated row appearing and its Session's start settling, and `— · —`
+  // would report an absence as a reading.
+  it("draws no policy line for a subagent that has not recorded one", async () => {
+    await render({ ...EMPTY_ACTIVITY_ISLAND, agents: [agent({ model: null })] });
+    click(cluster("agents"));
+
+    expect(rowIn("agents", "a1").querySelector("[data-agent-model]")).toBeNull();
+    // The row still says what it is doing; only the policy is missing.
+    expect(rowIn("agents", "a1").textContent).toContain("Audit icon weights");
   });
 
   it("draws a step per id, so two steps may share a title", async () => {

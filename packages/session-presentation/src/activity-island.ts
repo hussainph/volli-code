@@ -44,7 +44,9 @@
  * it. `resolveFeel` is the one place an override meets the default.
  */
 
-import { todoListCompleted, type TodoStatus } from "@volli/shared";
+import { todoListCompleted, type ModelSelection, type TodoStatus } from "@volli/shared";
+
+import { effortLabel } from "./composer-effort";
 
 /* ------------------------------------------------------------- projection */
 
@@ -105,6 +107,22 @@ export interface IslandAgent {
   state: "working" | "waiting" | "done" | "failed" | "stopped";
   /** Promoted to a full tab from its card row. */
   promoted: boolean;
+  /**
+   * The model policy the delegating agent chose for this child (VC-416), or
+   * `null` before one has been recorded.
+   *
+   * A parent picks its helper's model and effort per delegation — a cheap
+   * model for a lookup, a deep one for a review — and until this field existed
+   * the only surface that said which it had picked was the child's own
+   * composer, which costs a promotion to reach. Both of the surfaces this
+   * contract feeds exist to save exactly that trip, so the fact travels with
+   * the row rather than being fetched per glance.
+   *
+   * The whole {@link ModelSelection}, not the two words a row prints, because
+   * a client renders it to whatever width it has: {@link agentModelFacts} is
+   * the compact form and a wider surface can still name the provider.
+   */
+  model: ModelSelection | null;
 }
 
 /**
@@ -441,6 +459,53 @@ export function agentStateWord(agent: IslandAgent): string {
 /** Ended without finishing — dims the chip. `stopped` takes no badge; `failed` does. */
 export function agentDimmed(agent: IslandAgent): boolean {
   return agent.state === "failed" || agent.state === "stopped";
+}
+
+/** What a child is running, as the two words a glance surface prints. */
+export interface AgentModelFacts {
+  /** The model, by the id the Session is pinned to. */
+  model: string;
+  /** The reasoning level, in the composer's own copy — `Extra high`, not `xhigh`. */
+  effort: string;
+}
+
+/**
+ * What a child is running (VC-416): `sonnet-4.5` and `High`, or `null` when no
+ * policy has been recorded — which draws nothing rather than a pair of dashes.
+ *
+ * TWO FIELDS RATHER THAN ONE STRING, and that is the whole reason this is a
+ * function and not a template literal at each call site. Joining a model name
+ * to a bare level with a separator is a reading the composer already rejected:
+ * `gpt-5.6-luna · low` says "a low model" long before it says "thinking set to
+ * low" (`composer-ui.tsx`, `modelPillLabel`), which is why effort left that
+ * pill and became a gauge chip beside it. A client drawing these two keeps
+ * that separation — the effort wears the gauge, as it does everywhere else in
+ * this app — and a contract that handed over one pre-joined string would have
+ * made the wrong drawing the only possible one.
+ *
+ * THE MODEL ID, NOT THE CATALOG'S LABEL. A row here has no catalog behind it —
+ * the island reads a Session listing, not Model Access — and the id is the term
+ * the rest of the agent-facing surface already prints (`volli session list`'s
+ * `model` cell). A model the catalog no longer lists renders identically, which
+ * is the fallback a label lookup would have landed on anyway.
+ *
+ * THE PROVIDER IS LEFT OFF, and that is what the concision costs. The composer's
+ * pill leads with the provider where a name would otherwise be ambiguous; it
+ * can, because it holds the catalog that knows whether two signed-in providers
+ * ship that name. This one does not, so the choice is between printing it always
+ * and never — and on a row that already carries a title and a state word, a
+ * provider on every line buys a rare disambiguation with permanent width. The
+ * promoted tab's own pill still answers it.
+ *
+ * THE EFFORT IS THE PROOF-READ WORD ({@link effortLabel}), never the wire level:
+ * `xhigh` is Pi's spelling and `Extra high` is what the composer shows, and two
+ * surfaces naming one setting differently is how a reader concludes they are two
+ * settings.
+ */
+export function agentModelFacts(agent: IslandAgent): AgentModelFacts | null {
+  const model = agent.model;
+  if (model === null) return null;
+  return { model: model.modelId, effort: effortLabel(model.reasoningLevel) };
 }
 
 /* ------------------------------------------------------------------- plan */

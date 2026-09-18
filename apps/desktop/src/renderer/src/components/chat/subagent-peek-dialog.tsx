@@ -43,6 +43,7 @@ import { agentStateWord, groupTurns, type IslandAgent } from "@volli/session-pre
 
 import { useSessionController } from "@renderer/chat/use-session-controller";
 import type { ChatSessionsStore } from "@renderer/chat/use-session-controller";
+import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { ChatTurn, type TurnContext } from "@renderer/components/chat/chat-plane";
 import { ContentColumn } from "@renderer/components/layout/content-column";
 import {
@@ -105,6 +106,20 @@ export function SubagentPeekDialog({
               <span className="shrink-0 text-ui text-muted-foreground" data-subagent-peek-state>
                 {agentStateWord(agent)}
               </span>
+              {/* WHAT IT IS RUNNING, beside what it is doing (VC-416). The
+                  same component the card row draws, because this overlay is
+                  where that row opens and a glance whose wording changed on the
+                  way in would read as a different reading of a different fact.
+
+                  ON THE TITLE'S OWN LINE HERE, where the row puts it underneath.
+                  The row had a 320px floor and three action buttons to fit; this
+                  header is a 768px dialog with one. The rung moves with it —
+                  `text-ui`, not the row's `text-label` — because the line now
+                  stands BESIDE a 13px state word instead of under a 13px title,
+                  and a size registered in `cn`'s font-size group is an override
+                  the caller is allowed to make. It keeps the quieter INK, which
+                  is where the hierarchy actually lives. */}
+              <AgentModelLine agent={agent} className="shrink-0 text-ui" />
               {onOpenAsTab === undefined ? null : (
                 <Button
                   type="button"

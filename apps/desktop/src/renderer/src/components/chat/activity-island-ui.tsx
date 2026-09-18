@@ -117,6 +117,7 @@ import {
 } from "@volli/session-presentation";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 
+import { AgentModelLine } from "@renderer/components/chat/agent-model-ui";
 import { Button } from "@renderer/components/ui/button";
 import { ListRow } from "@renderer/components/ui/list-row";
 import { Popover, PopoverAnchor, PopoverContent } from "@renderer/components/ui/popover";
@@ -892,6 +893,21 @@ function AgentsCard({ agents, reduce }: { agents: readonly IslandAgent[]; reduce
             leading={<AgentDot agent={agent} reduce={reduce} />}
             primary={agent.label}
             primaryTrailing={<RowState>{agentStateWord(agent)}</RowState>}
+            // THE POLICY TAKES ITS OWN LINE (VC-416), where the tab row's
+            // owner rides the name's. The two additions are not the same
+            // weight: an owner is one short title, and this is a model id plus
+            // an effort word plus a glyph. The name's line is also the one with
+            // no width to spare — at this card's {@link
+            // ISLAND_AGENTS_CARD_MIN_PX} floor the row spends its 320px on
+            // padding, a 16px dot, a state word and three action buttons before
+            // the title gets any, and the title is the only part of the row a
+            // person scans. So the policy goes where `ListRow` keeps a quieter
+            // line for exactly this, and the title keeps the line it had.
+            //
+            // A row with no recorded policy draws no second line at all (the
+            // component answers null), so the height is spent only by rows that
+            // have something to say with it.
+            secondary={<AgentModelLine agent={agent} />}
             onActivate={() => actions.peekAgent(agent.id)}
             actions={
               <RowActions>
