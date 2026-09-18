@@ -8,7 +8,7 @@
   "scripts": {
     "postinstall": "pnpm run rebuild:native",
     "check:theme-css": "node scripts/generate-theme-css.mjs --check",
-    "check:ghostty-themes": "node scripts/generate-ghostty-themes.mjs --check",
+    "check:vendored-themes": "node scripts/check-vendored-themes.mjs --self-test && node scripts/check-vendored-themes.mjs",
     "check:design-tokens": "node scripts/check-design-tokens.mjs --self-test && node scripts/check-design-tokens.mjs",
     "check:licenses": "node scripts/check-dependency-licenses.mjs --self-test && node scripts/check-dependency-licenses.mjs",
     "licenses:report": "node scripts/check-dependency-licenses.mjs --report",
@@ -19,7 +19,6 @@
     "licenses:verify-sources": "node scripts/generate-lgpl-source-offer.mjs --verify-sources",
     "check:library-validation": "node scripts/check-library-validation.mjs --self-test && node scripts/check-library-validation.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
-    "check:theme-provenance": "node scripts/check-theme-provenance.mjs --self-test && node scripts/check-theme-provenance.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",

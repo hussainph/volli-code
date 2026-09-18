@@ -32,13 +32,6 @@
   "volli": {
     "notices": [
       {
-        "title": "Ghostty terminal theme catalog (iTerm2-Color-Schemes)",
-        "covers": [
-          "src/ghostty-theme-sources.generated.ts"
-        ],
-        "document": "THIRD-PARTY-THEMES.md"
-      },
-      {
         "title": "APCA-W3 lightness-contrast formulation",
         "covers": [
           "src/theme/color.ts"

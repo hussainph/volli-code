@@ -4,8 +4,16 @@
  * $HOME (so the owner's actual Ghostty config never interferes and is never
  * touched) and asserts the three acceptance criteria:
  *
- *   1. `theme = "Front End Delight"` in the config → a fresh session renders
- *      in that theme's colors.
+ *   1. `theme = "Smoke Probe"` in the config, with a matching theme FILE in the
+ *      user's own `~/.config/ghostty/themes/` → a fresh session renders in that
+ *      file's colors.
+ *
+ *      The theme is written into the isolated $HOME by this script rather than
+ *      named out of a bundled catalog (VC-413): the app ships no theme catalog,
+ *      and the user's own disk is now the only place terminal theme colors come
+ *      from. That makes this criterion a stronger test than it was — it exercises
+ *      the theme-directory probe in `main/ghostty-config.ts` end to end, instead
+ *      of a name lookup in a table.
  *   2. Editing the config file re-themes LIVE terminals without a restart
  *      (fs.watch → IPC push → applyAppearance).
  *   3. `macos-option-as-alt = left` → Option-left+b produces ESC-prefixed
@@ -41,9 +49,16 @@ const SCRATCH =
 await fs.mkdir(SCRATCH, { recursive: true });
 console.log("scratch:", SCRATCH, "\n");
 
-// Front End Delight, from the vendored Ghostty theme catalog (@volli/shared).
-const FED_BG = "rgb(27, 28, 29)";
-const FED_FG = "rgb(173, 173, 173)";
+/**
+ * The theme this smoke writes into the isolated $HOME, and the colors it names.
+ * Its own values, owned by this file — a theme read off the user's disk is the
+ * whole point of criterion 1, so inventing one here is more honest than
+ * borrowing somebody's.
+ */
+const PROBE_THEME = "Smoke Probe";
+const PROBE_THEME_FILE = "background = #1b2f3a\nforeground = #c8d8e0\n";
+const PROBE_BG = "rgb(27, 47, 58)";
+const PROBE_FG = "rgb(200, 216, 224)";
 // The loud live-reload override, unmistakable against the theme above.
 const LIVE_BG = "rgb(119, 34, 170)";
 
@@ -157,8 +172,11 @@ async function main() {
   const ghosttyDir = join(home, ".config", "ghostty");
   await fs.mkdir(ghosttyDir, { recursive: true });
   const configPath = join(ghosttyDir, "config");
-  // The owner's real config, verbatim (acceptance criterion 1).
-  await fs.writeFile(configPath, 'theme = "Front End Delight"\nmacos-option-as-alt = left\n');
+  // The user's own theme file, in the directory ghostty itself probes — the
+  // only place a named theme resolves from now (VC-413).
+  await fs.mkdir(join(ghosttyDir, "themes"), { recursive: true });
+  await fs.writeFile(join(ghosttyDir, "themes", PROBE_THEME), PROBE_THEME_FILE);
+  await fs.writeFile(configPath, `theme = "${PROBE_THEME}"\nmacos-option-as-alt = left\n`);
 
   const wsDir = await fs.realpath(await fs.mkdtemp(join(SCRATCH, "ws-")));
   const probe = join(SCRATCH, "alt-probe.txt");
@@ -213,7 +231,7 @@ async function main() {
     await page.reload();
     await page.waitForLoadState("domcontentloaded");
 
-    // === 1. Fresh session renders in Front End Delight ======================
+    // === 1. Fresh session renders in the user's own theme file ==============
     // The surface's default Session is a structured chat (which, with no
     // default model in this profile, refuses into the empty state), so the
     // terminal under test is minted explicitly through the session-start
@@ -223,18 +241,18 @@ async function main() {
     await page.getByLabel("Other things to open").first().click();
     await page.getByRole("menuitem", { name: /^Terminal/ }).click();
     await waitForLiveTerminal(page);
-    const bootColors = await waitForTerminalBackground(page, FED_BG);
+    const bootColors = await waitForTerminalBackground(page, PROBE_BG);
     check(
       1,
-      'theme = "Front End Delight" applied on boot',
-      bootColors?.background === FED_BG && bootColors.foreground === FED_FG,
-      `bg=${bootColors?.background ?? "n/a"} fg=${bootColors?.foreground ?? "n/a"} expected bg=${FED_BG} fg=${FED_FG}`,
+      `theme = "${PROBE_THEME}" resolved from the user's own themes directory on boot`,
+      bootColors?.background === PROBE_BG && bootColors.foreground === PROBE_FG,
+      `bg=${bootColors?.background ?? "n/a"} fg=${bootColors?.foreground ?? "n/a"} expected bg=${PROBE_BG} fg=${PROBE_FG}`,
     );
 
     // === 2. Config edit re-themes the LIVE terminal, no restart =============
     await fs.writeFile(
       configPath,
-      'theme = "Front End Delight"\nbackground = #7722aa\nmacos-option-as-alt = left\n',
+      `theme = "${PROBE_THEME}"\nbackground = #7722aa\nmacos-option-as-alt = left\n`,
     );
     // fs.watch debounces 250ms; poll the rendered color rather than sleeping.
     const liveColors = await waitForTerminalBackground(page, LIVE_BG);

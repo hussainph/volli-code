@@ -2,11 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { GhosttyAppearancePayload } from "@volli/shared";
 
 import * as model from "./project-appearance-model";
-import {
-  projectTerminalChoice,
-  projectTerminalOverlayEdits,
-  terminalCustomSeed,
-} from "./project-appearance-model";
+import { projectTerminalChoice, projectTerminalOverlayEdits } from "./project-appearance-model";
 
 describe("the retired editor surface", () => {
   it("offers no editor choice — a project overrides its appearance instead", () => {
@@ -101,22 +97,5 @@ describe("projectTerminalChoice", () => {
         }),
       ),
     ).toEqual({ kind: "inherit" });
-  });
-});
-
-describe("terminalCustomSeed", () => {
-  it("has nothing to pin when no layer names a theme", () => {
-    // The terminal is wearing the token-derived fallback, which has no catalog
-    // name — Volli must not invent one to write into the user's overlay file.
-    expect(terminalCustomSeed(appearance())).toBeNull();
-    expect(terminalCustomSeed(null)).toBeNull();
-  });
-
-  it("pins whatever the project is already showing, whichever layer supplied it", () => {
-    expect(
-      terminalCustomSeed(
-        appearance({ prefs: { themeName: "Nord" }, provenance: { theme: "ghostty" } }),
-      ),
-    ).toBe("Nord");
   });
 });

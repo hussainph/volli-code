@@ -172,8 +172,21 @@ const AUTHORED_GRAIN = "0.4";
  */
 const ABANDONED_HEX = "#7a2ea8";
 
-/** A ghostty theme with an unmistakable name, for proving a real overlay write. */
-const OVERLAY_THEME = "Aardvark Blue";
+/**
+ * The overlay write is proven through FONT SIZE, not the theme (VC-413).
+ *
+ * The terminal theme row used to be a picker over a vendored theme catalog, and
+ * picking from it was the write this smoke drove. The catalog is gone and the
+ * row reports rather than picks, so the write goes through the other control on
+ * the same pane that edits the same file by the same path
+ * (`theme.writeGlobalOverlay` → `applyOverlayEdits`). What checks 9 and 11 are
+ * actually about — Volli writes its OWN overlay, never the user's config, and a
+ * write preserves everything already in the file — is untouched by which key
+ * carries it.
+ *
+ * The user's config sets `font-size = 13`, so the first step writes 14.
+ */
+const OVERLAY_FONT_SIZE = 14;
 
 /**
  * Comfortably past the 300ms crossfade (renderer/src/theme/scope-transition.ts).
@@ -191,9 +204,17 @@ const SCOPE_SETTLE_MS = 700;
 const CROSSFADE = { ms: 300, css: "0.3s" };
 const REDUCED_MOTION_CROSSFADE = { ms: 120, css: "0.12s" };
 
-/** The user's own ghostty config — seeded, then asserted byte-identical (#67). */
+/**
+ * The user's own ghostty config — seeded, then asserted byte-identical (#67).
+ *
+ * `theme` names a file that does not exist on this machine, which is now a
+ * supported state rather than a broken one: with no bundled catalog the name
+ * resolves to nothing, the terminal wears Volli's token-derived palette, and
+ * the key stays exactly where the user put it. Check 10 is what proves that
+ * last part.
+ */
 const USER_GHOSTTY_CONFIG = `# The user's own ghostty config. Volli must NEVER write this file.
-theme = Dracula
+theme = a-theme-this-machine-does-not-have
 font-size = 13
 cursor-style = bar
 `;
@@ -436,18 +457,9 @@ const canvasRevert = (page) =>
     .getByTestId("project-appearance-canvas-row")
     .getByRole("button", { name: /^Reset Canvas to the app-wide value/ });
 
-/** The terminal theme row's trigger — distinct from the editor picker on the same page. */
-const terminalThemeTrigger = (page) =>
-  page.getByRole("button", { name: "Terminal theme", exact: true });
-
-const terminalThemeSearch = (page) =>
-  page.getByRole("combobox", { name: "Search terminal themes" });
-
-async function pickTerminalTheme(page, name) {
-  await terminalThemeTrigger(page).click();
-  await terminalThemeSearch(page).waitFor();
-  await terminalThemeSearch(page).fill(name);
-  await page.getByRole("option", { name, exact: true }).first().click();
+/** One step up on the Terminal section's font-size stepper — one overlay write. */
+async function stepTerminalFontSize(page) {
+  await page.getByRole("button", { name: "Increase terminal font size" }).click();
 }
 
 // ---- the canvas editor ------------------------------------------------------
@@ -981,16 +993,16 @@ try {
   });
 
   // ---- 4. the ghostty surfaces, which were meant to survive untouched -------
-  await attempt(9, "committing a terminal theme writes Volli's own overlay", async () => {
+  await attempt(9, "committing a terminal setting writes Volli's own overlay", async () => {
     await openAppearanceSettings(page);
-    await pickTerminalTheme(page, OVERLAY_THEME);
+    await stepTerminalFontSize(page);
     const written = await waitUntil("overlay written", () => pathExists(overlayPath)).then(
       () => true,
       () => false,
     );
     const text = (await readFileSafe(overlayPath)) ?? "";
     return {
-      ok: written && text.includes(`theme = ${OVERLAY_THEME}`),
+      ok: written && text.includes(`font-size = ${OVERLAY_FONT_SIZE}`),
       detail: written ? text.split("\n").at(-2) : "overlay never appeared",
     };
   });
@@ -1010,18 +1022,20 @@ cursor-style = block
 `;
     await fs.writeFile(overlayPath, handEdited);
 
-    await pickTerminalTheme(page, "Nord");
+    const next = OVERLAY_FONT_SIZE + 1;
+    await stepTerminalFontSize(page);
     await waitUntil("overlay rewritten", async () =>
-      ((await readFileSafe(overlayPath)) ?? "").includes("theme = Nord"),
+      ((await readFileSafe(overlayPath)) ?? "").includes(`font-size = ${next}`),
     );
 
     const text = (await readFileSafe(overlayPath)) ?? "";
     const keptComment = text.includes("# my own note");
     const keptKey = text.includes("cursor-style = block");
-    const themeOnce = text.split("\n").filter((l) => l.trim().startsWith("theme =")).length === 1;
+    const setOnce =
+      text.split("\n").filter((line) => line.trim().startsWith("font-size =")).length === 1;
     return {
-      ok: keptComment && keptKey && themeOnce,
-      detail: `comment=${keptComment} key=${keptKey} themeSetOnce=${themeOnce}`,
+      ok: keptComment && keptKey && setOnce,
+      detail: `comment=${keptComment} key=${keptKey} fontSizeSetOnce=${setOnce}`,
     };
   });
 

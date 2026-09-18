@@ -156,19 +156,22 @@ jobs:
       #                          (VC-76): an engines.node shape the matcher
       #                          cannot read fails HERE, instead of silently
       #                          letting every local Node through the gate.
-      #   check:theme-provenance — self-tests its matchers, then fails when the
-      #                          vendored Ghostty theme catalog and
-      #                          THIRD-PARTY-THEMES.md stop describing the same
-      #                          release (VC-410). Reads only checked-in bytes,
-      #                          so unlike generate-ghostty-themes.mjs --check
-      #                          it does not need a real Ghostty.app and can
-      #                          run in this Linux job.
+      #   check:vendored-themes — self-tests its detector, then fails on any
+      #                          tracked file that has started redistributing
+      #                          terminal themes again (VC-413). The 463-theme
+      #                          Ghostty/iTerm2 catalog was removed for
+      #                          unverified provenance; a picker that wants a
+      #                          list is exactly how it would come back. It
+      #                          replaces VC-410's check:theme-provenance,
+      #                          which pinned that catalog to the iTerm2
+      #                          release it was copied from: there is no longer
+      #                          a catalog to keep in step with a notice.
       - name: Check design system
         run: |
           vp run --filter @volli/desktop check:theme-css
           vp run --filter @volli/desktop check:design-tokens
           vp run --filter @volli/desktop check:node-version
-          vp run --filter @volli/desktop check:theme-provenance
+          vp run --filter @volli/desktop check:vendored-themes
 
       # Release compliance (VC-407). The notice that ships inside the .app is
       # derived from the installed production dependency set, so a dependency
