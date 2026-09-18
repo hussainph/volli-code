@@ -1,9 +1,11 @@
 /**
  * The color primitives the theme generator is built on, hand-rolled so
  * `@volli/shared` stays runtime-dependency-free (the package rule: pure,
- * unit-tested domain code with no imports at all). The tests cross-check this
- * math against `culori` and `apca-w3`, which are devDependencies of this
- * package only and are never imported by `src/*.ts`.
+ * unit-tested domain code with no imports at all). The OKLab/OKLCH math is
+ * cross-checked in test against `culori`, a devDependency of this package only
+ * and never imported by `src/*.ts`. The APCA math below is verified against
+ * this repository's own frozen vectors and a second transcription of the
+ * published formula — see the note above the constants.
  */
 
 /** Gamma-encoded sRGB, each channel 0–1. */
@@ -263,8 +265,15 @@ export function oklchToHex(L: number, C: number, h: number): string {
 
 /*
  * APCA-W3 0.1.9 constants (the W3C-licensed `sRGBcalc` formulation). These are
- * a published, versioned magic-number set — they are not tunable, and the
- * tests pin every one of them against `apca-w3` itself.
+ * a published, versioned magic-number set — they are not tunable.
+ *
+ * Every one of them is pinned by test (VC-412): `color.test.ts` re-derives the
+ * frozen vectors in `apca-reference.ts` from a second, independently written
+ * transcription of the published formula, then perturbs each constant of that
+ * transcription in turn and requires a vector to reject the result. The
+ * `apca-w3` package used to serve as the oracle; it was removed because it
+ * depends on AGPL-licensed `colorparsley`, and `scripts/check-excluded-dependencies.mjs`
+ * now keeps both out of this repository.
  */
 const APCA_TRC = 2.4;
 const APCA_R_COEFFICIENT = 0.2126729;
