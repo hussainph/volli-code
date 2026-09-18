@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "ai": "^7.0.83",
+    "ai": "^7.0.102",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }
