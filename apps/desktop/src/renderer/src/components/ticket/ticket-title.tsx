@@ -54,7 +54,7 @@ export function TicketTitle({ ticket }: { ticket: Ticket }) {
           setEditing(true);
         }
       }}
-      className="cursor-text text-title font-semibold text-foreground outline-none"
+      className="cursor-text text-title font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
     >
       {ticket.title}
     </h1>
