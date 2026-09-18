@@ -10,7 +10,12 @@
  *
  * THREE PAGES, scoped to the Main checkout and the project's own work:
  *
- *  • **Now** — the venue this Session stands in, and what the Session is.
+ *  • **Now** — what the Session in front IS and the tree it writes to, as ONE
+ *    card (`home-session-card.tsx`), with the usage card under it. Two cards,
+ *    nesting the same two scopes twice: Session inside project, once as
+ *    identity and once as money. It was three drawings for that — a
+ *    hand-rolled venue card, a `<dl>` of Model/Effort/Activity lines, and the
+ *    rail's shared usage card — until VC-406.
  *  • **Sessions** — the project's OWN Sessions, and only those. A ticket's
  *    Sessions already live in that ticket's rail, so listing them here would
  *    make Home a second index of the same rows. What has no other home is the
@@ -38,20 +43,26 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { FoldersIcon } from "@phosphor-icons/react/dist/csr/Folders";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
-import { GitBranchIcon } from "@phosphor-icons/react/dist/csr/GitBranch";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 import {
   effectiveHarnessId,
   harnessLabel,
   modelTierRow,
-  venueLooseCount,
+  type ModelAccessModel,
+  type ModelAccessProvider,
+  type ModelSelection,
   type Project,
 } from "@volli/shared";
 
-import { venueKindLabel } from "@renderer/components/chat/empty/venue-chips";
 import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeFilesPanel } from "@renderer/components/home/home-files-panel";
+import {
+  HomeSessionCard,
+  type HomeSessionFacts,
+  type HomeSessionModel,
+} from "@renderer/components/home/home-session-card";
 import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
+import { providerLabelOf } from "@renderer/components/models/model-identity";
 import { terminalTabDot, terminalTabState } from "@renderer/components/sessions/terminal-tab-state";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { isFileTabId } from "@renderer/components/ticket/ticket-file-tab";
@@ -65,17 +76,15 @@ import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { HomeUsageRailCard } from "@renderer/components/usage/usage-rail";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import {
   HOME_RAIL_MODES,
   HOME_RAIL_MODE_LABELS,
   homeSessionRows,
-  venuePathTail,
   type HomeRailMode,
   type HomeSessionRow,
 } from "@renderer/components/home/home-rail-model";
 import { compactAge } from "@renderer/lib/relative-time";
+import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
@@ -85,7 +94,7 @@ import {
 } from "@renderer/stores/project-sessions";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
-import { useVenueStore, venueKey, type VenueEntry } from "@renderer/stores/venue";
+import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** Every rail block is the same shape at the same inset — one seam, spelled once. */
@@ -186,19 +195,29 @@ const HOME_MODE_TABS: readonly RailModeTab<HomeRailMode>[] = HOME_RAIL_MODES.map
 function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: string }) {
   const venue = useVenueStore((state) => state.byScope[venueKey(projectId, null)]);
   const ensureVenue = useVenueStore((state) => state.ensure);
+  const facts = useSessionFacts(activeTabId);
   React.useEffect(() => {
     void ensureVenue(projectId, null);
   }, [projectId, ensureVenue]);
 
   return (
     <>
-      <div className={SECTION}>
-        <SectionHeading as="h3">Venue</SectionHeading>
-        <VenueCard venue={venue} />
-      </div>
-      <div className={SECTION}>
-        <SectionHeading as="h3">Session</SectionHeading>
-        <SessionFacts activeTabId={activeTabId} />
+      {/* The Session in front and the tree it writes to, as ONE card (VC-406).
+          They were two blocks in two drawings — a hand-rolled venue card over
+          an uppercase eyebrow over a `<dl>` of Model/Effort/Activity lines —
+          for what is one object at Home scope: a Home Session runs in the
+          Main checkout by construction. The eyebrow pairs with the usage
+          card's `Project` below it, so the page reads as two scopes rather
+          than four blocks. */}
+      <div className="flex flex-col gap-2 pt-4">
+        <div className={RAIL_PANEL_INSET}>
+          <SectionHeading as="h3">Session</SectionHeading>
+        </div>
+        <HomeSessionCard
+          facts={facts}
+          venue={venue}
+          onRetryVenue={() => void useVenueStore.getState().refresh(projectId, null)}
+        />
       </div>
       {/* The third scope (VC-87), as ONE card carrying both the project rollup
           and what the Session in front has contributed to it (VC-203). The
@@ -212,139 +231,73 @@ function NowPage({ projectId, activeTabId }: { projectId: string; activeTabId: s
 }
 
 /**
- * The venue card: the path, the branch, and how much is loose in it.
- *
- * A failure is NAMED here rather than swallowed, which is the half of the
- * contract the empty chat cannot keep — a drawing can be absent, but a card
- * that is about the venue and says nothing about it is a card that has gone
- * quiet on the one thing it exists for.
- *
- * This card is always the PROJECT's own scope (`venueKey(projectId, null)`), so
- * `resolving` is not a state it reaches in practice — a main checkout is always
- * there to measure. It draws the waiting card anyway rather than claiming a
- * venue it has not read (VC-286).
- *
- * BOTH VALUES TRUNCATE, AND BOTH HAVE A WAY OUT OF IT (VC-288). A rail is
- * narrow by construction and a worktree path is not, so `venuePathTail` shows
- * the tail and the row clips what is left — that part is right. What was wrong
- * is where the whole value lived: the path's was on a tooltip hung off a `<p>`,
- * which a pointer can ask for and a keyboard cannot, and the BRANCH had no
- * reveal at all. This is the rail a reader checks to see which tree they are
- * about to change something in; "hover to find out" is the wrong last word on
- * that question. Both are {@link VenueValue} now.
- */
-function VenueCard({ venue }: { venue: VenueEntry | undefined }) {
-  if (venue === undefined || venue.status === "loading" || venue.status === "resolving") {
-    return <div className="h-16 rounded-row border border-border bg-card" aria-hidden />;
-  }
-  if (venue.status === "error") {
-    return (
-      <p className="rounded-row border border-border bg-card p-4 text-ui text-muted-foreground">
-        {venue.error}
-      </p>
-    );
-  }
-  const loose = venueLooseCount(venue.venue.files);
-  return (
-    <div className="flex flex-col gap-2 rounded-row border border-border bg-card p-4">
-      <VenueValue term={venueKindLabel(venue.venue)} full={venue.venue.path}>
-        <span className="min-w-0 truncate text-foreground">{venuePathTail(venue.venue.path)}</span>
-      </VenueValue>
-      <div className="flex items-center justify-between gap-2">
-        {/* A detached HEAD has no branch to reveal — `detached` IS the whole
-            value — so it stays the plain row it was rather than becoming a
-            focus stop that opens a tooltip repeating the word under it. */}
-        {venue.venue.branch === null ? (
-          <span className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground">
-            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
-            <span className="truncate">detached</span>
-          </span>
-        ) : (
-          <VenueValue term="Branch" full={venue.venue.branch}>
-            <GitBranchIcon weight="bold" className="size-3 shrink-0" />
-            <span className="min-w-0 truncate">{venue.venue.branch}</span>
-          </VenueValue>
-        )}
-        {/* Silent at zero: a clean tree has nothing to report, and "0 loose"
-            is a number where there is no news. */}
-        {loose === 0 ? null : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="flex shrink-0 items-center gap-1 text-ui text-attention tabular-nums">
-                <StatusDot state="waiting" />
-                {loose}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              {loose} uncommitted {loose === 1 ? "file" : "files"}
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * One truncating venue value, and the reveal that is the rest of it.
- *
- * The shared {@link ValueReveal} does the work — a focus stop that goes
- * nowhere, the untruncated value as its accessible name, a bubble on hover and
- * on focus alike. What is local is the drawing: `text-left` because a button
- * centres its content and these are values in a column, and the rail's own mono
- * ink.
- */
-function VenueValue({
-  term,
-  full,
-  children,
-}: {
-  term: string;
-  full: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <ValueReveal
-      term={term}
-      full={full}
-      side="left"
-      className="flex min-w-0 items-center gap-1 rounded-sm text-left font-mono text-ui text-muted-foreground"
-    >
-      {children}
-    </ValueReveal>
-  );
-}
-
-/**
- * What the Session in front is.
+ * What the Session in front IS, read from the stores that hold it — the
+ * drawing is `home-session-card.tsx`.
  *
  * THREE CASES, and each is a different kind of thing rather than a missing
- * field of one kind. The Board tab is not a Session at all and says so in a
- * line. A chat is a model and an effort. A TERMINAL is neither — it is a PTY,
- * and asking it for a model would print two dashes and call that a reading, so
- * it answers with what it actually has: what is running in it, and whether that
+ * field of one kind. The Board tab (and a file tab) is not a Session at all.
+ * A chat is a model and an effort. A TERMINAL is neither — it is a PTY, and
+ * asking it for a model would print two dashes and call that a reading, so it
+ * answers with what it actually has: what is running in it, and whether that
  * is still alive.
+ *
+ * ONE HOOK RATHER THAN THE TWO COMPONENTS THIS WAS. A component per case let
+ * each read only its own stores, which is why it was shaped that way; but the
+ * cases have to produce one object now, and a hook that branched its reads
+ * would break the rules of hooks the first time the front tab changed kind.
+ * The reads that do not apply are cheap: a null id is answered without
+ * touching the store's maps.
  */
-function SessionFacts({ activeTabId }: { activeTabId: string }) {
+function useSessionFacts(activeTabId: string): HomeSessionFacts {
+  const catalog = useModelCatalog();
   const sessionId = React.useMemo(() => parseHomeChatTab(activeTabId), [activeTabId]);
-  const terminal =
+  // Whatever is in front and is not the Board, a file tab or a chat is a
+  // terminal — the same elimination the block did before this was one hook.
+  const terminalId =
     isHomeBoardTab(activeTabId) || isFileTabId(activeTabId) || sessionId !== null
       ? null
       : activeTabId;
+
   const projection = useChatSessionsStore((state) =>
     sessionId === null ? null : (state.sessions[sessionId]?.projection ?? null),
   );
   const lifecycle = useChatSessionsStore((state) =>
     sessionId === null ? null : (state.sessions[sessionId]?.lifecycle ?? null),
   );
+  const tab = useSessionsStore((state) =>
+    terminalId === null
+      ? undefined
+      : Object.values(state.byOwner)
+          .flatMap((container) => container.tabs)
+          .find((candidate) => candidate.sessionId === terminalId),
+  );
+  const parkState = useSessionsStore((state) => state.parkState);
+  const record = useProjectSessionsStore((state) =>
+    terminalId === null
+      ? undefined
+      : Object.values(state.byProject)
+          .flatMap((rows) => rows.terminal)
+          .find((row) => row.id === terminalId),
+  );
 
-  if (terminal !== null) return <TerminalFacts sessionId={terminal} />;
-  if (sessionId === null) {
-    return <p className={EMPTY_INLINE}>No session in front</p>;
+  if (terminalId !== null) {
+    if (tab === undefined) return null;
+    // The dot is `terminal-tab-state.ts`'s — the same derivation the strip's
+    // own tab draws from, so the rail and the tab can never disagree about
+    // whether a PTY is still there. `null` from it means PARKED, the one state
+    // that tab expresses by drawing no dot at all and this surface can name.
+    const dot = terminalTabDot(terminalTabState(tab, parkState));
+    return {
+      kind: "terminal",
+      running: record === undefined ? "Terminal" : harnessLabel(effectiveHarnessId(record)),
+      activity: dot ?? "parked",
+    };
   }
+  if (sessionId === null) return null;
+
   const selection = projection?.modelSelection ?? null;
   // The tier the model resolved from (VC-259), where a start named one; the
-  // same "Fast · haiku-4.5" the composer's pill reads, so the two agree.
+  // same "Fast" the composer's pill reads, so the two agree.
   const tier = projection?.modelTier ?? null;
   const waiting = (projection?.interactions.active.length ?? 0) > 0;
   // `ChatSessionLifecycle` is a subset of the dot's vocabulary by construction
@@ -353,94 +306,92 @@ function SessionFacts({ activeTabId }: { activeTabId: string }) {
   // dot would otherwise say "leave this alone" about a Session asking for you.
   const activity: StatusDotState = waiting ? "waiting" : (lifecycle ?? "idle");
 
-  return (
-    <dl className="flex flex-col gap-2">
-      <Fact label="Model">
-        {tier !== null ? (
-          <span className="text-muted-foreground">{modelTierRow(tier).label} · </span>
-        ) : null}
-        {selection?.modelId ?? "—"}
-      </Fact>
-      <Fact label="Effort">{selection?.reasoningLevel ?? "—"}</Fact>
-      <Fact label="Activity">
-        <span className="flex items-center gap-1">
-          <StatusDot state={activity} />
-          {ACTIVITY_LABEL[activity]}
-        </span>
-      </Fact>
-      {/* Cost is NOT a fourth row here. It used to be three (VC-87), and they
-          were the one part of this block drawn in a shape the page repeated
-          somewhere else — the usage card below reports the same figures beside
-          the project total they belong to (VC-203). */}
-    </dl>
-  );
+  return {
+    kind: "chat",
+    // Null, never a dash: a Session that has not accepted a model policy yet
+    // has no model to name, and the card says what it IS instead of drawing a
+    // title made of punctuation.
+    model: selection === null ? null : namedModel(selection, catalog),
+    tier: tier === null ? null : modelTierRow(tier).label,
+    effort: selection?.reasoningLevel ?? null,
+    activity,
+  };
 }
 
 /**
- * A terminal tab's facts: what is running in it, and its liveness.
+ * A selection, named against the catalogue: `claude-opus-4-1` → "Claude Opus
+ * 4.1", with the vendor's mark beside it (`models/model-identity.tsx`).
  *
- * The dot is `terminal-tab-state.ts`'s — the same derivation the strip's own
- * tab draws from, so the rail and the tab can never disagree about whether a
- * PTY is still there. `null` from it means PARKED, which is the one state that
- * tab expresses by drawing no dot at all and this surface has room to name.
+ * A selection the catalogue does not hold — or one drawn before the inspection
+ * lands — keeps its raw id as its label, which is the composer pill's own
+ * fallback. Neither is a failure state: a provider signed out from under a
+ * pinned Session still leaves the Session pinned, and the id is what it is
+ * pinned TO.
  */
-function TerminalFacts({ sessionId }: { sessionId: string }) {
-  const tab = useSessionsStore((state) =>
-    Object.values(state.byOwner)
-      .flatMap((container) => container.tabs)
-      .find((candidate) => candidate.sessionId === sessionId),
+function namedModel(selection: ModelSelection, catalog: ModelCatalog): HomeSessionModel {
+  const listed = catalog.models.find(
+    (model) => model.providerId === selection.providerId && model.modelId === selection.modelId,
   );
-  const parkState = useSessionsStore((state) => state.parkState);
-  const record = useProjectSessionsStore((state) =>
-    Object.values(state.byProject)
-      .flatMap((rows) => rows.terminal)
-      .find((row) => row.id === sessionId),
-  );
-
-  if (tab === undefined) return <p className={EMPTY_INLINE}>No session in front</p>;
-  const state = terminalTabState(tab, parkState);
-  const dot = terminalTabDot(state);
-  const activity: StatusDotState = dot ?? "parked";
-
-  return (
-    <dl className="flex flex-col gap-2">
-      <Fact label="Running">
-        {record === undefined ? "Terminal" : harnessLabel(effectiveHarnessId(record))}
-      </Fact>
-      <Fact label="Activity">
-        <span className="flex items-center gap-1">
-          <StatusDot state={activity} />
-          {ACTIVITY_LABEL[activity]}
-        </span>
-      </Fact>
-    </dl>
-  );
+  return {
+    model: listed ?? {
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      label: selection.modelId,
+    },
+    providerLabel: providerLabelOf(catalog.providers, selection.providerId),
+  };
 }
 
-/** One key/value line in the Session block. */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className="shrink-0 text-ui text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-ui text-foreground">{children}</dd>
-    </div>
-  );
+interface ModelCatalog {
+  models: readonly ModelAccessModel[];
+  providers: readonly ModelAccessProvider[];
 }
 
-/** The dot's own vocabulary, in words. */
-const ACTIVITY_LABEL: Record<StatusDotState, string> = {
-  working: "Working",
-  setup: "Setting up",
-  ready: "Ready",
-  starting: "Starting",
-  waiting: "Waiting for you",
-  error: "Failed",
-  idle: "Idle",
-  parked: "Parked",
-  exited: "Ended",
-  stopped: "Stopped",
-  interrupted: "Interrupted",
-};
+const EMPTY_CATALOG: ModelCatalog = { models: [], providers: [] };
+
+/**
+ * What Model Access knows, for naming the model the front Session is pinned to.
+ *
+ * THIS COSTS NO EXTRA IPC IN THE ORDINARY CASE. `inspect` is held per
+ * revision by `ModelAccessProvider`, so a rail asking while a composer has
+ * already asked joins that read instead of starting a second one; a later
+ * mount is answered from the held promise entirely. The revision is the
+ * dependency, so a sign-in or a Refresh re-reads and a rail on screen renames
+ * itself without being told.
+ *
+ * A FAILED READ IS SILENT, deliberately, and it is the narrow exception
+ * CLAUDE.md carves out rather than a swallowed error: nobody is waiting on
+ * this. The row is already drawn from the Session's own projection and stays
+ * drawn — the id in place of the name — so the whole consequence of the
+ * failure is a less friendly spelling of a value that is already correct. A
+ * toast here would fire on every offline start to report that.
+ */
+function useModelCatalog(): ModelCatalog {
+  const client = useModelAccessClient();
+  const revision = client?.revision ?? 0;
+  const [catalog, setCatalog] = React.useState<ModelCatalog>(EMPTY_CATALOG);
+
+  React.useEffect(() => {
+    if (client === null) return;
+    let live = true;
+    void client
+      .inspect({})
+      .then((snapshot) => {
+        if (live) setCatalog({ models: snapshot.models, providers: snapshot.providers });
+      })
+      .catch(() => {
+        if (live) setCatalog(EMPTY_CATALOG);
+      });
+    return () => {
+      live = false;
+    };
+    // `revision` stands for what the client would answer; the client object
+    // itself is stable for the life of the provider.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, revision]);
+
+  return catalog;
+}
 
 /** The chat Session a Home tab id names, or `null` for the Board and terminals. */
 function parseHomeChatTab(activeTabId: string): string | null {

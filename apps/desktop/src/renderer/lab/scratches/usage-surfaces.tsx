@@ -23,8 +23,8 @@ import * as React from "react";
 import type { SessionUsage, SessionUsageSummary } from "@volli/shared";
 import { summarizeSessionUsage } from "@volli/shared";
 
+import { HomeSessionCard } from "@renderer/components/home/home-session-card";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
-import { StatusDot } from "@renderer/components/ui/status-dot";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import { UsageBar } from "@renderer/components/usage/usage-bar";
@@ -177,21 +177,44 @@ export default function UsageSurfaces() {
 
       <Group heading="1 · Home rail — Now, both scopes in one card">
         <Rail>
-          {/* The rail's own inset, which the real Home rail's `SECTION` pays for
-              this block and the card pays for itself. */}
+          {/* The block above the usage card, as the rail really draws it since
+              VC-406 — the shipping `HomeSessionCard` rather than a copy of its
+              innards. This scratch used to restate it as a `<dl>` of
+              Model/Effort/Activity rows, which was accurate until the page it
+              was copied from stopped being a table; a scratch that redraws a
+              component beside it is the surface you check the design against,
+              and it was quietly a version behind. `home-rail-now.tsx` is where
+              this card is studied at its states. */}
           <div className="flex flex-col gap-2 px-4">
             <SectionHeading as="h3">Session</SectionHeading>
-            <dl className="flex flex-col gap-2">
-              <Fact label="Model">claude-opus-4-1</Fact>
-              <Fact label="Effort">high</Fact>
-              <Fact label="Activity">
-                <span className="flex items-center gap-1">
-                  <StatusDot state="working" />
-                  Working
-                </span>
-              </Fact>
-            </dl>
           </div>
+          <HomeSessionCard
+            facts={{
+              kind: "chat",
+              model: {
+                model: {
+                  providerId: "anthropic",
+                  modelId: "claude-opus-4-1",
+                  label: "Claude Opus 4.1",
+                },
+                providerLabel: "Anthropic",
+              },
+              tier: "Deep",
+              effort: "high",
+              activity: "working",
+            }}
+            venue={{
+              status: "ready",
+              venue: {
+                kind: "main-checkout",
+                path: "/Users/someone/code/volli-code",
+                branch: "main",
+                files: { committed: 6, modified: 3, added: 1, untracked: 2 },
+                diff: { added: 214, removed: 31, base: "main" },
+              },
+            }}
+            onRetryVenue={() => {}}
+          />
           <HomeUsageBlock
             summary={PROJECT}
             models={PROJECT_MODELS}
@@ -426,16 +449,6 @@ function State({
         </>
       )}
       {hint === undefined ? null : <p className="text-ui text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
-
-/** home-rail.tsx's own Fact row, copied so the scratch can stack it. */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className="shrink-0 text-ui text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-ui text-foreground">{children}</dd>
     </div>
   );
 }

@@ -121,6 +121,25 @@ describe("HomeRail", () => {
     expect(markup).toContain('data-testid="file-search-idle"');
   });
 
+  it("mounts the Session and its venue as one card, not three drawings", () => {
+    // VC-406. The page drew a hand-rolled venue card, then an eyebrow over a
+    // `<dl>` of Model/Effort/Activity lines, then the rail's shared usage card
+    // — three objects for two scopes, the middle one a string table. What is
+    // on the page now is one card wearing the same frame as the usage card
+    // under it, and the labels that table needed are gone with it.
+    seedVenue();
+    const markup = draw("chat:s1");
+
+    expect(markup).toContain('data-testid="home-session-card"');
+    expect(markup).toContain('data-testid="home-venue-path"');
+    expect(markup).not.toContain(">Model<");
+    expect(markup).not.toContain(">Effort<");
+    expect(markup).not.toContain(">Activity<");
+    // One eyebrow over the card, pairing with the usage card's `Project`.
+    expect(markup).toContain("Session");
+    expect(markup).not.toContain(">Venue<");
+  });
+
   it("puts the whole venue path and branch within a keyboard's reach", () => {
     // VC-288. Both values truncate in a rail this narrow, and both had their
     // full form behind a pointer: the path on a tooltip attached to a `<p>`,
@@ -138,20 +157,10 @@ describe("HomeRail", () => {
     );
     // Both reveals are buttons — focus stops Radix opens on focus as well as
     // on hover — rather than the text elements they were.
-    const venueCard = markup.slice(markup.indexOf("Venue"));
-    expect(venueCard.slice(0, venueCard.indexOf("Model"))).toContain("<button");
+    expect(markup.slice(markup.indexOf("home-venue-path"))).toContain("<button");
   });
 
-  it("names the venue block and the session block", () => {
-    const markup = draw("chat:s1");
-
-    expect(markup).toContain("Venue");
-    expect(markup).toContain("Model");
-    expect(markup).toContain("Effort");
-    expect(markup).toContain("Activity");
-  });
-
-  it("leads the model with the tier it resolved from, where a start named one", () => {
+  it("names the model, with the tier it resolved from on the line under it", () => {
     // A static render reads the store's initial state, so the Session in
     // front is seeded there: one started as `fast`, pinned to haiku.
     const slice = seedSlice("ready");
@@ -182,11 +191,18 @@ describe("HomeRail", () => {
     // Split rather than `replace`: the tags are separators here, not
     // something being sanitized away, and a lone `replace` of a tag pattern
     // reads to a scanner as a half-written sanitizer.
-    expect(
-      draw("chat:s1")
-        .split(/<[^>]+>/)
-        .join(""),
-    ).toContain("Fast · haiku-4.5");
+    const text = draw("chat:s1")
+      .split(/<[^>]+>/)
+      .join("");
+
+    // The model is the row's NAME; the tier and the effort trail it in the
+    // muted ink, because both are qualifiers OF the model rather than subjects.
+    // A static render has no Model Access above it, so the catalogue is unread
+    // and the name falls back to the id — without claiming, while it is unread,
+    // that the catalogue does not hold this model.
+    expect(text).toContain("haiku-4.5");
+    expect(text).toContain("Fast · Low effort");
+    expect(text).not.toContain("haiku-4.5 · anthropic");
   });
 
   it("says there is no Session in front when the Board tab is", () => {

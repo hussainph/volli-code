@@ -464,6 +464,49 @@ when wholly provider-reported. The old tilde prefix read as the figure's own pun
 size; the trailing word reads as a qualifier at every size, and `unverified` is never spelled
 `est.` because knowing a number and having computed it are different claims.
 
+## Home's Now page (VC-406)
+
+Home's rail is the ticket rail one scope up, and its Now page obeys the same rules. It answers two
+questions mid-session — what is in front, and where does it write — and the answer is **two cards,
+nesting the same two scopes twice**: the Session inside the project, once as identity
+(`home-session-card.tsx`) and once as money (`home-usage-block.tsx`). Same frame, same seam, same
+row inset, because they are *the* rail card rather than two cards that resemble each other.
+
+**A read-only fact is a card row, never a key/value line and never a pill.** The Session block was
+a `<dl>` — Model, Effort, Activity, each label parked at the left with its value right-aligned
+against it — beside a hand-rolled venue card with its own radius and its own inset. A string table
+says "here are some fields"; the rail's job is to say "here is a Session". The pill run is not the
+alternative either: pills are what the ticket rail's Properties fold wears, and those *edit* what
+they name (`docs/DESIGN.md` above: every act wears one costume). Facts that are only read wear the
+card row.
+
+**The identity row is a roster row in the card's clothes**: a mark, a name, a quieter line under
+it, and one tone dot plus one short phrase at the right edge — the reading order the ticket rail's
+roster, Home's own Sessions page and the sidebar's bands already share, so a reader who has learned
+a Session row anywhere has learned this one. What is drawn on it is the model, because the
+Session's title is already on the tab in front of the reader; the tier and the effort are the quiet
+line, because both are qualifiers *of* the model, and a qualifier given its own labelled row is a
+qualifier promoted to a subject.
+
+**A model is drawn, never spelled.** The vendor's mark (`models/model-identity.tsx`, the one the
+composer pill, the picker and Settings wear) leads the catalogue's name for it — "Claude Opus 4.1",
+not `claude-opus-4-1`. A wire id on a product surface is a value nobody proof-read; it survives only
+as the fallback for a selection the catalogue no longer lists, because a model we cannot name is
+still the one a Session will send to.
+
+**In a rail, the mark says the account and the text does not.** The roomier surfaces append
+"· Anthropic" where two signed-in providers ship one model name (`needsProvider`). A 240–300px row
+cannot afford it: the term is what pushes the NAME into an ellipsis, so it costs more of the fact
+than it adds. Marks are chosen by provider first, so the same model from two accounts already wears
+two glyphs — the same answer, drawn rather than spelled. The words stay one hover or one focus away
+in the reveal, which is also how a rail hands back any value it clipped (`ValueReveal`, VC-288),
+where a picker's rows wrap instead.
+
+**The words belong to the app, not to the surface.** Activity says what `SESSION_ACTIVITY_LABEL`
+says and effort says what `effortLabel` says. A page that keeps its own copy drifts: this one said
+"Ended" where every other surface says "Exited", and printed the wire enum `xhigh` where the
+composer's own chip says "Extra high".
+
 ## Vertical rhythm (reading surfaces)
 
 The Ticket Body tab is the reference implementation: generous air above the title (`pt-8` below the
