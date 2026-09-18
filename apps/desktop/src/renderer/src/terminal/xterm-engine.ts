@@ -191,6 +191,7 @@ export class XtermEngine implements TerminalEngine {
       this.dimensions = { cols, rows };
       fanOut(this.resizeCbs, "resize", this.dimensions);
     });
+    term.onScroll(() => this.syncScrollState());
     term.attachCustomKeyEventHandler(this.handleKeyEvent);
 
     // Safe while the host is `display:none` (a background tab's first attach):
@@ -356,7 +357,28 @@ export class XtermEngine implements TerminalEngine {
       return;
     }
     this.pendingFit = false;
+    // xterm preserves the buffer's line index while FitAddon changes the row
+    // count. If the person was following the tail, that index is no longer the
+    // bottom after a row-count change, so the next PTY output would land below
+    // the viewport. Preserve intentional scrollback inspection, but restore
+    // the tail only when it was selected before the geometry change.
+    const active = this.term?.buffer.active;
+    const wasAtBottom = active !== undefined && active.viewportY >= active.baseY;
     this.fitAddon.fit();
+    if (wasAtBottom) this.term?.scrollToBottom();
+    this.syncScrollState();
+  }
+
+  /** Keep the current xterm line-based viewport state available to the
+   * desktop smoke harness, whose old native-scroll reader predates xterm's
+   * custom scrollbar. This is not layout state: it is the same public buffer
+   * API used by fit's follow-bottom decision above. */
+  private syncScrollState(): void {
+    const active = this.term?.buffer.active;
+    const renderer = this.hostEl.querySelector(".xterm");
+    if (active === undefined || renderer === null) return;
+    renderer.setAttribute("data-terminal-scroll-top", String(active.viewportY));
+    renderer.setAttribute("data-terminal-scroll-max", String(active.baseY));
   }
 
   focus(): void {

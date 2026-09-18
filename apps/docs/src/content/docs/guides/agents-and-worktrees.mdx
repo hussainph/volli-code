@@ -18,7 +18,7 @@ changes. In Volli, a task is a ticket.
 | **Ticket chat** | One task and its brief | That ticket's worktree |
 | **Board chat** | Broad project work before you have a task | The project's main checkout |
 
-Choose a default model in **Settings → Model Access** before you start either
+Choose a default model in **Settings → Models** before you start either
 kind. Volli records the model for the chat and does not silently switch to a
 different model or account.
 
@@ -61,6 +61,17 @@ inspect its recorded work.
 
 A chat can reconnect without creating a second conversation history.
 
+## Automation Runs and Sessions
+
+An Automation Run is not an existing chat resumed with a new prompt. Every Run
+opens a fresh **Session** and sends the Automation's **Instructions** as its
+first message. A **Ticket enters** Trigger opens a Ticket Session for the ticket
+that arrived; a scheduled Trigger opens a project-level Board Session. Run
+history keeps the resolved model and reasoning beside the Session it created.
+
+Use the [Automations guide](/guides/automations/) to choose whether a Run starts
+by hand, from an armed board column, or on a schedule.
+
 ## Terminal companions
 
 Open a terminal companion when you want a shell or a specific TUI workflow. It
@@ -72,8 +83,8 @@ socket. It can inspect ticket context and report work to the app. See the
 [CLI reference](/reference/cli/) for its commands.
 
 <Aside type="note">
-  Open a terminal companion explicitly. Configure Model Access before you start
-  a built-in chat.
+  Open a terminal companion explicitly. Configure **Settings → Models** before
+  you start a built-in chat.
 </Aside>
 
 ## Change sets and retained worktrees
@@ -102,8 +113,13 @@ git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-
     description="Inspect a task's chats, files, diffs, and Now view."
   />
   <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Start fresh Sessions from saved instructions."
+  />
+  <LinkCard
     title="Troubleshooting"
     href="/reference/troubleshooting/"
-    description="Resolve Model Access, worktree, and local CLI problems."
+    description="Resolve model, worktree, and local CLI problems."
   />
 </CardGrid>

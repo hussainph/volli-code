@@ -60,7 +60,8 @@ your main checkout and can create and edit tickets. Use it to turn a rough idea
 into tasks.
 
 **Model Access.** The accounts, subscriptions, credentials, and models that
-Volli can use. Choose a default model here before you start a chat. Credentials
+Volli can use. In the app, this policy is under **Settings → Models**. Choose a
+default model there before you start a chat. Credentials
 do not enter chat history.
 
 **Terminal companion.** A manual terminal or external TUI you open for work in
@@ -104,11 +105,49 @@ The CLI and managed Volli skill pack use the following operating model. Run
 
 <AgentOperatingModel />
 
-## In development
+## Automations
 
-**Automations** are in development. They will be saved board triggers that open
-Sessions with instructions, a runtime, and recorded outcomes. They are not
-available to configure yet.
+**Automation.** A saved, named way to start work. It contains a **Trigger**,
+**Instructions**, and a **Runtime**. Every Automation can be run by hand; its
+Trigger describes what else may start it.
+
+**Trigger.** What starts an Automation besides a person: **Only when I run it**,
+**Ticket enters**, or **On a schedule**. A new Automation uses **Only when I
+run it**. A column Trigger makes an Automation available in selected columns;
+a schedule uses one of Volli's hourly, daily, weekdays, or weekly presets.
+
+**Instructions.** The message sent as the first message of the fresh Session a
+Run opens. Instructions use the chat composer's `/` templates and Skills and
+`@` file references.
+
+**Runtime.** The model policy for a Run. It can inherit the project default,
+name one of the configured default tiers, or pin an exact model and reasoning
+level. A Run records the resolved model and reasoning it used.
+
+**Run.** One invocation of an Automation and the durable record of the fresh
+Session it opened. Run history remains available even if the Automation is
+later deleted.
+
+**Unbound Run.** A one-time Run created by **Run once…**. It carries its own
+Instructions and names no saved Automation.
+
+**Enabled automation.** An Automation switched on for automatic triggering on
+this Mac. Enablement is off until someone turns it on here. It does not prevent
+a person from running the Automation by hand.
+
+**Armed automation.** The one Automation a column fires after a ticket makes a
+Deliberate move into it. A column can arm at most one, and arming is local to
+the machine and not retroactive.
+
+**Offered list.** The Automations a column presents during a Deliberate move.
+A column can offer several but fires at most one automatically. The list also
+has a **Move only** choice.
+
+**Option-drag picker.** The expanded Offered list shown while **Option (⌥)**
+is held during a card drag. Up to nine offered rows get digits **1**–**9**;
+**0** chooses **Move only**.
+
+See [Automations](/guides/automations/) for the authoring and running steps.
 
 ## Next steps
 

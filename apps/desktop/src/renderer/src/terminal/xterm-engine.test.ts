@@ -7,11 +7,14 @@ const mocks = vi.hoisted(() => ({
   handler: null as ((event: KeyboardEvent) => boolean) | null,
   textarea: null as HTMLTextAreaElement | null,
   dispose: vi.fn(),
+  fit: vi.fn(),
+  scrollToBottom: vi.fn(),
+  buffer: { viewportY: 0, baseY: 0 },
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
-    fit = vi.fn();
+    fit = mocks.fit;
   },
 }));
 vi.mock("@xterm/addon-unicode11", () => ({
@@ -21,6 +24,8 @@ vi.mock("@xterm/addon-unicode11", () => ({
 }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    readonly buffer = { active: mocks.buffer };
+    scrollToBottom = mocks.scrollToBottom;
     options: Record<string, unknown>;
     textarea!: HTMLTextAreaElement;
     unicode = { activeVersion: "" };
@@ -32,11 +37,16 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon() {}
     onData() {}
     onResize() {}
+    onScroll() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       mocks.handler = handler;
     }
-    open() {
+    open(host: HTMLElement) {
+      const root = document.createElement("div");
+      root.className = "xterm";
       this.textarea = document.createElement("textarea");
+      root.append(this.textarea);
+      host.append(root);
       mocks.textarea = this.textarea;
     }
     write() {}
@@ -66,22 +76,37 @@ const event = (init: KeyboardEventInit & { type?: string } = {}) => {
   return e;
 };
 
-describe("XtermEngine accessibility keyboard contract", () => {
-  afterEach(() => document.body.replaceChildren());
-  beforeEach(() => {
-    mocks.options = null;
-    mocks.handler = null;
-    mocks.textarea = null;
-    mocks.dispose.mockClear();
-    Object.defineProperty(globalThis, "ResizeObserver", {
-      configurable: true,
-      value: class {
-        observe() {}
-        disconnect() {}
-      },
-    });
+beforeEach(() => {
+  mocks.fit.mockReset();
+  mocks.scrollToBottom.mockReset().mockImplementation(() => {
+    mocks.buffer.viewportY = mocks.buffer.baseY;
   });
+  mocks.buffer.viewportY = 0;
+  mocks.buffer.baseY = 0;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 800,
+    height: 600,
+  } as DOMRect);
+  vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  mocks.options = null;
+  mocks.handler = null;
+  mocks.textarea = null;
+  mocks.dispose.mockClear();
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    value: class {
+      observe() {}
+      disconnect() {}
+    },
+  });
+});
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+});
 
+describe("XtermEngine accessibility keyboard contract", () => {
   it("creates xterm in screen reader mode and labels its input from the host id", () => {
     const engine = new XtermEngine();
     const host = document.createElement("div");
@@ -162,5 +187,41 @@ describe("XtermEngine accessibility keyboard contract", () => {
     expect(mocks.handler?.(tab)).toBe(false);
     engine.dispose();
     expect(mocks.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("XtermEngine follow-bottom behavior", () => {
+  it("re-anchors after fit changes the row count while already at the bottom", () => {
+    const engine = new XtermEngine();
+    engine.attach(document.createElement("div"));
+    mocks.scrollToBottom.mockClear();
+    mocks.buffer.viewportY = 12;
+    mocks.buffer.baseY = 12;
+    mocks.fit.mockImplementation(() => {
+      mocks.buffer.baseY = 24;
+    });
+
+    // The fit changes the grid from 12 visible rows to 24. The old viewport
+    // index is no longer the tail, so the engine must follow the new bottom.
+    engine.fit();
+
+    expect(mocks.scrollToBottom).toHaveBeenCalledOnce();
+    engine.dispose();
+  });
+
+  it("preserves an intentional scrollback position across the same fit", () => {
+    const engine = new XtermEngine();
+    engine.attach(document.createElement("div"));
+    mocks.scrollToBottom.mockClear();
+    mocks.buffer.viewportY = 4;
+    mocks.buffer.baseY = 12;
+    mocks.fit.mockImplementation(() => {
+      mocks.buffer.baseY = 24;
+    });
+
+    engine.fit();
+
+    expect(mocks.scrollToBottom).not.toHaveBeenCalled();
+    engine.dispose();
   });
 });

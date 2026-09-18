@@ -39,6 +39,20 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
   keystrokes so that shell and agent bindings keep working.
 </Aside>
 
+## Panes
+
+These shortcuts act on the tabbed surface in front of you (Home or a ticket).
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘\` | Split the surface to the right |
+| `⇧⌘\` | Split the surface down |
+| `⌃⌘` + `←` / `→` / `↑` / `↓` | Move focus between the surface panes |
+
+These shortcuts do nothing while **Settings** or the New ticket dialog is open,
+on the **Automations** or **Configure** page, or while a terminal has the whole
+canvas.
+
 ## Board
 
 | Shortcut | Action | When |
@@ -47,6 +61,14 @@ open. `⌘[` behaves the same way, since it means outdent inside an editor.
 | `Enter` | Open a focused card | A card has keyboard focus |
 | `Enter` | Add the card and keep the composer open | The inline composer is open |
 | `Esc` | Close the inline composer | The inline composer is open |
+| `⌥` (Option) | Expand the hovered column's Offered list | A card is being dragged |
+| `1`–`9` | Choose the matching offered Automation | A card is being dragged |
+| `0` | Choose **Move only** | A card is being dragged |
+
+During a drag, the board's compact Offered list can be used without holding
+Option. Holding it makes the rows larger landing targets. The enabled armed
+Automation is pinned to `1`; see [Automations](/guides/automations/) for the
+full move behavior.
 
 ## New ticket dialog
 
@@ -114,7 +136,7 @@ move focus out of the terminal first.
 | --- | --- | --- |
 | `←` `→` `↑` `↓` | Move the color 1% across the pad | A color on the pad has focus |
 | `⇧` + an arrow | Move the color 5% across the pad | A color on the pad has focus |
-| `←` `→` `↑` `↓` | Change grain by 1%, or 5% with `⇧` | The grain dial has focus |
+| `←` `→` `↑` `↓` | Change vibrancy or grain by 1% | A fader has focus |
 | `Enter` | Apply the typed hex | The primary color's hex field has focus |
 | `Esc` | Discard the typed hex | The primary color's hex field has focus |
 
