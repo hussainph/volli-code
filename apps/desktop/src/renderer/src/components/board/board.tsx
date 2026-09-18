@@ -71,6 +71,7 @@ import { TicketCardContent } from "@renderer/components/board/ticket-card";
 import { TicketDialogHost } from "@renderer/components/board/ticket-dialog-host";
 import { useBoardCanvasPan } from "@renderer/hooks/use-board-canvas-pan";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import { useTicketFocusRestore } from "@renderer/hooks/use-ticket-focus-handoff";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { cn } from "@renderer/lib/utils";
 import {
@@ -675,6 +676,19 @@ export const Board = React.memo(function Board({
     (ticketId: string) => openTicket(projectId, ticketId),
     [openTicket, projectId],
   );
+
+  // Coming BACK from a ticket opened with Enter: focus returns to the card or
+  // row it left from (VC-419). The board is re-mounted from scratch on that
+  // return, so this runs on mount and is a no-op for every other way of
+  // arriving here — see `use-ticket-focus-handoff.ts`.
+  //
+  // `revealTicketId` is the one thing the hook cannot do from the DOM: a card
+  // 50 rows down a windowed column is not mounted to be focused, so the column
+  // that holds it scrolls it into its window first, through the same
+  // `scrollOffsetForRow` path a selection made elsewhere takes. Released as
+  // soon as focus lands, so it never pins a column against later scrolling.
+  const [revealTicketId, setRevealTicketId] = React.useState<string | null>(null);
+  useTicketFocusRestore({ projectId, shownIds: selectionOrder, onReveal: setRevealTicketId });
   // Stable (the column passes its own status back) so columns aren't handed a
   // fresh closure every board render.
   const handleComposerClose = React.useCallback(
@@ -965,6 +979,10 @@ export const Board = React.memo(function Board({
                     composerInitiallyOpen={expandedEmptyStatus === status}
                     onComposerClose={handleComposerClose}
                     animateEnter={boardMounted.current}
+                    // A card keyboard focus is coming home to (VC-419). Only
+                    // the column that holds it hears about it; every other one
+                    // is handed `null` and does nothing.
+                    revealTicketId={revealTicketId}
                     // A column's window may only GROW while a card is in the
                     // air: see `column-window.ts`.
                     dragActive={drag !== null}

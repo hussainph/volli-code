@@ -480,6 +480,13 @@ export default defineConfig(({ mode }) => ({
         // shape as its two neighbours here, and gated for the same reason: it
         // decides whether a keystroke may write a PERSISTED preference.
         "src/lib/rail-toggle.ts",
+        // Which card the keyboard's place comes back to when a ticket closes
+        // (VC-419). In the gate on `escape-guard.ts`'s argument, one surface
+        // over: the origin of a journey is frequently GONE by the time it ends
+        // — filtered out, archived, deleted, or simply never mounted by a
+        // windowed column — and every one of those is a branch whose wrong
+        // answer is focus on BODY, which is precisely what no screenshot shows.
+        "src/lib/ticket-focus-origin.ts",
         "src/lib/relative-time.ts",
         "src/lib/terminal-focus.ts",
         "src/lib/debounce.ts",

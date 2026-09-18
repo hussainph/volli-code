@@ -11,6 +11,10 @@ import { PriorityIndicator } from "@renderer/components/board/priority-indicator
 import { TicketCardLabels } from "@renderer/components/board/ticket-card-labels";
 import { TicketContextMenu } from "@renderer/components/board/ticket-context-menu";
 import { useReducedMotion } from "@renderer/hooks/use-reduced-motion";
+import {
+  rememberTicketFocusOrigin,
+  TICKET_FOCUS_ATTRIBUTE,
+} from "@renderer/hooks/use-ticket-focus-handoff";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { cn } from "@renderer/lib/utils";
 
@@ -176,9 +180,15 @@ export function SortableTicketShell({
   // not the sensor's `keyboardCodes`, because board.tsx (where the sensor is
   // configured) is out of scope here; the outcome (Space drags, Enter opens) is
   // the same. The `onKeyDown` prop sits AFTER `{...listeners}` so it wins.
+  //
+  // The open is also where the return journey is recorded (VC-419): this card
+  // is about to be unmounted with the whole board, so the way back has to be
+  // written down from the element that still has focus, right here. Only the
+  // KEYBOARD path does it — a double-click never had a focus ring to restore.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!isDragging && onOpen && event.key === "Enter") {
       event.preventDefault();
+      rememberTicketFocusOrigin(projectId, ticket.id, event.currentTarget);
       onOpen(ticket.id);
       return;
     }
@@ -203,6 +213,7 @@ export function SortableTicketShell({
           }
           onDoubleClick={onOpen ? () => onOpen(ticket.id) : undefined}
           {...dataAttributes}
+          {...{ [TICKET_FOCUS_ATTRIBUTE]: ticket.id }}
           {...attributes}
           aria-pressed={selected}
           data-selected={selected || undefined}
