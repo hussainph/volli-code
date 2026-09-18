@@ -1,5 +1,9 @@
 # VC-322 — accessibility/motion candidate checklist
 
+> **Historical baseline:** merged terminal, contrast and navigation fixes supersede
+> several failures below. See [the integrated release results](vc322-integration-results.md)
+> for the latest evidence and outstanding gates. The human checklist below still applies.
+
 **Release verdict: BLOCKED, not accessibility sign-off.** Focused fixes are ready for review;
 remaining failures and unmeasured native behavior must not be counted as passes.
 Merge order requested by release coordination: **VC-343 → VC-344 → VC-322**.

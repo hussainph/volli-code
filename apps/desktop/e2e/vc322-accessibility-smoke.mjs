@@ -169,6 +169,9 @@ try {
     await page.getByRole("tablist", { name: "Ticket tabs" }).waitFor();
     await page.screenshot({ path: join(output, "ticket.png") });
     await fs.writeFile(join(output, "ticket-ax.txt"), await page.locator("body").ariaSnapshot());
+    await page.locator('h1[role="button"]').focus();
+    await page.waitForTimeout(200);
+    report.observations.push({ name: "ticket title focus", state: await active() });
     await tabTour("ticket body comments and rail", 12);
     await page.keyboard.press("Control+Shift+M");
     await page.keyboard.press("Tab");
@@ -383,9 +386,7 @@ try {
 // Only opt-in fix regression checks determine this probe's process exit code.
 if (gateFixes) {
   const dialogs = report.checks.slice(0, 2);
-  const title = report.observations
-    .find((item) => item.name === "ticket body comments and rail")
-    ?.steps.find((item) => item.tag === "H1");
+  const title = report.observations.find((item) => item.name === "ticket title focus")?.state;
   if (
     dialogs.length !== 2 ||
     dialogs.some((item) => !item.pass) ||

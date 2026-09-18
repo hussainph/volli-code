@@ -88,6 +88,21 @@ for (const trigger of [false, true])
     await settle();
     expect(document.activeElement).toBe(invoker);
   });
+it("leaves default close focus alone when no HTML invoker exists", async () => {
+  const close = new Event("closeAutoFocus", { cancelable: true });
+  function NoInvoker() {
+    const { restoreFocus } = useDialogFocusReturn(true);
+    React.useLayoutEffect(() => restoreFocus(close), [restoreFocus]);
+    return null;
+  }
+  const active = vi.spyOn(document, "activeElement", "get").mockReturnValue(null);
+  try {
+    await act(async () => root.render(<NoInvoker />));
+    expect(close.defaultPrevented).toBe(false);
+  } finally {
+    active.mockRestore();
+  }
+});
 it("honours a caller's explicit focus handoff", async () => {
   await act(async () => root.render(<Fixture override />));
   await act(async () => {
