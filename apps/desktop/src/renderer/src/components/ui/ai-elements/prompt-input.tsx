@@ -1,5 +1,25 @@
 "use client";
 
+/**
+ * Vendored from AI Elements, and MODIFIED.
+ *
+ *   upstream  https://github.com/vercel/ai-elements
+ *   file      packages/elements/src/prompt-input.tsx
+ *   revision  9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)
+ *   license   Apache-2.0 — Copyright 2023 Vercel, Inc.
+ *
+ * Most of this file is still upstream's: the attachment state machine, the
+ * accept/size/count validation and its error codes, the drop handlers, and the
+ * blob→data-URL submit path. Changed here: imports repointed at `@renderer/*`,
+ * lucide icons replaced with Phosphor, the unused surface deleted (provider and
+ * controller hooks, attachment chips, menu actions, action-menu/select/
+ * hover-card families), and the shell reshaped around Volli's composer.
+ *
+ * That last paragraph is not decoration — Apache-2.0 §4(b) requires a modified
+ * file to say it was modified. `./PROVENANCE.md` records how the revision above
+ * was established, what else changed, and where §4(a) and §4(d) are discharged.
+ */
+
 import { ArrowElbowDownLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowElbowDownLeft";
 import { SquareIcon } from "@phosphor-icons/react/dist/csr/Square";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
@@ -662,29 +682,9 @@ export type PromptInputFooterProps = Omit<ComponentProps<typeof InputGroupAddon>
 export const PromptInputFooter = ({ className, ...props }: PromptInputFooterProps) => (
   <InputGroupAddon
     align="block-end"
-    // THE PADDING IS SETTLED HERE, and it has to be. `inputGroupAddonVariants`
-    // pairs `block-end` with `pb-4` and `[.border-t]:pt-4` — a 16px lid and a
-    // 16px floor, sized for a field whose body is a 64px box. This footer's
-    // body is a 36px line, so 16/16 around one control row made the control
-    // band 45% of a collapsed composer.
-    //
-    // 4/8 RATHER THAN 8/8, and the asymmetry is the whole point. The lid and
-    // the floor are not the same measurement: the floor is the card's own
-    // inset, matching what the body reserves at the top, while the lid is half
-    // of the GAP between the message and its chrome — the body's own `pb`
-    // supplies the other half. 4 + 8 = 12px of air between the two bands
-    // against 8px of inset at each outer edge, so the internal seam is the
-    // widest space in the box and the grouping reads without a rule drawn
-    // across it. 8/8 made the seam and the edges equal, which is the geometry
-    // that needs a line to disambiguate.
-    //
-    // `[.border-t]` SURVIVES for a footer that does draw one. Written with the
-    // same variant rather than as a bare `pt-*`: the variant compiles to
-    // `&.border-t`, which is (0,2,0) against a plain utility's (0,1,0), so a
-    // bare override is emitted and never applied — and a bordered footer would
-    // silently take the variant's 16px lid. Matching the variant puts both in
-    // one `cn()` group instead, where the later one simply replaces it.
-    className={cn("justify-between gap-1 pt-1 pb-2 [.border-t]:pt-2", className)}
+    // The tray is one shared material across chat, ticket creation and
+    // instructions. Its 8px inset plus the controls' own inset aligns with prose.
+    className={cn("prompt-toolbar justify-between gap-1 px-2 py-2 [.border-t]:pt-2", className)}
     {...props}
   />
 );

@@ -94,7 +94,7 @@ const stripTabLabels = (page) =>
     .evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("aria-label")));
 const boardVisible = async (page) =>
   (await page.getByRole("button", { name: "New ticket", exact: true }).count()) > 0;
-/** Every live restty canvas in the window — the keep-alive probe. */
+/** Every live terminal in the window — the keep-alive probe. */
 const terminalCanvasCount = (page) =>
   page.evaluate(() => document.querySelectorAll("[data-terminal-pane-id]").length);
 

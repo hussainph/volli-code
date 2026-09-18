@@ -54,18 +54,21 @@ plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) �
 the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Six recorded exceptions**, each because the ladder's 8px gaps cannot express something finer
-that is measured rather than chosen. They are commented at their site; do not re-collapse them
-without looking at the surface:
+**Nine recorded exceptions**, each because the ladder's fixed rungs cannot express a
+measured piece of geometry rather than a value chosen locally. They are commented at their site;
+do not re-collapse them without looking at the surface:
 
 | Site | Value | Why |
 |---|---|---|
 | `ui/button.tsx` size variants | `px-2.5` · `px-3` · `px-3.5` | A control's inset is a function of its own height, and this is a four-rung height ladder (20/24/28/32) with only two rungs in range |
 | `rail-panel-parts.tsx` `RAIL_PANEL_INSET` | `px-3` at narrow | The narrow step must be *smaller* than 16 and still an inset; 8 halves the edge. Collapsed, the variant became a silent no-op |
-| `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` | Optical alignment to the title's cap height, and the 2px that binds a title to its meta line |
+| `sidebar/session-band-row.tsx` | `mt-1.5` · `gap-0.5` · `gap-1.5` · `pt-0.5` | The first pair keeps the dot on the title cap height and binds the real title to its meta line. VC-383's shorter 14px/12px skeleton bars need the 2px top nudge and 6px join to occupy that measured two-line row before labels replace them |
 | `board/ticket-card.tsx` | `px-3` | A dense card trades air for content: at `px-4` real titles truncate a word earlier |
 | `browser/session-cursor.css` | chip `gap: 5px` · `padding: 0 7px` · `height: 20px` · action `height: 15px` | The Session cursor's label is a drawing at pointer scale, measured against a 16px arrow, not a control on the layout grid: at the ladder's next step the chip reads as a button beside the arrow rather than a name riding it. Its type and corners still take the `--text-label` and `--radius-sm` rungs |
+| `globals.css` Monaco loading skeleton | `height: 14px` · `top: 12px` · `top: 36px` | The pseudo-elements meet Monaco's 12px source inset and its measured two-line placeholder drawing; 8/16/24px rungs move a bar before the host is replaced |
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
+| `ui/list-row.tsx` `ListRowSkeleton` | `gap-1.5` | Its 16px/14px bars need the 6px join to preserve the measured two-line placeholder footprint; `gap-2` changes that first paint before the labels replace it |
+| `chat/transcript-skeleton.tsx` | `gap-1.5` | Its 14px assistant bars sit on a 20px top-to-top placeholder rhythm (14 + 6); `gap-2` makes the transcript's loading drawing taller before prose replaces it |
 
 **Responsiveness is the whitespace, not breakpoints:** `<ContentColumn>` is
 `mx-auto w-full max-w-content px-gutter` — on wide windows the side margins grow; as the window
@@ -95,11 +98,115 @@ the surrounding "L", whose color and contrast come from the active theme.
 
 ## Composer stack
 
-The Session composer and anything parked on it (ask-user questions; later, plans and subagent
-activity) share one shell: `rounded-container`, hairline `border-border`, `bg-card`,
-`shadow-raised` (`COMPOSER_STACK_SHELL` in `chat/composer-stack.ts`). Overlays stack **above** the
-composer and never replace it — the input stays so a follow-up can be typed while a question or a
-run is live.
+Cards parked above the composer (questions, activity, picker suggestions) keep the quiet
+`COMPOSER_STACK_SHELL` in `@volli/session-presentation`. They never replace the input.
+
+### New-ticket composer
+
+The writing canvas owns the space: title and description on the reading measure,
+with Status, Priority and Labels below. Working-copy setup and Create more live
+in **Options**, not beside every commit. Checkout and batch-entry selections
+remain visible on the closed Options trigger.
+
+The footer has **two commit buttons and a chooser**, welded into one pill.
+**Create** is its own press — filing a ticket without starting work is the other
+ordinary answer, not an advanced variant, and it is never hidden behind a caret.
+Beside it the **primary** starts something: Create & start by default, or
+Create & run for a saved Automation. Only the caret's menu is open-ended (chat,
+or any of the project's Automations), and selection never submits.
+
+`⌘/Ctrl+Enter` is plain Create — the unmodified chord for the unmodified action.
+`⇧⌘/Ctrl+Enter` fires the primary, whatever the menu has selected, so no chord
+badge is printed against a single menu row. Model and effort appear only for chat
+kickoff; an Automation uses its saved Runtime. Launch mode is per-open and resets
+when retargeting projects; the ticket draft itself still survives closing.
+
+**Those three commits are why this tray folds early.** They take ~215px of the
+settings' own line where a chat footer spends ~100px on one send key, so at the
+dialog's own 36rem the model pill, the effort chip and the buttons no longer fit
+on one line and the whole button group wrapped (VC-382). The tray marks its
+container `data-composer-container="commit-tray"` and gives in three steps
+instead:
+
+| Tray | The run reads |
+|---|---|
+| ≥ 40rem (the expanded sheet) | two pills — model, then effort |
+| 34–40rem (the dialog's own 36rem) | one pill, `Model · Effort` |
+| < 34rem | one pill, the model alone |
+
+The value never leaves the CONTROL, only the face: the trigger is still named
+"Model and effort: … · Extra high" and its popover still opens on the slider. The
+run is the row's elastic member (`basis-38`, the Add door plus the pill's own
+116px floor), so the model name truncates and the commits never squash — a
+wrapped tray is a layout accident wearing the shape of a decision, and the only
+box that still earns one is narrower than this dialog can be.
+
+**Staged files sit in a band of their own**, between the metadata chips and the
+tray, hairline above and `py-2` inside it — the same inset on both edges, so the
+thumbnails never touch the tray they sit on.
+
+### Prompt chrome — writing sheet and control tray (VC-335)
+
+The first pass unified controls but still looked like the old flat box. The follow-up makes
+prompt writing a distinct object: an opaque writing sheet, a tinted lower tray, and a fine
+accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer-chrome.ts`
+owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
+There is no backdrop blur, animated glow, or focus-triggered shell change.
+
+This treatment reaches Session chat, New ticket, Automation instructions (including Run once),
+command-prompt creation, and ticket comments. Questions retain their quieter stacked-card
+treatment.
+
+| Piece | Rung | Says |
+|---|---|---|
+| Settings (model, effort) | `sm` — 24px, edged `bg-card` pills, muted ink; one combined control below 24rem (40rem in a commit tray), naming the model alone below 18rem (34rem there) | facts about the turn |
+| Add / context | `icon-sm` — 24px; Add has a circular edge | secondary controls |
+| Send / Queue | `icon-lg` — 32px, `rounded-control`, filled with a fine bevel | the primary key |
+| Stop | `icon-lg` — 32px, `outline` | interrupt the turn |
+| Text box at rest | `min-h-20`, `py-4`, content-grown | room for a short paragraph |
+| Footer tray | `px-2 py-2`, tinted `--muted`, hairline top edge | separates writing from configuration |
+
+**The tray is earned, not automatic.** It exists to divide writing from
+configuration, so it appears only where there is configuration or a primary to
+carry: chat (model, effort, send), ticket creation, ticket comments. A surface
+whose only control is the `+` — Automation instructions, the command-prompt body
+— keeps the shared shell and the shared door but draws no tinted band, because a
+full-width tint holding one 24px button reads as a container someone forgot to
+fill.
+
+The send key is a deliberate exception to the action-pill silhouette: it shares the 12px control
+radius, while settings remain pills. The shell takes `shadow-card`; dialogs keep `shadow-overlay`.
+The chrome stays at one ink, so a resting composer never masquerades as disabled.
+
+**`+` is the one door.** A menu, not a paperclip: Attach files… · Commands & skills `/` ·
+Mention a file `@`, each row's trailing slot carrying the keystroke that makes the row unnecessary.
+The two picker rows write the trigger at the caret through the picker stack's own binding, so the
+list opens exactly as if typed. A surface that takes no files has no attach row; one with no picker
+has no trigger rows; the New-ticket footer, whose editor completes `@` itself, keeps the `+` as a
+one-press attach. The ticket Files rail keeps a paperclip — it is about files, not prompts.
+
+**Chords live on hover.** Send says `⏎ · ⇧⏎`, Queue says `⏎ · ⌘⏎ steer`, in tooltips on the
+control the chord replaces; never as a hint line under the box.
+
+**Narrow, the row gives in order.** The composer is an `@container/composer`; below 24rem the
+separate effort pill folds into the model control, whose face and popover then expose both values.
+**Below 18rem the face keeps the model alone**: past that width the printed effort word is paid for
+out of the model name (42px of name at the app's narrowest pane, against 83px without it), and the
+value is still on the control — in its accessible name, and on the slider its popover opens to.
+(A tray whose commits are buttons rather than one send key runs the same ladder wider: it folds at
+40rem and drops the printed value at 34rem — see the New-ticket composer above. One rule, two
+ladders, all four thresholds in `globals.css` beside the constants `composer-ui.tsx` measures the
+portalled popover with.)
+Within that control the tier gives before the model does — a qualifier must not outlive the thing
+it qualifies, and the pill's one fact is the model this Session sends to. Wide, it truncates first;
+through the fold it leaves the face entirely rather than clipping to a letter or two (`Ticket
+Sess…`, then a bare `T` welded to the model name), and the full line stays in the accessible name
+and at the head of the open list.
+The rule is shared by Session chat, New-ticket kickoff, and one-off Automation runtime controls.
+The context pill also drops its percent while keeping the ring. During a live turn, model and effort
+are frozen, so that disabled combined control leaves the narrow tray entirely; the queued Steer
+action keeps its icon and accessible name but drops its printed word. Add stays outside the omitted
+group, and the context / Stop / Queue cluster never moves.
 
 ## Elevation — three tiers
 
@@ -192,6 +299,37 @@ Nothing in the app should render a taller control than `lg`.
 drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-px` over the strip's
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
 hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
+
+## Cursors — native, and one rule
+
+The pointer stays native, and native means the arrow. The hand is reserved for **links that
+leave the app** — a rendered `<a>` in prose, Document Mode's followable link. Nothing else: a
+button, a row, or any control that answers a press shows the arrow. Tailwind v4 dropped the old
+`cursor: pointer` from buttons and this app keeps it dropped (VC-381); a `cursor-pointer` in the
+app UI is a bug, not a missing affordance.
+
+Clickable rows that are not `<button>`s — tabs, menu rows, the palette and quick-open rows, the
+transcript's tool rows, the answer and verdict rows — carry `cursor-default select-none`: the
+arrow, so a row never shows the text caret, and no selection, so a press-drag across a row
+answers the click instead of painting a selection. `MENU_ROW` has said this since the menus were
+unified; `ui/tab-strip.tsx` was the one interactive row that never picked it up, which is why
+every tab in the app hovered like a line of text. A `select-none` row that contains a real field
+is the field's exception: `ui/inline-rename.tsx` hands selection back with `select-text`.
+
+The deliberate exceptions, all already in the code:
+
+| Surface | Cursor | Where |
+|---|---|---|
+| Links that leave the app | hand | the UA default on `<a>`; `.volli-md-link-open` for the editor's links |
+| A drag in flight | `cursor-grabbing` | the board's lifted card, a tab being carried, the effort rail at `data-dragging` |
+| A surface that is only a drag | `cursor-grab` | the board's canvas pan, automation lane cards |
+| Resize handles | `cursor-col-resize` / `cursor-row-resize` | `sidebar/sidebar-resize-handle.tsx`, `ticket/rail-resize-handle.tsx`, `split/split-view-divider.tsx`, `sessions/session-split-layout.tsx` |
+| Disabled controls | `cursor-not-allowed` | `ui/switch.tsx`, `ui/input.tsx`, `ui/textarea.tsx`, `ui/select.tsx`, `ui/command.tsx` |
+| Text, and the controls that open onto it | I-beam | real fields (UA default); `cursor-text` on `ui/input-group.tsx`'s addon and `ticket/ticket-title.tsx`, where a press lands the caret |
+
+Click-and-drag tiles — board cards, tabs before the drag engages — keep the arrow at rest: the
+click is the primary answer, and the closed hand appears only once a drag is actually carrying
+something. The UI lab (`renderer/lab/`) is a scratch space and is not held to this.
 
 ## Split view — panes, zones, and the empty pane (VC-202)
 

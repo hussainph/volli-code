@@ -2,102 +2,15 @@
  * The renderer-side terminal seam (CONCEPT.md decision #23: keep the terminal
  * renderer swappable). Everything above this interface — the sessions layer,
  * tab strip, PTY piping — talks only to `TerminalEngine`, so the concrete
- * renderer (restty today; ghostty-web or xterm.js tomorrow) can change without
+ * renderer (xterm.js today, through its DOM renderer) can change without
  * touching the host. Deliberately DOM-facing but renderer-agnostic.
  *
  * Grid ownership: the engine measures its own container and owns the cols/rows
- * grid (like xterm.js + a fit addon). The host does NOT compute dimensions; it
- * subscribes via `onResize` and forwards the reported grid to the PTY. `write`
- * feeds PTY output IN; `onData` reports user keystrokes to forward OUT.
+ * grid. The host does NOT compute dimensions; it subscribes via `onResize` and
+ * forwards the reported grid to the PTY. `write` feeds PTY output IN; `onData`
+ * reports user keystrokes to forward OUT.
  */
-import type { GhosttyTheme } from "restty";
-
-/**
- * Which renderer a live terminal actually got. A closed union because callers
- * branch on it: the WebGL2 fallback gives every terminal its own GL context,
- * where WebGPU shares one device across all of them (see gpu-session.ts).
- *
- * `"none"` is a RESOLVED answer, not a missing one: the renderer tried WebGPU,
- * tried the WebGL2 fallback, got neither, and went ready anyway (software
- * rasteriser, GPU blocklist, `--disable-gpu`). It holds zero GPU contexts and
- * will never report anything else — the one thing a caller must not do is keep
- * waiting on it, which is what `null` would have said.
- *
- * That only holds for a `"none"` the renderer ANNOUNCED. A renderer polled
- * before it has resolved anything can also say "none", meaning the opposite;
- * `polledBackend` below is the converter that keeps the two apart.
- */
-export type TerminalBackend = "webgpu" | "webgl2" | "none";
-
-/**
- * The only sanctioned way into `TerminalBackend`, for a backend a renderer has
- * ANNOUNCED. Renderers report their backend as a bare string, so anything
- * unrecognised becomes `null` ("not resolved") rather than leaking past the
- * union — a future backend name must never be mistaken for one whose context
- * accounting we know.
- *
- * Announced is the load-bearing word: `"none"` survives as `"none"` here only
- * because an announcement is by definition the end of resolution. Use
- * `polledBackend` for a value READ off a renderer instead — see below.
- */
-export function toTerminalBackend(value: string | null): TerminalBackend | null {
-  if (value === "webgpu") return "webgpu";
-  if (value === "webgl2") return "webgl2";
-  if (value === "none") return "none";
-  return null;
-}
-
-/**
- * The same conversion for a backend POLLED off a renderer — read synchronously
- * rather than delivered by its event — where `"none"` must fold to `null`.
- *
- * The trap this exists to close: restty initialises its runtime state to
- * `backend: "none"` synchronously, and only overwrites it inside async init
- * (WASM load + adapter request; 100 ms to 1 s+, longer when WebGPU fails and
- * the WebGL2 fallback is tried). So the identical string means opposite things
- * depending on where it came from: announced, it is "tried both, got neither,
- * holds nothing forever"; polled, it is overwhelmingly "hasn't started yet".
- * Trusting the polled one reports free capacity for the whole acquisition
- * window — precisely when N terminals are each racing for a context — which is
- * the Chrome context-eviction cliff gpu-pressure exists to keep away from.
- *
- * `null` is the safe direction: it counts as pending, every resolution
- * (including a genuine `"none"`) is announced as an event, and that event is
- * what corrects the reading.
- */
-export function polledBackend(value: string | null): TerminalBackend | null {
-  const backend = toTerminalBackend(value);
-  return backend === "none" ? null : backend;
-}
-
-/**
- * Everything an engine costs the GPU, as one value. The two fields are only
- * ever meaningful TOGETHER — `backend === null` means "still resolving" under a
- * live renderer and "nothing was ever asked" without one — so the seam carries
- * them as a pair rather than letting a caller read one and infer the other.
- */
-export interface TerminalGpuState {
-  /** See `TerminalEngine.hasRenderer`. */
-  readonly hasRenderer: boolean;
-  /** See `TerminalEngine.backend`. */
-  readonly backend: TerminalBackend | null;
-}
-
-/**
- * Whether two GPU states are the same reading — the dedupe rule an engine's
- * `onGpuStateChanged` announcement keys off.
- *
- * On the PAIR, never on `backend` alone. A device-loss rebuild destroys the
- * renderer and builds a fresh one, and the backend it lands on is very often
- * the value it started from: `null` on both sides, because `polledBackend`
- * folds restty's birth-state `"none"` to `null` for the whole acquisition
- * window. Comparing backends alone makes that entire teardown-and-recreate
- * silent, so a reader counting live GPU contexts keeps publishing a reading
- * from before the crash until some unrelated event happens to jog it.
- */
-export function sameGpuState(a: TerminalGpuState, b: TerminalGpuState): boolean {
-  return a.hasRenderer === b.hasRenderer && a.backend === b.backend;
-}
+import type { GhosttyTheme } from "@volli/shared";
 
 /** Terminal grid dimensions in character cells. */
 export interface TerminalDimensions {
@@ -115,19 +28,22 @@ export interface TerminalDimensions {
 export interface TerminalAppearance {
   theme: GhosttyTheme;
   /** Preferred font families in order; engines resolve them against locally
-   *  installed fonts (Local Font Access) however their font loader works. */
+   *  installed fonts however their font loader works. */
   fontFamilies: string[];
   /** Font size in CSS pixels. */
   fontSize: number;
-  /** Programming-ligature shaping (ghostty `font-feature` calt/liga subset). */
+  /** Programming-ligature shaping (ghostty `font-feature` calt/liga subset).
+   *  Carried through the chain but not currently rendered — see the accepted
+   *  losses at the top of `xterm-engine.ts`. */
   ligatures: boolean;
   /** Whether apps may receive mouse reports (ghostty `mouse-reporting`). */
   mouseReporting: boolean;
   /** ghostty `macos-option-as-alt`: which Option key produces ESC-prefixed
    *  input instead of macOS composed characters. */
   macosOptionAsAlt: "left" | "right" | boolean;
-  /** ghostty `scrollback-limit` in bytes; null = engine default. Init-only:
-   *  applies to renderers created after a change, never live ones. */
+  /** ghostty `scrollback-limit` in bytes; null = engine default. Applies to
+   *  live terminals as well as new ones — the engine converts it to a line
+   *  budget it can resize into (see `scrollbackLines`). */
   scrollbackLimitBytes: number | null;
 }
 
@@ -136,7 +52,7 @@ export interface TerminalEngine {
    * Mount (or re-parent) the engine's rendered surface into `container`.
    * Idempotent and re-parent-safe: the engine keeps a persistent host element
    * so switching containers (React remounts, keep-alive re-reveals) never
-   * destroys the live GPU canvas.
+   * destroys the live terminal.
    */
   attach(container: HTMLElement): void;
 
@@ -159,21 +75,19 @@ export interface TerminalEngine {
   onResize(callback: (dimensions: TerminalDimensions) => void): () => void;
 
   /**
-   * Pause or resume the render loop (GPU frames). Pause hidden terminals: PTY
-   * output keeps being parsed so the buffer stays current, but no repaints or
-   * GPU ticks run — and therefore no `onResize` events fire while paused, so
-   * `fit()` after resuming a revealed terminal. Callable before `attach`
-   * (the state is applied when the renderer is created) and after `dispose`
-   * (no-op).
+   * Tell the engine whether its surface is on screen. PTY output is parsed
+   * either way, so the buffer stays current while hidden; what an engine owes
+   * this call is that revealing it (`setPaused(false)`) applies any fit that
+   * could not be taken against a zero-size host. Callable before `attach` and
+   * after `dispose` (no-op).
    */
   setPaused(paused: boolean): void;
 
   /**
    * Re-measure the container and repaint. Call after revealing a previously
-   * hidden (display:none, zero-size) terminal — a hidden GPU canvas measures
-   * as zero and must be refit on show. Implementations own settle timing:
-   * a fit that lands while hidden is applied on the next unpause, and the
-   * measurement is repeated once geometry/DPR have settled.
+   * hidden (display:none, zero-size) terminal. Implementations own settle
+   * timing: a fit that lands while hidden is applied on the next unpause, and
+   * the measurement is repeated once geometry has settled.
    */
   fit(): void;
 
@@ -186,56 +100,13 @@ export interface TerminalEngine {
   resetFontSize(): void;
 
   /**
-   * Whether a renderer exists at all right now. False for an engine that has
-   * been constructed but never `attach`ed (a headless session's engine is
-   * created at boot and may never host a view), between the teardown and the
-   * re-creation inside `rebuildRenderer`, and after `dispose`.
-   *
-   * This is what separates "holds no GPU context and never asked for one" from
-   * "asked, still waiting" — `backend === null` cannot tell them apart, and a
-   * caller counting contexts or waiting for one to resolve needs both answers.
-   */
-  readonly hasRenderer: boolean;
-
-  /**
-   * The renderer this engine actually got, or `null` while it is still
-   * unresolved — backend selection finishes asynchronously, well after the
-   * engine is constructed and often after it is attached. Only meaningful
-   * alongside `hasRenderer`: with no renderer, `null` means "nothing has been
-   * asked of the GPU yet", not "an answer is coming".
-   */
-  readonly backend: TerminalBackend | null;
-
-  /**
-   * Subscribe to this engine's GPU cost changing — BOTH inputs, announced as
-   * the consistent `(hasRenderer, backend)` pair, deduped with `sameGpuState`.
-   *
-   * Both, because both move the reading and only one of them is a backend
-   * event: a renderer being created or destroyed (attach, the device-loss
-   * rebuild, dispose) changes what the GPU holds without necessarily changing
-   * `backend` at all. Reading the getters instead races the async backend
-   * selection, so this event — not the getters — is what a caller counting
-   * live GPU contexts must key off.
-   *
-   * Multi-subscriber; returns the unsubscribe function (see onData).
-   */
-  onGpuStateChanged(listener: (state: TerminalGpuState) => void): () => void;
-
-  /**
-   * Re-apply a changed appearance to the LIVE renderer (theme, font size,
-   * fonts, ligatures, mouse mode) without recreating it — the live-reload
+   * Re-apply a changed appearance to the LIVE terminal (theme, font size,
+   * fonts, scrollback, mouse mode) without recreating it — the live-reload
    * path for ghostty config edits. Optional: an engine without runtime
    * knobs simply renders new sessions with the new appearance.
    */
   applyAppearance?(appearance: TerminalAppearance): void;
 
-  /**
-   * Tear down and recreate the underlying renderer in place after a GPU
-   * device loss, preserving the host element and replaying recent output.
-   * Optional: only GPU-backed engines have a device to lose.
-   */
-  rebuildRenderer?(): void;
-
-  /** Tear down the renderer and release GPU resources. Terminal use only. */
+  /** Tear down the terminal and release its resources. Terminal use only. */
   dispose(): void;
 }

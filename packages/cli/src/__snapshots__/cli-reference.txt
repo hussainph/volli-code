@@ -47,6 +47,15 @@ Agent Tool Surface
   session stop  Stop another agent session's work, recording who stopped it.
   session send  Steer a message into another running agent session.
   session delegate  Delegate one task to a subagent Session that answers back here.
+  automation run  Run a saved Automation on one Ticket, opening one fresh Session.
+  mcp list  List this project's configured MCP servers, their tools, and where each came from.
+  mcp preview  Connect to an MCP server and show its tools without saving anything.
+  mcp install  Add or update one MCP server for this project, after previewing what it would do.
+  mcp refresh  Reconnect to a configured MCP server and re-read its tool catalog.
+  mcp enable  Turn a configured MCP server on for Sessions created from now on.
+  mcp disable  Turn a configured MCP server off without deleting it.
+  mcp tools  Choose which of a configured server's discovered tools are on.
+  mcp remove  Delete a configured MCP server, after previewing what it breaks.
 
 App-only verbs
   ticket archive  Archive a ticket (its worktree is preserved).
@@ -878,6 +887,239 @@ Notes:
 - Topics: concepts, changes, exit-codes, addressing, json, orchestration.
 
 ============================================================================
+volli help automation run
+============================================================================
+automation run — Run a saved Automation on one Ticket, opening one fresh Session.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: automation_run
+
+Input:
+  automation  The name of the Automation to run, spelled as it is in Volli, for example 'Nightly sweep'.
+  ticket  The display id of the Ticket this agent invocation targets, including for a schedule-trigger Automation, for example VC-12.
+
+Effects:
+- Durable write: Create one Automation Run with its resolved model and reasoning, open the fresh Session it names with the `automation` Actor, and deliver the Automation's Instructions as that Session's first message.
+- Human sees: The Run appears in the Ticket's Run history and its Session is marked with the `automation` Actor — the same record a person's Run by hand writes, with nothing naming the agent that asked for it.
+- Does not: The Ticket does not move, and no existing Session is woken: a Run always opens a fresh one.
+- Does not: It does not wait for the Run to finish, and the Run does not report back into the calling Session.
+- Does not: No Automation is created, edited or armed — this verb runs a saved one and authors nothing.
+
+Notes:
+- Runs as a named tool in the Board Session's tool bundle; the shell never executes it.
+- Runs a saved Automation a person already wrote; it cannot create or edit one.
+
+============================================================================
+volli help mcp list
+============================================================================
+mcp list — List this project's configured MCP servers, their tools, and where each came from.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_list
+
+Effects:
+- Durable writes: none.
+- Human sees: Nothing changes: this reads the same configuration Settings → Configure → MCP Servers shows.
+- Does not: No server is connected, no process is started, and no Session's tool list changes.
+
+Notes:
+- Reads the project's own configuration; nothing is connected and no server process is started.
+- Provenance is what an install RECORDED, never what Volli verified: a version is what was asked for and a digest is what was claimed.
+- A server marked stale kept its last working tool list after a failed refresh; mcp_refresh retries it.
+
+============================================================================
+volli help mcp preview
+============================================================================
+mcp preview — Connect to an MCP server and show its tools without saving anything.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_preview
+
+Input:
+  id  A short stable id for this server, letters, digits, dashes and underscores only. Installing the same id twice updates that server rather than adding a second one.
+  name  The display name a person will see in Settings, for example 'Acme Files'.
+  command (optional)  For a LOCAL server: the executable to run, which must already be on PATH, for example 'npx' or 'uvx'. Volli installs nothing. Give this or url, never both.
+  args (optional)  Arguments for the local command, one per entry, exactly as an MCP config spells them: ["-y", "@acme/files-mcp"]. An entry may contain spaces. Ignored for a remote server.
+  url (optional)  For a REMOTE server: its streamable HTTP endpoint, http or https, with no credentials in the URL. Give this or command, never both.
+
+Effects:
+- Durable writes: none.
+- Human sees: A local server's process is started for the length of the handshake, and a remote server sees one connection.
+- Does not: Nothing is saved: the project's MCP configuration is exactly as it was, and no Session gains a tool.
+
+Notes:
+- Starts the local command or opens the remote connection for as long as the handshake takes, then closes it.
+- Nothing is stored: no server row, no tool selection, no provenance.
+- Bounded by the 10-second connection limit, and by this turn's own cancellation.
+
+============================================================================
+volli help mcp install
+============================================================================
+mcp install — Add or update one MCP server for this project, after previewing what it would do.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_install
+
+Input:
+  id  A short stable id for this server, letters, digits, dashes and underscores only. Installing the same id twice updates that server rather than adding a second one.
+  name  The display name a person will see in Settings, for example 'Acme Files'.
+  command (optional)  For a LOCAL server: the executable to run, which must already be on PATH, for example 'npx' or 'uvx'. Volli installs nothing. Give this or url, never both.
+  args (optional)  Arguments for the local command, one per entry, exactly as an MCP config spells them: ["-y", "@acme/files-mcp"]. An entry may contain spaces. Ignored for a remote server.
+  url (optional)  For a REMOTE server: its streamable HTTP endpoint, http or https, with no credentials in the URL. Give this or command, never both.
+  tools (optional)  Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.
+  source (optional)  Where this configuration came from, recorded so a person can audit it later: a registry entry, a URL, or a document. Recorded as given; Volli fetches nothing from it.
+  registryType (optional)  The ecosystem the source named, as an MCP server.json spells it. Recorded metadata; Volli resolves nothing in that ecosystem. (valid: npm, pypi, nuget, cargo, oci, mcpb)
+  version (optional)  The version string this install asked for. Recorded as asked; nothing pins the command that actually runs to it.
+  digest (optional)  A digest the source published, such as an mcpb fileSha256. Recorded so a person can see what was pinned; it is never verified, because Volli downloads nothing to verify.
+  confirm (optional)  Omit it, or pass "preview", to see the warning and what would happen while writing nothing. Pass "apply" only after reading that warning, to actually perform the operation. (valid: preview, apply)
+
+Effects:
+- Durable write: Store the server's transport, its discovered tool catalog, the tools selected from it, and the provenance supplied with the request, keyed on the server id so a repeat updates rather than duplicates.
+- Durable write: Append one durable audit record naming the request, its source, its outcome, and what to do if it failed.
+- Human sees: The server appears in Settings → Configure → MCP Servers with its provenance and selected tools, and the install shows in that project's MCP history.
+- Does not: The calling Session gains nothing: its tool list was frozen at birth and is byte-identical afterwards. The selected tools reach the next Session created.
+- Does not: No package is downloaded, unpacked or verified, and no existing Session's tool list changes.
+
+Notes:
+- Previews by default: without confirm=apply nothing is connected for real and nothing is written.
+- Volli downloads nothing. A local server is a command that must already be on PATH — usually run through npx or uvx — and source, version and digest are recorded as provenance, never fetched or verified.
+- Saving the same server id twice updates that row in place, so repeating an install cannot create a duplicate.
+- Settings are written only after discovery succeeds. A first-time failure writes nothing at all; a failed update keeps the last working tool list and marks the server stale.
+- Authenticated servers are not supported yet: no header, no secret environment value, so a server needing an API key cannot be installed here.
+
+============================================================================
+volli help mcp refresh
+============================================================================
+mcp refresh — Reconnect to a configured MCP server and re-read its tool catalog.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_refresh
+
+Input:
+  server  The server's id, as mcp_list prints it.
+
+Effects:
+- Durable write: Replace the stored tool catalog with the one just discovered, or mark the server stale with the failure while keeping the last working catalog.
+- Human sees: The server's tool list and status update in Settings → Configure → MCP Servers.
+- Does not: No existing Session changes: a Session's MCP tools are frozen at birth, and a refreshed catalog reaches the next Session created.
+
+Notes:
+- Keeps the current tool selection; a selected tool the server no longer offers fails the refresh rather than being silently dropped.
+- A failed refresh leaves the last working catalog in place and marks the server stale, so nothing that worked stops working.
+
+============================================================================
+volli help mcp enable
+============================================================================
+mcp enable — Turn a configured MCP server on for Sessions created from now on.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_enable
+
+Input:
+  server  The server's id, as mcp_list prints it.
+
+Effects:
+- Durable write: Set the server's enabled flag.
+- Human sees: The server's On checkbox in Settings → Configure → MCP Servers.
+- Does not: No existing Session gains a tool: a frozen tool list never changes. The next Session created sees the change.
+
+Notes:
+- Adding a server and turning it on are separate acts; this is the second one.
+- Nothing is connected: enablement is a stored flag read when a Session is created.
+
+============================================================================
+volli help mcp disable
+============================================================================
+mcp disable — Turn a configured MCP server off without deleting it.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_disable
+
+Input:
+  server  The server's id, as mcp_list prints it.
+
+Effects:
+- Durable write: Clear the server's enabled flag.
+- Human sees: The server's On checkbox in Settings → Configure → MCP Servers.
+- Does not: No existing Session loses a tool: a frozen tool list never changes, and the server's configuration is kept so reattachment keeps working.
+
+Notes:
+- The reversible alternative to mcp_remove: the configuration stays, so older Sessions using this server can still reattach.
+- Nothing is connected, and no running Session loses a tool it was born with.
+
+============================================================================
+volli help mcp tools
+============================================================================
+mcp tools — Choose which of a configured server's discovered tools are on.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_tools
+
+Input:
+  server  The server's id, as mcp_list prints it.
+  tools  The complete set of tool names to leave on, separated by spaces or commas. Pass an empty string to turn every tool off.
+
+Effects:
+- Durable write: Replace which of the stored catalog's tools are marked on.
+- Human sees: The per-tool checkboxes in Settings → Configure → MCP Servers.
+- Does not: No existing Session changes: its MCP tools are frozen at birth. The selection reaches the next Session created.
+
+Notes:
+- The selection replaces the current one: a discovered tool not named here is turned off.
+- Only tools the last successful discovery found can be selected; an unknown name is refused rather than ignored.
+
+============================================================================
+volli help mcp remove
+============================================================================
+mcp remove — Delete a configured MCP server, after previewing what it breaks.
+
+Door: Agent Tool Surface (named tool; not shell-executable)
+Verb tier: control
+Tool availability: not claimed outside a resolved Session.
+
+Tool: mcp_remove
+
+Input:
+  server  The server's id, as mcp_list prints it.
+  confirm (optional)  Omit it, or pass "preview", to see the warning and what would happen while writing nothing. Pass "apply" only after reading that warning, to actually perform the operation. (valid: preview, apply)
+
+Effects:
+- Durable write: Delete the server row, its stored catalog, and its tool selection.
+- Durable write: Append one durable audit record naming what was removed, by which Session, and what it may have broken.
+- Human sees: The server leaves Settings → Configure → MCP Servers, and the removal shows in that project's MCP history.
+- Does not: The calling Session's frozen tool list does not change, and no Session currently attached loses a tool mid-run.
+- Does not: Session history is not edited: transcripts still name the tools that were called.
+
+Notes:
+- Previews by default: without confirm=apply nothing is deleted.
+- Older Sessions born holding one of this server's tools will fail to reattach once it is gone, because the transport their frozen tool needs no longer exists.
+- mcp_disable is the reversible alternative and keeps reattachment working.
+
+============================================================================
 volli help ticket
 ============================================================================
 ticket subcommands:
@@ -953,6 +1195,20 @@ volli help prompt
 prompt subcommands:
   prompt baseline  Measure the prompt baseline a fresh chat Session starts with, per section. [Agent CLI]
 Run volli help prompt <subcommand> for detail.
+
+============================================================================
+volli help mcp
+============================================================================
+mcp subcommands:
+  mcp list     List this project's configured MCP servers, their tools, and where each came from. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp preview  Connect to an MCP server and show its tools without saving anything. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp install  Add or update one MCP server for this project, after previewing what it would do. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp refresh  Reconnect to a configured MCP server and re-read its tool catalog. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp enable   Turn a configured MCP server on for Sessions created from now on. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp disable  Turn a configured MCP server off without deleting it. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp tools    Choose which of a configured server's discovered tools are on. [Agent Tool Surface (named tool; not shell-executable)]
+  mcp remove   Delete a configured MCP server, after previewing what it breaks. [Agent Tool Surface (named tool; not shell-executable)]
+Run volli help mcp <subcommand> for detail.
 
 ============================================================================
 volli help concepts
@@ -1252,17 +1508,17 @@ Run volli help session <subcommand> for detail.
 ============================================================================
 volli help hook
 ============================================================================
-USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "hook" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help nonsense
 ============================================================================
-USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "nonsense" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help exit-codes extra
 ============================================================================
-USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
+USAGE Unknown help path "exit-codes extra" (commands: identify, board, ticket list, ticket show, ticket events, ticket brief, worktree status, worktree diff, conflicts, project list, label list, model list, cost, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, worktree sync, label merge, session start, session stop, session send, session delegate, session list, session peek, session answer, session done, session blocked, session link, notify, app launch, prompt baseline, doctor, help, automation run, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration). Next: Run `volli help`, then ask for one listed command or topic.
 
 ============================================================================
 volli help ticket create VC-1
@@ -1337,7 +1593,7 @@ Notes:
 ============================================================================
 volli frobnicate
 ============================================================================
-UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, label merge, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, session stop, session send, session delegate; topics: concepts, changes, exit-codes, addressing, json, orchestration)
+UNSUPPORTED_COMMAND No Volli verb matches "frobnicate" (declared verbs: identify, board, ticket list, ticket show, ticket events, ticket create, ticket update, ticket move, ticket comment, ticket signal, ticket archive, ticket brief, worktree status, worktree diff, worktree sync, conflicts, project list, label list, label merge, model list, cost, session list, session peek, session answer, session start, session done, session blocked, session link, notify, doctor, prompt baseline, app launch, help, automation run, session stop, session send, session delegate, mcp list, mcp preview, mcp install, mcp refresh, mcp enable, mcp disable, mcp tools, mcp remove; topics: concepts, changes, exit-codes, addressing, json, orchestration)
 
 ============================================================================
 volli identify --not-an-option
@@ -1518,6 +1774,51 @@ USAGE Unknown option --not-an-option (options: --fix, --dry-run) — see volli h
 volli help --not-an-option
 ============================================================================
 ok {"command":"help","args":{"path":["--not-an-option"]},"json":false}
+
+============================================================================
+volli automation run --not-an-option
+============================================================================
+WRONG_DOOR volli automation run exists on the Agent Tool Surface as automation.run; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp list --not-an-option
+============================================================================
+WRONG_DOOR volli mcp list exists on the Agent Tool Surface as mcp.list; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp preview --not-an-option
+============================================================================
+WRONG_DOOR volli mcp preview exists on the Agent Tool Surface as mcp.preview; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp install --not-an-option
+============================================================================
+WRONG_DOOR volli mcp install exists on the Agent Tool Surface as mcp.install; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp refresh --not-an-option
+============================================================================
+WRONG_DOOR volli mcp refresh exists on the Agent Tool Surface as mcp.refresh; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp enable --not-an-option
+============================================================================
+WRONG_DOOR volli mcp enable exists on the Agent Tool Surface as mcp.enable; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp disable --not-an-option
+============================================================================
+WRONG_DOOR volli mcp disable exists on the Agent Tool Surface as mcp.disable; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp tools --not-an-option
+============================================================================
+WRONG_DOOR volli mcp tools exists on the Agent Tool Surface as mcp.tools; the Agent CLI does not execute it.
+
+============================================================================
+volli mcp remove --not-an-option
+============================================================================
+WRONG_DOOR volli mcp remove exists on the Agent Tool Surface as mcp.remove; the Agent CLI does not execute it.
 
 ============================================================================
 volli session harness ORACLE-1 --not-an-option

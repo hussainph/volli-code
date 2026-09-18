@@ -150,11 +150,20 @@ const fixture = vi.hoisted(() => {
   return { record, ended, interrupted, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
 });
 
-vi.mock("@renderer/stores/ticket-session-records", async () => {
+// Partial: the STORE is a fixture, but `ticketSessionListingStateOf` is kept
+// real (VC-383). It is a pure reader, and these rows depend on the arm it
+// states — a ticket whose rows were seeded directly, with no recorded listing
+// state, is a LANDED answer and must draw its rows rather than a skeleton.
+// Re-declaring it here would let the fixture and the store disagree about that.
+vi.mock("@renderer/stores/ticket-session-records", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/stores/ticket-session-records")>();
   const { create } = await import("zustand");
   return {
+    ...actual,
     useTicketSessionRecordsStore: create(() => ({
       byTicket: { "ticket-6": fixture.rows },
+      listingState: {},
+      listingError: {},
       refresh: () => Promise.resolve(),
       renameLocally: () => {},
       setActiveHarness: () => {},

@@ -26,7 +26,9 @@ interface InspectableProps {
   "aria-label"?: string;
   children?: React.ReactNode;
   className?: string;
+  compactEffort?: { levels: readonly string[]; value: string; onChange(level: string): void };
   disabled?: boolean;
+  label?: string;
   levels?: readonly string[];
   onClick?(): void;
   onCloseAutoFocus?(event: { preventDefault(): void }): void;
@@ -294,6 +296,14 @@ describe("the queued message row", () => {
     expect(html).toContain('aria-label="Queued message actions:');
   });
 
+  it("keeps Steer direct but lets its printed label give way in a narrow live turn", () => {
+    const html = renderComposer();
+
+    expect(html).toContain('aria-label="Steer queued message: also cover the empty-name branch"');
+    expect(html).toContain('class="composer-steer-label"');
+    expect(html).toContain("composer-live-config");
+  });
+
   it("names turn interruption and wears no focus dressing on the shell", () => {
     const html = renderComposer();
 
@@ -340,6 +350,21 @@ function footerProps(overrides: Partial<SessionComposerProps> = {}): SessionComp
 
 function renderFooter(overrides: Partial<SessionComposerProps> = {}): string {
   return renderToStaticMarkup(<SessionComposer {...footerProps(overrides)} />);
+}
+
+/** Every hover label in the footer, in row order — the chords the primaries name. */
+function hintLabels(props: SessionComposerProps): string[] {
+  const labels: string[] = [];
+  const walk = (node: React.ReactNode): void => {
+    for (const child of React.Children.toArray(node)) {
+      if (!React.isValidElement(child)) continue;
+      const own = child.props as InspectableProps;
+      if (typeof own.label === "string") labels.push(own.label);
+      walk(own.children);
+    }
+  };
+  walk(composerTree(props));
+  return labels;
 }
 
 /** The effort chip as an ELEMENT, so its props can be read rather than parsed. */
@@ -427,15 +452,78 @@ describe("the effort control's place in the footer", () => {
     expect(effortPill()?.props.levels).toEqual(["low", "medium", "xhigh"]);
   });
 
-  it("rests its chrome dim, and comes up for focus AND for an open menu", () => {
+  it("offers one responsive model-and-effort control without duplicating the slider stops", () => {
+    const html = renderFooter();
+    const model = findElements(composerTree(footerProps()), ModelPill)[0];
+
+    expect(model?.props.compactEffort).toMatchObject({
+      levels: ["low", "medium", "xhigh"],
+      value: "medium",
+    });
+    expect(html).toContain("composer-separate-effort");
+    expect(html).toContain("composer-merged-effort-label");
+  });
+
+  it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
+    // The row rested at 70% and came up under focus. On the app's own
+    // canvases that made a resting composer and a disabled one the same
+    // picture, and the field (T3 Code, OpenCode, ChatGPT, Cursor) draws the
+    // chrome at one ink and lets the muted tier say "chrome" by itself.
     const html = renderFooter();
 
-    expect(html).toContain("opacity-70");
-    expect(html).toContain("group-focus-within/composer:opacity-100");
-    // The half `:focus-within` cannot do: a Radix popover portals its content
-    // out of this form, so opening the model list moves focus off the composer
-    // and the row would dim under the hand that opened it.
-    expect(html).toContain("has-[[data-state=open]]:opacity-100");
+    expect(html).not.toContain("opacity-70");
+    expect(html).not.toContain("group-focus-within/composer:opacity-100");
+  });
+
+  it("draws every control on the shared rung, and the primary at the larger send-key rung (VC-335)", () => {
+    const html = renderFooter();
+
+    // The model and effort pills are `sm`; Send is `icon-lg`, filled.
+    // Its 32px key stands above the 24px settings. Nothing is `xs` any
+    // more: that rung is for inline row actions, and the queued rows (absent
+    // here) are the only place the composer still wears it.
+    expect(html).toMatch(/data-variant="ghost" data-size="sm"[^>]*data-testid="model-pill"/);
+    expect(html).toMatch(
+      /data-variant="ghost" data-size="sm"[^>]*aria-label="Reasoning effort: Medium"/,
+    );
+    expect(html).toMatch(/data-variant="default" data-size="icon-lg"[^>]*aria-label="Send"/);
+    expect(html).not.toContain('data-size="xs"');
+    expect(html).not.toContain('data-size="icon-xs"');
+  });
+
+  it("separates the writing sheet, settings tray, and send key (VC-335)", () => {
+    const html = renderFooter();
+    expect(html).toContain("prompt-surface");
+    expect(html).toContain("prompt-toolbar");
+    expect(html).toContain("prompt-config");
+    expect(html).toContain("prompt-primary rounded-control");
+    expect(html).toContain("min-h-20");
+  });
+
+  it("keeps prompt entry on the writing sheet without an expanded-editor icon", () => {
+    const html = renderFooter();
+
+    expect(html).not.toContain("Expand message editor");
+    expect(html).toContain('aria-keyshortcuts="Enter Shift+Enter Meta+Enter Control+Enter"');
+    expect(html).toContain('aria-keyshortcuts="Enter"');
+  });
+
+  it("names the chord on the primary's hover, and both of them while a turn is live", () => {
+    // ⏎ / ⇧⏎ idle, ⏎ / ⌘⏎ live — the keystrokes nothing on the surface said.
+    // Read off the element tree: a Radix tooltip's content is not in the
+    // static markup until it opens, and its label is a prop of the hint.
+    expect(hintLabels(footerProps({ working: false }))).toEqual(["Send ⏎ · New line ⇧⏎"]);
+    expect(hintLabels(footerProps({ working: true }))).toEqual(["Stop turn", "Queue ⏎ · Steer ⌘⏎"]);
+  });
+
+  it("opens everything a message can take under one `+` (VC-335)", () => {
+    const html = renderFooter({ onAttachFiles: () => undefined });
+
+    expect(html).toContain('aria-label="Add to message"');
+    // A menu, not a bare paperclip: the `/` and `@` rows are what teach the
+    // two triggers nothing else on the surface names.
+    expect(html).toContain('data-slot="dropdown-menu-trigger"');
+    expect(html).not.toContain('aria-label="Attach files"');
   });
 });
 

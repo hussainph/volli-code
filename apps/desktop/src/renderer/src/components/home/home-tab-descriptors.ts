@@ -31,6 +31,7 @@ import { chatTabId, CHAT_TAB_FALLBACK_LABEL } from "@renderer/components/ticket/
 import { chatTabStatus } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { browserTabDisplayTitle } from "@renderer/stores/browser-tabs";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import type { SessionTab } from "@renderer/stores/sessions";
 
@@ -52,10 +53,12 @@ export function useHomeTabDescriptors({
 }: HomeTabDescriptorsInput): readonly HomeTabDescriptor[] {
   const chatTitles = useChatSessionsStore(
     useShallow((state) =>
-      chatIds.map(
-        (sessionId) =>
-          state.sessions[sessionId]?.projection?.session.title ?? CHAT_TAB_FALLBACK_LABEL,
-      ),
+      chatIds.map((sessionId) => state.sessions[sessionId]?.projection?.session.title ?? null),
+    ),
+  );
+  const draftChatTitles = useChatDraftsStore(
+    useShallow((state) =>
+      chatIds.map((sessionId) => state.drafts[sessionId]?.provisional?.title ?? null),
     ),
   );
   const chatStatuses = useChatSessionsStore(
@@ -73,7 +76,7 @@ export function useHomeTabDescriptors({
       kind: "chat",
       id: chatTabId(sessionId),
       sessionId,
-      title: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      title: draftChatTitles[index] ?? chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
       status: chatStatuses[index] ?? "idle",
     })),
     ...fileTabs.map((tab, index): HomeTabDescriptor => {

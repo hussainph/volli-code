@@ -85,6 +85,34 @@ import { useBoardStore } from "@renderer/stores/board";
 import { Board } from "./board";
 import { columnDroppableId } from "./board-dnd";
 
+/**
+ * How many card shells and column droppables have rendered — counted at the
+ * dnd-kit hooks they call, so a shell React skipped through a memo is a shell
+ * that is not counted. This is what "the picker no-op re-rendered the whole
+ * board" was made of, and what the last case below pins.
+ */
+const renders = vi.hoisted(() => ({ sortable: 0, droppable: 0 }));
+vi.mock("@dnd-kit/sortable", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/sortable")>();
+  return {
+    ...actual,
+    useSortable: (...args: Parameters<typeof actual.useSortable>) => {
+      renders.sortable += 1;
+      return actual.useSortable(...args);
+    },
+  };
+});
+vi.mock("@dnd-kit/core", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    useDroppable: (...args: Parameters<typeof actual.useDroppable>) => {
+      renders.droppable += 1;
+      return actual.useDroppable(...args);
+    },
+  };
+});
+
 /* --------------------------------------------------------- the layout shim */
 
 /**
@@ -483,6 +511,12 @@ function grown(status: TicketStatus): boolean {
   );
 }
 
+function ticketSlots(status: TicketStatus): string[] {
+  return [...columnNamed(status).querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].map(
+    (slot) => slot.dataset.boardTicketSlot!,
+  );
+}
+
 /**
  * Which droppable dnd-kit says the card is over, read back from its OWN live
  * region rather than from anything this file computed. It is what keeps the
@@ -591,6 +625,17 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
+  // A column watches its own scroller to keep its mounted window sized
+  // (VC-316). jsdom ships no `ResizeObserver`, and inert is the right stub
+  // here: these cases move the board by dragging, never by resizing it.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
@@ -618,6 +663,9 @@ beforeEach(() => {
     runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
+    // A landed rail version from an earlier mount would let this case answer
+    // from a cache the `beforeEach` above just cleared (VC-373).
+    railReadAt: {},
   });
   canvasMeasures = 0;
   restoreLayout = installLayout();
@@ -643,6 +691,47 @@ const MANY = 12;
 const BUDGET = 60_000;
 
 describe("a card flipping between itself and the column holding it", () => {
+  it(
+    "keeps the same full ticket preview behind the expanded automation choices",
+    async () => {
+      const grip = await pickUp();
+      const preview = document.querySelector<HTMLElement>("[data-ticket-drag-preview]");
+      expect(preview).not.toBeNull();
+      const contents = preview?.textContent;
+      await move(grip.card);
+      await press("keydown", { key: "Alt", altKey: true });
+      await move(grip.card, true);
+      expect(grown("doing")).toBe(true);
+      expect(document.querySelector("[data-ticket-drag-preview]")).toBe(preview);
+      expect(preview?.textContent).toBe(contents);
+      expect(preview?.className).toContain("opacity-30");
+      expect(preview?.parentElement?.style.zIndex).toBe("10");
+      await press("keyup", { key: "Alt", altKey: false });
+      expect(preview?.className).not.toContain("opacity-30");
+      await endDrag();
+    },
+    BUDGET,
+  );
+
+  it(
+    "keeps cross-column measured nodes frozen and paints the resolved landing column",
+    async () => {
+      await pickUp();
+      const beforeDoing = ticketSlots("doing");
+      const beforeTodo = ticketSlots("todo");
+      const target = columnNamed("todo").querySelector("article");
+      expect(target).not.toBeNull();
+      await move(centre(target!));
+
+      expect(ticketSlots("doing")).toEqual(beforeDoing);
+      expect(ticketSlots("todo")).toEqual(beforeTodo);
+      expect(columnNamed("todo").getAttribute("data-drop-aimed")).toBe("true");
+      expect(columnNamed("doing").hasAttribute("data-drop-aimed")).toBe(false);
+      await endDrag();
+    },
+    BUDGET,
+  );
+
   it(
     "does not re-measure the board's scroll ancestry more as the flips pile up",
     async () => {
@@ -723,6 +812,76 @@ describe("a card flipping between itself and the column holding it", () => {
       expect(many.over).toEqual(alternating(MANY));
       expect(many.measures).toBe(few.measures);
       expect(many.measures).toBeLessThanOrEqual(2);
+    },
+    BUDGET,
+  );
+});
+
+/* ---------------------------------------------- what a no-op move costs */
+
+/** `TICKETS` plus `extra` more cards spread over the three standing columns. */
+function biggerBoard(extra: number): Ticket[] {
+  const statuses: TicketStatus[] = ["todo", "doing", "needs_review"];
+  return [
+    ...TICKETS,
+    ...Array.from({ length: extra }, (_, index) =>
+      ticket(`x${index}`, 100 + index, statuses[index % statuses.length]!),
+    ),
+  ];
+}
+
+interface Wiggle {
+  sortable: number;
+  droppable: number;
+  /** What the card was announced over, collapsed; a no-op run reads as one entry. */
+  over: string[];
+}
+
+/**
+ * `steps` pointer moves that stay inside the lifted card — the pointer
+ * shifts by a pixel, so each is a real move dnd-kit's sensor sees, and none
+ * of them changes `over`, the hovered column or ⌥.
+ */
+async function wiggle(grip: Grip, steps: number): Promise<Wiggle> {
+  // Settle: the first move after lift-off carries dnd-kit's own start-up work.
+  await move({ x: grip.card.x, y: grip.card.y + 6 });
+  renders.sortable = 0;
+  renders.droppable = 0;
+  const over: string[] = [];
+  for (let step = 0; step < steps; step += 1) {
+    await move({ x: grip.card.x + (step % 2), y: grip.card.y + 6 });
+    const now = overNow();
+    if (now !== null && over.at(-1) !== now) over.push(now);
+  }
+  return { sortable: renders.sortable, droppable: renders.droppable, over };
+}
+
+const WIGGLES = 12;
+
+describe("a pointer move that changes nothing", () => {
+  it(
+    "renders no column and no card shell but the lifted one, however many cards there are",
+    async () => {
+      const small = await wiggle(await pickUp(), WIGGLES);
+      await endDrag();
+      await unmountBoard();
+
+      useBoardStore.setState({ ticketsByProject: { p1: biggerBoard(24) } });
+      const large = await wiggle(await pickUp(), WIGGLES);
+      await endDrag();
+
+      // The gesture was a real drag that never left the lifted card.
+      expect(small.over).toEqual([DRAGGED]);
+      expect(large.over).toEqual([DRAGGED]);
+      // No column re-rendered for it…
+      expect(small.droppable).toBe(0);
+      expect(large.droppable).toBe(0);
+      // …and the only shell that did is the lifted card's own, which follows
+      // the pointer. Pre-fix this read every card on the board per move —
+      // 6 × 12 against 30 × 12 — because the ⌥ picker's reducer minted a fresh
+      // state for a move that changed nothing, and the board rendered for it.
+      expect(large.sortable).toBe(small.sortable);
+      expect(small.sortable).toBeLessThanOrEqual(WIGGLES);
     },
     BUDGET,
   );

@@ -134,6 +134,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
+import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 import { ticketScope } from "@renderer/stores/sessions";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
@@ -686,7 +687,11 @@ export function TicketRepositorySummary({
   const [watchAttempt, setWatchAttempt] = React.useState(0);
   const [stage, setStage] = React.useState<DoneFlowStage>("idle");
   // The global Done-TTL, only needed to name the "In Done for N+ days" line.
-  const [ttlDays, setTtlDays] = React.useState<number | null>(null);
+  // Read once app-wide (stores/retention-ttl.ts): every ticket's card reads
+  // the same store, so a ticket switch or a planning broadcast costs nothing
+  // after the first answer has landed (VC-373). A settings write adopts its
+  // own answer there, which is the invalidation.
+  const ttlDays = useRetentionTtlStore((state) => state.ttlDays);
   // A retention mutation (archive/keep/dismiss) in flight — disables its controls.
   const [retentionBusy, setRetentionBusy] = React.useState(false);
   // The commit press awaiting confirmation (both roads to one, see PendingCommit).
@@ -719,19 +724,18 @@ export function TicketRepositorySummary({
     }
   }, [ticket.id, hasWorktree]);
 
-  /** The TTL-only half: a single non-critical DB read (only labels a line, never blocks the
-   * status/diff summary on failure) — no git subprocess, so unlike `refreshStatusAndDiff` it's
-   * cheap enough to re-run on every broadcast without debouncing (see the effect below). */
-  const refreshTtl = React.useCallback(async () => {
-    const ttlResult = await window.api.retention.getTtlDays();
-    if (ttlResult.ok) setTtlDays(ttlResult.days);
+  /** The TTL half: an app-wide cached read (only labels a line, never blocks the
+   * status/diff summary on failure) — no git subprocess, and nothing to re-read per
+   * broadcast or per ticket. See `stores/retention-ttl.ts`. */
+  const ensureTtl = React.useCallback(async () => {
+    await useRetentionTtlStore.getState().ensure();
   }, []);
 
   /** Full refresh: mount, and every direct action below (commit/push/archive/etc.) — those want
    * immediate, un-debounced feedback since the user just triggered them locally. */
   const refresh = React.useCallback(async () => {
-    await Promise.all([refreshStatusAndDiff(), refreshTtl()]);
-  }, [refreshStatusAndDiff, refreshTtl]);
+    await Promise.all([refreshStatusAndDiff(), ensureTtl()]);
+  }, [refreshStatusAndDiff, ensureTtl]);
 
   React.useEffect(() => {
     void refresh();
@@ -776,7 +780,9 @@ export function TicketRepositorySummary({
   //   • untargeted ("anything may have changed") → we can't rule this ticket out,
   //     so refresh conservatively but DEBOUNCED, collapsing a burst of unrelated
   //     broadcasts into one status+diff subprocess pair.
-  // TTL is a cheap global DB read, so it re-runs directly on any non-skipped bump.
+  // The TTL needs none of that any more: it is one app-wide cached setting
+  // whose own value is adopted on the settings write (VC-373), so a broadcast
+  // has nothing new to read here. Only git state moves on a bump.
   const debouncedGitRefresh = useDebouncedCallback(() => void refreshStatusAndDiff(), 1500);
   // Tracks the version already covered by the mount-time `refresh()` above, so this
   // effect's own first run (which always fires on mount, whatever the initial version is) is a
@@ -786,13 +792,12 @@ export function TicketRepositorySummary({
     if (seenPlanningVersion.current === planningChange.version) return;
     seenPlanningVersion.current = planningChange.version;
     if (planningChange.ticketId !== null && planningChange.ticketId !== ticket.id) return;
-    void refreshTtl();
     if (planningChange.ticketId === ticket.id) {
       void refreshStatusAndDiff();
     } else {
       debouncedGitRefresh.schedule();
     }
-  }, [planningChange, ticket.id, refreshTtl, refreshStatusAndDiff, debouncedGitRefresh]);
+  }, [planningChange, ticket.id, refreshStatusAndDiff, debouncedGitRefresh]);
 
   /** Standalone Commit (chevron menu, via the gate): keeps its own "Committed: <message>" toast. */
   async function runCommitOnly(choices: Omit<WorktreeCommitInput, "ticketId">) {

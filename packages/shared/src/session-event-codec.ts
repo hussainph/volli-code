@@ -47,6 +47,8 @@ import { MODEL_TIERS } from "./model-access-policy";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { AuthoritySnapshot, SessionToolId } from "./authority";
+import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
+import type { McpToolDefinition } from "./mcp";
 import { JUDGMENT_MODES } from "./authority-config";
 import { errorMessage } from "./errors";
 import {
@@ -191,7 +193,7 @@ const codecs = {
                 kind,
                 resources: decodePromptResources(input.resources, `${context}.input.resources`),
               }
-            : { kind, tools: decodeSessionToolIds(input.tools, `${context}.input.tools`) };
+            : decodeToolSurfaceInput(input, kind, `${context}.input`);
       return { kind: "session.input.recorded", input: decoded };
     },
     scrub: (payload) => payload,
@@ -363,6 +365,19 @@ const codecs = {
     // Structural paths stay host-side for diagnostics. A client needs the fact
     // and cause to draw the notice, not provider request coordinates.
     scrub: ({ paths: _paths, ...payload }) => payload,
+    // The scrub REMOVES `paths` rather than emptying it, so the durable decode
+    // would reject what the edge actually ships; without this the notice never
+    // reached a person on either path into the chat (VC-368). Nothing renderer
+    // side reads `paths`, so the shorter shape is the whole contract.
+    decodeRenderer: (record, context) => ({
+      kind: "context.reasoning_dropped" as const,
+      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
+      turnId: readString(record.turnId, `${context}.turnId`),
+      count: readPositiveInteger(record.count, `${context}.count`),
+      causes: readArray(record.causes, `${context}.causes`, (cause, itemContext) =>
+        enumValue(cause, REASONING_DROP_CAUSES, itemContext),
+      ),
+    }),
   },
   "transcript.referenced": {
     decode: (record, context) => ({
@@ -1217,6 +1232,52 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
       text: readString(row.text, `${context}[${index}].text`),
     };
   });
+}
+
+function decodeMcpToolDefinitions(value: unknown, context: string): readonly McpToolDefinition[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  const definitions = value.map((entry, index): McpToolDefinition => {
+    const row = asRecord(entry, `${context}[${index}]`);
+    const serverId = readString(row.serverId, `${context}[${index}].serverId`);
+    const toolName = readString(row.toolName, `${context}[${index}].toolName`);
+    const providerName = readString(row.providerName, `${context}[${index}].providerName`);
+    const description = readString(row.description, `${context}[${index}].description`);
+    const sanitized = sanitizeMcpToolDefinition({
+      serverId,
+      serverName: "recorded",
+      toolName,
+      description,
+      inputSchema: row.inputSchema,
+    });
+    if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
+    if (!isMcpToolId(providerName)) {
+      throw new Error(`${context}[${index}].providerName is invalid`);
+    }
+    return { ...sanitized.definition, providerName };
+  });
+  return validateMcpToolDefinitions(definitions);
+}
+
+function decodeToolSurfaceInput(
+  input: Record<string, unknown>,
+  kind: "tool-surface",
+  context: string,
+): {
+  kind: "tool-surface";
+  tools: readonly SessionToolId[];
+  mcpTools?: readonly McpToolDefinition[];
+} {
+  const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  const mcpTools =
+    input.mcpTools === undefined
+      ? undefined
+      : decodeMcpToolDefinitions(input.mcpTools, `${context}.mcpTools`);
+  const mcpNames = tools.filter(isMcpToolId);
+  const definitionNames = (mcpTools ?? []).map((definition) => definition.providerName);
+  if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
+    throw new Error(`${context} MCP definitions do not match the tool surface`);
+  }
+  return mcpTools === undefined ? { kind, tools } : { kind, tools, mcpTools };
 }
 
 /**

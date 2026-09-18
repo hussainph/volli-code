@@ -132,6 +132,29 @@ asarUnpack:
   # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
 
+# Licence notices travel with the artifact (VC-407). All three files land in
+# Contents/Resources, the place a user reaches through Finder's "Show Package
+# Contents" and the conventional home for a desktop app's notices — inside the
+# asar they would be unreadable without unpacking it.
+#
+# THIRD-PARTY-NOTICES is generated from the resolved production dependency set
+# by the repo-root scripts/generate-third-party-notices.mjs and committed;
+# `check:notices` (CI) fails when it drifts from what is installed, when a file
+# named here goes missing, and when a package this config ships — including a
+# platform-native one the dependency walk skips — has no notice covering it. That
+# check reads THIS block — renaming a destination without telling the generator
+# fails rather than silently shipping to the old path. The Electron Chromium
+# catalogue source is intentionally not checked in: electron-builder resolves
+# the downloaded Electron distribution for packaging, while check:notices lets
+# that source be absent on offline CI and rejects it when present but empty.
+extraResources:
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: THIRD-PARTY-NOTICES
+    to: THIRD-PARTY-NOTICES.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: LICENSES.chromium.html
+
 electronLanguages:
   - en
 

@@ -78,19 +78,24 @@ import {
   askInteractionId,
   askUserInteractionId,
   budgetAskInteractionId,
+  confirmAskInteractionId,
   isBudgetCause,
+  isConfirmCause,
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   DEFAULT_INTERACTION_PROMPT_ID,
   errorMessage,
+  isMcpToolId,
   readSkillResources,
   sessionToolIds,
   verbToolsOf,
   type AgentRuntime,
   type AuthorityPolicy,
   type AuthoritySnapshot,
+  type CommandRefusalSeverity,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type McpToolDefinition,
   type ModelSelection,
   type ModelSelectionOutcome,
   type PromptResource,
@@ -99,6 +104,7 @@ import {
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
   type RuntimeBrowserPort,
+  type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
   type RuntimeRecoveryRef,
@@ -235,6 +241,8 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Sanitized MCP definitions frozen beside their dynamic names. */
+  mcpTools?: readonly McpToolDefinition[];
   /**
    * Which tree the Session runs in. Not derivable from the Role here: a Ticket
    * that never took a worktree is bound to the project's Main checkout by
@@ -321,6 +329,9 @@ export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
  * from outliving it.
  */
 export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+
+/** Main-owned MCP port with attachment cleanup for its clients/transports. */
+export type DesktopMcpPort = RuntimeMcpPort & { dispose: () => Promise<void> | void };
 
 /**
  * A Session frozen before the hold tools existed (VC-239) keeps its six: its
@@ -432,6 +443,18 @@ export interface PiAdapterOptions {
     attachmentId: string;
     workspacePath: string;
   }) => DesktopShellPort;
+  /**
+   * Main-process MCP host for this attachment's exact frozen definitions.
+   * Membership stays in Session history; this resolver owns only clients,
+   * transports, calls, and cleanup.
+   */
+  resolveMcpPort?: (scope: {
+    projectId: string;
+    sessionId: string;
+    attachmentId: string;
+    workspacePath: string;
+    mcpTools: readonly McpToolDefinition[];
+  }) => DesktopMcpPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -552,6 +575,33 @@ const COMPACTION_REJECTION_CODES = {
 } as const satisfies Record<
   Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
   string
+>;
+
+/**
+ * Which of those four a person's own `/compact` is owed an apology for, and
+ * which two it merely ran into (VC-141).
+ *
+ * Decided here because this is where the runtime's reason is still readable.
+ * A client given only `PI_BUSY` could not tell a live turn from a compaction
+ * already running, and the runtime writes a different sentence for each; a
+ * client given the severity renders whichever sentence arrived and never has
+ * to know either code.
+ *
+ * `busy-unsupported` and `nothing-to-compact` are benign: the context was not
+ * free, or there was nothing left to summarize. Neither is a failure of the
+ * Session's plumbing, and CLAUDE.md draws exactly that line — "Errors are for
+ * operations that failed, not for outcomes the user chose." `closed` and
+ * `summary-failed` are failures: an attachment that has gone away, and a
+ * provider that would not produce the summary.
+ */
+const COMPACTION_REFUSAL_SEVERITY = {
+  "busy-unsupported": "benign",
+  closed: "failure",
+  "nothing-to-compact": "benign",
+  "summary-failed": "failure",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  CommandRefusalSeverity
 >;
 
 function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
@@ -691,6 +741,16 @@ function piNativeAdapter(
           attachmentId: spec.attachmentId,
           workspacePath: spec.directory,
         }),
+        mcp:
+          (context.mcpTools?.length ?? 0) === 0
+            ? undefined
+            : options.resolveMcpPort?.({
+                projectId: context.projectId,
+                sessionId: spec.sessionId,
+                attachmentId: spec.attachmentId,
+                workspacePath: spec.directory,
+                mcpTools: context.mcpTools ?? [],
+              }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
         // The directory the Session Engine prepared is the one to measure: a
@@ -701,6 +761,7 @@ function piNativeAdapter(
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
       } catch (error) {
+        await binding.release("adapter_failure").catch(() => undefined);
         throw new NativeAttachmentError(
           errorMessage(error),
           recovery === undefined ? "PI_CONFIGURATION_INVALID" : "PI_RECOVERY_FAILED",
@@ -776,6 +837,8 @@ interface PiBindingOptions {
   browser: DesktopBrowserPort | undefined;
   /** The Session's scoped background shell capability; `undefined` is "no shells". */
   shell: DesktopShellPort | undefined;
+  /** Attachment-scoped MCP host for the frozen dynamic definitions. */
+  mcp: DesktopMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
@@ -791,6 +854,7 @@ class PiBinding implements BindingHandle {
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
   readonly #shell: DesktopShellPort | undefined;
+  readonly #mcp: DesktopMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
   readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
@@ -825,6 +889,7 @@ class PiBinding implements BindingHandle {
     this.#web = options.web;
     this.#browser = options.browser;
     this.#shell = options.shell;
+    this.#mcp = options.mcp;
     this.#callVerb = options.callVerb;
     this.#prepareTurnAttachments = options.prepareTurnAttachments;
     this.#workspaceEnvironment = options.workspaceEnvironment;
@@ -901,6 +966,19 @@ class PiBinding implements BindingHandle {
     const wantsHoldPair = context.toolSurface.includes("browser_acquire");
     // One name stands for the three (VC-270), on the browser's reasoning.
     const wantsShell = context.toolSurface.includes("shell_start");
+    const mcpTools = context.mcpTools ?? [];
+    const mcpNames = context.toolSurface.filter(isMcpToolId);
+    if (
+      JSON.stringify(mcpNames) !==
+      JSON.stringify(mcpTools.map((definition) => definition.providerName))
+    ) {
+      throw new Error("This Session's frozen MCP definitions do not match its tool surface.");
+    }
+    if (mcpTools.length > 0 && this.#mcp === undefined) {
+      throw new Error(
+        "This Session's frozen Agent Tool Surface includes MCP tools, but this launch wired no MCP host.",
+      );
+    }
     if (
       (wantsWebFetch && this.#web.webFetch === undefined) ||
       (wantsWebSearch && this.#web.webSearch === undefined)
@@ -1001,6 +1079,7 @@ class PiBinding implements BindingHandle {
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
         ...(verbs.length === 0 ? {} : { verbs }),
+        ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
       signal: this.#abort.signal,
@@ -1013,6 +1092,7 @@ class PiBinding implements BindingHandle {
         ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
+      ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),
       // Caller identity is closed over here and never travels in the call. The
       // model names a verb and its arguments; WHO is asking is this
       // attachment's own identity, which is exactly what the socket door
@@ -1115,7 +1195,12 @@ class PiBinding implements BindingHandle {
             : this.#rejected(
                 command.commandId,
                 COMPACTION_REJECTION_CODES[outcome.reason],
+                // The runtime's own sentence, carried whole. It is the one
+                // place that knows whether the context is busy with a turn or
+                // with another compaction, and it writes a different sentence
+                // for each.
                 outcome.message,
+                COMPACTION_REFUSAL_SEVERITY[outcome.reason],
               );
         } catch (error) {
           return this.#unknown(command.commandId, error);
@@ -1241,6 +1326,7 @@ class PiBinding implements BindingHandle {
     // the attachment's token, and a shell still being SIGTERMed should not
     // outlive the identity it was spawned under (VC-270).
     this.#shell?.dispose();
+    await this.#mcp?.dispose();
     await this.#handle?.close();
   }
 
@@ -1320,14 +1406,17 @@ class PiBinding implements BindingHandle {
    */
   async #ask(request: RuntimeAskRequest, signal: AbortSignal): Promise<RuntimeAskChoice> {
     const offer = askOffer(request);
-    // Two frozen derivations, chosen by cause: a budget question keeps its own
-    // `budget-ask:` segment so that a gate ask and a budget ask about ONE tool
-    // call can never mint one interaction id — under a shared prefix the
-    // second `opened` emit would dedupe against the first and park a question
-    // nobody was shown. See `budgetAskInteractionId` in @volli/shared.
+    // Three frozen derivations, chosen by cause: a budget question keeps its
+    // own `budget-ask:` segment and a confirmation its `confirm-ask:` one, so
+    // that a gate ask and either of them about ONE tool call can never mint one
+    // interaction id — under a shared prefix the second `opened` emit would
+    // dedupe against the first and park a question nobody was shown. See
+    // `budgetAskInteractionId` / `confirmAskInteractionId` in @volli/shared.
     const interactionId = isBudgetCause(request.cause)
       ? budgetAskInteractionId(request.toolCallId)
-      : askInteractionId(request.toolCallId);
+      : isConfirmCause(request.cause)
+        ? confirmAskInteractionId(request.toolCallId)
+        : askInteractionId(request.toolCallId);
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1551,8 +1640,22 @@ class PiBinding implements BindingHandle {
     };
   }
 
-  #rejected(commandId: string, code: string, detail: string): DeliveryReceipt {
-    return { commandId, status: "rejected", code, detail, native: this.#native };
+  #rejected(
+    commandId: string,
+    code: string,
+    detail: string,
+    severity?: CommandRefusalSeverity,
+  ): DeliveryReceipt {
+    return {
+      commandId,
+      status: "rejected",
+      code,
+      detail,
+      native: this.#native,
+      // Absent, never explicitly `undefined`: a key JSON would drop is a key
+      // structured clone would have carried across as a present `undefined`.
+      ...(severity === undefined ? {} : { severity }),
+    };
   }
 
   #unknown(commandId: string, error: unknown): DeliveryReceipt {

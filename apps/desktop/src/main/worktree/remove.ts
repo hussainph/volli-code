@@ -19,8 +19,22 @@
  * as the delete is also what narrows the gate's own check-to-destroy window:
  * anything that started a turn since the gate ran is stopped here rather than
  * having its directory pulled out from under it.
+ *
+ * OFF THE MAIN THREAD (VC-383). This verb runs on the Electron main process,
+ * and it is reached unattended: the retention watch's reclaim fires it from a
+ * timer and from every window focus, not only from the "Remove worktree…"
+ * click. On the sync runner it was five serial `execFileSync` children for the
+ * dirty predicate, then `git worktree remove` — which deletes the whole
+ * checkout, `node_modules` and all, inside one child — and for a forgotten
+ * directory a recursive `rmSync` of the same. Every window froze for the length
+ * of the delete, with nothing the person had clicked. The potentially long git
+ * and destructive filesystem work is on the async runner and `fs/promises`;
+ * `existsSync` deliberately remains the one synchronous existence look. Turning
+ * that cheap check into another await would widen the check-to-delete span
+ * VC-383 is narrowing, not make the removal safer.
  */
-import { existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 
 import {
   WORKTREE_DIRTY_REFUSAL_PREFIX,
@@ -33,12 +47,14 @@ import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import type { AgentSiteReleaseReport } from "./agent-sites";
 import { isOwnedWorktreePath, ownedContainers } from "./containers";
-import { isWorktreeDirty } from "./dirty";
+import { acquireDeletionLease, UNDER_DELETION_REFUSAL } from "./deletion-lease";
+import { isWorktreeDirtyAsync } from "./dirty";
 import { GitError, parseWorktreeList } from "./git";
 import { homeDir } from "./home";
 import { canonicalize } from "./paths";
 import { clearPhase } from "./phase";
-import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
+import { withRepositoryWorktreeTurn } from "./repository-turn";
+import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
 
 // System-driven, no session: these mutations are attributed to automation.
 const SYSTEM_ACTOR: TicketEventActor = { kind: "automation" };
@@ -82,113 +98,139 @@ export async function remove(
   const project = getProjectById(deps.db, ticket.project_id);
   if (!project) return err("Unknown project");
 
-  // Dir already gone (deleted manually, or a stale row): there is no work left
-  // to protect and `git worktree remove` would fail on the missing path — prune
-  // the stale registration and clear identity so the ticket isn't dead-ended.
-  // A binding may still be pointed at it, which is the very state this path
-  // exists to clean up, so it is released here too.
-  if (!existsSync(worktreePath)) {
-    await opts.releaseAgentSites?.(worktreePath);
-    try {
-      deps.git(["worktree", "prune"], project.path);
-    } catch {
-      // Metadata cleanup is best-effort; the identity clear below still runs.
-    }
-    clearIdentity(deps, ticketId);
-    return ok(undefined);
-  }
-
-  if (!opts.force) {
-    const dirty = isWorktreeDirty(deps.git, {
-      worktreePath,
-      branch: ticket.branch,
-      baseBranch: ticket.base_branch,
-    });
-    if (dirty.dirty) {
-      // The stable shared prefix is the remove dialog's escalation contract:
-      // ONLY this refusal may offer the destructive force step.
-      return err(
-        `${WORKTREE_DIRTY_REFUSAL_PREFIX} (${dirty.reason ?? "dirty"}). ` +
-          `Confirm removal to discard it.`,
-      );
-    }
-  }
-
-  // A directory git has FORGOTTEN (VC-113): the admin entry under
-  // `.git/worktrees/` is gone while the checkout is still on disk, which is
-  // what a half-finished removal or a second install's `git worktree remove`
-  // leaves behind. `git worktree remove` refuses such a path in BOTH modes
-  // ("fatal: '…' is not a working tree"), `ensure` refuses to recreate over it,
-  // and Settings skips it for being DB-known — so the ticket had no route out of
-  // the state at all, in or out of the app, short of a terminal.
-  //
-  // Deciding this is a READ, so it happens here: after the dirty gate, before
-  // anything is released or deleted.
-  const registered = isRegisteredWorktree(deps, project.path, worktreePath);
-  // The plain delete is the one destructive act in this module git itself does
-  // not perform, so it is never reached without an explicit confirmation, not
-  // even when the dirty predicate happened to read the folder as clean. It
-  // refuses under its OWN prefix rather than the dirty one: this is not a
-  // worktree with uncommitted work in it, it is a folder nothing can read, and
-  // the dialog escalates on either.
-  if (!registered && !opts.force) {
-    return err(
-      `${WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX} (git no longer tracks the folder). ` +
-        `Confirm removal to delete it.`,
-    );
-  }
-
-  // Last thing before the checkout stops existing, and after the dirty gate on
-  // purpose: a non-forced remove that is about to refuse must not have closed
-  // the user's chat on the way to refusing. The order does put the executor's
-  // own shutdown after the cleanliness read, so anything it writes on the way
-  // out lands unseen — the same pre-existing window as any write between that
-  // read and the delete, and narrower than leaving the executor running.
-  await opts.releaseAgentSites?.(worktreePath);
-
-  if (!registered) {
-    // Fenced twice: confirmed above, and contained here. The path must sit
-    // inside a container this database owns — the same ownership question the
-    // sweep and the orphan-delete channel ask (containers.ts), because an
-    // rm -rf is exactly where guessing is unaffordable.
-    if (!isOwnedWorktreePath(ownedContainers(deps.db, homeDir(deps)), worktreePath)) {
-      return err(
-        `Git no longer tracks ${worktreePath}, and it sits outside this project's worktree folder. ` +
-          `Delete it yourself, then try again.`,
-      );
-    }
-    try {
-      rmSync(worktreePath, { recursive: true, force: true });
-    } catch (caught) {
-      return err(
-        `Couldn't delete the folder: ${caught instanceof Error ? caught.message : String(caught)}`,
-      );
-    }
-    try {
-      deps.git(["worktree", "prune"], project.path);
-    } catch {
-      // Metadata cleanup is best-effort; the identity clear below still runs.
-    }
-    clearIdentity(deps, ticketId);
-    return ok(undefined);
-  }
-
+  // Every destructive preflight below can yield. Take the non-waiting lease
+  // while this call still owns the synchronous turn, before its first await, so
+  // a terminal or a binding cannot begin inside the directory midway through a
+  // manual remove or the unattended VC-383 retention reclaim.
+  const lease = acquireDeletionLease(worktreePath);
+  if (lease === null) return err(UNDER_DELETION_REFUSAL);
   try {
-    const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
-    deps.git(args, project.path);
-  } catch (caught) {
-    const message =
-      caught instanceof GitError && caught.stderr.trim()
-        ? caught.stderr.trim()
-        : caught instanceof Error
-          ? caught.message
-          : String(caught);
-    return err(`Couldn't remove the worktree: ${message}`);
-  }
+    // The required async runner, never `deps.git`: a missing seam must fail at
+    // bundle construction rather than putting the delete back on Electron main.
+    const git = deps.gitAsync;
 
-  // Clear the checkout pointer (emits `worktree_changed`) after the git work succeeds.
-  clearIdentity(deps, ticketId);
-  return ok(undefined);
+    // Dir already gone (deleted manually, or a stale row): there is no work left
+    // to protect and `git worktree remove` would fail on the missing path — prune
+    // the stale registration and clear identity so the ticket isn't dead-ended.
+    // A binding may still be pointed at it, which is the very state this path
+    // exists to clean up, so it is released here too.
+    if (!existsSync(worktreePath)) {
+      await opts.releaseAgentSites?.(worktreePath);
+      await pruneBestEffort(git, project.path);
+      clearIdentity(deps, ticketId);
+      return ok(undefined);
+    }
+
+    if (!opts.force) {
+      const dirty = await isWorktreeDirtyAsync(git, {
+        worktreePath,
+        branch: ticket.branch,
+        baseBranch: ticket.base_branch,
+      });
+      if (dirty.dirty) {
+        // The stable shared prefix is the remove dialog's escalation contract:
+        // ONLY this refusal may offer the destructive force step.
+        return err(
+          `${WORKTREE_DIRTY_REFUSAL_PREFIX} (${dirty.reason ?? "dirty"}). ` +
+            `Confirm removal to discard it.`,
+        );
+      }
+    }
+
+    // A directory git has FORGOTTEN (VC-113): the admin entry under
+    // `.git/worktrees/` is gone while the checkout is still on disk, which is
+    // what a half-finished removal or a second install's `git worktree remove`
+    // leaves behind. `git worktree remove` refuses such a path in BOTH modes
+    // ("fatal: '…' is not a working tree"), `ensure` refuses to recreate over it,
+    // and Settings skips it for being DB-known — so the ticket had no route out of
+    // the state at all, in or out of the app, short of a terminal.
+    //
+    // Deciding this is a READ, so it happens here: after the dirty gate, before
+    // anything is released or deleted.
+    const registered = await isRegisteredWorktree(git, project.path, worktreePath);
+    // The plain delete is the one destructive act in this module git itself does
+    // not perform, so it is never reached without an explicit confirmation, not
+    // even when the dirty predicate happened to read the folder as clean. It
+    // refuses under its OWN prefix rather than the dirty one: this is not a
+    // worktree with uncommitted work in it, it is a folder nothing can read, and
+    // the dialog escalates on either.
+    if (!registered && !opts.force) {
+      return err(
+        `${WORKTREE_UNVERIFIABLE_REFUSAL_PREFIX} (git no longer tracks the folder). ` +
+          `Confirm removal to delete it.`,
+      );
+    }
+
+    // Last thing before the checkout stops existing, and after the dirty gate on
+    // purpose: a non-forced remove that is about to refuse must not have closed
+    // the user's chat on the way to refusing. The lease stays held while this
+    // shutdown yields, so nothing new can become live in the directory between
+    // the clean read and the delete.
+    await opts.releaseAgentSites?.(worktreePath);
+
+    if (!registered) {
+      // Fenced twice: confirmed above, and contained here. The path must sit
+      // inside a container this database owns — the same ownership question the
+      // sweep and the orphan-delete channel ask (containers.ts), because an
+      // rm -rf is exactly where guessing is unaffordable.
+      if (!isOwnedWorktreePath(ownedContainers(deps.db, homeDir(deps)), worktreePath)) {
+        return err(
+          `Git no longer tracks ${worktreePath}, and it sits outside this project's worktree folder. ` +
+            `Delete it yourself, then try again.`,
+        );
+      }
+      try {
+        await rm(worktreePath, { recursive: true, force: true });
+      } catch (caught) {
+        return err(
+          `Couldn't delete the folder: ${caught instanceof Error ? caught.message : String(caught)}`,
+        );
+      }
+      await pruneBestEffort(git, project.path);
+      clearIdentity(deps, ticketId);
+      return ok(undefined);
+    }
+
+    try {
+      const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
+      // The repository's turn, not just the directory's lease (VC-389). The
+      // lease above orders this against work starting in THIS directory; this
+      // orders the git command against every other change to the same
+      // REPOSITORY, which is a different hazard with a different key.
+      await withRepositoryWorktreeTurn(project.path, () => git(args, project.path));
+    } catch (caught) {
+      const message =
+        caught instanceof GitError && caught.stderr.trim()
+          ? caught.stderr.trim()
+          : caught instanceof Error
+            ? caught.message
+            : String(caught);
+      return err(`Couldn't remove the worktree: ${message}`);
+    }
+
+    // Clear the checkout pointer (emits `worktree_changed`) after the git work succeeds.
+    clearIdentity(deps, ticketId);
+    return ok(undefined);
+  } finally {
+    // Every return above, plus a throwing release or identity write, crosses
+    // here: a leaked deletion lease would permanently refuse future work.
+    lease.release();
+  }
+}
+
+/**
+ * Metadata cleanup is best-effort; the identity clear that follows still runs.
+ *
+ * Takes the repository's turn like every other worktree change (VC-389):
+ * `prune` drops admin records across the WHOLE repository, so it is the last
+ * command that may run beside another ticket's `worktree add`.
+ */
+async function pruneBestEffort(git: RunGitAsync, projectPath: string): Promise<void> {
+  try {
+    await withRepositoryWorktreeTurn(projectPath, () => git(["worktree", "prune"], projectPath));
+  } catch {
+    // Best-effort by contract — see the caller.
+  }
 }
 
 /**
@@ -197,14 +239,14 @@ export async function remove(
  * destructive branch, so ambiguity has to route back to git's own refusal
  * rather than to an rm -rf.
  */
-function isRegisteredWorktree(
-  deps: WorktreeDeps,
+async function isRegisteredWorktree(
+  git: RunGitAsync,
   projectPath: string,
   worktreePath: string,
-): boolean {
+): Promise<boolean> {
   let listing: string;
   try {
-    listing = deps.git(["worktree", "list", "--porcelain"], projectPath);
+    listing = await git(["worktree", "list", "--porcelain"], projectPath);
   } catch {
     return true;
   }

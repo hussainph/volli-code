@@ -37,6 +37,7 @@
  *    Automation BESIDES a person. A switched-off Automation is offered with the
  *    page's own words beside it rather than dimmed or withheld.
  */
+import { TicketAutomationChoices } from "./ticket-automation-choices";
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -99,6 +100,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -198,6 +200,10 @@ export function TicketAutomationsPanel({
         onRun={run}
         onRunOnce={() => setRunOnce({ modelOverride: null })}
       />
+      <TicketAutomationChoices
+        groups={rail.groups}
+        onRun={(automation) => run({ kind: "automation", automation }, null)}
+      />
       {empty ? (
         // Visible and plain: one line, a report and never an action — the
         // header's own door is 20px above it, and a second copy of the same
@@ -287,7 +293,6 @@ function AutomationRunControl({
 }) {
   const label = railRunLabel(rail.primary);
   const overrides = modelOverrideRows(models);
-  const offered = rail.offered;
   // Present, named and unpressable while the reads land: the control is never
   // hidden (VC-112), and it never presses a default it has not read yet.
   const unread = rail.primary.kind === "unread";
@@ -329,17 +334,31 @@ function AutomationRunControl({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               {unread ? <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div> : null}
-              {offered.map((automation) => (
-                <DropdownMenuItem
-                  key={automation.id}
-                  onSelect={() => onRun({ kind: "automation", automation }, null)}
-                >
-                  <LightningIcon />
-                  <span className="min-w-0 flex-1 truncate">{automation.name}</span>
-                  <OffNote automation={automation} enabledIds={enabledIds} />
-                </DropdownMenuItem>
+              {/* Every column's offer, grouped and labelled (VC-329 item 5):
+                  this Ticket's own column first, the rest in board order. A row
+                  under another column's heading runs here, on THIS Ticket — the
+                  same hand-run as ever, without the detour through the status
+                  chip to make the column match. */}
+              {rail.groups.map((group, index) => (
+                <React.Fragment key={group.status}>
+                  {index > 0 ? <DropdownMenuSeparator /> : null}
+                  <DropdownMenuLabel className="text-label text-muted-foreground">
+                    {group.label}
+                    {group.current ? " · this ticket" : ""}
+                  </DropdownMenuLabel>
+                  {group.automations.map((automation) => (
+                    <DropdownMenuItem
+                      key={automation.id}
+                      onSelect={() => onRun({ kind: "automation", automation }, null)}
+                    >
+                      <LightningIcon />
+                      <span className="min-w-0 flex-1 truncate">{automation.name}</span>
+                      <OffNote automation={automation} enabledIds={enabledIds} />
+                    </DropdownMenuItem>
+                  ))}
+                </React.Fragment>
               ))}
-              {offered.length > 0 ? <DropdownMenuSeparator /> : null}
+              {rail.groups.length > 0 ? <DropdownMenuSeparator /> : null}
               <DropdownMenuItem onSelect={onRunOnce}>
                 <PlayIcon />
                 {UNBOUND_RUN_LABEL}…
@@ -530,6 +549,15 @@ function RunOnceForm({
       : (models.find(
           (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
         )?.reasoningLevels ?? []);
+  const changePinEffort = (reasoningLevel: string): void => {
+    if (pin === null) return;
+    const picked = composerModelSelection({ ...pin, reasoningLevel });
+    if (picked !== null) setPin(picked);
+  };
+  const compactEffort =
+    pin !== null && pinStops.length > 1
+      ? { levels: pinStops, value: pin.reasoningLevel, onChange: changePinEffort }
+      : undefined;
   // The shared rule, so this button and main's refusal are one policy.
   const incomplete = unboundRunProblem(instructions) !== null || (choice === "pin" && pin === null);
 
@@ -553,7 +581,7 @@ function RunOnceForm({
         </DialogHeader>
         {/* DialogContent is a grid. This zero minimum lets the shared picker
             truncate inside the dialog instead of widening the grid track. */}
-        <div className="flex min-w-0 flex-col gap-2">
+        <div data-composer-container="" className="@container/composer flex min-w-0 flex-col gap-2">
           <ComposerPickerStack
             value={instructions}
             onValueChange={setInstructions}
@@ -569,7 +597,7 @@ function RunOnceForm({
           >
             <InstructionsTextarea value={instructions} onValueChange={setInstructions} />
           </ComposerPickerStack>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Segmented<OverrideChoice>
               ariaLabel="Runtime"
               value={choice}
@@ -585,6 +613,7 @@ function RunOnceForm({
                   models={models}
                   selection={pin ?? NO_PIN}
                   disabled={false}
+                  compactEffort={compactEffort}
                   onChange={(next) => {
                     const picked = composerModelSelection(next);
                     if (picked !== null) setPin(picked);
@@ -594,10 +623,8 @@ function RunOnceForm({
                   <EffortPill
                     levels={pinStops}
                     value={pin.reasoningLevel}
-                    onChange={(level) => {
-                      const picked = composerModelSelection({ ...pin, reasoningLevel: level });
-                      if (picked !== null) setPin(picked);
-                    }}
+                    onChange={changePinEffort}
+                    className="composer-separate-effort"
                   />
                 ) : null}
               </>

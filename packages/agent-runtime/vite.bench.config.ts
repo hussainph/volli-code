@@ -8,7 +8,9 @@ export default defineConfig({
   test: {
     include: ["bench/**/*.bench.test.ts"],
     testTimeout: 600_000,
-    // Timing measurements do not survive being run beside each other.
+    // Timing measurements do not survive being run beside each other. This is
+    // deliberately one worker even when VOLLI_CONCURRENCY_HINT is higher: the
+    // benchmark measures runtime work rather than throughput under test load.
     fileParallelism: false,
     maxWorkers: 1,
     minWorkers: 1,

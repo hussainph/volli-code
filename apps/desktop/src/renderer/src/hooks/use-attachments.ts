@@ -18,8 +18,12 @@ import type { BlobLinkView } from "@volli/shared";
 import type { BlobAttachInput } from "../../../ipc/contract";
 
 export interface UseAttachmentsOptions {
-  /** Where the resulting links hang, or `{ unowned: true }` while a Ticket is still being composed. */
-  owner: BlobAttachInput["owner"];
+  /**
+   * Where links hang, or `{ unowned: true }` while their Ticket/Session is still
+   * a Draft. A reader defers that choice until an import starts, so promotion
+   * cannot leave this hook using a render-stale owner.
+   */
+  owner: BlobAttachInput["owner"] | (() => BlobAttachInput["owner"]);
   /** Absolute workspace root an `@` ref would resolve against; without it every file snapshots. */
   refRoot?: string | undefined;
   /** A repository file was named live instead of copied — insert `@relPath` into the text. */
@@ -73,7 +77,13 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
 
   const attachFiles = React.useCallback(
     async (files: Iterable<File>): Promise<void> => {
-      const { owner: current, refRoot: root, onRefInsert: insert, onError: fail } = latest.current;
+      const {
+        owner: suppliedOwner,
+        refRoot: root,
+        onRefInsert: insert,
+        onError: fail,
+      } = latest.current;
+      const current = typeof suppliedOwner === "function" ? suppliedOwner() : suppliedOwner;
       for (const file of files) {
         // "" when the drag did not come from the filesystem — a pasted
         // screenshot, or a drag out of another app's canvas.

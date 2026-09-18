@@ -29,6 +29,7 @@ import {
 import type {
   ModelAccessSnapshot,
   ModelSelection,
+  McpToolDefinition,
   ModelTier,
   PromptResource,
   ReasoningLevel,
@@ -159,14 +160,23 @@ export interface SessionToolSurfacePorts {
     role: SessionRole,
     grants: readonly string[],
     within?: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
   ): readonly SessionToolId[];
+  /** Selected sanitized definitions for a newly born root Session. */
+  resolveMcp?(projectId: string): readonly McpToolDefinition[];
+  /** Exact definitions a parent froze, used verbatim by a new child. */
+  recordedMcp?(sessionId: string): Promise<readonly McpToolDefinition[]>;
   /**
    * The surface one existing Session was frozen with, or `null` when it has
    * none recorded (a legacy Session that has not attached since VC-164). Read
    * for a parent, to bound its child.
    */
   recorded(sessionId: string): Promise<readonly SessionToolId[] | null>;
-  record(sessionId: string, tools: readonly SessionToolId[]): Promise<void>;
+  record(
+    sessionId: string,
+    tools: readonly SessionToolId[],
+    mcpTools?: readonly McpToolDefinition[],
+  ): Promise<void>;
 }
 
 /**
@@ -206,6 +216,31 @@ export interface SessionStartInput {
    */
   parentSessionId?: string;
   title: string | null;
+  /**
+   * The Session id a client already minted (VC-358), honored when present so a
+   * provisional chat can be promoted under the id it carried all along. There
+   * is no swap to manage because there is no second id: the ledger takes this
+   * one as the Session's.
+   *
+   * Rides the `session.create` CLIENT COMMAND only — never the model record,
+   * never an attach — and is deliberately absent from the durable intent the
+   * engine writes: the id IS the Session's id, so recording that it was
+   * proposed would be a second copy of one fact. The command id stays derived
+   * from {@link operationId}, so a replayed promotion restates the same id
+   * under the same key, which is what lets the engine's dedup collapse it (its
+   * replay guard refuses a replay naming a different id than the create was
+   * accepted under).
+   *
+   * Absent — every existing caller, whose doors name no such field — keeps the
+   * ledger's own id derivation, untouched.
+   *
+   * THIS FACADE DOES NOT VALIDATE. Format is the RPC door's contract
+   * (`z.uuidv4()` there, per `docs/BOUNDARIES.md` rule 1), and uniqueness is
+   * the ledger's (`assertGloballyUnusedId`). A caller reaching this facade by
+   * another door — the agent socket, an Automation — therefore carries the
+   * same obligation the RPC door discharges for the renderer.
+   */
+  requestedSessionId?: string;
   /** Skill slugs to inject at attach time. Absent means none — never ambient. */
   skills?: readonly string[];
   /**
@@ -541,10 +576,15 @@ export function createSessions(options: SessionsOptions): Sessions {
     // Resolved before creation for the same reason as named resources: the
     // Session's Cache Prefix starts at birth, not whenever an attachment later
     // happens to read Settings. The answer is sanitized names/order only.
+    const mcpTools =
+      input.parentSessionId === undefined
+        ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
+        : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
     const toolSurface = options.toolSurface.resolve(
       role,
       grants.grants,
-      ...(within === null ? [] : [within]),
+      within === null ? undefined : within,
+      mcpTools,
     );
     const created = await options.runtime.command({
       commandId: sessionCreateCommandId(input.operationId),
@@ -555,6 +595,12 @@ export function createSessions(options: SessionsOptions): Sessions {
         role,
         parentSessionId: input.parentSessionId ?? null,
         title: input.title,
+        // The client-minted id rides only this intent (VC-358); a legacy
+        // caller that names none omits the key entirely, so its durable
+        // create intent is byte-identical to what it always wrote.
+        ...(input.requestedSessionId === undefined
+          ? {}
+          : { requestedSessionId: input.requestedSessionId }),
       },
     });
     // The Session now exists durably, so planner history says so — whatever
@@ -584,7 +630,7 @@ export function createSessions(options: SessionsOptions): Sessions {
     // that the door could not honestly bound.
     if (resources.length > 0) await options.skills.record(created.sessionId, resources);
     options.grants.recordBirth(created.sessionId, grants);
-    await options.toolSurface.record(created.sessionId, toolSurface);
+    await options.toolSurface.record(created.sessionId, toolSurface, mcpTools);
     return { sessionId: created.sessionId, model };
   }
 

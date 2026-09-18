@@ -332,4 +332,10 @@ describe("MonacoFileEditor markup", () => {
     expect(html).not.toContain("Changed on disk");
     expect(html).not.toContain("data-monaco-fallback");
   });
+
+  it("wears the loading stamp from the first frame, so the host is never a bare box", () => {
+    // The placeholder `globals.css` draws while Monaco's runtime chunk loads
+    // keys on this attribute (VC-383); the mount effect re-stamps it later.
+    expect(markup()).toContain('data-monaco-status="loading"');
+  });
 });

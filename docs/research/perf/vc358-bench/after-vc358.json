@@ -1,0 +1,794 @@
+{
+  "schemaVersion": 1,
+  "warning": "Performance numbers are comparable only on the same machine, in the same power/thermal state, with the same load arm.",
+  "generatedAt": "2026-09-14T15:35:48.139Z",
+  "host": {
+    "device": {
+      "model": "MacBookPro17,1",
+      "cpu": "Apple M1",
+      "logicalCores": 8,
+      "availableParallelism": 8,
+      "memoryBytes": 17179869184,
+      "architecture": "arm64"
+    },
+    "os": {
+      "platform": "darwin",
+      "release": "25.5.0",
+      "macosVersion": "26.5.1",
+      "macosBuild": "25F80"
+    },
+    "git": {
+      "sha": "8f9d25492e8806d7a514f9e9ce0091445f2888d1",
+      "dirty": false
+    },
+    "node": "v24.18.0"
+  },
+  "fixture": {
+    "schemaVersion": 1,
+    "preset": "real",
+    "seed": 353259855,
+    "generatedAt": "2025-01-15T12:00:00.000Z",
+    "databaseSchemaVersion": 49,
+    "projectId": "perf-project",
+    "projectPrefix": "PERF",
+    "longChat": {
+      "sessionId": "perf-session-0001",
+      "ticketId": "perf-ticket-0001",
+      "displayId": "PERF-1"
+    },
+    "workspaceTickets": [
+      "perf-ticket-0001",
+      "perf-ticket-0002"
+    ],
+    "counts": {
+      "sessions": 1198,
+      "sessionEvents": 259855,
+      "tickets": 392,
+      "ticketEvents": 5361,
+      "sessionCommands": 8541,
+      "liveWorktrees": 50,
+      "overlappingWorktrees": 17,
+      "maxSessionEvents": 1668,
+      "transcriptMessages": 1600
+    },
+    "busiestSessionEvents": 1668,
+    "eventDistribution": {
+      "min": 90,
+      "p50": 149,
+      "p95": 592,
+      "p99": 1164,
+      "max": 1668,
+      "sessionsAtLeast500": 79,
+      "sessionsAtLeast1000": 21
+    },
+    "eventAllocationSha256": "84d22f15804957ee175d11b948cda35a9f7fca5ca79a63d8e6f19fbaa5d9e753",
+    "warning": "Performance numbers are comparable only on the same machine under the same load arm.",
+    "verification": {
+      "ok": true,
+      "preset": "real",
+      "seed": 353259855,
+      "schemaVersion": 49,
+      "counts": {
+        "sessions": 1198,
+        "sessionEvents": 259855,
+        "tickets": 392,
+        "ticketEvents": 5361,
+        "sessionCommands": 8541
+      },
+      "busiest": {
+        "session_id": "perf-session-0001",
+        "count": 1668
+      },
+      "eventDistribution": {
+        "min": 90,
+        "p50": 149,
+        "p95": 592,
+        "p99": 1164,
+        "max": 1668,
+        "sessionsAtLeast500": 79,
+        "sessionsAtLeast1000": 21
+      },
+      "overlappingWorktrees": 17,
+      "decodedSampleEvents": 20,
+      "busiestSessionEvents": 1668,
+      "longProjectionModel": {
+        "providerId": "openai-codex",
+        "modelId": "gpt-5.4",
+        "reasoningLevel": "medium"
+      },
+      "firstArtifactMessageId": "perf-message-00001",
+      "manifestSha256": "497c4caedf7daeeefd02b4c798c30886957b99e8f3aa68fcca7a28f126745ab1",
+      "databaseBytes": 145141760
+    }
+  },
+  "config": {
+    "command": "/opt/homebrew/Cellar/node@24/24.18.0/bin/node /Users/phalasiya/.volli/worktrees/volli-code-f3732f45/VC-358-chat-should-not-create-a-durable-session-until-t/apps/desktop/e2e/bench/performance/run.mjs --preset real --interactions new_chat --repetitions 10 --arms idle,loaded --skip-build --fixture /tmp/volli-perf-oiQ7DZ/real-seed-353259855 --keep-fixture --output /tmp/vc358-bench/after",
+    "repetitions": 10,
+    "busyCores": 2,
+    "streamSteps": 120,
+    "streamTokenRate": 30,
+    "streamContent": "live-prose-4kb-open-code-fence-96-growth-close-prose",
+    "slowdownMs": 0,
+    "arms": [
+      "idle",
+      "loaded"
+    ]
+  },
+  "arms": [
+    {
+      "name": "idle",
+      "busyCores": 0,
+      "slowdownMs": 0,
+      "interactions": [
+        {
+          "id": "new_chat",
+          "label": "+ Chat to usable composer",
+          "samples": [
+            {
+              "latencyMs": 267.4000005722046,
+              "frameTimesMs": [
+                16.30600000000004,
+                18.699999999999818,
+                16.09999999999991,
+                17.300000000000182,
+                16.59999999999991,
+                16.699999999999818,
+                31.5,
+                16.600000000000364,
+                18.59999999999991,
+                16.5,
+                15.099999999999909,
+                16.800000000000182,
+                17.199999999999818,
+                16.800000000000182,
+                17.5
+              ],
+              "refreshIntervalMs": 16.5,
+              "droppedFrames": 1,
+              "longTasksMs": [],
+              "rendererRssMb": 354.0625
+            },
+            {
+              "latencyMs": 208,
+              "frameTimesMs": [
+                16.66800000000012,
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                16.700000000000273,
+                15.099999999999909,
+                16.299999999999727,
+                18.5,
+                14.700000000000273,
+                16.90000000000009,
+                18.09999999999991,
+                17
+              ],
+              "refreshIntervalMs": 16.59999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 319.28125
+            },
+            {
+              "latencyMs": 352.3999996185303,
+              "frameTimesMs": [
+                16.634000000000015,
+                118.60000000000014,
+                16.59999999999991,
+                16.699999999999818,
+                16.700000000000273,
+                16.699999999999818,
+                16.59999999999991,
+                14.700000000000273,
+                17.399999999999636,
+                17.300000000000182,
+                15.400000000000091,
+                18.59999999999991,
+                16.59999999999991,
+                15.5
+              ],
+              "refreshIntervalMs": 16.59999999999991,
+              "droppedFrames": 6,
+              "longTasksMs": [
+                134
+              ],
+              "rendererRssMb": 340.796875
+            },
+            {
+              "latencyMs": 476,
+              "frameTimesMs": [
+                16.59999999999991,
+                133.30000000000018,
+                15.900000000000091,
+                17,
+                15.199999999999818,
+                18.700000000000273,
+                16.5,
+                14.799999999999727,
+                33.5,
+                18.40000000000009,
+                16.699999999999818,
+                14.800000000000182,
+                18.59999999999991,
+                16.700000000000273,
+                15,
+                16.399999999999636,
+                18.5,
+                14.700000000000273,
+                16.799999999999727,
+                16.700000000000273
+              ],
+              "refreshIntervalMs": 15.199999999999818,
+              "droppedFrames": 9,
+              "longTasksMs": [
+                137
+              ],
+              "rendererRssMb": 337.640625
+            },
+            {
+              "latencyMs": 305,
+              "frameTimesMs": [
+                1.905999999999949,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                16.700000000000273,
+                15.599999999999909,
+                16.799999999999727,
+                17.600000000000364,
+                16.59999999999991
+              ],
+              "refreshIntervalMs": 16.59999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [
+                139
+              ],
+              "rendererRssMb": 348.734375
+            },
+            {
+              "latencyMs": 368.69999980926514,
+              "frameTimesMs": [
+                16.634000000000015,
+                131.4000000000001,
+                18.5,
+                16.800000000000182,
+                14.799999999999727,
+                18.5,
+                16.600000000000364,
+                33.399999999999636,
+                16.600000000000364,
+                16.799999999999727,
+                15.099999999999909,
+                17.5,
+                17.300000000000182
+              ],
+              "refreshIntervalMs": 16.600000000000364,
+              "droppedFrames": 8,
+              "longTasksMs": [
+                147
+              ],
+              "rendererRssMb": 325.515625
+            },
+            {
+              "latencyMs": 375.69999980926514,
+              "frameTimesMs": [
+                14.733999999999924,
+                18.59999999999991,
+                131.4000000000001,
+                18.300000000000182,
+                15.099999999999909,
+                35.19999999999982,
+                16.5,
+                16.800000000000182,
+                16.799999999999727,
+                14.600000000000364,
+                17.199999999999818,
+                16.5,
+                17.199999999999818,
+                17.800000000000182
+              ],
+              "refreshIntervalMs": 16.5,
+              "droppedFrames": 8,
+              "longTasksMs": [
+                150
+              ],
+              "rendererRssMb": 279.484375
+            },
+            {
+              "latencyMs": 239.5999994277954,
+              "frameTimesMs": [
+                16.66800000000012,
+                16.699999999999818,
+                16.700000000000273,
+                14.699999999999818,
+                18,
+                15.300000000000182,
+                18.59999999999991,
+                16.699999999999818,
+                16.59999999999991,
+                14.800000000000182,
+                17.300000000000182,
+                16.09999999999991,
+                18.5,
+                16.699999999999818
+              ],
+              "refreshIntervalMs": 16.09999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 319.03125
+            },
+            {
+              "latencyMs": 455.30000019073486,
+              "frameTimesMs": [
+                16.4399999999996,
+                14.900000000000091,
+                18.59999999999991,
+                14.700000000000273,
+                16.799999999999727,
+                18.5,
+                33.40000000000009,
+                16.59999999999991,
+                14.800000000000182,
+                18.59999999999991,
+                16.59999999999991,
+                15.100000000000364,
+                18.299999999999727,
+                15.099999999999909,
+                18.200000000000273,
+                16.699999999999818,
+                16.59999999999991
+              ],
+              "refreshIntervalMs": 15.100000000000364,
+              "droppedFrames": 1,
+              "longTasksMs": [
+                153
+              ],
+              "rendererRssMb": 311.28125
+            },
+            {
+              "latencyMs": 359.1000003814697,
+              "frameTimesMs": [
+                16.634000000000015,
+                133.4000000000001,
+                14.700000000000273,
+                16.59999999999991,
+                35.29999999999973,
+                14.700000000000273,
+                16.90000000000009,
+                17.199999999999818,
+                17.90000000000009,
+                16.09999999999991,
+                15.300000000000182,
+                18.59999999999991,
+                16.59999999999991
+              ],
+              "refreshIntervalMs": 16.09999999999991,
+              "droppedFrames": 8,
+              "longTasksMs": [
+                146
+              ],
+              "rendererRssMb": 331.140625
+            }
+          ],
+          "summary": {
+            "latencyMs": {
+              "n": 10,
+              "min": 208,
+              "p50": 352.4,
+              "p95": 476,
+              "max": 476,
+              "mean": 340.72,
+              "variance": 6840.158
+            },
+            "rendererRssMb": {
+              "n": 10,
+              "min": 279.484,
+              "p50": 325.516,
+              "p95": 354.063,
+              "max": 354.063,
+              "mean": 326.697,
+              "variance": 415.466
+            },
+            "frameTimeMs": {
+              "n": 142,
+              "min": 1.906,
+              "p50": 16.7,
+              "p95": 33.5,
+              "max": 133.4,
+              "mean": 21.26,
+              "variance": 444.301
+            },
+            "droppedFrames": {
+              "n": 10,
+              "min": 0,
+              "p50": 1,
+              "p95": 9,
+              "max": 9,
+              "mean": 4.1,
+              "variance": 14.29
+            },
+            "longTasks": {
+              "observedCount": 7,
+              "countPerSample": {
+                "n": 10,
+                "min": 0,
+                "p50": 1,
+                "p95": 1,
+                "max": 1,
+                "mean": 0.7,
+                "variance": 0.21
+              },
+              "durationMs": {
+                "n": 7,
+                "min": 134,
+                "p50": 146,
+                "p95": 153,
+                "max": 153,
+                "mean": 143.714,
+                "variance": 43.347
+              }
+            },
+            "settleLongTasks": {
+              "observedCount": 0,
+              "countPerSample": {
+                "n": 10,
+                "min": 0,
+                "p50": 0,
+                "p95": 0,
+                "max": 0,
+                "mean": 0,
+                "variance": 0
+              },
+              "durationMs": null
+            }
+          }
+        }
+      ],
+      "rendererErrors": []
+    },
+    {
+      "name": "2-busy-core",
+      "busyCores": 2,
+      "slowdownMs": 0,
+      "interactions": [
+        {
+          "id": "new_chat",
+          "label": "+ Chat to usable composer",
+          "samples": [
+            {
+              "latencyMs": 200.89999961853027,
+              "frameTimesMs": [
+                16.567999999999756,
+                16.600000000000364,
+                16.799999999999727,
+                16.700000000000273,
+                16.59999999999991,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273
+              ],
+              "refreshIntervalMs": 16.59999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 304.96875
+            },
+            {
+              "latencyMs": 249.5,
+              "frameTimesMs": [
+                16.5,
+                16.600000000000364,
+                18.5,
+                16.599999999999454,
+                15.200000000000728,
+                18.399999999999636,
+                16.600000000000364,
+                16.699999999999818,
+                16.699999999999818,
+                15.300000000000182,
+                16.199999999999818,
+                18.300000000000182,
+                16.899999999999636,
+                15.300000000000182
+              ],
+              "refreshIntervalMs": 16.199999999999818,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 275.984375
+            },
+            {
+              "latencyMs": 207.5999994277954,
+              "frameTimesMs": [
+                17.5,
+                16.300000000000182,
+                18.09999999999991,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273,
+                14.699999999999818,
+                18.700000000000273,
+                16.599999999999454,
+                16.700000000000728,
+                16.599999999999454,
+                14.800000000000182
+              ],
+              "refreshIntervalMs": 16.599999999999454,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 309.34375
+            },
+            {
+              "latencyMs": 281,
+              "frameTimesMs": [
+                16.700000000000273,
+                16.699999999999818,
+                16.90000000000009,
+                18.299999999999727,
+                15.300000000000182,
+                18.09999999999991,
+                14.700000000000273,
+                16.800000000000182,
+                16.399999999999636,
+                18.699999999999818,
+                16.199999999999818,
+                17.100000000000364,
+                15,
+                16.399999999999636,
+                18.700000000000728,
+                16.599999999999454
+              ],
+              "refreshIntervalMs": 16.399999999999636,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 291.09375
+            },
+            {
+              "latencyMs": 352.3999996185303,
+              "frameTimesMs": [
+                16.634000000000015,
+                16.59999999999991,
+                16.699999999999818,
+                33.30000000000018,
+                14.899999999999636,
+                16.600000000000364,
+                16.600000000000364,
+                18.599999999999454,
+                14.800000000000182,
+                18.5,
+                16.699999999999818,
+                16.699999999999818,
+                16.100000000000364,
+                15.5,
+                18.300000000000182,
+                16.099999999999454,
+                16.600000000000364,
+                17.399999999999636,
+                15.200000000000728
+              ],
+              "refreshIntervalMs": 16.099999999999454,
+              "droppedFrames": 1,
+              "longTasksMs": [
+                52
+              ],
+              "rendererRssMb": 287.140625
+            },
+            {
+              "latencyMs": 200.79999923706055,
+              "frameTimesMs": [
+                16.670000000000073,
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                16.59999999999991,
+                14.900000000000091,
+                18.5,
+                16.700000000000273,
+                16.299999999999727,
+                17.09999999999991,
+                16.5
+              ],
+              "refreshIntervalMs": 16.5,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 370.328125
+            },
+            {
+              "latencyMs": 224.39999961853027,
+              "frameTimesMs": [
+                16.700000000000273,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                16.300000000000182,
+                16.5,
+                17.199999999999818,
+                16.699999999999818,
+                16.600000000000364,
+                15.299999999999727,
+                18.09999999999991,
+                16.600000000000364
+              ],
+              "refreshIntervalMs": 16.59999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 315.546875
+            },
+            {
+              "latencyMs": 198.60000038146973,
+              "frameTimesMs": [
+                17.799999999999727,
+                16.600000000000364,
+                16.59999999999991,
+                16.799999999999727,
+                16.600000000000364,
+                16.699999999999818,
+                16.699999999999818,
+                15.600000000000364,
+                17.59999999999991,
+                16.799999999999727,
+                16.600000000000364
+              ],
+              "refreshIntervalMs": 16.600000000000364,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 350.484375
+            },
+            {
+              "latencyMs": 250,
+              "frameTimesMs": [
+                16.634000000000015,
+                16.699999999999818,
+                15.300000000000182,
+                18,
+                16.699999999999818,
+                16.59999999999991,
+                16.700000000000273,
+                14.799999999999727,
+                18.5,
+                15.700000000000273,
+                16.09999999999991,
+                18.299999999999727,
+                16.600000000000364,
+                16.59999999999991
+              ],
+              "refreshIntervalMs": 16.09999999999991,
+              "droppedFrames": 0,
+              "longTasksMs": [],
+              "rendererRssMb": 325.421875
+            },
+            {
+              "latencyMs": 262.30000019073486,
+              "frameTimesMs": [
+                16.59999999999991,
+                16.700000000000273,
+                16.699999999999818,
+                33.19999999999982,
+                15.600000000000364,
+                16.09999999999991,
+                16.799999999999727,
+                18.200000000000273,
+                15.5,
+                16.199999999999818,
+                17.09999999999991,
+                17.900000000000546,
+                14.699999999999818,
+                17.800000000000182
+              ],
+              "refreshIntervalMs": 16.09999999999991,
+              "droppedFrames": 1,
+              "longTasksMs": [],
+              "rendererRssMb": 272.5
+            }
+          ],
+          "summary": {
+            "latencyMs": {
+              "n": 10,
+              "min": 198.6,
+              "p50": 224.4,
+              "p95": 352.4,
+              "max": 352.4,
+              "mean": 242.75,
+              "variance": 2099.921
+            },
+            "rendererRssMb": {
+              "n": 10,
+              "min": 272.5,
+              "p50": 304.969,
+              "p95": 370.328,
+              "max": 370.328,
+              "mean": 310.281,
+              "variance": 901.533
+            },
+            "frameTimeMs": {
+              "n": 135,
+              "min": 14.7,
+              "p50": 16.67,
+              "p95": 18.5,
+              "max": 33.3,
+              "mean": 16.92,
+              "variance": 4.856
+            },
+            "droppedFrames": {
+              "n": 10,
+              "min": 0,
+              "p50": 0,
+              "p95": 1,
+              "max": 1,
+              "mean": 0.2,
+              "variance": 0.16
+            },
+            "longTasks": {
+              "observedCount": 1,
+              "countPerSample": {
+                "n": 10,
+                "min": 0,
+                "p50": 0,
+                "p95": 1,
+                "max": 1,
+                "mean": 0.1,
+                "variance": 0.09
+              },
+              "durationMs": {
+                "n": 1,
+                "min": 52,
+                "p50": 52,
+                "p95": 52,
+                "max": 52,
+                "mean": 52,
+                "variance": 0
+              }
+            },
+            "settleLongTasks": {
+              "observedCount": 0,
+              "countPerSample": {
+                "n": 10,
+                "min": 0,
+                "p50": 0,
+                "p95": 0,
+                "max": 0,
+                "mean": 0,
+                "variance": 0
+              },
+              "durationMs": null
+            }
+          }
+        }
+      ],
+      "rendererErrors": [],
+      "load": {
+        "durationMs": 181606.127,
+        "workers": 2,
+        "progress": [
+          {
+            "ready": true,
+            "iterations": 11400000000,
+            "checksum": 1487373364
+          },
+          {
+            "ready": true,
+            "iterations": 11400000000,
+            "checksum": 2949315903
+          }
+        ]
+      }
+    }
+  ],
+  "backgroundLoadGap": {
+    "from": "idle",
+    "to": "2-busy-core",
+    "interactions": [
+      {
+        "id": "new_chat",
+        "label": "+ Chat to usable composer",
+        "p50DeltaMs": -128,
+        "p50Ratio": 0.637,
+        "p95DeltaMs": -123.6,
+        "p95Ratio": 0.74
+      }
+    ]
+  }
+}

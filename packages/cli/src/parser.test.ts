@@ -283,6 +283,19 @@ describe("parseCliArgs", () => {
     );
   });
 
+  // VC-329 listed `automation.run` so an agent reading the reference meets the
+  // verb — but listed still means tool-only, and a shell attempt must be
+  // answered with the door that holds it, never a bare "no such verb".
+  it("refuses automation run with the door that does hold it", () => {
+    const result = parseCliArgs(["automation", "run", "Nightly sweep", "VC-4"]);
+    if (result.ok) throw new Error("expected a wrong-door refusal");
+    expect(result.code).toBe("WRONG_DOOR");
+    expect(result.verb).toBe("automation.run");
+    expect(result.message).toBe(
+      "volli automation run exists on the Agent Tool Surface as automation.run; the Agent CLI does not execute it.",
+    );
+  });
+
   it("refuses ticket archive by naming the app as the only surface", () => {
     const result = parseCliArgs(["ticket", "archive", "VC-12"]);
     if (result.ok) throw new Error("expected a wrong-door refusal");
@@ -978,6 +991,17 @@ describe("registry ↔ argv mechanics", () => {
       "session.send",
       "session.delegate",
       "session.await",
+      // The MCP management family (VC-380), tool-only for the reason the rest
+      // of this list is: a same-uid process must not be able to install an MCP
+      // server, and absence of a shell door is the enforcement.
+      "mcp.list",
+      "mcp.preview",
+      "mcp.install",
+      "mcp.refresh",
+      "mcp.enable",
+      "mcp.disable",
+      "mcp.tools",
+      "mcp.remove",
     ]);
   });
 });

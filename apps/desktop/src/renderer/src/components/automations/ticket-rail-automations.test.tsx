@@ -98,13 +98,15 @@ const doors = {
   list: vi.fn(),
   armings: vi.fn(),
   enablement: vi.fn(),
+  columnOrders: vi.fn(),
   runsForTicket: vi.fn(),
 };
 
 /**
- * One available model with one reasoning level, so the per-invocation override
- * menu has something to offer. Without a catalog the override rows are
- * correctly absent, which would make the surface untestable rather than tested.
+ * One available model with two reasoning levels, so the per-invocation
+ * override has both model and effort choices to expose. Without a catalog the
+ * override rows are correctly absent, which would make the surface untestable
+ * rather than tested.
  */
 const MODEL_ACCESS = {
   inspect: vi.fn(async () => ({
@@ -115,7 +117,7 @@ const MODEL_ACCESS = {
         modelId: "claude-opus",
         label: "claude-opus",
         state: "available",
-        reasoningLevels: ["high"],
+        reasoningLevels: ["low", "high"],
       },
     ],
   })),
@@ -241,6 +243,7 @@ function runButton(): HTMLButtonElement {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
+  doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
   vi.mocked(openRunSession).mockReset();
   vi.mocked(runAutomationOnTicket).mockReset();
   vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
@@ -255,6 +258,9 @@ beforeEach(() => {
     // "already read" flag from a previous mount would leave every later case
     // asserting against the first one's answer.
     enablementRead: false,
+    // A landed rail version from an earlier mount would let this case answer
+    // from a cache the `beforeEach` above just cleared (VC-373).
+    railReadAt: {},
   });
 });
 
@@ -269,6 +275,23 @@ afterEach(async () => {
 });
 
 describe("the split button", () => {
+  it("shows and runs another column's saved work without opening any menu", async () => {
+    await mount({
+      automations: [automation({ trigger: { kind: "columns", columns: ["needs_review"] } })],
+    });
+    expect(text()).toContain("Needs Review");
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull();
+    await act(async () => control("Run Review sweep on this ticket").click());
+    expect(runAutomationOnTicket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "automation", automationId: "a1" },
+        ticketId: "t1",
+        modelOverride: null,
+      }),
+    );
+    expect(TICKET.status).toBe("doing");
+  });
+
   it("presses the Armed automation of this Ticket's current column", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
 
@@ -312,7 +335,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).toContain("Switched off");
+    expect(text()).toContain("Manual only");
     await act(async () => {
       menuItem("Review sweep").click();
     });
@@ -324,7 +347,7 @@ describe("the split button", () => {
 
     await openMenu();
 
-    expect(text()).not.toContain("Switched off");
+    expect(text()).not.toContain("Manual only");
   });
 
   it("presses Run once where the column arms nothing", async () => {
@@ -550,11 +573,19 @@ describe("Run once", () => {
     await mount({ automations: [automation()] });
     await openMenu();
     await openSubmenu("Run on model");
+    await openSubmenu("claude-opus");
     await act(async () => {
-      menuItem("claude-opus").click();
+      menuItem("high").click();
     });
 
     expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
+    expect(document.querySelector("[data-composer-container]")?.className).toContain(
+      "@container/composer",
+    );
+    expect(document.querySelector('[data-testid="model-pill"]')?.getAttribute("aria-label")).toBe(
+      "Model and effort: claude-opus · Anthropic · High",
+    );
+    expect(document.querySelector(".composer-separate-effort")).not.toBeNull();
     await typeInstructions("/sweep this once");
     await act(async () => {
       runButton().click();
@@ -579,8 +610,9 @@ describe("the per-invocation override", () => {
     await mount({ automations: [automation()], armings: [ARMING] });
     await openMenu();
     await openSubmenu("Run on model");
+    await openSubmenu("claude-opus");
     await act(async () => {
-      menuItem("claude-opus").click();
+      menuItem("high").click();
     });
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({

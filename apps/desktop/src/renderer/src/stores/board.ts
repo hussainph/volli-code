@@ -25,6 +25,7 @@ import {
   type TicketFilter,
   type TicketPriority,
   type TicketStatus,
+  type TicketSummary,
 } from "@volli/shared";
 import type {
   ArchivedTicketsResult,
@@ -118,6 +119,20 @@ export function planningChangeAffects(change: PlanningChange, ticketId: string):
   return change.ticketId === null || change.ticketId === ticketId;
 }
 
+/**
+ * Whether this renderer holds the ticket's CANONICAL Ticket Body (VC-387).
+ *
+ * A ticket the steady-state roster introduced carries `body: ""` as a
+ * PLACEHOLDER, because the roster does not read bodies. `""` is also a
+ * perfectly legal body, so the two are indistinguishable by value — and a
+ * surface that reads the placeholder as canonical writes an empty body over a
+ * real one. Ask this before rendering a body for editing, and before any
+ * read-modify-write that derives a new body from the one in the store.
+ */
+export function isTicketBodyLoaded(state: BoardState, ticketId: string): boolean {
+  return state.unloadedTicketBodies[ticketId] === undefined;
+}
+
 const defaultGateway: BoardGateway = {
   createTicket: (input) => window.api.tickets.create(input),
   moveTicket: (input) => window.api.tickets.move(input),
@@ -132,9 +147,40 @@ const defaultGateway: BoardGateway = {
   listArchived: (projectId) => window.api.tickets.listArchived(projectId),
 };
 
-interface BoardState {
+export interface BoardState {
   ticketsByProject: Record<string, Ticket[]>;
   labelsByProject: Record<string, Label[]>;
+  /**
+   * Ticket ids whose `body` in {@link BoardState.ticketsByProject} is a
+   * PLACEHOLDER rather than the canonical Ticket Body (VC-387) — read through
+   * {@link isTicketBodyLoaded}, never directly.
+   *
+   * Empty after a wholesale {@link BoardState.hydrate}, because the boot payload
+   * carries every body. A ticket the scoped roster introduces (created by an
+   * agent or another window after this one booted) is marked here until
+   * {@link BoardState.adoptTicketBody} fills it, which is what opening that
+   * ticket does.
+   *
+   * A SEPARATE index rather than a nullable `Ticket["body"]`, because `body` is
+   * domain vocabulary shared with main, the CLI and the agent brief; only this
+   * renderer's cache has a "not read yet" state, so only this renderer carries
+   * the flag.
+   */
+  unloadedTicketBodies: Record<string, true>;
+  /**
+   * Whether the next board-moving planning refresh must be WHOLESALE whatever
+   * its scope (VC-387).
+   *
+   * A failed refresh may have missed the mutation that triggered it, and a
+   * scoped read is exactly the read that cannot repair a slice it does not
+   * name. Set by {@link BoardState.notePlanningRefreshFailed}; cleared by the
+   * wholesale {@link BoardState.hydrate} that heals it.
+   *
+   * In the store rather than in a module variable so it resets with the rest of
+   * the board, is visible to anything that can read board state, and is reached
+   * by tests through the same door as every other board fact.
+   */
+  planningRecoveryNeeded: boolean;
   /**
    * A project's archived tickets — cold storage for the Archive view, kept OUT
    * of `ticketsByProject` (the board holds only live cards) and loaded on
@@ -167,6 +213,11 @@ interface BoardState {
    */
   notePlanningChange(change?: { ticketId?: string; projectId?: string }): void;
   /**
+   * Records that a planning refresh read failed, arming the wholesale recovery
+   * described on {@link BoardState.planningRecoveryNeeded}.
+   */
+  notePlanningRefreshFailed(): void;
+  /**
    * Seeds tickets/labels from the boot payload — the ONE place state is set
    * wholesale outside a mutation. Also the path a change made OUTSIDE this
    * renderer arrives on (`refreshPlanningData`, lib/boot.ts, after a
@@ -178,6 +229,39 @@ interface BoardState {
     ticketsByProject: Record<string, Ticket[]>,
     labelsByProject: Record<string, Label[]>,
   ): void;
+  /**
+   * Seeds ONE project's tickets/labels from the steady-state refresh read
+   * (`volli:data-project-roster`, VC-387) — the scoped sibling of
+   * {@link BoardState.hydrate}, and the path a socket-originated change that
+   * names its project arrives on.
+   *
+   * Two things it does that a wholesale hydrate cannot. Every OTHER project's
+   * slice keeps its identity, so an agent commenting in one project no longer
+   * re-renders the boards of the others. And the roster carries no `body`, so
+   * each row is completed with the body this store already holds — a ticket
+   * this renderer has never seen gets a `""` PLACEHOLDER and is recorded in
+   * {@link BoardState.unloadedTicketBodies} until
+   * {@link BoardState.adoptTicketBody} fills it, which is what opening that
+   * ticket does. The mark is what keeps the placeholder from being mistaken for
+   * an empty body a person actually wrote.
+   *
+   * A no-op for a project this renderer does not hold: bringing one back needs
+   * the projects store too, which only a wholesale hydrate carries.
+   */
+  hydrateProjectRoster(projectId: string, tickets: readonly TicketSummary[], labels: Label[]): void;
+  /**
+   * Adopts one ticket's body, read on its own because the refresh roster no
+   * longer carries it (VC-387). A no-op for a ticket the board does not hold
+   * (archived, deleted, or in a project this renderer forgot) and for a body
+   * that already matches — an unchanged body must not mint a new ticket object,
+   * or every planning change would re-render the open ticket for nothing.
+   *
+   * It clears the ticket's {@link BoardState.unloadedTicketBodies} mark on EVERY
+   * path that reached a real read, the unchanged-body one included: a ticket
+   * whose canonical body genuinely is `""` must end up loaded, or it would stay
+   * marked forever and no surface would ever let a person edit it.
+   */
+  adoptTicketBody(projectId: string, ticketId: string, body: string): void;
   /**
    * Seeds empty `ticketsByProject`/`labelsByProject` slices for a project that
    * didn't exist at boot — mirroring the wholesale seed `hydrate` does from
@@ -422,6 +506,19 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
      * has the ticket in hand, not the project id. `undefined` for an unknown
      * ticket id.
      */
+    /**
+     * The `unloadedTicketBodies` record with `ticketId` removed, or `undefined`
+     * when it was not marked — so a caller can skip writing an identical record
+     * and leave the reference (and every subscriber reading it) untouched.
+     */
+    function markTicketBodyLoaded(ticketId: string): Record<string, true> | undefined {
+      const unloaded = get().unloadedTicketBodies;
+      if (unloaded[ticketId] === undefined) return undefined;
+      const next = { ...unloaded };
+      delete next[ticketId];
+      return next;
+    }
+
     function findTicketProject(
       ticketId: string,
     ): { projectId: string; ticket: Ticket } | undefined {
@@ -509,7 +606,12 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         );
         return;
       }
+      // The authoritative ticket main answers with always carries the real body,
+      // whatever field this call edited — so landing it retires any placeholder
+      // mark the roster left on this ticket.
       patchById(result.ticket);
+      const loaded = markTicketBodyLoaded(ticketId);
+      if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
     }
 
     /** Shared optimistic/write-through/reconcile path for one-card and group moves. */
@@ -551,6 +653,8 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       archivedByProject: {},
       filterByProject: {},
       selectedByProject: {},
+      unloadedTicketBodies: {},
+      planningRecoveryNeeded: false,
       lastPlanningChange: { version: 0, ticketId: null, projectId: null },
 
       notePlanningChange(change) {
@@ -563,9 +667,77 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         });
       },
 
+      notePlanningRefreshFailed() {
+        set({ planningRecoveryNeeded: true });
+      },
+
+      hydrateProjectRoster(projectId, tickets, labels) {
+        // Never resurrect a forgotten project, the rule every ticket mutation
+        // reconciles under: a scoped read answers about one project, and a
+        // project this renderer has dropped must come back through a wholesale
+        // hydrate (which carries the projects store with it) or not at all.
+        const previous = get().ticketsByProject[projectId];
+        if (previous === undefined) return;
+        const bodyById = new Map(previous.map((ticket) => [ticket.id, ticket.body]));
+        const next = tickets.map((row) => ({ ...row, body: bodyById.get(row.id) ?? "" }));
+        // A row this renderer has not seen before got a PLACEHOLDER body above,
+        // not a read one. Marked here so no surface mistakes it for an empty
+        // body a person wrote. A row already on the board keeps whatever mark it
+        // had: the roster did not read its body either way.
+        const unloaded = { ...get().unloadedTicketBodies };
+        for (const row of tickets) if (!bodyById.has(row.id)) unloaded[row.id] = true;
+        // And a ticket that LEFT the board takes its mark with it, so an archive
+        // and an unarchive cannot leave a stale entry behind forever.
+        const survivingIds = new Set(tickets.map((row) => row.id));
+        for (const ticket of previous) if (!survivingIds.has(ticket.id)) delete unloaded[ticket.id];
+        set({
+          ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
+          labelsByProject: { ...get().labelsByProject, [projectId]: labels },
+          unloadedTicketBodies: unloaded,
+        });
+        // The same re-home a wholesale hydrate does, for the same reason: a CLI
+        // archive or another window's mutation drops a ticket here with no local
+        // action to hang owner reconciliation off.
+        reconcileTicketChatTabOwners(projectId, previous, next);
+      },
+
+      adoptTicketBody(projectId, ticketId, body) {
+        const slice = get().ticketsByProject[projectId];
+        if (slice === undefined) return;
+        const index = slice.findIndex((ticket) => ticket.id === ticketId);
+        const current = slice[index];
+        if (current === undefined) return;
+        // The mark clears whatever the body turned out to be — BEFORE the
+        // unchanged-body return below, because a ticket whose canonical body
+        // really is "" has now been read and must not stay a placeholder.
+        const loaded = markTicketBodyLoaded(ticketId);
+        if (current.body === body) {
+          if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
+          return;
+        }
+        // One replaced entry in a copied array, rather than a mapped rebuild:
+        // every OTHER ticket keeps its object identity, so adopting one body
+        // cannot re-render the cards beside it.
+        const next = [...slice];
+        next[index] = { ...current, body };
+        set({
+          ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
+          ...(loaded === undefined ? {} : { unloadedTicketBodies: loaded }),
+        });
+      },
+
       hydrate(ticketsByProject, labelsByProject) {
         const previous = get().ticketsByProject;
-        set({ ticketsByProject, labelsByProject });
+        // The boot payload carries every live ticket's body, so nothing is a
+        // placeholder after a wholesale hydrate — and this read is also the one
+        // that heals a board a failed refresh may have left stale, which is what
+        // retires `planningRecoveryNeeded`.
+        set({
+          ticketsByProject,
+          labelsByProject,
+          unloadedTicketBodies: {},
+          planningRecoveryNeeded: false,
+        });
         // The removal path `reconcileSlice` cannot see: a CLI archive, a
         // retention sweep, or another window's mutation reaches this renderer as
         // a wholesale re-hydrate, dropping the ticket without any local action

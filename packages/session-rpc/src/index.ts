@@ -17,7 +17,9 @@ import {
 } from "@volli/session-engine";
 import {
   MODEL_PICKER_VIEWS,
+  isolatePerformanceObserver,
   MODEL_PURPOSES,
+  readOptionalPerformanceClock,
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
@@ -57,7 +59,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence"
+  "sessionId" | "receipt" | "throughSequence" | "refusal"
 >;
 
 /**
@@ -88,6 +90,15 @@ export interface SessionCreateInput {
   /** The Role: a Ticket Session when set, a Board Session when null. */
   ticketId: string | null;
   title: string | null;
+  /**
+   * A client-minted UUIDv4 the durable Session takes as its own id (VC-358),
+   * so a provisional chat can be promoted under the id it carried all along.
+   * Absent — every caller that has not opted in — keeps the ledger's own id
+   * derivation. Format-checked here (v4 only, per `docs/BOUNDARIES.md` rule 1);
+   * the ledger refuses an id already in use, and the engine refuses a replay
+   * that names a different id than the one its command was accepted under.
+   */
+  requestedSessionId?: string;
   /**
    * Skill slugs to inject at attach time as system-prompt RESOURCE sections.
    * Absent means none — injection is explicit selection, never ambient.
@@ -124,6 +135,18 @@ export interface SessionCreateResult {
  * The server-side composition root supplies this context. It deliberately
  * carries the deep runtime rather than leaking its ports to individual RPCs.
  */
+export interface RpcProcedurePerformanceSample {
+  procedure: string;
+  durationMs: number;
+  outcome: "success" | "error";
+}
+
+/** Optional payload-free timer used by the Electron performance harness. */
+export interface RpcProcedurePerformanceObserver {
+  now?(): number;
+  record(sample: RpcProcedurePerformanceSample): void;
+}
+
 export interface SessionRouterContext {
   runtime: SessionRuntime;
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
@@ -146,6 +169,7 @@ export interface SessionRouterContext {
   attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
   diagnostics: RpcDiagnosticLog;
   transport?: "electron-ipc" | "unknown";
+  performanceObserver?: RpcProcedurePerformanceObserver;
 }
 
 export interface RpcDiagnosticEntry {
@@ -624,6 +648,7 @@ const t = initTRPC.context<SessionRouterContext>().create();
 const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
   const transport = ctx.transport ?? "unknown";
   ctx.diagnostics.record({ procedure: path, phase: "start", transport, code: null, message: null });
+  const performanceStartedAt = readOptionalPerformanceClock(ctx.performanceObserver);
   const result = await next();
   if (result.ok) {
     ctx.diagnostics.record({
@@ -642,8 +667,33 @@ const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
       message: result.error.message,
     });
   }
+  const performanceEndedAt = readOptionalPerformanceClock(ctx.performanceObserver);
+  recordProcedurePerformance(ctx.performanceObserver, {
+    procedure: path,
+    startedAt: performanceStartedAt,
+    endedAt: performanceEndedAt,
+    outcome: result.ok ? "success" : "error",
+  });
   return result;
 });
+
+function recordProcedurePerformance(
+  observer: RpcProcedurePerformanceObserver | undefined,
+  input: {
+    procedure: string;
+    startedAt: number | null;
+    endedAt: number | null;
+    outcome: RpcProcedurePerformanceSample["outcome"];
+  },
+): void {
+  // A missing clock endpoint means this sample has no trustworthy duration.
+  // Skipping it is preferable to publishing a plausible-looking zero.
+  if (!observer || input.startedAt === null || input.endedAt === null) return;
+  const durationMs = Math.max(0, input.endedAt - input.startedAt);
+  isolatePerformanceObserver(() => {
+    observer.record({ procedure: input.procedure, durationMs, outcome: input.outcome });
+  });
+}
 
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
@@ -659,6 +709,18 @@ export function createSessionRouter() {
             // records durably.
             ticketId: nonEmptyString.nullable(),
             title: nullableString,
+            // A client-minted UUID the durable Session adopts (VC-358), so a
+            // provisional chat needs no id swap on promotion. Checked at this
+            // edge: a malformed id must never reach the ledger.
+            //
+            // v4 SPECIFICALLY, not any UUID. `docs/BOUNDARIES.md` rule 1 bars a
+            // durable id built from anything machine-local, and a v1 UUID
+            // embeds the minting machine's MAC address. `z.string().uuid()`
+            // admits v1 (and the nil/max ids), so it is the wrong shape for an
+            // id a CLIENT proposes. A durable id derivation is frozen the
+            // moment it ships, which makes this the one line that cannot be
+            // tightened later.
+            requestedSessionId: z.uuidv4().optional(),
             // The optimistic-open path mints the Session, so it is the path
             // that has to carry the skills: `attach` composes the prompt from
             // the record `create` wrote, and never sees this input.
@@ -945,6 +1007,9 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     sessionId: result.sessionId,
     receipt: result.receipt,
     throughSequence: result.throughSequence,
+    // Nullable rather than optional, so the field survives every transport
+    // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
+    refusal: result.refusal,
   };
 }
 
@@ -962,7 +1027,12 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   throughSequence: number;
 } {
   const source = snapshot.projection;
-  const projection: Partial<SessionPresentationProjection> = {};
+  // A builder, filled field by field from whichever ones the snapshot carried,
+  // so it drops the `readonly` the published type wears (VC-393). The value
+  // leaves here as that type and nothing mutates it afterwards.
+  const projection: {
+    -readonly [K in keyof SessionPresentationProjection]?: SessionPresentationProjection[K];
+  } = {};
   if (source.session !== undefined) projection.session = source.session;
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {

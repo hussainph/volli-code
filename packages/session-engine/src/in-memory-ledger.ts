@@ -1,4 +1,4 @@
-import { assertSessionEvent } from "@volli/shared";
+import { assertSessionEvent, assertSessionProjectionCheckpoint } from "@volli/shared";
 import type {
   CommandReceipt,
   ListLatestTicketSignalsQuery,
@@ -12,6 +12,7 @@ import type {
   SessionEvent,
   SessionLedger,
   SessionLedgerTransaction,
+  SessionProjectionCheckpoint,
   SessionUsageAttribution,
   SessionUsageEntry,
   SessionUsageScope,
@@ -53,6 +54,7 @@ class InMemorySessionLedger implements SessionLedger {
   #events = new Map<string, SessionEvent>();
   #commands = new Map<string, SessionCommand>();
   #receipts = new Map<string, CommandReceipt>();
+  #projectionCheckpoints = new Map<string, SessionProjectionCheckpoint>();
   #tail: Promise<void> = Promise.resolve();
 
   async transaction<T>(
@@ -96,6 +98,10 @@ class InMemorySessionLedger implements SessionLedger {
         assertOpen();
         return this.#countSessions(query);
       },
+      listAttachedSessions: () => {
+        assertOpen();
+        return this.#listAttachedSessions();
+      },
       listSessionStarts: (query) => {
         assertOpen();
         return this.#listSessionStarts(query);
@@ -119,6 +125,26 @@ class InMemorySessionLedger implements SessionLedger {
       listEvents: (query) => {
         assertOpen();
         return this.#listEvents(query);
+      },
+      listProjectionEvents: (query) => {
+        assertOpen();
+        // This adapter holds decoded objects, so there is no provenance decode
+        // to skip and no cheaper read to offer. Dropping the field anyway keeps
+        // it honest about what a fold is allowed to see, so a reducer that
+        // started reading provenance would fail here and not only in SQLite.
+        return this.#listEvents(query).map(({ provenance: _provenance, ...event }) => event);
+      },
+      latestEventSequence: (sessionId) => {
+        assertOpen();
+        return this.#latestEventSequence(sessionId);
+      },
+      getProjectionCheckpoint: (sessionId) => {
+        assertOpen();
+        return this.#getProjectionCheckpoint(sessionId);
+      },
+      saveProjectionCheckpoint: (checkpoint) => {
+        assertOpen();
+        this.#saveProjectionCheckpoint(checkpoint);
       },
       getCommand: (commandId) => {
         assertOpen();
@@ -215,6 +241,32 @@ class InMemorySessionLedger implements SessionLedger {
       .map(clone);
   }
 
+  /**
+   * Every Session holding at least one open attachment, across every project.
+   *
+   * Derived straight from the events rather than from an index: this store is
+   * a test double whose whole content fits in memory, so the cheap answer and
+   * the true answer are the same walk. The SQLite ledger keeps a projected
+   * closure mark instead — same meaning, different cost — and
+   * `session-engine.test.ts` holds the two to the same answers.
+   */
+  #listAttachedSessions(): readonly Session[] {
+    const attached: Session[] = [];
+    for (const session of this.#sessions.values()) {
+      const open = new Set<string>();
+      for (const event of this.#eventsFor(session.id)) {
+        // `attachment.failed` never opens one, so only these two move the set.
+        if (event.payload.kind === "attachment.opened") open.add(event.payload.attachment.id);
+        if (event.payload.kind === "attachment.closed") open.delete(event.payload.attachmentId);
+      }
+      if (open.size > 0) attached.push(clone(session));
+    }
+    return attached.toSorted(
+      (left, right) =>
+        right.createdAt - left.createdAt || compareSqliteBinaryText(right.id, left.id),
+    );
+  }
+
   #countSessions(query: ListSessionsQuery): number {
     return [...this.#sessions.values()].filter((session) => {
       if (session.projectId !== query.projectId) return false;
@@ -300,6 +352,28 @@ class InMemorySessionLedger implements SessionLedger {
       .map(clone);
   }
 
+  #latestEventSequence(sessionId: string): number {
+    return this.#eventsFor(sessionId).at(-1)?.sequence ?? 0;
+  }
+
+  #getProjectionCheckpoint(sessionId: string): SessionProjectionCheckpoint | null {
+    const checkpoint = this.#projectionCheckpoints.get(sessionId);
+    return checkpoint ? clone(checkpoint) : null;
+  }
+
+  #saveProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): void {
+    if (!this.#sessions.has(checkpoint.sessionId)) {
+      throw new Error("Session projection checkpoint is invalid");
+    }
+    assertSessionProjectionCheckpoint(checkpoint, {
+      latestSequence: this.#latestEventSequence(checkpoint.sessionId),
+      invalidMessage: "Session projection checkpoint is invalid",
+    });
+    const existing = this.#projectionCheckpoints.get(checkpoint.sessionId);
+    if (existing && existing.throughSequence > checkpoint.throughSequence) return;
+    this.#projectionCheckpoints.set(checkpoint.sessionId, clone(checkpoint));
+  }
+
   #getCommand(commandId: string): SessionCommand | null {
     const command = this.#commands.get(commandId);
     return command ? clone(command) : null;
@@ -354,6 +428,7 @@ class InMemorySessionLedger implements SessionLedger {
       events: cloneMap(this.#events),
       commands: cloneMap(this.#commands),
       receipts: cloneMap(this.#receipts),
+      projectionCheckpoints: cloneMap(this.#projectionCheckpoints),
     };
   }
 
@@ -362,6 +437,7 @@ class InMemorySessionLedger implements SessionLedger {
     this.#events = checkpoint.events;
     this.#commands = checkpoint.commands;
     this.#receipts = checkpoint.receipts;
+    this.#projectionCheckpoints = checkpoint.projectionCheckpoints;
   }
 }
 
@@ -376,6 +452,7 @@ interface LedgerCheckpoint {
   events: Map<string, SessionEvent>;
   commands: Map<string, SessionCommand>;
   receipts: Map<string, CommandReceipt>;
+  projectionCheckpoints: Map<string, SessionProjectionCheckpoint>;
 }
 
 export function createInMemorySessionLedger(): SessionLedger {

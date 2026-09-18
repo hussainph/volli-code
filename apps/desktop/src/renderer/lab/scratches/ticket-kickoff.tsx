@@ -1,7 +1,7 @@
 /**
  * The New-ticket composer after VC-56 — the real dialog, over the real board.
  *
- * Four things to look at, and three of them are rows rather than pictures.
+ * Five things to look at, and four of them are rows rather than pictures.
  *
  * **The metadata row is one line.** Status / Priority / Labels on the left,
  * `base → destination` on the right. It had been two lines: the terminal-harness
@@ -11,13 +11,20 @@
  * terminal kickoff it described.
  *
  * **The bottom rail carries the run.** Model and effort — the chat composer's
- * own two pills, imported rather than re-drawn — sit beside the paperclip,
+ * own controls, imported rather than re-drawn — sit beside the paperclip,
  * because they belong to the ACT of creating rather than to the ticket, and
  * because pressing Create & start lands you in a chat pane showing these exact
- * two controls with these exact two values. Seeded from Model Access's TICKET
- * default: the fake catalog below sets the Board default to `haiku-4.5` and
- * the ticket default to `sonnet-4.5`, so the pill naming sonnet is the row
- * proving which purpose it read.
+ * two values. Seeded from Model Access's TICKET default: the fake catalog below
+ * sets the Board default to `haiku-4.5` and the ticket default to
+ * `sonnet-4.5`, so the pill naming sonnet is the row proving which purpose it
+ * read. At the dialog's own width they are ONE control naming both values, and
+ * Expand is what parts them — this tray's three commits leave no room for a
+ * second chip at 36rem (VC-382), so the fold is worth watching both ways.
+ *
+ * **Attach something.** `+` → Attach files…, any file: the strip lands in a band
+ * of its own between the chips and the tray, and it pays the same air above the
+ * tiles as below them. It used to pay none below, which sat 64px thumbnails on
+ * the tray's hairline beside the buttons.
  *
  * **The two commits explain themselves on hover.** Rest on Create, then on
  * Create & start — one clause each, naming what it does and its chord. Hover
@@ -90,6 +97,38 @@ export const api = {
         remotes: ["origin/main", "origin/develop"],
         fetchedAt: Date.now() - 90 * 60_000,
       }),
+  },
+  /**
+   * Files staged on a Ticket that does not exist yet (VC-50), so the strip
+   * between the chips and the tray can be looked at here — `+` → Attach files…
+   * and pick anything. Without this the lab's unstubbed door refuses and the
+   * one band whose spacing this scratch is meant to judge never draws (VC-382).
+   *
+   * No bytes are stored: the hash is derived from the name, and the tile it
+   * addresses over `volli-blob:` resolves only in Electron — an image tile
+   * draws as an empty square of the right size here, exactly as the composer
+   * states rig's own fixtures do.
+   */
+  attachments: {
+    pathForFile: (file: File) => `/lab/${file.name}`,
+    attach: (input: { fileName: string; mime?: string }) =>
+      Promise.resolve({
+        ok: true,
+        relPath: null,
+        blob: {
+          linkId: null,
+          blobHash: [...input.fileName]
+            .map((character) => (character.codePointAt(0) ?? 0).toString(16).padStart(2, "0"))
+            .join("")
+            .padEnd(64, "0")
+            .slice(0, 64),
+          label: input.fileName,
+          originalName: input.fileName,
+          mime: input.mime ?? "application/octet-stream",
+          sizeBytes: 182_000,
+        },
+      }),
+    remove: () => Promise.resolve({ ok: true }),
   },
 };
 
@@ -208,7 +247,9 @@ function labModelAccess(): ModelAccessClient {
 
 /* ------------------------------------------------------------------ scratch */
 
-export default function TicketKickoffScratch() {
+export default function TicketKickoffScratch({
+  initialTickets = tickets,
+}: { initialTickets?: typeof tickets } = {}) {
   const client = React.useMemo(labModelAccess, []);
   const [empty, setEmpty] = React.useState(false);
 
@@ -216,10 +257,10 @@ export default function TicketKickoffScratch() {
   // the PROJECT's tickets, not off a filter, so this is the only way to reach it.
   React.useEffect(() => {
     useBoardStore.setState({
-      ticketsByProject: { [project.id]: empty ? [] : tickets },
+      ticketsByProject: { [project.id]: empty ? [] : initialTickets },
       labelsByProject: { [project.id]: labels },
     });
-  }, [empty]);
+  }, [empty, initialTickets]);
 
   return (
     // The app shell mounts one `TooltipProvider` at its root; a scratch that
@@ -236,7 +277,7 @@ export default function TicketKickoffScratch() {
               {empty ? "Fill the board" : "Empty the board"}
             </Button>
             <span className="text-ui text-muted-foreground">
-              ⌘↵ creates · ⇧⌘↵ creates and starts
+              ⌘↵ creates · ⇧⌘↵ runs the selected action
             </span>
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border">

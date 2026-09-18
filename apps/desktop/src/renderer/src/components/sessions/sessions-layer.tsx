@@ -20,7 +20,7 @@ import {
   useSessionsStore,
   type TerminalSplitDirection,
 } from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+import { subscribeTicketSessionActivity } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { subscribeProjectSessionActivity } from "@renderer/stores/project-sessions";
 import {
@@ -152,19 +152,15 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
     });
     const offExit = window.api.terminal.onExit((event) => {
       markExited(event.sessionId, event.exitCode);
-      // Refresh the ticket's durable session-records cache so the just-ended
-      // record's `endedAt` (and therefore its resumability, interrupt/resume
-      // issue #78) lands promptly — the rail's History rows and the exited-
-      // pane resume overlay both read this one shared cache
-      // (stores/ticket-session-records.ts) and neither is guaranteed to be
-      // mounted to notice the exit itself. `sessionOwner` resolves ANY pane
-      // (root or split leaf) to its owner id; every tab under one owner
-      // shares the same scope kind (ownerKey never collides project/ticket).
-      const state = useSessionsStore.getState();
-      const ownerId = state.sessionOwner[event.sessionId];
-      const isTicketOwner =
-        ownerId !== undefined && state.byOwner[ownerId]?.tabs[0]?.scope.kind === "ticket";
-      if (isTicketOwner) void useTicketSessionRecordsStore.getState().refresh(ownerId);
+      // No listing refetch here (VC-373). The exit's durable half — the
+      // record's `endedAt`, and with it the pane's resumability
+      // (interrupt/resume, issue #78) — is written through the Session Engine
+      // by `closeTerminalAttachment`, so `volli:session-activity` announces the
+      // updated row within a frame or two and the shared cache
+      // (stores/ticket-session-records.ts) folds it in. Both consumers of that
+      // cache (the rail's History rows, the exited-pane resume overlay) read
+      // the store, and neither needs this layer to race the push with a read.
+      // `markExited` above is the live half, which the channel cannot carry.
     });
     const offParkState = window.api.terminal.onParkState((event) => {
       useSessionsStore.getState().setParkState(event.sessionId, event.parked, event.keepAwake);
@@ -203,6 +199,15 @@ export function SessionsLayer({ visible, visibleTabIds, rail, plane = null }: Se
   // (`stores/project-sessions.ts`), and the sidebar's Active band and the
   // board's active-session ring both read what it feeds.
   React.useEffect(() => subscribeProjectSessionActivity(), []);
+
+  // The same channel into the TICKET roster cache (VC-373), mounted here for
+  // the same reason: the rail unmounts on every page flip and collapse, and a
+  // row that moved while it was gone must still fold in. A ticket's own doors
+  // (create, split, exit, rename) no longer re-read the listing on their own
+  // transitions — the create and the exit are durable facts this channel
+  // announces, and racing a push with a fetch just spends an indexed read to
+  // be told the same thing.
+  React.useEffect(() => subscribeTicketSessionActivity(), []);
 
   // Background shells (VC-270), pushed from main's one host for the reason
   // the channels above are mounted here. Hydrated once behind the

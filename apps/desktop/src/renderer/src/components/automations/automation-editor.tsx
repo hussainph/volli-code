@@ -44,6 +44,7 @@ import {
   type TicketStatus,
   type ValidAutomationRuntime,
 } from "@volli/shared";
+import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { reclampEffort } from "@volli/session-presentation";
 
 import {
@@ -53,6 +54,7 @@ import {
   type ComposerModel,
 } from "@renderer/components/chat/composer-ui";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
+import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
 import { ModelName } from "@renderer/components/models/model-identity";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
@@ -73,7 +75,14 @@ import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
 import { INSTRUCTIONS_PLACEHOLDER, MANUAL_TRIGGER_LABEL } from "./automations-page-model";
+import {
+  clearEditorDraft,
+  loadEditorDraft,
+  saveEditorDraft,
+  type AutomationEditorDraft,
+} from "./editor-draft";
 import { TimeZonePicker } from "./time-zone-picker";
+import { AutomationAuthoringButton } from "./automation-authoring-button";
 
 const NO_MODELS: readonly ComposerModel[] = [];
 
@@ -415,38 +424,121 @@ function RuntimeFields({
   );
 }
 
+/**
+ * The draft state, stated in the editor's title row. Two things are separated
+ * here, and the separation is the whole of it.
+ *
+ * THE SLOT NEVER CHANGES WIDTH. As a bordered bar above Instructions this
+ * appeared on the first keystroke and pushed the whole form down — the layout
+ * jump VC-405 calls glitchy. Moving it into the title row ends the vertical
+ * push but not the jump: the name input is the row's only elastic member, so a
+ * `shrink-0` child arriving still takes its width out of the one field under
+ * the cursor, and `dirty` flips on the first character OF THE NAME. So the slot
+ * is always in the row and only its ink changes. `opacity`, not `hidden` or a
+ * conditional: it has to keep occupying the row to hold the width open. The
+ * label it reserves is the label it will show, because `resumed` cannot change
+ * while a draft is being typed — only a discard or a save clears it, and both
+ * end the draft — so the width reserved is the exact width that arrives.
+ *
+ * THE ANNOUNCEMENT CARRIES TEXT AND NOTHING ELSE. `role="status"` used to wrap
+ * the discard button with the sentence, which puts a control inside a live
+ * region and re-reads it on every status change; `chat/activity-island-ui.tsx`
+ * records the same lesson against the same mistake ("A GROUP, not a live
+ * region"). The region is its own sr-only span, and it is mounted whether or
+ * not a draft exists so that the text CHANGES inside a region the reader is
+ * already watching — a live region that arrives with its text already in it is
+ * the classic version of this bug, and it announces nothing.
+ */
+function DraftIndicator({
+  dirty,
+  resumed,
+  onDiscard,
+}: {
+  dirty: boolean;
+  resumed: boolean;
+  onDiscard: () => void;
+}) {
+  const label = resumed ? "Draft restored" : "Draft saved";
+  return (
+    <>
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {dirty ? label : ""}
+      </span>
+      <div
+        data-slot={dirty ? (resumed ? "draft-resumed" : "draft-saved") : "draft-idle"}
+        aria-hidden={!dirty}
+        className={cn(
+          "flex shrink-0 items-center text-ui text-muted-foreground",
+          !dirty && "pointer-events-none opacity-0",
+        )}
+      >
+        <span className="whitespace-nowrap">{label}</span>
+        {/* No gap: the button's own inset is the space, so the pair reads as one
+         * label with a door rather than two peers — the row's `gap-4` is then
+         * the wider interval, and it is what separates this from the record's
+         * controls. */}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          disabled={!dirty}
+          onClick={onDiscard}
+        >
+          Discard draft
+        </Button>
+      </div>
+    </>
+  );
+}
+
 export function AutomationEditorPanel({
   projectId,
   automation,
   actions,
   history,
+  onDiscardedNewDraft,
 }: {
   projectId: string;
   automation: Automation | null;
   actions?: React.ReactNode;
   history?: React.ReactNode;
+  /** Discarding a NEW record leaves nothing to show; the page chooses what replaces it. */
+  onDiscardedNewDraft?: () => void;
 }) {
   const save = useAutomationsStore((state) => state.save);
   const update = useAutomationsStore((state) => state.update);
   const commandId = React.useRef(crypto.randomUUID());
-  const [name, setName] = React.useState(automation?.name ?? "");
-  const [instructions, setInstructions] = React.useState(automation?.instructions ?? "");
+  const automationId = automation?.id ?? null;
+  // Edits and new drafts both survive navigation. A refreshed saved record
+  // never replaces unsaved words; its updatedAt key remounts from this cache.
+  const [restored] = React.useState<AutomationEditorDraft | null>(() =>
+    loadEditorDraft(projectId, undefined, automationId),
+  );
+  const [resumed, setResumed] = React.useState(restored !== null);
+  const [name, setName] = React.useState(restored?.name ?? automation?.name ?? "");
+  const [instructions, setInstructions] = React.useState(
+    restored?.instructions ?? automation?.instructions ?? "",
+  );
   const [ownership, setOwnership] = React.useState<OwnershipChoice>(
-    automation === null || automation.projectId !== null ? "project" : "global",
+    restored?.ownership ??
+      (automation === null || automation.projectId !== null ? "project" : "global"),
   );
-  // The record's Runtime whole, so reopening an Automation that names a tier
-  // does not silently rewrite it to inherit on the next save. Only the invalid
-  // row is dropped — it is the one shape a save may not carry.
   const [runtime, setRuntime] = React.useState<ValidAutomationRuntime>(
-    automation !== null && isValidAutomationRuntime(automation.runtime) ? automation.runtime : null,
+    restored !== null
+      ? restored.runtime
+      : automation !== null && isValidAutomationRuntime(automation.runtime)
+        ? automation.runtime
+        : null,
   );
-  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(() =>
-    automation === null || automation.trigger.kind === "none" ? "none" : automation.trigger.kind,
+  const [triggerChoice, setTriggerChoice] = React.useState<TriggerChoice>(
+    restored?.triggerChoice ?? automation?.trigger.kind ?? "none",
   );
-  const [columns, setColumns] = React.useState<readonly TicketStatus[]>(() =>
-    automation === null ? [] : automationTriggerColumns(automation.trigger),
+  const [columns, setColumns] = React.useState<readonly TicketStatus[]>(
+    restored?.columns ?? (automation === null ? [] : automationTriggerColumns(automation.trigger)),
   );
-  const storedSchedule = automation === null ? null : automationTriggerSchedule(automation.trigger);
+  const storedSchedule =
+    restored?.schedule ??
+    (automation === null ? null : automationTriggerSchedule(automation.trigger));
   const [preset, setPreset] = React.useState<AutomationSchedulePreset>(
     storedSchedule?.preset ?? "daily",
   );
@@ -486,12 +578,17 @@ export function AutomationEditorPanel({
     };
   }, [inspect, hiddenModels]);
 
-  const schedule: AutomationSchedule =
-    preset === "hourly"
-      ? { preset, minute, timeZone }
-      : preset === "weekly"
-        ? { preset, weekday, hour, minute, timeZone }
-        : { preset, hour, minute, timeZone };
+  // Memoized so the draft-save effect below can depend on the schedule without
+  // re-firing on every render — the fields it is composed from are its real deps.
+  const schedule: AutomationSchedule = React.useMemo(
+    () =>
+      preset === "hourly"
+        ? { preset, minute, timeZone }
+        : preset === "weekly"
+          ? { preset, weekday, hour, minute, timeZone }
+          : { preset, hour, minute, timeZone },
+    [preset, weekday, hour, minute, timeZone],
+  );
   const trigger: AutomationTrigger =
     triggerChoice === "schedule"
       ? { kind: "schedule", schedule }
@@ -508,9 +605,93 @@ export function AutomationEditorPanel({
     (triggerChoice === "columns" && columns.length === 0) ||
     scheduleProblem !== null;
 
+  const draft = React.useMemo<AutomationEditorDraft>(
+    () => ({
+      name,
+      instructions,
+      ownership: ownershipChoice,
+      triggerChoice,
+      columns,
+      schedule,
+      runtime,
+    }),
+    [name, instructions, ownershipChoice, triggerChoice, columns, schedule, runtime],
+  );
+  const ownershipDirty =
+    ownershipChoice !==
+    (automation !== null && automation.projectId === null ? "global" : "project");
+  const dirty =
+    automation === null
+      ? name.trim() !== "" ||
+        instructions.trim() !== "" ||
+        ownershipDirty ||
+        triggerChoice !== "none" ||
+        runtime !== null
+      : name !== automation.name ||
+        instructions !== automation.instructions ||
+        ownershipDirty ||
+        JSON.stringify(trigger) !== JSON.stringify(automation.trigger) ||
+        JSON.stringify(runtime) !== JSON.stringify(automation.runtime);
+
+  // What this slot already holds, so a pass that would rewrite the same bytes
+  // writes nothing. A draft merely RESTORED is the case that matters: its
+  // fields are dirty by definition, so without this every arrival re-persists
+  // a draft nobody touched — and a new-record draft that renews itself on
+  // arrival is one the page keeps reading as "resume the record you were
+  // creating", forever (VC-375). Advanced on every write, so reverting an edit
+  // to the stored text still leaves screen and storage saying the same thing.
+  const persisted = React.useRef(restored === null ? null : JSON.stringify(restored));
+  React.useEffect(() => {
+    if (dirty) {
+      const next = JSON.stringify(draft);
+      if (persisted.current === next) return;
+      saveEditorDraft(projectId, draft, undefined, automationId);
+      persisted.current = next;
+    } else {
+      clearEditorDraft(projectId, undefined, automationId);
+      persisted.current = null;
+    }
+  }, [automationId, projectId, draft, dirty]);
+
+  /** Discard restores the saved record; only a new record becomes blank. */
+  function discardDraft(): void {
+    clearEditorDraft(projectId, undefined, automationId);
+    setName(automation?.name ?? "");
+    setInstructions(automation?.instructions ?? "");
+    setOwnership(automation === null || automation.projectId !== null ? "project" : "global");
+    setRuntime(
+      automation !== null && isValidAutomationRuntime(automation.runtime)
+        ? automation.runtime
+        : null,
+    );
+    setTriggerChoice(automation?.trigger.kind ?? "none");
+    setColumns(automation === null ? [] : automationTriggerColumns(automation.trigger));
+    const savedSchedule =
+      automation === null ? null : automationTriggerSchedule(automation.trigger);
+    setPreset(savedSchedule?.preset ?? "daily");
+    setWeekday(
+      savedSchedule?.preset === "weekly" ? savedSchedule.weekday : DEFAULT_SCHEDULE_WEEKDAY,
+    );
+    setHour(
+      savedSchedule !== null && savedSchedule.preset !== "hourly"
+        ? savedSchedule.hour
+        : DEFAULT_SCHEDULE_HOUR,
+    );
+    setMinute(savedSchedule?.minute ?? 0);
+    setTimeZone(savedSchedule?.timeZone ?? hostTimeZone());
+    setResumed(false);
+    setProblem(null);
+    // A new record has nothing to restore TO, so discarding it would otherwise
+    // leave a blank create form standing where the page expects one selected
+    // record. Hand the surface back to the rail's first Automation, which is
+    // the same answer an ordinary arrival gives.
+    if (automation === null) onDiscardedNewDraft?.();
+  }
+
   async function submit(): Promise<void> {
     if (incomplete || saving) return;
     setSaving(true);
+    const submittedDraft = JSON.stringify(draft);
     try {
       const refusal =
         automation === null
@@ -533,6 +714,13 @@ export function AutomationEditorPanel({
       if (refusal === null) {
         commandId.current = crypto.randomUUID();
         setProblem(null);
+        // Never clear newer typing that happened while this save was in flight.
+        if (
+          JSON.stringify(loadEditorDraft(projectId, undefined, automationId)) === submittedDraft
+        ) {
+          clearEditorDraft(projectId, undefined, automationId);
+          setResumed(false);
+        }
       } else {
         setProblem(refusal);
       }
@@ -554,6 +742,7 @@ export function AutomationEditorPanel({
           placeholder="Name this automation"
           className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
         />
+        <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
         {actions}
         <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
           {automation === null ? "Create automation" : "Save changes"}
@@ -564,7 +753,19 @@ export function AutomationEditorPanel({
         <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
             <section className="flex min-h-0 flex-col gap-2">
-              <SectionLabel>Instructions</SectionLabel>
+              <div className="flex items-center justify-between gap-2">
+                <SectionLabel>Instructions</SectionLabel>
+                <AutomationAuthoringButton
+                  projectId={projectId}
+                  context={{
+                    name,
+                    instructions,
+                    trigger,
+                    runtime,
+                    skillSlugs: skills.map((skill) => skill.name),
+                  }}
+                />
+              </div>
               <ComposerPickerStack
                 value={instructions}
                 onValueChange={setInstructions}
@@ -580,7 +781,7 @@ export function AutomationEditorPanel({
                 <InstructionsTextarea
                   value={instructions}
                   onValueChange={setInstructions}
-                  className="min-h-48 rounded-xl bg-card px-4 py-4 shadow-raised"
+                  className="min-h-48"
                 />
               </ComposerPickerStack>
             </section>
@@ -737,6 +938,28 @@ export function AutomationEditorPanel({
  * The Instructions box with the shared composer's caret binding. Exported for
  * Run once, whose unbound Instructions use the same grammar without becoming
  * another Automation authoring surface.
+ *
+ * IT WEARS THE COMPOSER'S SHELL (VC-335), and the composer's `+`. This is a
+ * prompt — the same `/` and `@` grammar, the same picker card over it — and it
+ * was drawn as a bare form field with a browser resize grip in its corner, so
+ * the two surfaces a person writes prompts into looked like two different
+ * kinds of thing. Now it is `PROMPT_SURFACE` around the same textarea insets,
+ * with the same `+` (Commands & skills and Mention a file — no attach row,
+ * because Instructions take no files). The runtime lives in the aside on the
+ * editor and under the box on Run once, where it already was.
+ *
+ * NO TINTED TRAY HERE, and that is the rule rather than an exception. The tray
+ * exists to separate writing from CONFIGURATION — in chat it carries model,
+ * effort and the send key; on a comment it carries the primary. This surface
+ * has neither: saving belongs to the editor around it, so the band was a
+ * full-width tint holding one 24px button at its far left and nothing else,
+ * which read as a container someone forgot to fill. The door rests on the
+ * writing sheet instead, aligned to the text's own inset. `new-command-dialog`
+ * already draws a trayless prompt surface on the same reasoning.
+ *
+ * `className` reaches the textarea, because the two call sites disagree on
+ * how tall a resting box should be (a page's instructions, a dialog's) and
+ * that is the only thing they disagree on.
  */
 export function InstructionsTextarea({
   value,
@@ -749,26 +972,39 @@ export function InstructionsTextarea({
 }) {
   const caret = useComposerCaretBinding();
   return (
-    <textarea
-      ref={caret.ref}
-      value={value}
-      aria-label="Instructions"
-      placeholder={INSTRUCTIONS_PLACEHOLDER}
-      className={cn(
-        "min-h-32 w-full resize-y rounded-lg border border-border bg-transparent px-4 py-2",
-        "text-sm text-foreground outline-none placeholder:text-muted-foreground",
-        "focus-visible:border-ring",
-        className,
-      )}
-      onChange={(event) => {
-        caret.trackCaret(event.currentTarget);
-        onValueChange(event.currentTarget.value);
-      }}
-      onSelect={(event) => caret.trackCaret(event.currentTarget)}
-      onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
-      onKeyDown={(event) => {
-        if (caret.handleKeyDown(event)) return;
-      }}
-    />
+    <div
+      data-slot="instructions-box"
+      className={cn("flex min-w-0 flex-col overflow-hidden", PROMPT_SURFACE)}
+    >
+      <textarea
+        ref={caret.ref}
+        value={value}
+        aria-label="Instructions"
+        placeholder={INSTRUCTIONS_PLACEHOLDER}
+        className={cn(
+          // The chat composer's own text box: the same inset, the same size,
+          // grown by content to a ceiling and scrolled inside itself past it.
+          // No resize grip — `field-sizing-content` is the growth, and the
+          // grip drew a form field where a prompt box should be.
+          "field-sizing-content min-h-32 max-h-96 w-full resize-none bg-transparent px-4 py-4",
+          "text-sm text-foreground outline-none placeholder:text-muted-foreground",
+          className,
+        )}
+        onChange={(event) => {
+          caret.trackCaret(event.currentTarget);
+          onValueChange(event.currentTarget.value);
+        }}
+        onSelect={(event) => caret.trackCaret(event.currentTarget)}
+        onKeyUp={(event) => caret.trackCaret(event.currentTarget)}
+        onKeyDown={(event) => {
+          if (caret.handleKeyDown(event)) return;
+        }}
+      />
+      {/* On the sheet, not in a tray: `px-3` puts the button's edge on the
+          text's 16px column so it reads as placed rather than parked. */}
+      <div className="flex items-center gap-1 px-3 pb-3">
+        <ComposerAddMenu />
+      </div>
+    </div>
   );
 }

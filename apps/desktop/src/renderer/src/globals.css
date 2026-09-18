@@ -24,6 +24,224 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Prompt materials (VC-335). A quiet writing sheet, an accent-tinted tray,
+ * and a directional edge highlight make this a distinct object at rest.
+ * No backdrop blur, moving glow, or focus-triggered repaint of the shell.
+ * Layers are opaque over --card: transcript text cannot bleed into the draft.
+ */
+@layer components {
+  .prompt-surface {
+    border-color: transparent;
+    background:
+      linear-gradient(var(--card), var(--card)) padding-box,
+      linear-gradient(
+          135deg,
+          color-mix(in oklab, var(--primary) 50%, var(--border-strong)),
+          var(--border-strong) 38%,
+          var(--border) 72%,
+          color-mix(in oklab, var(--primary) 30%, var(--border-strong))
+        )
+        border-box;
+  }
+
+  .prompt-toolbar {
+    border-top: 1px solid color-mix(in oklab, var(--primary) 10%, var(--border));
+    background: linear-gradient(
+      110deg,
+      color-mix(in oklab, var(--primary) 10%, var(--muted)),
+      var(--muted) 70%
+    );
+  }
+
+  .prompt-add {
+    border: 1px solid var(--border-strong);
+    background-color: var(--card);
+  }
+
+  .prompt-primary {
+    /* Keep the solved foreground/fill pair intact; only the bevel takes ink. */
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--primary-foreground) 30%, transparent),
+      var(--shadow-raised);
+  }
+}
+
+/* THE SKELETON RECIPE (VC-383).
+ *
+ * `Skeleton` and Monaco's pseudo-elements cannot share a React child, but they
+ * must share the same material. These properties are the one recipe: every bar
+ * reads its fill, corner, and animation from them. The reduced-motion query
+ * changes that recipe rather than making a second gate at each consumer, so a
+ * primitive change cannot leave Monaco moving differently.
+ *
+ * The selector pair is intentional. `data-slot="skeleton"` is the React
+ * primitive's stable hook; Monaco's loading host is the one non-React shape
+ * that inherits the recipe into its pseudo-elements.
+ */
+[data-slot="skeleton"],
+[data-monaco-status="loading"] {
+  --skeleton-fill: color-mix(in oklab, var(--accent) 70%, transparent);
+  --skeleton-radius: var(--radius-md);
+  --skeleton-animation: var(--animate-pulse);
+}
+
+@layer components {
+  [data-slot="skeleton"] {
+    border-radius: var(--skeleton-radius);
+    background-color: var(--skeleton-fill);
+    animation: var(--skeleton-animation);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="skeleton"],
+  [data-monaco-status="loading"] {
+    --skeleton-animation: none;
+  }
+}
+
+/* Below 24rem, model and effort become one control: the separate effort pill
+ * retires and its value joins the model face. The model name gives up its 56px
+ * floor for that band — the mark and the full accessible label still identify
+ * the model while both values are printed — and gets the room back at 18rem,
+ * where the value leaves the face (see the rule at the bottom of this ladder).
+ * The floor is released on the name span itself as well as the run that holds
+ * it: the tier beside it carries a far larger shrink factor, so it still
+ * truncates away first and the model is the last text standing rather than the
+ * first to go.
+ *
+ * A live turn freezes both values. On the app's narrowest chat pane, repeating
+ * that disabled fact still costs the whole second footer line, so the live
+ * surface gives it up before Add, context, Stop, or Queue. The queued row keeps
+ * its direct Steer action but lets the icon and accessible name carry it where
+ * the printed word would squeeze the draft.
+ *
+ * `!important` is the same specificity guard the motion gates use: Tailwind's
+ * generated display utilities otherwise restore the controls after this
+ * authored container rule changes them. */
+@container composer (max-width: 23.999rem) {
+  .composer-separate-effort,
+  .composer-live-config,
+  .composer-steer-label {
+    display: none !important;
+  }
+
+  .composer-merged-effort-label {
+    display: inline !important;
+  }
+
+  .composer-model-name,
+  .composer-model-name > [data-testid="model-pill-name"] {
+    min-width: 0;
+  }
+
+  /* AND THE TIER LEAVES RATHER THAN TRUNCATES. Its shrink factor already makes
+   * it the first text to go, but `truncate` clips a run to whatever pixels are
+   * left, and a few of them are still a few: at 265px the qualifier drew as a
+   * lone `T` welded to the model name — `TClaude Sonnet 4…` — which reads as a
+   * typo rather than as a word that ran out of room. A qualifier must not
+   * outlive the thing it qualifies, and one letter of it is not a qualifier.
+   * The whole line is still in the trigger's accessible name and at the head of
+   * the open list. */
+  .composer-model-name > [data-testid="model-pill-tier"] {
+    display: none !important;
+  }
+}
+
+/* THE SAME FOLD, ASKED AT A FAR WIDER BOX, because a tray that COMMITS is not
+ * a tray that sends (VC-382). A chat footer spends ~100px on one send key; the
+ * New-ticket tray carries three welded controls — Create, the primary start,
+ * and the launch caret — which measured 215px in the lab and are all words, so
+ * none of them can give. The settings run beside them (Add, model, effort) is
+ * 332px at a 17-character model name and the longest effort word, and the tray
+ * pays the 48px gutter: 603px before anything gives, against the composer
+ * dialog's own 576px. So the two pills and the three commit controls did not
+ * fit on one line at the size this composer actually opens at, and the row
+ * wrapped the whole button group onto a second one — the bug, and it took a
+ * long model name or a long effort word to see, which is why 24rem never
+ * caught it.
+ *
+ * 40rem is the first round rem above that 603px, and it is a THRESHOLD, not a
+ * width: the dialog (36rem) folds effort into the model face and fits in one
+ * line with room to truncate a long name; the expanded sheet (48rem) is above
+ * it and keeps both pills, which is the state this control was drawn for.
+ *
+ * `[data-composer-container="commit-tray"]` marks the surface rather than the
+ * component, because the JS half of the same decision reads that attribute to
+ * choose the same number — the portalled effort slider cannot be reached by a
+ * container query, and a face that names a value whose control has vanished is
+ * worse than either state alone. `COMPACT_COMMIT_TRAY_WIDTH_PX` in
+ * `chat/composer-ui.tsx` is the other half; move the two together.
+ *
+ * `!important` for the reason the rule above gives: these are Tailwind's own
+ * display utilities being overridden by an authored container rule. */
+@container composer (max-width: 39.999rem) {
+  [data-composer-container="commit-tray"] .composer-separate-effort {
+    display: none !important;
+  }
+
+  [data-composer-container="commit-tray"] .composer-merged-effort-label {
+    display: inline !important;
+  }
+}
+
+/* AND THE LAST THING THE FACE PRINTS IS THE MODEL. Below 34rem even the merged
+ * pair stops fitting beside three commits — the face is 227px at a long name
+ * and "Extra high", 160px without it, against the 419px the commits, the Add
+ * door and the gutter already spend — so the value leaves the FACE while the
+ * control keeps it. Nothing is lost by it: the trigger's accessible name still
+ * reads "Model and effort: … · Extra high", the popover still opens on the
+ * slider, and the model — the fact the pill exists to carry — is what survives
+ * the squeeze. This is the step that replaced a second row: the row used to
+ * stack the commits under the settings here, which is a layout accident
+ * wearing the shape of a decision.
+ *
+ * After the 40rem rule, not before it: same specificity, so source order is
+ * what lets this one win inside its own range. */
+@container composer (max-width: 33.999rem) {
+  [data-composer-container="commit-tray"] .composer-merged-effort-label {
+    display: none !important;
+  }
+}
+
+/* AND THE CHAT COMPOSER TAKES THE SAME LAST STEP AT ITS OWN WIDTH (VC-382).
+ * The tray's version above is about a row that would otherwise break; this one
+ * is about a name that would otherwise be eaten. Both values printed, the face
+ * spends ~40px on the effort word and the model pays for it out of its own
+ * give: measured in the lab at `Claude Sonnet 4.5`, the name renders 97px at a
+ * 320px box, 57px at 280, 42px at the app's own narrowest pane (265) and 17px
+ * at 240 — five characters and then two, for a value that never changes while
+ * a person types. Drop the printed word and the same boxes give the name 113,
+ * 98, 83 and 58px.
+ *
+ * 18rem is where the two stop both fitting rather than a width someone liked:
+ * 280px is the box at which the name crosses back under the 56px floor the
+ * pill spends its give defending, so the band above this keeps both values and
+ * the band below keeps the one the pill exists for. The value is still ON the
+ * control — in its accessible name, and under the caret on the slider the
+ * popover opens to — so this hides a printed word, not a fact.
+ *
+ * Last in the ladder, and that is load-bearing: it shares the 24rem rule's
+ * specificity, so source order is what lets it win inside its own range. The
+ * tray rules above are not in this contest — an attribute makes them more
+ * specific than both, and their own pair settles in the same way. */
+@container composer (max-width: 17.999rem) {
+  .composer-merged-effort-label {
+    display: none !important;
+  }
+}
+
+/* Outside the component layer so the forced-colors edge also overrides the
+ * shell's border-transparent utility when decorative fills disappear. */
+@media (forced-colors: active) {
+  .prompt-surface,
+  .prompt-toolbar,
+  .prompt-add {
+    border-color: ButtonBorder;
+  }
+}
+
 /* GENERATED THEME TOKENS — BEGIN */
 /*
  * Every color below is the canvas pipeline's output for the shipped default
@@ -640,6 +858,52 @@
   }
 }
 
+/* An editor host while Monaco's runtime chunk is on its way (VC-383).
+ *
+ * The first ticket Body or File tab of an app run pays the runtime's lazy
+ * import — the editor module, its workers and the Shiki bootstrap — and until
+ * it lands the host is a bare box: `components/editor/monaco-*-editor.tsx`
+ * stamp `data-monaco-status="loading"` on it and then hand the SAME node to
+ * Monaco to mount into. That is why this is CSS and not children: React-owned
+ * nodes inside Monaco's mount point would be reconciled against DOM the editor
+ * manages. Two pseudo-elements draw the shape `ui/skeleton.tsx` draws — the
+ * same fill, the same radius, the same pulse — as two text lines at the
+ * editor's own top padding, so the first paint of the document lands where
+ * the bars were. They leave with the attribute: the editor sets `ready` on
+ * mount, `failed` on the fallback. The shared `--skeleton-*` recipe supplies
+ * the fill, radius, pulse, and reduced-motion gate; the bars stay when motion
+ * stops, because a still bar is still a placeholder.
+ *
+ * `height: 14px`, `top: 12px`, and `top: 36px` are the recorded VC-383
+ * measurements: a 14px glyph surrogate at Monaco's 12px source inset, then a
+ * second measured line position. Replacing them with ladder rungs moves this
+ * first paint before Monaco replaces the host. */
+[data-monaco-status="loading"] {
+  position: relative;
+}
+
+[data-monaco-status="loading"]::before,
+[data-monaco-status="loading"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  height: 14px;
+  border-radius: var(--skeleton-radius);
+  background: var(--skeleton-fill);
+  pointer-events: none;
+  animation: var(--skeleton-animation);
+}
+
+[data-monaco-status="loading"]::before {
+  top: 12px;
+  width: 60%;
+}
+
+[data-monaco-status="loading"]::after {
+  top: 36px;
+  width: 85%;
+}
+
 /* The transcript's own sweep — the sidebar's effect, paid for differently.
  *
  * The row above animates `mask-position`, which is a repaint of the glyphs on
@@ -1157,7 +1421,23 @@
  * the shadow run 60px past the other three, comfortably more than the widest
  * layer reaches. Nothing else is lost to it: the card already clips its content
  * with `overflow-hidden`, popovers portal to the body, and the seam edge is
- * square anyway. */
+ * square anyway.
+ *
+ * THE TWO HALVES ARE KEYED SEPARATELY, and for the length of a pin they are
+ * allowed to disagree. The sidebar half answers to the SHELL
+ * (`[data-volli-shell="framed"]`), which flips on the first frame of a pin; the
+ * card half answers to the surface's own `[data-sidebar-layout]`, which does
+ * not flip until the journey lands (app-shell.tsx, `useSidebarContentMotion`).
+ * So during those ~200ms the sidebar is already drawing its docked half while
+ * the card is still the floating card, sliding right on a compositor translate.
+ *
+ * That is the trade the transform bought, taken deliberately. Keying the card
+ * to the shell too would put both halves in agreement at every instant — and
+ * charge one full layout of every terminal canvas and Monaco editor in the
+ * window at the start of the animation, and another at the end, purely to
+ * exchange the card's 8px left inset for a square edge. The unit below is a
+ * contract about where these two REST. Mid-journey the eye is tracking one
+ * moving edge, and the moving edge is correct in both renderings. */
 
 /* The two numbers the rest of this geometry is built from: the margin that
  * insets the unit, and the hairline it draws around it. `primary-sidebar.tsx`
@@ -1193,8 +1473,11 @@
   height: auto;
 }
 
-/* The framed content card, floating on the canvas — the other half of the unit. */
-[data-volli-shell="framed"] [data-slot="sidebar-inset"] {
+/* The framed content card, floating on the canvas — the other half of the unit,
+ * keyed to the surface's own endpoint marker rather than to the shell. See the
+ * seam block above for why the two halves are allowed to disagree while a pin
+ * is travelling. */
+[data-slot="sidebar-inset"][data-sidebar-layout="framed"] {
   /* 0, not −1px.
    *
    * The lab carried a 1px overlap justified by a `--sidebar-width` rounding tax
@@ -1415,7 +1698,6 @@ input[type="range"] {
   appearance: none;
   height: 1rem;
   background: transparent;
-  cursor: pointer;
 }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;

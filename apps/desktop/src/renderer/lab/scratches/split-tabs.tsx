@@ -23,7 +23,7 @@
  * Three tensions decide whether this ships, and each has a control below.
  *
  *  1. **Nothing may remount.** A live terminal that remounts is a killed pty
- *     and a re-created restty context; CLAUDE.md forbids incidental unmounts
+ *     and a re-created terminal; CLAUDE.md forbids incidental unmounts
  *     outright. The trap is the obvious tree — panes nested inside the layout
  *     structure — which makes React's parent chain a function of the layout, so
  *     splitting, closing a sibling and restructuring all reparent a pane. The
@@ -61,7 +61,7 @@
  * window behaves exactly like split-right), and `withoutLeaf` is already the
  * undo: backing out with Escape collapses the split away again.
  *
- * Deliberately not modelled: real ptys and restty (the lab has no main process
+ * Deliberately not modelled: real ptys and xterm.js (the lab has no main process
  * — see lab/main.tsx), rename, and dragging a member out of a *collapsed* group
  * (the dropdown offers an eject button instead, which is the better affordance
  * anyway). Judge the interaction.
@@ -387,7 +387,7 @@ interface PaneBodyProps {
 }
 
 /**
- * The unit whose survival is the whole question. In the app this is a restty
+ * The unit whose survival is the whole question. In the app this is an xterm.js
  * canvas over a live pty, or a Pi-backed transcript; here it is three probes
  * that make a remount impossible to miss.
  *

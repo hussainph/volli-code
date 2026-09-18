@@ -5,12 +5,13 @@ import type {
 } from "@volli/session-engine";
 import type {
   ModelAccessSnapshot,
+  McpToolDefinition,
   ModelSelection,
   SessionCommand,
   TicketEventActor,
 } from "@volli/shared";
 
-import { defaultModelRequiredForTier } from "@volli/shared";
+import { defaultModelRequiredForTier, mcpProviderToolName } from "@volli/shared";
 
 import {
   createSessions,
@@ -75,6 +76,70 @@ function sessions(
 }
 
 describe("Sessions", () => {
+  it("freezes selected MCP definitions at root birth and gives a child its parent's exact frozen definitions", async () => {
+    const parentTool: McpToolDefinition = {
+      serverId: "server-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("server-1", "Fixture", "echo"),
+      description: "Original description",
+      inputSchema: { type: "object" },
+    };
+    const settingsTool: McpToolDefinition = {
+      ...parentTool,
+      description: "Changed after parent birth",
+    };
+    const records: Array<{
+      sessionId: string;
+      tools: readonly string[];
+      mcpTools: readonly McpToolDefinition[];
+    }> = [];
+    const { sessions: door } = sessions({
+      toolSurface: {
+        resolve: (_role, _grants, within, mcpTools = []) => [
+          "read",
+          ...mcpTools
+            .map((tool) => tool.providerName)
+            .filter((name) => within?.includes(name) ?? true),
+        ],
+        resolveMcp: () => [settingsTool],
+        recorded: async () => ["read", parentTool.providerName],
+        recordedMcp: async () => [parentTool],
+        record: async (sessionId, tools, mcpTools = []) => {
+          records.push({ sessionId, tools, mcpTools });
+        },
+      },
+    });
+
+    await door.create({
+      operationId: "root",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Root",
+    });
+    await door.create({
+      operationId: "child",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: "parent-1",
+      title: "Child",
+    });
+
+    expect(records).toEqual([
+      {
+        sessionId: "session-1",
+        tools: ["read", settingsTool.providerName],
+        mcpTools: [settingsTool],
+      },
+      {
+        sessionId: "session-1",
+        tools: ["read", parentTool.providerName],
+        mcpTools: [parentTool],
+      },
+    ]);
+  });
+
   it("asks the default-model port with the Role's tier AND the project — the chain's project rung (VC-126)", async () => {
     // The Role decides the rung (VC-53): a Ticket Session reads the `ticket`
     // tier, a project chat the `global` one. Spoken as a tier since VC-259,
@@ -152,6 +217,77 @@ describe("Sessions", () => {
     ]);
     // The Ticket guard is a Ticket concern: a ticketless create never asks it.
     expect(ticketsAsked).toEqual(["ticket-1"]);
+  });
+
+  it("forwards a client-minted id only inside the session.create intent (VC-358)", async () => {
+    const REQUESTED = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    const { commands, sessions: door } = sessions();
+
+    const created = await door.create({
+      ...startInput("operation-promote"),
+      requestedSessionId: REQUESTED,
+    });
+
+    // The durable id IS the requested one — a promotion needs no swap,
+    // because the client minted the id the ledger took.
+    expect(created.sessionId).toBe(REQUESTED);
+    expect(commands[0]).toMatchObject({
+      // Still operation-derived: the requested id rides the intent, never
+      // the key, so the engine's dedup sees one operation either way.
+      commandId: "operation-promote:create",
+      command: { kind: "session.create", requestedSessionId: REQUESTED },
+    });
+    // ONLY the create intent carries it — never the model record beside it.
+    expect(commands[1]?.command).not.toHaveProperty("requestedSessionId");
+  });
+
+  it("keeps a create that names no id byte-identical to the legacy intent (VC-358)", async () => {
+    const { commands, sessions: door } = sessions();
+
+    const created = await door.create(startInput("operation-legacy"));
+
+    // No id requested, so the ledger derives one, as it always has.
+    expect(created.sessionId).toBe("session-1");
+    expect(commands[0]?.command).toMatchObject({
+      kind: "session.create",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      role: "ticket",
+      parentSessionId: null,
+      title: "VC-1",
+    });
+    // Absent, not null: the key does not exist on a legacy create intent,
+    // so what legacy callers write durably is unchanged.
+    expect(commands[0]?.command).not.toHaveProperty("requestedSessionId");
+  });
+
+  it("restates the same requested id under the same command id on replay", async () => {
+    // This layer's whole replay duty for a promoted chat: restate a
+    // comparable intent. Whether a DIFFERING id is refused is the engine's
+    // replay guard, which this facade never duplicates.
+    const REQUESTED = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    const { commands, sessions: door } = sessions();
+
+    const first = await door.create({
+      ...startInput("operation-promote-replay"),
+      requestedSessionId: REQUESTED,
+    });
+    const replay = await door.create({
+      ...startInput("operation-promote-replay"),
+      requestedSessionId: REQUESTED,
+    });
+
+    expect(replay).toEqual(first);
+    const creates = commands.filter((request) => request.command.kind === "session.create");
+    expect(creates).toHaveLength(2);
+    expect(creates[0]).toMatchObject({
+      commandId: "operation-promote-replay:create",
+      command: { requestedSessionId: REQUESTED },
+    });
+    expect(creates[1]).toMatchObject({
+      commandId: "operation-promote-replay:create",
+      command: { requestedSessionId: REQUESTED },
+    });
   });
 
   it("records session_started for a Ticket create with the door's actor — and never for a ticketless one", async () => {
@@ -1353,7 +1489,13 @@ function result(
   request: SessionRuntimeCommandRequest,
   status: "accepted" | "completed" | "rejected" = "completed",
 ): SessionRuntimeCommandResult {
-  const sessionId = "sessionId" in request ? request.sessionId : "session-1";
+  const sessionId =
+    "sessionId" in request
+      ? request.sessionId
+      : request.command.kind === "session.create" && request.command.requestedSessionId
+        ? // The engine honors a client-minted id (VC-358); the fixture does too.
+          request.command.requestedSessionId
+        : "session-1";
   return {
     sessionId,
     command: {
@@ -1398,6 +1540,7 @@ function result(
               sequence: 2,
             },
     throughSequence: 2,
+    refusal: null,
   };
 }
 

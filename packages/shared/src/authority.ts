@@ -36,6 +36,7 @@
  */
 
 import type { JudgmentMode } from "./authority-config";
+import type { McpToolId } from "./mcp";
 import type { VerbToolKey } from "./verb-registry";
 
 /**
@@ -190,7 +191,7 @@ export const CAPABILITY_TOOL_IDS = [...CODING_TOOL_IDS, ...NON_CODING_TOOL_IDS] 
  * over these names is `isSessionToolId` in `agent-tool-surface.ts`, which is
  * downstream of both.
  */
-export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey;
+export type SessionToolId = CodingToolId | NonCodingToolId | VerbToolKey | McpToolId;
 
 /**
  * When silent denial stops being the right answer and the user should be asked.
@@ -449,6 +450,42 @@ export function isBudgetCause(cause: AuthorityDenialCause): cause is BudgetCause
 }
 
 /**
+ * The confirmation causes: operations that stop and ask before doing anything
+ * (VC-380).
+ *
+ * A third namespace beside the rules and the budgets, because it is a third
+ * kind of pause and the ledger has to count them apart. A RULE judges what a
+ * call does and refuses it; a BUDGET judges how much a Session has already
+ * spent; a CONFIRMATION judges nothing at all. Nothing has been refused when
+ * one of these is raised — the verb is perfectly permitted, its arguments are
+ * fine, and no allowance is exhausted. What has happened is that the operation
+ * is about to do something a person would want to have seen first, and the door
+ * chose to show them.
+ *
+ * Borrowing a budget id for it would have made the denial ledger count
+ * confirmations as exhausted allowances, and borrowing a rule id would have put
+ * a non-rule in the rule pack whose digest is computed over its members.
+ *
+ * Overridable by construction, like a budget: an ask nobody could grant would
+ * be a refusal wearing a question's clothes. Deliberately NOT in
+ * {@link OVERRIDABLE_AUTHORITY_RULES}, which is rule-pack membership typed over
+ * {@link AuthorityRuleId}.
+ */
+export const CONFIRM_CAUSE_IDS = [
+  /** Adding or updating an MCP server, which runs a command or opens a remote relationship. */
+  "confirm.mcp-install",
+  /** Deleting an MCP server, which breaks reattachment for older Sessions using it. */
+  "confirm.mcp-remove",
+] as const;
+
+export type ConfirmCauseId = (typeof CONFIRM_CAUSE_IDS)[number];
+
+/** Whether a cause is a confirmation — an operation asking before it acts. */
+export function isConfirmCause(cause: AuthorityDenialCause): cause is ConfirmCauseId {
+  return (CONFIRM_CAUSE_IDS as readonly string[]).includes(cause);
+}
+
+/**
  * Why a call was refused, once a refusal is a durable fact rather than a string.
  *
  * Wider than {@link AuthorityRuleId} by two families, because the gate can
@@ -460,7 +497,11 @@ export function isBudgetCause(cause: AuthorityDenialCause): cause is BudgetCause
  * the verb's own door rather than the gate, with the same need for a countable
  * name.
  */
-export type AuthorityDenialCause = AuthorityRuleId | "call.unreadable" | BudgetCauseId;
+export type AuthorityDenialCause =
+  | AuthorityRuleId
+  | "call.unreadable"
+  | BudgetCauseId
+  | ConfirmCauseId;
 
 /**
  * The rules a person may overrule when Volli stops and asks.

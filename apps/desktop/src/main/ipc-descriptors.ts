@@ -415,6 +415,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is [] => args.length === 0,
     invalidError: "Invalid request",
   },
+  "volli:data-project-roster": {
+    guard: (args): args is IpcArgs<"volli:data-project-roster"> =>
+      args.length === 1 && isProjectIdInput(args[0]),
+    invalidError: "Invalid project",
+  },
   "volli:database": {
     guard: (args): args is IpcArgs<"volli:database"> =>
       args.length === 0 || (args.length === 1 && (args[0] === "reveal" || args[0] === "export")),
@@ -496,6 +501,62 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       return override === null || (isRecord(override) && !Array.isArray(override));
     },
     invalidError: "Invalid authority policy",
+  },
+  "volli:mcp-list": {
+    guard: (args): args is IpcArgs<"volli:mcp-list"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
+    invalidError: "Invalid MCP project",
+  },
+  "volli:mcp-test": {
+    guard: (args): args is IpcArgs<"volli:mcp-test"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isRecord(args[0]["server"]),
+    invalidError: "Invalid MCP server test",
+  },
+  "volli:mcp-save": {
+    guard: (args): args is IpcArgs<"volli:mcp-save"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      isRecord(args[0]["server"]) &&
+      isStringArray(args[0]["enabledTools"]),
+    invalidError: "Invalid MCP server save",
+  },
+  "volli:mcp-refresh": {
+    guard: (args): args is IpcArgs<"volli:mcp-refresh"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP server refresh",
+  },
+  "volli:mcp-set-enabled": {
+    guard: (args): args is IpcArgs<"volli:mcp-set-enabled"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string" &&
+      typeof args[0]["enabled"] === "boolean",
+    invalidError: "Invalid MCP server enablement",
+  },
+  "volli:mcp-set-tools": {
+    guard: (args): args is IpcArgs<"volli:mcp-set-tools"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string" &&
+      isStringArray(args[0]["enabledTools"]),
+    invalidError: "Invalid MCP tool selection",
+  },
+  "volli:mcp-remove": {
+    guard: (args): args is IpcArgs<"volli:mcp-remove"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP server removal",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
@@ -639,6 +700,11 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 && isTicketIdInput(args[0]),
     invalidError: "Invalid ticket",
   },
+  "volli:ticket-body": {
+    guard: (args): args is IpcArgs<"volli:ticket-body"> =>
+      args.length === 1 && isTicketIdInput(args[0]),
+    invalidError: "Invalid ticket",
+  },
   "volli:ticket-latest-signals": {
     guard: (args): args is IpcArgs<"volli:ticket-latest-signals"> =>
       args.length === 1 && isProjectIdInput(args[0]),
@@ -745,7 +811,13 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:blob-link-drafts"> => {
       if (args.length !== 1) return false;
       const [input] = args;
-      if (!isRecord(input) || typeof input["ticketId"] !== "string") return false;
+      if (!isRecord(input)) return false;
+      // Exactly one owner — the `blob_links` CHECK again: the Ticket the
+      // new-Ticket composer just created, or the Session a promoted Draft
+      // just minted (VC-358). Never both, never neither.
+      const hasTicket = typeof input["ticketId"] === "string";
+      const hasSession = typeof input["sessionId"] === "string";
+      if (hasTicket === hasSession) return false;
       const blobs = input["blobs"];
       return (
         Array.isArray(blobs) &&

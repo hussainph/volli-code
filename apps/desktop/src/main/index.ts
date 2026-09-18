@@ -22,6 +22,8 @@ import {
   acceptsImageInputIn,
   applySkillModes,
   BLOB_URL_SCHEME,
+  CHAT_DRAFTS_APP_STATE_KEY,
+  chatDraftAttachmentHashes,
   diffManagedContent,
   displayTicketId,
   errorMessage,
@@ -48,6 +50,7 @@ import {
   workspaceInstallCommand,
 } from "@volli/shared";
 import type {
+  McpToolDefinition,
   PromptResource,
   RuntimeVerbResult,
   SessionEnvRepair,
@@ -64,6 +67,8 @@ import type {
   VolliIpcEvent,
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
+import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
+import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
   beginAcceptedUpdateInstall,
@@ -88,7 +93,8 @@ import type { BusyWorktreeSite, DbHandle } from "./data-ipc";
 import { registerDataIpcHandlers } from "./data-ipc";
 import { openVolliDb } from "./db";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
-import { readSessionConcurrencyEnv } from "./session-concurrency";
+import { createSessionConcurrencyEnvReader } from "./session-concurrency";
+import type { SessionConcurrencyEnvReader } from "./session-concurrency";
 import {
   getAutomation,
   getAutomationRun,
@@ -489,6 +495,19 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
   return null;
 }
 
+/** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
+function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.mcpTools ?? [];
+    }
+  }
+  return [];
+}
+
 function publishBackgroundShellEvent(event: BackgroundShellStateEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) continue;
@@ -757,11 +776,13 @@ app.whenReady().then(async () => {
 
   // Renderer permission policy. Electron's default with NO handler installed
   // is grant-everything; this allowlist keeps exactly what the app uses:
-  //  - local-fonts: restty resolves the ghostty-config font families against
-  //    installed fonts via the Local Font Access API (issue #18).
+  //  - local-fonts: the Terminal settings font picker enumerates the user's
+  //    installed families through the Local Font Access API (issue #18), so
+  //    the ghostty-config font chain can be offered as real choices.
   //  - clipboard-read / clipboard-sanitized-write: terminal copy/paste and
   //    OSC 52 (status quo under the old default-grant; a ghostty-style
-  //    clipboard-read=ask policy needs a restty seam that 0.2.0 lacks).
+  //    clipboard-read=ask policy would need a per-request prompt this app
+  //    does not have a surface for yet).
   //  - fullscreen: standard window affordance.
   const allowedPermissions = new Set([
     "local-fonts",
@@ -994,6 +1015,7 @@ app.whenReady().then(async () => {
   // store is intentionally constructed before any Session surface: it resolves
   // birth grants and the door later consumes the exact durable record.
   const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
+  const mcpSettings = dbHandle.ok ? new McpSettingsService({ db: dbHandle.db }) : null;
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1018,7 +1040,7 @@ app.whenReady().then(async () => {
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
-          resolve: (role, grants, within) => {
+          resolve: (role, grants, within, mcpTools = []) => {
             // Membership only. `webAccess.resolve()` may momentarily read a key
             // to prove the capability works, but only sanitized names and order
             // survive this closure; the provider closures are discarded here.
@@ -1068,15 +1090,23 @@ app.whenReady().then(async () => {
               // boundary: a malformed durable grant refuses the Session before
               // it reaches a model as a mysteriously smaller tool surface.
               grants,
+              mcpTools,
             });
           },
+          resolveMcp: (projectId) => mcpSettings?.selectedTools(projectId) ?? [],
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
-          record: async (sessionId, tools) => {
+          recordedMcp: async (sessionId) =>
+            recordedMcpTools(await sessionEngine.listEvents({ sessionId })),
+          record: async (sessionId, tools, mcpTools = []) => {
             await sessionEngine.getOrRecordSessionInput({
               sessionId,
-              input: { kind: "tool-surface", tools },
+              input: {
+                kind: "tool-surface",
+                tools,
+                ...(mcpTools.length === 0 ? {} : { mcpTools }),
+              },
               provenance: {
                 source: { kind: "system", id: "pi-runtime", detail: null },
                 venue: { id: "local", kind: "local" },
@@ -1164,6 +1194,29 @@ app.whenReady().then(async () => {
   });
 
   /**
+   * This process's ONE reader of who is working (VC-403).
+   *
+   * Every door that starts something asks the same question about the same
+   * machine — a structured attachment, a background shell, a terminal — so
+   * they share one reader rather than each keeping its own. Two readers would
+   * be two answers about one machine for as long as their windows disagreed.
+   *
+   * Behind it, `listAttachedSessions` reads only the Sessions holding an open
+   * attachment instead of folding every Session of every project, so an
+   * uncached start no longer waits on the fleet; the reader's short memo is
+   * now only there to collapse a burst.
+   *
+   * `null` when there is no Session Engine to ask, which leaves every
+   * toolchain on its own default rather than blocking a Session.
+   */
+  const concurrencyEnvReader: SessionConcurrencyEnvReader | null =
+    sessionEngine === null
+      ? null
+      : createSessionConcurrencyEnvReader({
+          listAttachedSessions: () => sessionEngine.listAttachedSessions(),
+        });
+
+  /**
    * One structured Session's share of the machine (VC-339), in the variables
    * `cargo`, `make`, `cmake`, `go`, `pytest`, gradle and vitest already read —
    * the same budget a spawned PTY gets in `pty/manager.ts`, so a Session's
@@ -1175,16 +1228,8 @@ app.whenReady().then(async () => {
    * default rather than blocking the Session.
    */
   const sessionConcurrencyEnvFor = async (sessionId: string): Promise<Record<string, string>> => {
-    if (!dbHandle.ok || sessionEngine === null) return {};
-    const db = dbHandle.db;
-    const engine = sessionEngine;
-    return readSessionConcurrencyEnv(
-      {
-        listProjectIds: () => listProjects(db).map((project) => project.id),
-        listSessions: (projectId) => engine.listSessions({ projectId, scope: "all" }),
-      },
-      { excludeSessionId: sessionId, environment: process.env },
-    );
+    if (concurrencyEnvReader === null) return {};
+    return concurrencyEnvReader({ excludeSessionId: sessionId, environment: process.env });
   };
 
   let agentToolDoor: AgentToolDoor | null = null;
@@ -1267,6 +1312,22 @@ app.whenReady().then(async () => {
               // starts (VC-339).
               concurrencyEnv: () => sessionConcurrencyEnvFor(scope.sessionId),
             }),
+          resolveMcpPort:
+            mcpSettings === null
+              ? undefined
+              : (scope) => {
+                  const host = new McpSessionHost({
+                    workspacePath: scope.workspacePath,
+                    // Snapshot only the configuration the frozen surface needs.
+                    // Current enablement selects new Sessions; a missing record
+                    // refuses attachment instead of advertising an unusable tool.
+                    servers: serversForFrozenMcpTools(
+                      mcpSettings.list(scope.projectId),
+                      scope.mcpTools,
+                    ),
+                  });
+                  return { call: host.port.call, dispose: () => host.close() };
+                },
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a
@@ -1334,6 +1395,7 @@ app.whenReady().then(async () => {
             } as const;
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
+            let mcpTools = recordedMcpTools(events);
             if (toolSurface === null) {
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
@@ -1353,12 +1415,16 @@ app.whenReady().then(async () => {
                   provenance,
                 }),
               );
+              // A legacy Session is not retroactively granted today's MCP
+              // settings; the newly recorded backfill is deliberately empty.
+              mcpTools = [];
             }
             const shared = {
               projectId: project.id,
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              ...(mcpTools.length === 0 ? {} : { mcpTools }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
               // edit. Resolved per attach for the reason the web ports are: what
@@ -1934,6 +2000,12 @@ app.whenReady().then(async () => {
               ? { sessionEngine, runtime: sessionRuntime }
               : null,
           delegate: delegationsFor,
+          // The MCP management family's host (VC-380): the SAME settings owner
+          // the Configure pane writes through and `resolveMcp` reads for a new
+          // Session's surface. One owner, so a server an agent installs and one
+          // a person adds by hand are the same row — not a resemblance this
+          // door maintains, but the same code.
+          mcp: () => mcpSettings,
           ...(submitKickoffMessage === undefined
             ? {}
             : { submitSessionMessage: submitKickoffMessage }),
@@ -2063,6 +2135,70 @@ app.whenReady().then(async () => {
       console.error("[volli] failed to coordinate app shutdown:", errorMessage(error));
     },
   });
+  // Remote pages live in main-owned WebContentsViews, never in the privileged
+  // app renderer. The host receives every Electron surface explicitly so its
+  // registry and security policy stay testable without Electron globals.
+  //
+  // BEFORE boot recovery, and that ordering is load-bearing (VC-367). Recovery
+  // rehydrates a structured attachment, which resolves the Session's whole tool
+  // surface — including `resolveBrowserPort`, which reads `browserTabsRef`.
+  // Built after recovery, as it was, that read found null and threw, so EVERY
+  // Session with a live turn at crash time failed to reconcile and was force-
+  // closed instead: the reconcile path could not succeed at boot, on any crash,
+  // for any such Session. The host is inert until something drives a tab
+  // (`BrowserTabHost`'s constructor only stores its dependencies, and its stage
+  // window is a lazy callback), so nothing is started early by moving it here —
+  // only made available to the one caller at boot that needs it.
+  //
+  // The alternative was to move recovery down to the host instead. This way
+  // round on purpose: recovery must run before anything reads the ledger (see
+  // `session-runtime/boot-recovery.ts`), and that invariant is held by position
+  // — moving the sweep past several hundred lines of handler registration would
+  // have made it depend on none of them ever growing a read.
+  const browserTabs = new BrowserTabHost({
+    createId: randomUUID,
+    createView: (options) => new WebContentsView(options),
+    fromPartition: (partition) => session.fromPartition(partition),
+    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    // The off-screen stage every tab waits in until a person shows it (VC-278).
+    // A tab nobody has revealed still needs a window to hold its compositor
+    // surface, or its clicks land nowhere and its screenshots never answer.
+    //
+    // A BaseWindow, deliberately: it holds views but has no webContents, so it
+    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
+    // picks the app window out of, and that `activate` counts before
+    // re-creating one. `show: false` is load-bearing and must stay: showing
+    // this would put an agent's page on screen with nothing in the UI claiming
+    // to have shown it.
+    createStageWindow: () =>
+      new BaseWindow({
+        show: false,
+        width: BROWSER_DEFAULT_BOUNDS.width,
+        height: BROWSER_DEFAULT_BOUNDS.height,
+        skipTaskbar: true,
+        focusable: false,
+      }),
+    publishState: (tab) => publishBrowserTabEvent({ tab }),
+    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
+    // The pictures a transcript card shows (VC-238): live captures bounded in
+    // memory, model-requested screenshots also on disk under userData — never
+    // the Blob store, whose Session links become the next turn's input.
+    pictures: new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
+    }),
+    // The holder's name for the pill and the cursor label (VC-239), from the
+    // Session's own projection. A launch with no runtime has no Sessions to
+    // hold a tab, so the placeholder is never what a person sees.
+    ...(sessionRuntime === null
+      ? {}
+      : {
+          sessionName: async (sessionId: string) =>
+            (await sessionRuntime.projection({ sessionId })).projection.session.title,
+        }),
+  });
+  browserTabsRef = browserTabs;
   // Boot recovery: no PTY or retired-runtime binding survives a relaunch. A
   // structured attachment stays reattachable, but a turn left active by the
   // prior process is reconciled now so `session list` cannot call it idle.
@@ -2115,17 +2251,19 @@ app.whenReady().then(async () => {
   // it runs at boot rather than on the user's turn, and a failure is logged
   // rather than raised: garbage left behind is a disk cost, never a broken app.
   //
-  // EXCEPT what a still-stored new-Ticket draft names (VC-137): the draft
-  // persists its attachment strip like it persists the words, so those Blobs
-  // are a persisted attachment waiting for their Ticket, not garbage. Reading
-  // the raw app_state row here — the renderer owns that envelope's shape, and
-  // `draftAttachmentHashes` reads it defensively enough that a malformed row
-  // can at worst leak bytes until the draft is fixed or cleared.
+  // EXCEPT what a still-stored new-Ticket or provisional-chat Draft names
+  // (VC-137/VC-358): each persists its attachment strip like it persists the
+  // words, so those Blobs are waiting for an owner, not garbage. Reading the
+  // raw app_state rows here — the renderer owns those envelope shapes, and the
+  // shared readers are defensive enough that malformed state can at worst leak
+  // bytes until the Draft is fixed or cleared.
   if (dbHandle.ok) {
     try {
-      const retained = new Set(
-        draftAttachmentHashes(getAllAppState(dbHandle.db)[NEW_TICKET_DRAFT_APP_STATE_KEY]),
-      );
+      const appState = getAllAppState(dbHandle.db);
+      const retained = new Set([
+        ...draftAttachmentHashes(appState[NEW_TICKET_DRAFT_APP_STATE_KEY]),
+        ...chatDraftAttachmentHashes(appState[CHAT_DRAFTS_APP_STATE_KEY]),
+      ]);
       const { collected } = collectUnlinkedBlobs(
         dbHandle.db,
         blobsRoot(app.getPath("userData")),
@@ -2161,7 +2299,7 @@ app.whenReady().then(async () => {
   // window edge and by every ghostty chain read — a `theme = light:X,dark:Y`
   // pair resolves to a different half in each.
   const currentAppearance = (): ResolvedAppearance => currentFirstPaint().appearance;
-  // Ghostty config read + live-reload watch, feeding restty's appearance. The
+  // Ghostty config read + live-reload watch, feeding the terminal appearance. The
   // `userData` root is where Volli's own ghostty OVERLAY files live (decision
   // #67). Registered after the db opens because the chain read needs the
   // resolved mode, which lives in `app_state`.
@@ -2297,6 +2435,7 @@ app.whenReady().then(async () => {
     // The person's stop (VC-269) acts through the same runtime the agent
     // tool's stop does — no parallel door; absent with the runtime.
     sessionRuntime: sessionRuntime ?? undefined,
+    mcpSettings: mcpSettings ?? undefined,
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
@@ -2738,55 +2877,15 @@ app.whenReady().then(async () => {
     if (step === "confirm" && !confirmDiscardUnsaved(names, "Quit")) refuseQuit(event);
   });
 
-  const ptyManager = registerTerminalIpcHandlers(dbHandle, agentRuntime, sessionEngine);
+  // The terminal door takes the same reader the structured door uses (VC-403):
+  // one question about one machine, asked once.
+  const ptyManager = registerTerminalIpcHandlers(
+    dbHandle,
+    agentRuntime,
+    sessionEngine,
+    concurrencyEnvReader,
+  );
   ptyManagerRef = ptyManager;
-  // Remote pages live in main-owned WebContentsViews, never in the privileged
-  // app renderer. The host receives every Electron surface explicitly so its
-  // registry and security policy stay testable without Electron globals.
-  const browserTabs = new BrowserTabHost({
-    createId: randomUUID,
-    createView: (options) => new WebContentsView(options),
-    fromPartition: (partition) => session.fromPartition(partition),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
-    // The off-screen stage every tab waits in until a person shows it (VC-278).
-    // A tab nobody has revealed still needs a window to hold its compositor
-    // surface, or its clicks land nowhere and its screenshots never answer.
-    //
-    // A BaseWindow, deliberately: it holds views but has no webContents, so it
-    // never joins `BrowserWindow.getAllWindows()` — the list `getWindow` below
-    // picks the app window out of, and that `activate` counts before
-    // re-creating one. `show: false` is load-bearing and must stay: showing
-    // this would put an agent's page on screen with nothing in the UI claiming
-    // to have shown it.
-    createStageWindow: () =>
-      new BaseWindow({
-        show: false,
-        width: BROWSER_DEFAULT_BOUNDS.width,
-        height: BROWSER_DEFAULT_BOUNDS.height,
-        skipTaskbar: true,
-        focusable: false,
-      }),
-    publishState: (tab) => publishBrowserTabEvent({ tab }),
-    publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
-    // The pictures a transcript card shows (VC-238): live captures bounded in
-    // memory, model-requested screenshots also on disk under userData — never
-    // the Blob store, whose Session links become the next turn's input.
-    pictures: new BrowserPictureStore({
-      createId: randomUUID,
-      now: Date.now,
-      persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
-    }),
-    // The holder's name for the pill and the cursor label (VC-239), from the
-    // Session's own projection. A launch with no runtime has no Sessions to
-    // hold a tab, so the placeholder is never what a person sees.
-    ...(sessionRuntime === null
-      ? {}
-      : {
-          sessionName: async (sessionId: string) =>
-            (await sessionRuntime.projection({ sessionId })).projection.session.title,
-        }),
-  });
-  browserTabsRef = browserTabs;
   registerBrowserTabIpcHandlers(browserTabs);
   registerBackgroundShellIpcHandlers(backgroundShells);
   // An archived Ticket's headless agent tabs have no one left to drive them

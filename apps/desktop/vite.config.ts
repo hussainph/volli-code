@@ -36,8 +36,19 @@ const shouldLaunchElectronAfterPack = process.env.VOLLI_DESKTOP_DEV === "1" && i
 // transitive OpenTelemetry package to electron-builder.yml's node_modules
 // whitelist and keeping that list in sync as their dependency graph moves.
 // `verify-packed-requires.mjs` is what catches getting this wrong.
+//
+// The MCP client (VC-8) rides along on exactly the same reasoning. It is
+// main-only, pure JavaScript, and — checked across every file of its `dist/`,
+// including the stdio transport — reads nothing relative to its own package
+// layout: no `__dirname`, no `require.resolve`, no module-load file read. That
+// is the property that forces jsdom into `neverBundle`, and its absence is what
+// makes inlining safe here. Bundling it also spares this repo from tracking its
+// runtime tree (cross-spawn, zod, jose, eventsource, @modelcontextprotocol/core
+// …) in the electron-builder whitelist as that graph moves.
 const bundleWorkspacePackages = (id: string): boolean =>
-  id.startsWith("@volli/") || id.startsWith("@opentelemetry/");
+  id.startsWith("@volli/") ||
+  id.startsWith("@opentelemetry/") ||
+  id.startsWith("@modelcontextprotocol/");
 
 function sourceFilesUnder(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -129,7 +140,17 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "main",
           environment: "node",
+          // The performance matrix's tests are NOT here. They generate a
+          // real-scale migrated database more than once to prove byte-for-byte
+          // determinism, which takes minutes and blows this lane's 5s default
+          // timeout — it failed CI exactly that way. They have their own config
+          // and command: `pnpm test:performance-harness` (vite.bench.config.ts).
           include: ["src/main/**/*.test.ts"],
+          // Drains the data-change coalescer after every test. Module state
+          // that outlives the test that filled it is delivered into the next
+          // one's window mock otherwise; see the file for why it disposes
+          // rather than flushes.
+          setupFiles: ["src/main/test-setup.ts"],
           // Stated again here, and it is not redundant: `renderer` above
           // INHERITS this cap through `extends: true` while this project
           // inherits nothing, and vitest refuses a run whose projects disagree
@@ -358,6 +379,16 @@ export default defineConfig(({ mode }) => ({
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
         "src/components/sidebar/edge-region.ts",
+        // How the shell's pin/unpin journey decides what to do next (VC-359).
+        // Enrolled on `edge-region.ts`'s argument and then some: the rule holds
+        // two facts apart on purpose — which layout the content surface is laid
+        // out against, and where the compositor is drawing it — and the failure
+        // mode is not a wrong pixel but a STUCK one. Its first version could
+        // strand the spacer reserving a panel width with no panel in it, with
+        // every Browser plane frozen behind a stand-in and no input left that
+        // could re-run the machine. Nothing in a screenshot of a settled shell
+        // shows that the settling was reachable at all.
+        "src/components/sidebar/content-motion.ts",
         "src/components/sidebar/listing.ts",
         "src/components/theme/project-appearance-model.ts",
         // Pure `.ts` beside canvas-editor.tsx, in the gate for the same reason
@@ -502,11 +533,24 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/css-color.ts",
         "src/terminal/appearance.ts",
         "src/terminal/engine.ts",
-        "src/terminal/gpu-pressure-model.ts",
         "src/terminal/appearance-model.ts",
+        // The Ghostty-config → xterm.js option mapping (VC-107). Enrolled for
+        // `appearance-model.ts`'s reason one line up: it is pure translation
+        // whose failures are silent. A palette slot mapped to the wrong xterm
+        // key, a selection keyword that resolves to nothing, or a DECSET filter
+        // one mode too wide all render a terminal that merely looks slightly
+        // different — nothing throws, and no screenshot says which half of the
+        // mapping was asked.
+        "src/terminal/xterm-appearance.ts",
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        // How a burst of invalidations becomes one (VC-359). Enrolled because
+        // the merge is a SAFETY rule, not an optimisation: it may only ever
+        // widen, and the one kind a venue cache depends on has to survive a
+        // mixed batch. A branch that quietly narrowed a scope would leave a
+        // surface showing yesterday's data with nothing on screen saying so.
+        "**/src/main/data-change-coalescer.ts",
         "**/src/main/blob-attach.ts",
         "**/src/main/blob-collect.ts",
         "**/src/main/blob-protocol.ts",
@@ -546,6 +590,18 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/process/**",
         "**/src/main/db/spawn-ledger-repo.ts",
         "**/src/main/project-roots.ts",
+        // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
+        // for the reason the process modules above are: it is a concurrency
+        // guard, so its branches are the ones no screenshot and no manual pass
+        // can show. An uncovered branch here is a `worktree add` and a
+        // `worktree prune` nobody watched decide whether to run against one
+        // repository at the same time, which is a race git's own documentation
+        // names. Its sibling `worktree/git.ts` is deliberately NOT enrolled:
+        // one defensive fallback in it (a child-process failure carrying no
+        // `message`) is not reachable from a test without exporting an
+        // internal purely to satisfy the gate, and a contrived test is worth
+        // less than an honest gap.
+        "**/src/main/worktree/repository-turn.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
         // guarantee it carries — five fields, one pragma, one app_state key,

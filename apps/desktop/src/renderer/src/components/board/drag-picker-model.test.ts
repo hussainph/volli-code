@@ -295,6 +295,71 @@ describe("digits", () => {
   });
 });
 
+/**
+ * The board bails on reference equality before touching React state, so an
+ * event that changes nothing has to hand back the SAME object — a fresh but
+ * equal one was a full board render per mouse move.
+ */
+describe("an event that changes nothing returns the same state", () => {
+  it("for a move that stays on the hovered column with ⌥ where it was", () => {
+    const hovering = run([start, over("doing")]);
+    expect(dragPickerReducer(hovering, over("doing"), columns)).toBe(hovering);
+    const gutter = run([start, over(null)]);
+    expect(dragPickerReducer(gutter, over(null), columns)).toBe(gutter);
+  });
+
+  it("for a move that keeps an open picker on its own column and row", () => {
+    const open = run([start, over("doing"), { kind: "modifier", held: true }]);
+    expect(dragPickerReducer(open, over("doing", true), columns)).toBe(open);
+    // Leaving for the gutter keeps the picker but IS a hover change.
+    expect(dragPickerReducer(open, over(null, true), columns)).not.toBe(open);
+    // The row under the pointer arrives as a fresh object on every move; the
+    // same row is still the same state.
+    const onRow = dragPickerReducer(
+      open,
+      {
+        kind: "pointer-move",
+        hovered: "doing",
+        modifierHeld: true,
+        target: { status: "doing", index: 2 },
+      },
+      columns,
+    );
+    expect(onRow).not.toBe(open);
+    expect(
+      dragPickerReducer(
+        onRow,
+        {
+          kind: "pointer-move",
+          hovered: "doing",
+          modifierHeld: true,
+          target: { status: "doing", index: 2 },
+        },
+        columns,
+      ),
+    ).toBe(onRow);
+  });
+
+  it("for a repeated ⌥ keydown, and for a digit chosen while already chosen", () => {
+    const open = run([start, over("doing"), { kind: "modifier", held: true }]);
+    // macOS auto-repeats keydown while the key is held.
+    expect(dragPickerReducer(open, { kind: "modifier", held: true }, columns)).toBe(open);
+    const chosen = dragPickerReducer(open, { kind: "digit", digit: 3 }, columns);
+    expect(chosen.picker).toEqual({ status: "doing", index: 2 });
+    expect(dragPickerReducer(chosen, { kind: "digit", digit: 3 }, columns)).toBe(chosen);
+  });
+
+  it("while still handing back a new state for every real change", () => {
+    const hovering = run([start, over("doing")]);
+    expect(dragPickerReducer(hovering, over("todo"), columns)).not.toBe(hovering);
+    expect(dragPickerReducer(hovering, over("doing", true), columns)).not.toBe(hovering);
+    const bare = run([start, over("doing"), { kind: "digit", digit: 2 }]);
+    // The bare choice is bound to Doing; leaving Doing clears it.
+    expect(dragPickerReducer(bare, over("todo"), columns).selection).toBeNull();
+    expect(dragPickerReducer(bare, over("todo"), columns)).not.toBe(bare);
+  });
+});
+
 describe("what is drawn", () => {
   it("shows the hovered column's list, and only the picker's while one is open", () => {
     const hovering = run([start, over("doing")]);

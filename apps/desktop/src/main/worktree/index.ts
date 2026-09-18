@@ -39,6 +39,14 @@ export {
   UNDER_DELETION_REFUSAL,
 } from "./deletion-lease";
 
+// The serialization between two CHANGES to one repository (VC-389) is a
+// different question from the lease above — that one is about a directory and
+// refuses, this one is about a repository and queues — and it is NOT exported
+// here. Nothing outside this directory takes a repository's turn, and the
+// ordering holds because every mutation site is in here; a barrel entry would
+// invite a caller that cannot be checked against that. Same for the git-child
+// gate in `git.ts`. Import from the module when a real consumer appears.
+
 // Live work inside a directory — the guard every destructive worktree path
 // asks, shared so the automatic and manual routes cannot answer it differently.
 export { busyRefusal, busySiteWithin } from "./activity";
@@ -72,6 +80,9 @@ export {
   readWorktreeChangeSet,
   readWorktreeChangeSetPaths,
   readWorktreeBaseFile,
+  // The git-free half of those verbs: ticket → on-disk identity, for a caller
+  // that needs the PATH rather than a status report (VC-369).
+  resolveWorktreeTarget,
 } from "./read";
 export type {
   WorktreeReadDeps,
@@ -222,6 +233,8 @@ export type { SetupRun, SetupRunDeps, SetupRunParams, SetupFeedResult } from "./
 // The default git runners (both capture stderr) — callers build `deps.git` /
 // `deps.gitAsync` from these. The async one exists because the Change Set reads
 // must never block main; see git.ts.
+// Both runners share one bound on how many async git children this process
+// runs at once; what it covers and what it does not is written down in git.ts.
 export { runGitCapturing, runGitCapturingAsync, GitError } from "./git";
 
 export type {

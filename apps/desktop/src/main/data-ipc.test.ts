@@ -7,12 +7,16 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectRosterResult,
   ProjectUpdateResult,
   Result,
+  RetentionArchiveCleanResult,
+  RetentionKeepResult,
   RetentionTtlResult,
   SessionRenameResult,
   SessionsResult,
   SessionStopResult,
+  TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
   TicketEventsResult,
@@ -22,12 +26,17 @@ import type {
   TicketsResult,
   VolliIpcChannel,
   WorktreeBranchesResult,
+  WorktreeBaseReadResult,
+  WorktreeChangeSetResult,
   WorktreeCommitResult,
   WorktreeOrphanCleanupResult,
   WorktreeOrphanDeleteResult,
+  WorktreePushPrResult,
   WorktreeRecreateResult,
   WorktreeOrphansResult,
+  WorktreeDiffResult,
   WorktreeRemoveResult,
+  WorktreeStatusResult,
   WorktreeTrimResult,
   WorktreeTrimScanResult,
   WorktreeTrimSettingsResult,
@@ -48,12 +57,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog } = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: never[]) => unknown>(),
-  dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
-  showItemInFolder: vi.fn(),
-  showSaveDialog: vi.fn(),
-}));
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch } = vi.hoisted(
+  () => ({
+    handlers: new Map<string, (...args: never[]) => unknown>(),
+    dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
+    showItemInFolder: vi.fn(),
+    showSaveDialog: vi.fn(),
+    /**
+     * The VC-372 observer hooks of the most recently constructed watch manager.
+     * The stand-in below carries them so the snapshot cache sees the same
+     * coverage and change reports the real manager sends.
+     */
+    worktreeWatch: {
+      options: undefined as
+        | {
+            onCoverageChange?: (ticketId: string, covered: boolean) => void;
+            onRelevantChange?: (ticketIds: readonly string[]) => void;
+          }
+        | undefined,
+    },
+  }),
+);
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -93,6 +117,20 @@ vi.mock("electron", () => ({
 vi.mock("./worktree", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
+  // The rail reads. Mocked so the coalescing/dedup assertions below can count
+  // calls on the seam itself; `worktree/read.test.ts` drives the real verbs.
+  readWorktreeStatus: vi.fn(),
+  readWorktreeDiff: vi.fn(),
+  readWorktreeChangeSet: vi.fn(),
+  readWorktreeBaseFile: vi.fn(),
+  resolveWorktreeTarget: vi.fn(),
+  // The two Done-flow writes the rail's own doors drive (VC-372's invalidation
+  // assertions call them); mocked so no real git runs here.
+  commitTicketRemaining: vi.fn(),
+  publishTicketBranch: vi.fn(),
+  // The retention archive-and-clean path — the other door that deletes a
+  // checkout the snapshot cache may be holding an answer for.
+  archiveAndClean: vi.fn(),
   // The read-only scan and the confirmed cleanup are two verbs now (VC-284);
   // both are mocked here, and both have their own suites under worktree/.
   scanOrphans: vi.fn(),
@@ -119,10 +157,12 @@ vi.mock("./worktree", async () => ({
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
-  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` — needs a
-  // stub export so that value import doesn't throw under strict ESM mocking.
+  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` and by the
+  // commit/push handlers' deps — needs a stub export so that value import
+  // doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
+  runNet: vi.fn(),
   // The trim-on-finish door (VC-340): fired beside the reply on a Done move and
   // on an archive. Mocked because it walks a real filesystem; the composition
   // itself is covered by `worktree/retention.test.ts`.
@@ -135,20 +175,38 @@ vi.mock("./worktree", async () => ({
   getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
-  // a no-op stand-in keeps real `fs.watch` handles out of the suite.
+  // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
+  // carry the VC-372 observer contract, and its timing matches the real
+  // manager's: a subscription reports coverage, an UNWATCH only releases the
+  // subscriber (the real root lingers for the rewatch grace), and a ticket-wide
+  // teardown reports that coverage ended.
   WorktreeChangeWatchManager: class {
-    watch = vi.fn(() => ({ ok: true as const }));
+    constructor(options: (typeof worktreeWatch)["options"] = undefined) {
+      worktreeWatch.options = options;
+    }
+    watch = vi.fn((_sender: unknown, ticketId: string) => {
+      worktreeWatch.options?.onCoverageChange?.(ticketId, true);
+      return { ok: true as const };
+    });
     pause = vi.fn(() => ({ ok: true as const }));
     resume = vi.fn(() => ({ ok: true as const }));
     unwatch = vi.fn();
-    unwatchTicket = vi.fn();
+    unwatchTicket = vi.fn((ticketId: string) => {
+      worktreeWatch.options?.onCoverageChange?.(ticketId, false);
+    });
   },
 }));
 
+import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine } from "./session-control";
+import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
 import { insertSession } from "./session-control/test-support";
-import { openTestDb, testSession } from "./db/test-helpers";
+import { recordAutomationRun } from "./db/automations-repo";
+import { recordSessionStartedOnce } from "./db/events-repo";
+import { readSessionProvenance } from "./db/session-provenance-repo";
+import { recordMcpOperation } from "./db/mcp-operations-repo";
+import { insertProject } from "./db/projects-repo";
+import { openTestDb, testProject, testSession } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 import { getProjectById } from "./db/projects-repo";
 import { resetOrphanScanForTest } from "./orphan-scan";
@@ -156,10 +214,18 @@ import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { worktreesHome } from "./worktree-runtime";
 import { projectContainerName } from "./worktree/containers";
 import {
+  archiveAndClean,
   cleanupOrphans,
+  commitTicketRemaining,
   ensure,
   getTrimSettings,
   listBranches,
+  readWorktreeBaseFile,
+  readWorktreeChangeSet,
+  readWorktreeDiff,
+  readWorktreeStatus,
+  publishTicketBranch,
+  resolveWorktreeTarget,
   remove as removeWorktree,
   scanOrphans,
   scanTrimTargets,
@@ -167,6 +233,7 @@ import {
   trimAllWorktrees,
   trimFinishedWorktree,
 } from "./worktree";
+import { resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { orphanCleanupEngine } from "./worktree-runtime";
 import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
 import { updateTicketFieldsCommand } from "./ticket-commands";
@@ -189,6 +256,24 @@ function invoke<T>(channel: VolliIpcChannel, ...args: unknown[]): T {
   return (handler as (...callArgs: unknown[]) => T)(fakeEvent, ...args);
 }
 
+/** The production invalidation is frame-window coalesced; handler tests await its delivery. */
+async function expectDataChanged(payload: unknown): Promise<void> {
+  await vi.waitFor(() => {
+    expect(dataChangedSends).toContainEqual({ channel: "volli:data-changed", payload });
+  });
+}
+
+/**
+ * Assert this handler queued NOTHING. The flush is what makes the claim mean
+ * anything: the invalidation is coalesced into a frame window, so an unflushed
+ * `toEqual([])` inside a synchronous test body is true whether the handler
+ * queued an invalidation or not.
+ */
+function expectNoDataChange(): void {
+  flushDataChangedForTest();
+  expect(dataChangedSends).toEqual([]);
+}
+
 let ctx: TestDb;
 
 // `volli:project-create` now requires an existing directory (main-side path
@@ -208,6 +293,10 @@ beforeEach(() => {
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
+  // The rail's last-known snapshot is process-wide (VC-372): each test starts
+  // from a clean launch, and from no prior test's watch manager hooks.
+  resetWorktreeSnapshotsForTest();
+  worktreeWatch.options = undefined;
   // The orphan sweep is cached once per launch (module state) — drop it so each
   // test starts from a clean launch and its own mocked sweep runs.
   resetOrphanScanForTest();
@@ -219,6 +308,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A mutation this test did not inspect is DISCARDED, not delivered, by
+  // `src/main/test-setup.ts` — delivering it would put ids this test created
+  // into the next test's send log.
   ctx.cleanup();
   for (const dir of createdProjectDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -308,6 +400,70 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+describe("MCP settings IPC", () => {
+  it("routes typed project-scoped settings operations through the main-owned service", async () => {
+    const list = vi.fn(() => [{ id: "server-1" }]);
+    const save = vi.fn(async () => ({ ok: true, server: { id: "server-1" } }));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list, save } as never });
+
+    // One read carries both halves of what the pane shows: the servers, and
+    // the management history beside them (VC-380). Empty here because no
+    // operation has been recorded against this project.
+    expect(invoke("volli:mcp-list" as never, { projectId: "project-1" })).toEqual({
+      ok: true,
+      servers: [{ id: "server-1" }],
+      operations: [],
+    });
+    await expect(
+      invoke<Promise<unknown>>("volli:mcp-save" as never, {
+        projectId: "project-1",
+        server: { id: "server-1" },
+        enabledTools: ["echo"],
+      }),
+    ).resolves.toEqual({ ok: true, server: { id: "server-1" } });
+    expect(list).toHaveBeenCalledWith("project-1");
+    expect(save).toHaveBeenCalledWith({
+      projectId: "project-1",
+      server: { id: "server-1" },
+      enabledTools: ["echo"],
+    });
+  });
+
+  it("carries this project's management history on the same read, scoped to it", () => {
+    insertProject(ctx.db, testProject({ id: "project-1", name: "One", path: "/repo/one" }));
+    insertProject(ctx.db, testProject({ id: "project-2", name: "Two", path: "/repo/two" }));
+    const entry = {
+      serverId: "server-1",
+      serverName: "Fixture",
+      operation: "install" as const,
+      outcome: "applied" as const,
+      detail: null,
+      provenance: { source: null, registryType: null, version: null, digest: null },
+      sessionId: "session-1",
+      ticketId: null,
+    };
+    recordMcpOperation(
+      ctx.db,
+      { ...entry, id: "session-1:a", projectId: "project-1", summary: "Installed Fixture." },
+      100,
+    );
+    recordMcpOperation(
+      ctx.db,
+      { ...entry, id: "session-1:b", projectId: "project-2", summary: "Elsewhere." },
+      200,
+    );
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { list: () => [] } as never });
+
+    const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
+      projectId: "project-1",
+    });
+
+    // The pane reads one project. Another project's history appearing here
+    // would be a leak between projects, not merely untidy.
+    expect(result.operations.map((row) => row.summary)).toEqual(["Installed Fixture."]);
+  });
+});
+
 describe("volli:project-authority-policy", () => {
   it("records a departure and answers with the project carrying it", () => {
     const id = createProject();
@@ -485,6 +641,113 @@ describe("volli:project-session-defaults — Chat model", () => {
     expect(
       ctx.db.prepare("SELECT session_harness FROM projects WHERE id = ?").get(projectId),
     ).toEqual({ session_harness: "codex" });
+  });
+});
+
+describe("ticket-scoped invalidations carry their project (VC-387)", () => {
+  it("names the project on a retention pin, so windows re-read one board not all of them", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    dataChangedSends.length = 0;
+
+    const kept = invoke<RetentionKeepResult>("volli:retention-keep", {
+      ticketId: ticket.id,
+      keep: true,
+    });
+
+    expect(kept.ok).toBe(true);
+    // Without the projectId the renderer cannot scope its refresh and falls
+    // back to a whole-board bootstrap — the exact read this ticket removes.
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "retention",
+    });
+  });
+
+  // `volli:retention-dismiss` and the two worktree publish paths take the same
+  // `ticketScope` helper this pins; they are not asserted separately because the
+  // retention watcher is a process-wide singleton that broadcasts on its own
+  // schedule, and a second assertion here would be pinning the coalescer's merge
+  // rather than the scope.
+});
+
+describe("volli:data-project-roster — the steady-state refresh read (VC-387)", () => {
+  it("answers one project's live board, carrying no ticket bodies", () => {
+    const projectId = createProject();
+    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Other",
+    });
+    const mine = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "Mine",
+      body: "# A body long enough to be worth not re-reading",
+      labels: ["perf"],
+    });
+    if (!mine.ok) throw new Error(mine.error);
+    createTicket(other.project.id);
+
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", { projectId });
+
+    if (!roster.ok) throw new Error(roster.error);
+    expect(roster.tickets).toEqual([
+      expect.objectContaining({ id: mine.ticket.id, title: "Mine", labels: ["perf"] }),
+    ]);
+    // The point of the read: the column the whole-board re-read spends its
+    // bytes on never crosses.
+    expect(roster.tickets[0]).not.toHaveProperty("body");
+    expect(roster.labels).toEqual([expect.objectContaining({ name: "perf", projectId })]);
+  });
+
+  it("names the same live tickets, in the same order, as the boot payload it replaces", () => {
+    const projectId = createProject();
+    const first = createTicket(projectId);
+    const second = createTicket(projectId);
+    archiveTicket(second.id);
+
+    const boot = invoke<BootstrapResult>("volli:data-bootstrap");
+    if (!boot.ok) throw new Error(boot.error);
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", { projectId });
+    if (!roster.ok) throw new Error(roster.error);
+
+    expect(roster.tickets.map(({ id }) => id)).toEqual(
+      boot.data.ticketsByProject[projectId]?.map(({ id }) => id),
+    );
+    expect(roster.tickets.map(({ id }) => id)).toEqual([first.id]);
+  });
+
+  it("refuses an unknown project rather than answering an empty board for it", () => {
+    const roster = invoke<ProjectRosterResult>("volli:data-project-roster", {
+      projectId: "no-such-project",
+    });
+
+    expect(roster).toEqual({ ok: false, error: "Unknown project" });
+  });
+});
+
+describe("volli:ticket-body — the per-ticket body read (VC-387)", () => {
+  it("answers the body the roster no longer carries", () => {
+    const projectId = createProject();
+    const created = invoke<TicketResult>("volli:ticket-create", {
+      projectId,
+      status: "todo",
+      title: "With a body",
+      body: "# Scope\n\nDo the thing.",
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: created.ticket.id });
+
+    expect(read).toEqual({ ok: true, body: "# Scope\n\nDo the thing." });
+  });
+
+  it("refuses a ticket that is gone rather than answering an empty body", () => {
+    const read = invoke<TicketBodyResult>("volli:ticket-body", { ticketId: "no-such-ticket" });
+
+    expect(read).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
 
@@ -889,9 +1152,11 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
       usesWorktree: true,
     });
 
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -945,7 +1210,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
     expect(ensure).not.toHaveBeenCalled();
   });
 
-  it("broadcasts a worktree change when scope is switched OFF, so a venue reader stops waiting (VC-286)", () => {
+  it("broadcasts a worktree change when scope is switched OFF, so a venue reader stops waiting (VC-286)", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId); // worktree-scoped, no worktree yet
     dataChangedSends.length = 0;
@@ -954,9 +1219,11 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
 
     // The ticket's Session now binds the main checkout; a venue cached as
     // `resolving` for the worktree it will never get must be read again.
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -968,7 +1235,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
     invoke<TicketResult>("volli:ticket-update", { ticketId: ticket.id, usesWorktree: false });
 
     // No transition, no checkout moved, nothing for a venue reader to re-read.
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 
   it("does not re-materialize when scope is re-asserted as already on", () => {
@@ -1729,6 +1996,187 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     ).toMatchObject({ live: true, activity: "idle" });
   });
 
+  // VC-392: the fetch reads provenance for the whole roster in one batch
+  // (`readSessionProvenances`) while the push channel reads one Session at a
+  // time (`readSessionProvenance`, exactly as `index.ts` composes it). The two
+  // must produce the same row for the same Session: the renderer applies a push
+  // as a whole-row upsert, so a disagreement would change a Session's mark the
+  // moment it did anything — the flicker the push channel exists to remove.
+  it("pushes the same rows the fetch returns, provenance included", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const pushed = new Map<string, SessionListingRow>();
+    const watch = watchSessionActivity(sessionEngine, {
+      publish: ({ row }) => pushed.set(rowId(row), row),
+      // The expression `index.ts` passes, unchanged.
+      provenanceOf: (born) => readSessionProvenance(ctx.db, born),
+    });
+    // Created THROUGH the watch, because `createSession` is one of the writes
+    // that marks a Session dirty. Nothing here retitles anything: a rename is a
+    // ledger fact and `sessions.title` is only the minted name, so a test that
+    // dirtied Sessions by renaming them would be comparing two readers of a
+    // title neither of them should still be showing.
+    const start = async (title: string, ticketId: string | null): Promise<string> => {
+      const created = await watch.engine.createSession({
+        commandId: `create-${title}`,
+        projectId,
+        ticketId,
+        role: roleImpliedByTicket(ticketId),
+        parentSessionId: null,
+        title,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      return created.session.id;
+    };
+    // One Session per source the reader can answer from, so the comparison
+    // below covers every arm rather than the resting one.
+    const parent = await start("Orchestrator", ticket.id);
+    const delegated = await start("Delegated", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: delegated,
+      now: 600,
+      actor: { kind: "session", sessionId: parent, ticketId: ticket.id },
+    });
+    const runSession = await start("Nightly sweep", ticket.id);
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: "automation-1",
+        automationName: "Nightly sweep",
+        ticketId: ticket.id,
+        sessionId: runSession,
+        model: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+      700,
+    );
+    const byHand = await start("Opened by hand", ticket.id);
+    recordSessionStartedOnce(ctx.db, {
+      ticketId: ticket.id,
+      sessionId: byHand,
+      now: 800,
+      actor: { kind: "user" },
+    });
+    const board = await start("Board chat", null);
+
+    // The flush builds the pushed row the same way the renderer receives it,
+    // and it runs after the provenance records above are in place.
+    await watch.flush();
+    watch.stop();
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    const fetched = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const scoped = await invoke<Promise<SessionsResult>>("volli:session-list-for-ticket", {
+      ticketId: ticket.id,
+    });
+    if (!fetched.ok || !scoped.ok) throw new Error("listing failed");
+
+    expect(pushed.size).toBe(5);
+    for (const row of [...fetched.sessions, ...scoped.sessions]) {
+      expect(row).toEqual(pushed.get(rowId(row)));
+    }
+    // The marks themselves, so the two channels agreeing on `{ kind: "user" }`
+    // for everything could not pass this test.
+    const provenanceById = new Map(
+      fetched.sessions.map((row) => [rowId(row), row.provenance] as const),
+    );
+    expect(provenanceById.get(runSession)).toEqual({
+      kind: "automation",
+      automationName: "Nightly sweep",
+    });
+    expect(provenanceById.get(delegated)).toEqual({
+      kind: "session",
+      parentSessionId: parent,
+      parentTitle: "Orchestrator",
+    });
+    expect(provenanceById.get(byHand)).toEqual({ kind: "user" });
+    expect(provenanceById.get(board)).toEqual({ kind: "user" });
+  });
+
+  // VC-392: the bench that measures this tail cannot call the handler itself
+  // (it would have to boot Electron), so it measures
+  // `sessionListingRowsForRoster` — the function the handler calls. This test
+  // is the other half of that arrangement: it pins, through the REAL handler,
+  // that the roster's provenance still costs a bounded number of statements
+  // rather than a number that grows per Session. Together they close the gap a
+  // hand-assembled bench would leave, which is that the handler drifts away
+  // from the thing being measured and nobody notices.
+  it("lists a roster without paying a provenance read per Session", async () => {
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const roster = 24;
+    for (let index = 0; index < roster; index += 1) {
+      const created = await sessionEngine.createSession({
+        commandId: `create-bulk-${index}`,
+        projectId,
+        ticketId: ticket.id,
+        role: roleImpliedByTicket(ticket.id),
+        parentSessionId: null,
+        title: `Bulk ${index}`,
+        provenance: {
+          source: { kind: "user", id: "test", detail: null },
+          venue: { id: "local", kind: "local" },
+        },
+      });
+      recordSessionStartedOnce(ctx.db, {
+        ticketId: ticket.id,
+        sessionId: created.session.id,
+        now: 600 + index,
+        actor: { kind: "user" },
+      });
+    }
+
+    // The interceptor goes on BEFORE the first listing, not after it.
+    // `prepared` memoizes per handle, so a wrapper installed after a warm-up
+    // would decorate nothing and count zero however the handler reads — which
+    // is a test that passes because it is blind. `counting` is what switches
+    // recording on, so preparation happens under the wrapper and only the
+    // second listing's EXECUTIONS are counted.
+    let counting: string[] | null = null;
+    const prepare = ctx.db.prepare.bind(ctx.db);
+    ctx.db.prepare = ((sql: string) => {
+      const statement = prepare(sql);
+      if (!/FROM\s+(automation_runs|ticket_events|session_event_sequence)\b/.test(sql)) {
+        return statement;
+      }
+      for (const method of ["get", "all", "iterate"] as const) {
+        const real = statement[method].bind(statement) as (...args: unknown[]) => unknown;
+        Object.defineProperty(statement, method, {
+          configurable: true,
+          value: (...args: unknown[]) => {
+            counting?.push(sql);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
+    }) as typeof ctx.db.prepare;
+
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    const provenanceStatements: string[] = [];
+    counting = provenanceStatements;
+    const listed = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
+    counting = null;
+
+    if (!listed.ok) throw new Error("listing failed");
+    expect(listed.sessions).toHaveLength(roster);
+    // The counter saw the reads at all. Without this the two bounds below are
+    // satisfied by a counter that is simply not working.
+    expect(provenanceStatements.length).toBeGreaterThan(0);
+    // Comfortably under one per Session, and not pinned to an exact number so
+    // that adding a durable source stays a one-line change here.
+    expect(provenanceStatements.length).toBeLessThanOrEqual(5);
+    expect(provenanceStatements.length).toBeLessThan(roster);
+  });
+
   it("rejects invalid input", () => {
     expect(invoke<SessionsResult>("volli:session-list", 42)).toEqual({
       ok: false,
@@ -2144,10 +2592,7 @@ describe("volli:worktree-remove", () => {
     });
     // Targeted at the ticket whose worktree path was cleared (projectId is
     // undefined here — no ticket row was seeded — and undefined keys are ignored).
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: "ticket-1", kind: "worktree" },
-    });
+    await expectDataChanged({ entity: "tickets", ticketId: "ticket-1", kind: "worktree" });
   });
 
   it("refuses (main-side) when a terminal runs in the ticket's worktree, never calling remove", async () => {
@@ -2310,9 +2755,419 @@ describe("volli:worktree-remove", () => {
   });
 });
 
+/**
+ * VC-369. The rail's status read is five git children on the Electron main
+ * process, and the Details rail asks for it from TWO surfaces that mount
+ * together (`ticket-repository-summary` and `ticket-changes-panel`, both live at
+ * once in split view) plus on every watch event. These assert the two defences
+ * by call count on the seam: coalescing per ticket, and a share window so one
+ * mount burst is one read.
+ */
+/** A promise the test releases by hand, so reads can be held mid-flight. */
+function deferredGate(): { gate: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { gate, release };
+}
+
+/** Holds `readWorktreeStatus` open until the returned `release` is called. */
+function deferredRead(): { release: () => void } {
+  const { gate, release } = deferredGate();
+  vi.mocked(readWorktreeStatus).mockImplementation(async () => {
+    await gate;
+    return { kind: "ok", status: { uncommitted: true } } as never;
+  });
+  return { release };
+}
+
+describe("volli:worktree-status coalescing (VC-369)", () => {
+  it("serves both rail surfaces from ONE read when they mount together", async () => {
+    const { release } = deferredRead();
+
+    // Both surfaces ask before the first read has finished — the mount burst.
+    const first = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", {
+      ticketId: "t1",
+    });
+    const second = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", {
+      ticketId: "t1",
+    });
+    release();
+
+    expect(await first).toEqual({ ok: true, status: { uncommitted: true } });
+    expect(await second).toEqual({ ok: true, status: { uncommitted: true } });
+    // Five git children, not ten.
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps tickets independent — one ticket's burst never answers another's", async () => {
+    const { release } = deferredRead();
+
+    const a = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t1" });
+    const b = invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t2" });
+    release();
+    await Promise.all([a, b]);
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the discriminated failure arms identical through the coalescer", async () => {
+    vi.mocked(readWorktreeStatus).mockResolvedValue({ kind: "missing-ticket" } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+
+    vi.mocked(readWorktreeStatus).mockResolvedValue({
+      kind: "no-worktree",
+      displayId: "VC-1",
+      usesWorktree: true,
+    } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t2" }),
+    ).toEqual({ ok: false, error: "This ticket has no worktree." });
+
+    vi.mocked(readWorktreeStatus).mockResolvedValue({
+      kind: "missing-on-disk",
+      displayId: "VC-1",
+      worktreePath: "/gone",
+    } as never);
+    expect(
+      await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId: "t3" }),
+    ).toMatchObject({ ok: false });
+  });
+});
+
+describe("volli:worktree-diff coalescing (VC-369)", () => {
+  it("coalesces one ticket+mode, and never shares an answer across modes", async () => {
+    const { gate, release } = deferredGate();
+    vi.mocked(readWorktreeDiff).mockImplementation(async (_deps, _id, mode) => {
+      await gate;
+      return {
+        kind: "ok",
+        diff: { files: [], insertions: mode === "merge-base" ? 1 : 2 },
+      } as never;
+    });
+
+    const a = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "merge-base",
+    });
+    const sameAgain = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "merge-base",
+    });
+    const otherMode = invoke<Promise<WorktreeDiffResult>>("volli:worktree-diff", {
+      ticketId: "t1",
+      mode: "working-tree",
+    });
+    release();
+
+    // The two modes are different questions; only the identical pair shares.
+    expect(await a).toMatchObject({ ok: true, diff: { insertions: 1 } });
+    expect(await sameAgain).toMatchObject({ ok: true, diff: { insertions: 1 } });
+    expect(await otherMode).toMatchObject({ ok: true, diff: { insertions: 2 } });
+    expect(vi.mocked(readWorktreeDiff)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("volli:worktree-change-watch (VC-369)", () => {
+  it("resolves the path without running the five-child status read", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: {
+        displayId: "VC-1",
+        worktreePath: "/wt/VC-1",
+        branch: "b",
+        baseBranch: "main",
+      },
+    } as never);
+
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toMatchObject({ ok: true });
+    // The whole saving: this handler only ever wanted the path.
+    expect(vi.mocked(readWorktreeStatus)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same failure arms it reported from the status read", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({ kind: "missing-ticket" } as never);
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "Unknown ticket" });
+
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "no-worktree",
+      displayId: "VC-1",
+      usesWorktree: true,
+    } as never);
+    expect(
+      await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
+    ).toEqual({ ok: false, error: "This ticket has no worktree." });
+  });
+});
+
+/**
+ * VC-372. Now↔Diffs unmounts one rail panel and mounts the other — both asking
+ * for the same status + Change Set pair — and a diff tab asks for the Change Set
+ * a third time just to find its own row. These assert the last-known snapshot by
+ * call count on the read seam: served while a watch covers the ticket, retired
+ * by a watcher change, by a mutating verb, or by the loss of coverage.
+ */
+describe("the rail's last-known worktree snapshot (VC-372)", () => {
+  const okStatus = {
+    kind: "ok",
+    displayId: "VC-1",
+    worktreePath: "/wt/VC-1",
+    branch: "b",
+    baseBranch: "main",
+    status: {
+      uncommitted: false,
+      sequencerActive: false,
+      aheadOfBase: 0,
+      behindBase: 0,
+      unpushed: null,
+    },
+  };
+  const okChangeSet = {
+    kind: "ok",
+    displayId: "VC-1",
+    changeSet: {
+      baseRevision: "base",
+      headRevision: "head",
+      files: [],
+      insertions: 0,
+      deletions: 0,
+      revision: "rev",
+      truncated: false,
+      totalCount: 0,
+    },
+  };
+
+  /** Both rail surfaces read the same pair; stub it as an ok answer. */
+  function stubReads(): void {
+    vi.mocked(readWorktreeStatus).mockResolvedValue(okStatus as never);
+    vi.mocked(readWorktreeChangeSet).mockResolvedValue(okChangeSet as never);
+  }
+
+  async function readPair(ticketId = "t1"): Promise<void> {
+    await invoke<Promise<WorktreeStatusResult>>("volli:worktree-status", { ticketId });
+    await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", { ticketId });
+  }
+
+  async function subscribe(ticketId = "t1"): Promise<void> {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId });
+  }
+
+  /** Everything one panel's mount does: read the pair, then subscribe. */
+  async function mountPanel(ticketId = "t1"): Promise<void> {
+    await readPair(ticketId);
+    await subscribe(ticketId);
+  }
+
+  /** The unwatch → read → watch beat of a rail page flip. */
+  async function flipPanel(ticketId = "t1"): Promise<void> {
+    invoke<Result>("volli:worktree-change-unwatch", { ticketId });
+    await readPair(ticketId);
+    await subscribe(ticketId);
+  }
+
+  /** The watcher's eager change report, as the real manager sends it. */
+  function fireWorktreeChange(...ticketIds: string[]): void {
+    worktreeWatch.options?.onRelevantChange?.(ticketIds);
+  }
+
+  /**
+   * The real manager reports this once a released root's rewatch grace expires
+   * (or its handle faults). The read-level suite drives the real timing; here it
+   * is the door into the same observer call.
+   */
+  function endCoverage(ticketId: string): void {
+    worktreeWatch.options?.onCoverageChange?.(ticketId, false);
+  }
+
+  it("serves the Now↔Diffs↔Now flips from the panel's first read", async () => {
+    stubReads();
+    await mountPanel();
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+
+    await flipPanel();
+    await flipPanel();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads exactly one status and one Change Set when the watcher reports a change", async () => {
+    stubReads();
+    await mountPanel();
+
+    fireWorktreeChange("t1");
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps tickets independent — one ticket's change never answers another's", async () => {
+    stubReads();
+    await mountPanel("t1");
+    await mountPanel("t2");
+
+    fireWorktreeChange("t1");
+    await readPair("t2");
+
+    // t2's answer was not invalidated; t1's was.
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends coverage when the watch really tears down, so the next mount reads fresh", async () => {
+    stubReads();
+    await mountPanel();
+
+    endCoverage("t1");
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer on a rail commit", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(commitTicketRemaining).mockResolvedValue({
+      ok: true,
+      value: { committed: true, message: "feat: x" },
+    } as never);
+
+    await invoke<Promise<WorktreeCommitResult>>("volli:worktree-commit", {
+      ticketId: "t1",
+      message: "feat: x",
+      includeUnstaged: false,
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer on a rail push-pr", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(publishTicketBranch).mockResolvedValue({
+      ok: true,
+      value: { url: "https://example.test/pr/1", existing: false },
+    } as never);
+
+    await invoke<Promise<WorktreePushPrResult>>("volli:worktree-push-pr", { ticketId: "t1" });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when the worktree is removed", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined } as never);
+
+    await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
+      ticketId: "t1",
+      force: false,
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when the worktree is recreated", async () => {
+    stubReads();
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    await mountPanel(ticket.id);
+    vi.mocked(ensure).mockResolvedValue({
+      ok: true,
+      value: { identity: { worktreePath: "/wt/VC-1" } },
+    } as never);
+
+    await invoke<Promise<WorktreeRecreateResult>>("volli:worktree-recreate", {
+      ticketId: ticket.id,
+    });
+    await readPair(ticket.id);
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires the answer when retention archives and cleans the checkout", async () => {
+    stubReads();
+    await mountPanel();
+    vi.mocked(archiveAndClean).mockResolvedValue({ ok: true, value: undefined } as never);
+
+    await invoke<Promise<RetentionArchiveCleanResult>>("volli:retention-archive-clean", {
+      ticketId: "t1",
+    });
+    await readPair();
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires every ticket's answer on an untargeted trim sweep", async () => {
+    stubReads();
+    await mountPanel("t1");
+    await mountPanel("t2");
+    vi.mocked(trimAllWorktrees).mockResolvedValue({
+      dryRun: false,
+      removedCount: 1,
+    } as never);
+
+    await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
+    await readPair("t1");
+    await readPair("t2");
+
+    expect(vi.mocked(readWorktreeStatus)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(4);
+  });
+
+  it("asks only for the base read when a diff tab opens over the Diffs page's snapshot", async () => {
+    stubReads();
+    await mountPanel();
+    // The Diffs page holds this pair; opening one of its rows asks for the
+    // Change Set again only to find the row and its `baseRevision`.
+    vi.mocked(readWorktreeBaseFile).mockResolvedValue({
+      kind: "ok",
+      displayId: "VC-1",
+      baseRevision: "base",
+      file: { content: "hello\n", truncated: false },
+    } as never);
+
+    await invoke<Promise<WorktreeChangeSetResult>>("volli:worktree-change-set", {
+      ticketId: "t1",
+    });
+    const base = await invoke<Promise<WorktreeBaseReadResult>>("volli:worktree-base-read", {
+      ticketId: "t1",
+      path: "src/a.ts",
+      baseRevision: "base",
+    });
+
+    expect(base).toMatchObject({ ok: true, content: "hello\n" });
+    // The Change Set was served, not re-read; the base read is the only worktree
+    // read this tab needed.
+    expect(vi.mocked(readWorktreeChangeSet)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(readWorktreeBaseFile)).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("volli:worktree-branches", () => {
-  it("flattens the listing onto the result envelope", () => {
-    vi.mocked(listBranches).mockReturnValue({
+  it("flattens the listing onto the result envelope", async () => {
+    vi.mocked(listBranches).mockResolvedValue({
       ok: true,
       value: {
         branches: ["main", "dev"],
@@ -2322,7 +3177,7 @@ describe("volli:worktree-branches", () => {
       },
     });
 
-    const result = invoke<WorktreeBranchesResult>("volli:worktree-branches", {
+    const result = await invoke<Promise<WorktreeBranchesResult>>("volli:worktree-branches", {
       projectId: "project-1",
     });
 
@@ -2379,9 +3234,11 @@ describe("volli:worktree-recreate", () => {
     });
 
     expect(result).toEqual({ ok: true, worktreePath: "/wt/VC-1-a-ticket" });
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", ticketId: ticket.id, projectId, kind: "worktree" },
+    await expectDataChanged({
+      entity: "tickets",
+      ticketId: ticket.id,
+      projectId,
+      kind: "worktree",
     });
   });
 
@@ -2957,10 +3814,7 @@ describe("the build-artifact channels", () => {
     const result = await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
 
     expect(result).toEqual({ ok: true, report });
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: expect.objectContaining({ kind: "worktree" }),
-    });
+    await expectDataChanged(expect.objectContaining({ kind: "worktree" }));
   });
 
   it("broadcasts nothing when a real pass removed nothing", async () => {
@@ -2974,7 +3828,7 @@ describe("the build-artifact channels", () => {
 
     await invoke<Promise<WorktreeTrimResult>>("volli:worktree-trim");
 
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 
   it("reads and writes the trim settings", async () => {
@@ -3121,10 +3975,7 @@ describe("volli:worktree-orphan-delete", () => {
     expect(result).toEqual({ ok: true });
     expect(existsSync(target)).toBe(false);
     // An orphan is unlinked from any live ticket, so this broadcast is untargeted.
-    expect(dataChangedSends).toContainEqual({
-      channel: "volli:data-changed",
-      payload: { entity: "tickets", kind: "worktree" },
-    });
+    await expectDataChanged({ entity: "tickets", kind: "worktree" });
   });
 
   // Deleting a ticket only nulls `sessions.ticket_id`, so a Session can still be
@@ -3481,6 +4332,123 @@ describe("attachments (VC-50)", () => {
     });
   });
 
+  it("links a promoted Draft's staged blobs to its new session (VC-358)", async () => {
+    // The durable Session a promotion minted — its id was fixed before the
+    // staged blobs ever had an owner to hang off.
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    expect(draft.blob.linkId).toBeNull();
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash, label: "Staged" }],
+    });
+    if (!linked.ok) throw new Error(linked.error);
+    expect(linked.blobs).toHaveLength(1);
+    expect(linked.blobs[0]).toMatchObject({ label: "Staged", originalName: "staged.png" });
+
+    // The Session's own list reads them back; the Ticket's does not, and the
+    // adoption left no ticket event — a session link is recorded by the
+    // transcript turn that carries the file, never by the ledger here.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "Staged" }],
+    });
+    expect(invoke<BlobLinksResult>("volli:blob-list", { ticketId: ticket.id })).toMatchObject({
+      blobs: [],
+    });
+    const events = invoke<TicketEventsResult>("volli:ticket-events", { ticketId: ticket.id });
+    if (!events.ok) throw new Error(events.error);
+    expect(events.events.filter((one) => one.payload.kind === "attachment_added")).toHaveLength(0);
+  });
+
+  it("re-links a promoted Draft idempotently — a retry after a lost reply adds nothing", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    const draft = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "staged.png",
+      bytes: PNG,
+      owner: { unowned: true },
+    });
+    if (!draft.ok || !draft.blob) throw new Error("expected a blob");
+    const first = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!first.ok) throw new Error(first.error);
+
+    // Promotion replays its one command after a lost reply; the same blobs
+    // against the same Session are the SAME links, in the same order.
+    const retry = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs: [{ blobHash: draft.blob.blobHash }],
+    });
+    if (!retry.ok) throw new Error(retry.error);
+    expect(retry.blobs).toEqual(first.blobs);
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [{ label: "staged.png" }],
+    });
+  });
+
+  it("refuses a promoted Draft whose staged images exceed what one chat can carry (VC-358)", async () => {
+    insertSession(ctx.db, testSession(projectId, null, { id: "promoted-1" }));
+    // Nothing here was refusable at import: a Draft has no Session, so the
+    // cumulative check had nothing to measure against. Promotion is where
+    // these bytes would become a conversation's, and so where the ceiling
+    // finally applies.
+    const blobs: { blobHash: string }[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const image = new Uint8Array(MAX_INLINE_IMAGE_BYTES);
+      image[0] = i;
+      const staged = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+        fileName: `shot-${i}.png`,
+        bytes: image,
+        owner: { unowned: true },
+      });
+      if (!staged.ok || !staged.blob) throw new Error("expected a staged blob");
+      blobs.push({ blobHash: staged.blob.blobHash });
+    }
+    const overflow = new Uint8Array(1024);
+    overflow[0] = 99;
+    const last = await invoke<Promise<BlobAttachResult>>("volli:blob-attach", {
+      fileName: "one-more.png",
+      bytes: overflow,
+      owner: { unowned: true },
+    });
+    if (!last.ok || !last.blob) throw new Error("expected a staged blob");
+    blobs.push({ blobHash: last.blob.blobHash });
+
+    const linked = invoke<BlobLinksResult>("volli:blob-link-drafts", {
+      sessionId: "promoted-1",
+      blobs,
+    });
+    expect(linked).toMatchObject({ ok: false });
+    if (linked.ok) throw new Error("expected refusal");
+    expect(linked.error).toMatch(/Remove one and send again/);
+    // All or nothing, as with an unknown hash: a chat holding four of five
+    // images nobody chose to drop would be worse than an honest refusal.
+    expect(invoke<BlobLinksResult>("volli:blob-list", { sessionId: "promoted-1" })).toMatchObject({
+      blobs: [],
+    });
+  });
+
+  it("refuses a draft link that names no owner or both owners", () => {
+    expect(invoke<BlobLinksResult>("volli:blob-link-drafts", { blobs: [] })).toEqual({
+      ok: false,
+      error: "Invalid attachment drafts",
+    });
+    expect(
+      invoke<BlobLinksResult>("volli:blob-link-drafts", {
+        ticketId: ticket.id,
+        sessionId: "promoted-1",
+        blobs: [],
+      }),
+    ).toEqual({ ok: false, error: "Invalid attachment drafts" });
+  });
+
   it("refuses a list that names no owner", async () => {
     expect(invoke<BlobLinksResult>("volli:blob-list", {})).toEqual({
       ok: false,
@@ -3567,6 +4535,6 @@ describe("the ticket wake bus (VC-85)", () => {
     invoke<TicketResult>("volli:ticket-set-priority", { ticketId: ticket.id, priority: "high" });
 
     expect(seen.map((wake) => wake.event.payload.kind)).toEqual(["priority_changed"]);
-    expect(dataChangedSends).toEqual([]);
+    expectNoDataChange();
   });
 });

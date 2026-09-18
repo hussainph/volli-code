@@ -2050,6 +2050,185 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
   WHERE merged_into_id IS NULL;
 `;
 
+/** App-owned, per-project MCP configuration and its last successful discovery. */
+const MIGRATION_047_MCP_SERVERS = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  transport    TEXT NOT NULL CHECK (json_valid(transport)),
+  catalog      TEXT NOT NULL CHECK (json_valid(catalog)),
+  stale        INTEGER NOT NULL CHECK (stale IN (0, 1)),
+  error        TEXT,
+  refreshed_at INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, created_at, id);
+`;
+
+/**
+ * Migration 050: where a server came from, and what was done to it (VC-380).
+ *
+ * Two additions that answer two different questions a person asks after an
+ * agent has been managing MCP servers.
+ *
+ * `mcp_servers` gains four nullable provenance columns. They are RECORDED, not
+ * enforced: Volli fetches no package and checks no digest, so a stored
+ * `version` is what an install asked for and a stored `digest` is what it
+ * claimed, never what ran. Verifying either needs the download step, which is
+ * VC-379's. Nullable because the honest answer for a server a person typed in
+ * by hand is that nobody said.
+ *
+ * `mcp_operations` is an append-only log of MANAGEMENT operations — VC-8's
+ * activity path records MCP tool CALLS inside a transcript and nothing records
+ * installs. It deliberately holds `server_id` as plain text with NO foreign
+ * key: the record that matters most is the removal, and a row that cascaded
+ * away with the server it named would delete exactly the evidence a person
+ * came looking for. The project reference does cascade, because a record
+ * belonging to no project is unreachable by construction.
+ */
+const MIGRATION_050_MCP_PROVENANCE = `
+ALTER TABLE mcp_servers ADD COLUMN source TEXT;
+ALTER TABLE mcp_servers ADD COLUMN registry_type TEXT;
+ALTER TABLE mcp_servers ADD COLUMN version TEXT;
+ALTER TABLE mcp_servers ADD COLUMN digest TEXT;
+`;
+
+const MIGRATION_050_MCP_OPERATIONS = `
+CREATE TABLE IF NOT EXISTS mcp_operations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id     TEXT NOT NULL,
+  server_name   TEXT NOT NULL,
+  operation     TEXT NOT NULL CHECK (operation IN ('install', 'remove')),
+  outcome       TEXT NOT NULL CHECK (outcome IN ('applied', 'failed')),
+  summary       TEXT NOT NULL,
+  detail        TEXT,
+  source        TEXT,
+  registry_type TEXT,
+  version       TEXT,
+  digest        TEXT,
+  session_id    TEXT,
+  ticket_id     TEXT,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_operations_project_order ON mcp_operations(project_id, created_at DESC, id DESC);
+`;
+
+/**
+ * Migration 050 as one from-scratch statement.
+ *
+ * `Migration.sql` is what a from-scratch test fixture may exec directly, so it
+ * has to be the WHOLE migration, not the half that needs no probe. 040 and 041
+ * compose their two pieces the same way; `apply` below then re-runs the column
+ * half only when the schema does not already carry it.
+ */
+const MIGRATION_050 = `${MIGRATION_050_MCP_PROVENANCE}${MIGRATION_050_MCP_OPERATIONS}`;
+
+/**
+ * Migration 051: an indexed mark for "this attachment is still open" (VC-403).
+ *
+ * `session_attachments` records that an attachment was OPENED; that it later
+ * CLOSED lives only in an `attachment.closed` event, so the one question the
+ * concurrency budget asks — who is attached right now — could previously be
+ * answered only by folding every Session's whole log. This adds the closure
+ * back as a rebuildable read model beside the fact, exactly as `session_usage`
+ * projects `usage.recorded`: the event stays canonical, this column is derived
+ * from it in the same transaction that appends it, and the backfill below is
+ * the derivation — re-running it over the same immutable events reproduces the
+ * same marks, which is what makes the column a cache rather than a second
+ * opinion.
+ *
+ * The partial index is the point. Open attachments are a handful on any
+ * machine while closed ones are the entire history, so an index that holds
+ * only the open rows is the size of the answer rather than the size of the
+ * ledger — which is what turns a fleet fold into a lookup.
+ */
+const MIGRATION_051_SESSION_ATTACHMENT_CLOSURE = `
+ALTER TABLE session_attachments ADD COLUMN closed_sequence INTEGER;
+
+-- Backfill from the canonical facts, once: every attachment named by an
+-- attachment.closed event carries that event's sequence. An attachment whose
+-- close was never recorded stays NULL, which is the same thing the fold says
+-- about it -- a terminal left open by a crash reads as open, and the budget has
+-- always counted it.
+UPDATE session_attachments
+   SET closed_sequence = (
+     SELECT MAX(e.sequence)
+       FROM session_events e
+      WHERE e.session_id = session_attachments.session_id
+        AND json_extract(e.payload, '$.kind') = 'attachment.closed'
+        AND json_extract(e.payload, '$.attachmentId') = session_attachments.id
+   );
+
+CREATE INDEX IF NOT EXISTS session_attachments_open
+    ON session_attachments(session_id)
+ WHERE closed_sequence IS NULL AND observed_kind = 'opened';
+`;
+
+/**
+ * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
+ *
+ * The immutable event log remains canonical. This table is an additive cache:
+ * a missing, stale-ahead, unsupported, or malformed row is ignored and the
+ * Session refolds from event one. `ON DELETE CASCADE` keeps the cache's lifetime
+ * no longer than the immutable Session row it summarizes.
+ */
+const MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS = `
+CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
+  session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  schema_version   INTEGER NOT NULL CHECK (schema_version > 0),
+  through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+  checkpoint       TEXT NOT NULL CHECK (json_valid(checkpoint)),
+  digest           TEXT NOT NULL CHECK (length(digest) = 64),
+  updated_at       INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 049: canonical-prefix repair invalidates projection checkpoints.
+ *
+ * These triggers briefly lived inside the checkpoint migration itself while
+ * it was unreleased. Keeping them in their own follow-up migration converges
+ * profiles that opened after the checkpoint table landed but before its
+ * repair invalidation did.
+ */
+const MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
+-- App writes append immutable facts, so inserts are handled as checkpoint
+-- tails. If repair tooling changes a canonical prefix out of band, invalidate
+-- its derived row instead of allowing the cache to hide that change.
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_updated
+AFTER UPDATE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.session_id OR session_id = NEW.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_deleted
+AFTER DELETE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints WHERE session_id = OLD.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_provenance_updated
+AFTER UPDATE ON session_provenances
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id IN (
+     SELECT session_id FROM session_events WHERE provenance_id = NEW.id OR provenance_id = OLD.id
+   );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_session_updated
+AFTER UPDATE ON sessions
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.id OR session_id = NEW.id;
+END;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
   { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
@@ -2289,7 +2468,78 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
     apply: applyMigration046LabelCaseIdentity,
   },
+  {
+    version: 47,
+    name: "mcp_servers — per-project configuration and last working tool catalog",
+    sql: MIGRATION_047_MCP_SERVERS,
+  },
+  {
+    version: 48,
+    name: "session_projection_checkpoints — rebuildable per-Session read models",
+    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS,
+  },
+  {
+    version: 49,
+    name: "session projection checkpoints — invalidate on canonical-prefix repair",
+    sql: MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
+  },
+  {
+    version: 50,
+    name: "mcp — recorded provenance and an append-only management audit trail",
+    sql: MIGRATION_050,
+    apply: applyMigration050McpProvenance,
+  },
+  {
+    version: 51,
+    name: "session_attachments — an indexed closure mark, so asking who is attached costs no fold",
+    sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
+    apply: applyMigration051AttachmentClosure,
+  },
 ];
+
+/**
+ * Migration 050's column additions, probe-gated like 040's and 041's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. All four
+ * columns are added together or not at all, so one probe covers the block.
+ *
+ * The audit table is executed here too rather than left to `sql`, because
+ * `migrate` treats `apply` as a REPLACEMENT for the declared statement, not as
+ * a step beside it. `CREATE TABLE IF NOT EXISTS` needs no probe of its own.
+ *
+ * `MIGRATION_050` still composes both halves, because `sql` is also what a
+ * from-scratch fixture execs directly; this function and that constant must
+ * describe the same migration, and a fixture that got only the audit table
+ * would build an `mcp_servers` with no provenance columns and fail far from
+ * here.
+ */
+function applyMigration050McpProvenance(db: Database.Database): void {
+  const columns = db.pragma("table_info(mcp_servers)") as { name: string }[];
+  if (!columns.some(({ name }) => name === "registry_type")) {
+    db.exec(MIGRATION_050_MCP_PROVENANCE);
+  }
+  db.exec(MIGRATION_050_MCP_OPERATIONS);
+}
+
+/**
+ * Migration 051's column addition, probe-gated like 040's, 041's and 050's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. The backfill
+ * and the partial index are idempotent on their own, so the probe covers only
+ * the column: re-running the `UPDATE` derives the same closure marks from the
+ * same immutable events.
+ */
+function applyMigration051AttachmentClosure(db: Database.Database): void {
+  const columns = db.pragma("table_info(session_attachments)") as { name: string }[];
+  if (columns.some(({ name }) => name === "closed_sequence")) return;
+  db.exec(MIGRATION_051_SESSION_ATTACHMENT_CLOSURE);
+}
 
 /**
  * Migration 044's reconciler, probe-gated like 040's and 041's.
@@ -2769,8 +3019,15 @@ export interface MigrateOptions {
   toVersion?: number;
 }
 
-/** Applies every migration whose `version` is greater than the db's current `user_version`, in order. */
-export function migrate(db: Database.Database, dbPath: string, options: MigrateOptions = {}): void {
+/**
+ * Applies every migration whose `version` is greater than the db's current
+ * `user_version`, in order. Returns whether any migration ran.
+ */
+export function migrate(
+  db: Database.Database,
+  dbPath: string,
+  options: MigrateOptions = {},
+): boolean {
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
   const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
   const pending = MIGRATIONS.filter(
@@ -2778,7 +3035,7 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
   ).toSorted((a, b) => a.version - b.version);
   if (pending.length === 0) {
     logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
-    return;
+    return false;
   }
 
   // Only an already-populated database needs a safety copy — a fresh
@@ -2824,4 +3081,5 @@ export function migrate(db: Database.Database, dbPath: string, options: MigrateO
     const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
     logMigrationBackupRetention(retentionReport);
   }
+  return true;
 }

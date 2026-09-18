@@ -56,6 +56,7 @@ import { writeModelAccessDefault } from "./session-runtime/model-access-preferen
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
 import { scriptedGit } from "./worktree/scripted-git";
+import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import type { SessionEngine } from "@volli/session-engine";
 
@@ -177,6 +178,9 @@ function createAgentCommandService(
 let ctx: TestDb;
 
 afterEach(() => ctx.cleanup());
+// The rail's last-known snapshot is process-wide (VC-372): every test here
+// starts from a clean launch and leaves no covered ticket behind.
+afterEach(() => resetWorktreeSnapshotsForTest());
 
 /**
  * The notification port, as a test records it: the WHOLE request (producer and
@@ -4470,7 +4474,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -4483,6 +4487,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
       // seam (C3) so this scenario isn't about that check.
       worktreeExists: () => true,
@@ -4534,13 +4539,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
     // the PHYSICAL cwd the CLI's `process.cwd()` reports — the exact macOS
@@ -4578,13 +4584,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4611,13 +4618,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     // A ticket that never entered Doing has no worktree.
     await service.execute({
@@ -4666,7 +4674,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -4679,6 +4687,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4737,7 +4746,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { git } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -4748,6 +4757,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4777,13 +4787,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4823,7 +4834,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     // No worktreeExists stub here — this exercises the REAL default (existsSync)
     // against a directory that genuinely never existed by the time it's checked.
     const service = createAgentCommandService({
@@ -4832,6 +4843,7 @@ describe("agent command service", () => {
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
     });
     const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
     const missingPath = join(scratchBase, "worktree");
@@ -4864,13 +4876,14 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git } = scriptedGit(() => "");
+    const { git, gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
       git,
+      gitAsync,
       worktreeExists: () => true,
     });
     await seedWorktreeTicket(service);
@@ -4934,6 +4947,102 @@ describe("agent command service", () => {
     await seedWorktreeTicket(service);
     return { service, calls };
   };
+
+  it("retires the rail's last-known snapshot when a merge lands", async () => {
+    let head = "aaaaaaa";
+    const { service } = await syncScenario((args) => {
+      if (args[0] === "rev-parse" && args[3] === "MERGE_HEAD") throw new Error("no merge");
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "bbbbbbb\n";
+      if (args[0] === "rev-parse") return `${head}\n`;
+      if (args[0] === "merge") {
+        head = "ddddddd";
+        return "";
+      }
+      if (args[0] === "rev-list") return "2\n";
+      if (args[0] === "diff") return "3\t1\tsrc/a.ts\n";
+      return "";
+    });
+
+    // Prime a covered answer, the way an open rail would have.
+    const snapshots = getWorktreeSnapshots();
+    snapshots.noteCovered("ticket-one");
+    const okRead = {
+      kind: "ok" as const,
+      displayId: "VC-1",
+      worktreePath: "/wt/VC-1",
+      branch: "volli/VC-1-ship",
+      baseBranch: "main",
+      status: {
+        uncommitted: false,
+        sequencerActive: false,
+        aheadOfBase: 0,
+        behindBase: 0,
+        unpushed: null,
+      },
+    };
+    const load = vi.fn(async () => okRead);
+    await snapshots.readStatus("ticket-one", load);
+    expect(await snapshots.readStatus("ticket-one", load)).toBe(okRead);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "worktree.sync",
+      args: { id: "VC-1" },
+      ctx: { cwd: "/repo/volli", env: ACTING_ENV },
+    });
+    expect(res).toMatchObject({ ok: true });
+
+    // The merge moved the branch: the rail must not be served the pre-merge
+    // answer any more.
+    await snapshots.readStatus("ticket-one", load);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves `worktree status` from the rail's last-known snapshot while it is covered", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const { git, gitAsync, calls } = scriptedGit((args) => {
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
+      if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t0\n";
+      if (args[0] === "rev-list") return "0\n";
+      return "";
+    });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      newId: () => "ticket-one",
+      git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+    await seedWorktreeTicket(service);
+    getWorktreeSnapshots().noteCovered("ticket-one");
+
+    const request = {
+      v: 1 as const,
+      cmd: "worktree.status" as const,
+      args: {},
+      ctx: { cwd: "/wt/VC-1", env: ACTING_ENV },
+    };
+    await service.execute(request);
+    const afterFirst = calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    // The five-child read a window's rail just paid for answers the CLI too.
+    expect(await service.execute(request)).toMatchObject({ ok: true });
+    expect(calls.length).toBe(afterFirst);
+  });
 
   it("merges the base into a ticket's branch and reports what moved", async () => {
     let head = "aaaaaaa";

@@ -19,12 +19,14 @@ import {
   BUILTIN_RULE_PACK_ID,
   DEFAULT_AUTHORITY_POLICY,
   errorMessage,
+  mcpProviderToolName,
   resolveAuthorityPolicy,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
+  type McpToolDefinition,
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
   type PromptResource,
@@ -1119,6 +1121,97 @@ describe("Pi native adapter attach", () => {
     ]);
   });
 
+  it("binds exact frozen MCP definitions to an attachment-scoped port and disposes it on release", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo/exact",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo/exact"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const dispose = vi.fn(async () => undefined);
+    const call = vi.fn(async () => ({ content: [], isError: false }));
+    const { binding, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: ({ mcpTools, workspacePath }) => {
+        expect(mcpTools).toEqual([tool]);
+        expect(workspacePath).toBe(attachmentSpec().directory);
+        return { call, dispose };
+      },
+    });
+
+    expect(runtime.spec.tools.mcp).toEqual([tool]);
+    await runtime.spec.mcp?.call(
+      { serverId: "fixture-1", toolName: "echo/exact", arguments: {}, toolCallId: "call-1" },
+      new AbortController().signal,
+    );
+    expect(call).toHaveBeenCalledOnce();
+    await binding.release("requested");
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("disposes the MCP attachment host when runtime setup fails", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const dispose = vi.fn(async () => undefined);
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+      resolveMcpPort: () => ({
+        call: async () => ({ content: [], isError: false }),
+        dispose,
+      }),
+    });
+    runtime.startFailure = new Error("runtime setup failed");
+
+    await expect(adapter.attach(attachmentSpec(), new RecordingSink())).rejects.toThrow(
+      "runtime setup failed",
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an MCP surface with missing definitions or no main-process port", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const missingDefinitions = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(missingDefinitions).rejects.toThrow(/MCP definitions.*surface/i);
+
+    const noPort = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    }).adapter.attach(attachmentSpec(), new RecordingSink());
+    await expect(noPort).rejects.toThrow(/wired no MCP host/i);
+  });
+
   it("names todo_write in the bundle exactly when the frozen surface holds it (VC-6)", async () => {
     // Membership is the bundle's to state because the tool has no port. It is
     // read back off the durable record like the verb half, never re-derived:
@@ -1393,6 +1486,70 @@ describe("Pi native adapter attach", () => {
     const binding = await adapter.attach(attachmentSpec(), new RecordingSink());
 
     expect(binding.native).toEqual({ id: null, detail: null });
+  });
+
+  /**
+   * VC-367. Boot recovery reconciles a Session whose turn was live at the
+   * crash, and reconciling rehydrates the binding — which resolves the whole
+   * tool surface, this port included. A host that is not up yet makes the
+   * resolver throw, and the throw comes out of `attach` rather than out of any
+   * browser tool: the Session never recovers, and the failure is recorded as
+   * `adapter_unrecoverable` with the resolver's own words. That is precisely
+   * what the shipped boot order produced for every such Session, on every
+   * crash, because the host was built several hundred lines AFTER the sweep.
+   */
+  const recoveringSpec = attachmentSpec({
+    continuity: "native_resume",
+    native: {
+      id: "pi-session-previous",
+      detail: {
+        runtime: "pi",
+        sessionId: "pi-session-previous",
+        sessionFilePath: "/data/pi-sessions/pi-session-previous.jsonl",
+      },
+    },
+  });
+
+  it("fails a recovery attach when the Browser host is not up yet", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => {
+        throw new Error("The Browser host is not ready; retry the attachment.");
+      },
+    });
+
+    const error: unknown = await adapter
+      .attach(recoveringSpec, new RecordingSink())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("The Browser host is not ready");
+    // Nothing was started, so there is no binding to reconcile: the Session's
+    // turn stays interrupted and boot recovery force-closes the attachment.
+    expect(runtime.specs).toHaveLength(0);
+  });
+
+  it("recovers the same Session once the Browser host exists", async () => {
+    const { adapter, runtime } = composition({
+      resolveBrowserPort: () => ({
+        tabs: async () => ({ tabs: [] }),
+        navigate: unusedPortMethod,
+        snapshot: unusedPortMethod,
+        act: unusedPortMethod,
+        screenshot: unusedPortMethod,
+        console: unusedPortMethod,
+        turnEnded: () => undefined,
+      }),
+    });
+
+    const binding = await adapter.attach(recoveringSpec, new RecordingSink());
+
+    // The whole difference is the ordering: same Session, same recovery
+    // reference, same adapter — a host that exists is all it ever needed. The
+    // prior process's sidecar reached the runtime, so there is a live binding
+    // for boot recovery to reconcile the interrupted turn through.
+    expect(runtime.specs).toHaveLength(1);
+    expect(runtime.spec.recovery).toMatchObject({ sessionId: "pi-session-previous" });
+    expect(binding.reconcile).toBeTypeOf("function");
   });
 });
 
@@ -1814,6 +1971,10 @@ describe("Pi native adapter dispatch", () => {
       status: "rejected",
       code: "PI_NOTHING_TO_COMPACT",
       detail: "There is nothing left to summarize.",
+      // VC-141: the adapter is the last place the runtime's reason is legible,
+      // so it is where "this refused nothing a person needs apologising for"
+      // gets decided. A client reading only the code could not.
+      severity: "benign",
     });
   });
 
@@ -1837,7 +1998,81 @@ describe("Pi native adapter dispatch", () => {
       status: "rejected",
       code: "PI_COMPACTION_FAILED",
       detail: "the summarizer is unhappy",
+      // A provider that would not produce the summary IS a failure.
+      severity: "failure",
     });
+  });
+
+  // One code, two causes, two sentences — and both benign. The runtime writes
+  // them apart on purpose, and nothing between here and the toast collapses
+  // them back together (VC-141).
+  it.each([
+    ["a live turn", "The context cannot be compacted while Pi is running."],
+    ["a compaction already running", "This context is already being compacted."],
+  ])("carries the busy sentence for %s, marked benign", async (_cause, message) => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({ kind: "rejected", reason: "busy-unsupported", message });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_BUSY",
+      detail: message,
+      severity: "benign",
+    });
+  });
+
+  it("marks a compaction refused by a closed attachment a failure", async () => {
+    const { binding, runtime } = await attached();
+    runtime.compactionOutcomes.push({
+      kind: "rejected",
+      reason: "closed",
+      message: "This attachment is closed.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "context.compact",
+      commandId: "command-compact",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      instructions: null,
+    });
+
+    expect(receipt).toMatchObject({
+      status: "rejected",
+      code: "PI_ATTACHMENT_CLOSED",
+      severity: "failure",
+    });
+  });
+
+  it("leaves every other refusal unmarked, which reads as a failure", async () => {
+    // Only compaction answers the severity question today. An interrupt or a
+    // model change that is refused carries no mark, and a client must treat an
+    // unvouched refusal as a failure rather than guessing.
+    const { binding, runtime } = await attached();
+    runtime.modelSelectionOutcomes.push({
+      kind: "rejected",
+      reason: "model-unavailable",
+      message: "That model is not available.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "model.select",
+      commandId: "command-model-unmarked",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      selection: { providerId: "openai-codex", modelId: "missing", reasoningLevel: "off" },
+    });
+
+    expect(receipt).toMatchObject({ status: "rejected", code: "PI_MODEL_UNAVAILABLE" });
+    expect(receipt).not.toHaveProperty("severity");
   });
 
   it("reports a compaction that threw as an unknown outcome, never a refusal", async () => {
@@ -1941,6 +2176,58 @@ describe("Pi native adapter escalation", () => {
       interactionId: "budget-ask:call-9",
       resolution: { optionIds: ["once"], response: null },
     });
+  });
+
+  /**
+   * The same seam carrying VC-380's confirmation, under its OWN frozen segment.
+   * Nothing has been refused here: the verb is permitted and its arguments are
+   * fine. What is being asked is whether a person wants this MCP server
+   * installed at all, before the command is run for real.
+   */
+  it("asks an MCP confirmation under the confirm-ask segment (VC-380)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "mcp.install"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "previewed" };
+      },
+    });
+
+    await runtime.spec.callVerb?.(
+      { verb: "mcp.install", input: { id: "files" }, toolCallId: "call-11" },
+      new AbortController().signal,
+    );
+    if (lent === undefined) throw new Error("The binding lent no ask");
+    const choice = lent(
+      {
+        cause: "confirm.mcp-install",
+        tool: "mcp_install",
+        toolCallId: "call-11",
+        turnId: null,
+        reason: "Files is a local MCP server: Volli starts `npx -y files` and it runs as you.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      // Distinct from both `ask:` and `budget-ask:`, so neither answer can
+      // settle this question's wait.
+      interaction: { id: "confirm-ask:call-11", kind: "permission" },
+    });
+
+    const receipt = await binding.dispatch(answerCommand("confirm-ask:call-11", ["reject"]));
+
+    expect(receipt).toMatchObject({ status: "accepted" });
+    expect(await choice).toBe("refuse");
   });
 
   it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {

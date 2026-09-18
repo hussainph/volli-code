@@ -1,5 +1,24 @@
 "use client";
 
+/**
+ * Descended from AI Elements, and MODIFIED.
+ *
+ *   upstream  https://github.com/vercel/ai-elements
+ *   file      packages/elements/src/conversation.tsx
+ *   revision  9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)
+ *   license   Apache-2.0 — Copyright 2023 Vercel, Inc.
+ *
+ * Far less of this file is upstream's than of `prompt-input.tsx`, but it is not
+ * clean-room either: the component skeleton — `ConversationContent`,
+ * `ConversationScrollButton`, `ConversationEmptyState`, their
+ * `use-stick-to-bottom` wiring and their literal class strings — is copied
+ * expression, which is why the notice is here. Changed: Phosphor icons,
+ * `@renderer/*` imports, the scroll-chaining bridge below, and both
+ * `StickToBottom` props forced to `instant` where upstream animates.
+ *
+ * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
+ */
+
 import { ArrowDownIcon } from "@phosphor-icons/react/dist/csr/ArrowDown";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";

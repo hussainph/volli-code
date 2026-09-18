@@ -74,6 +74,19 @@ export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
 export type ProjectSessionListingState = "loading" | "loaded" | "failed";
 
 /**
+ * Whether a surface must hold the project's Session rows rather than explain
+ * them. `undefined` is deliberately pending: it means the baseline has never
+ * been requested, not that a Project has no agents. Home and the sidebar share
+ * this selector so VC-383 cannot leave one surface honest while the other turns
+ * the same unread listing into an empty sentence.
+ */
+export function projectSessionListingPending(
+  listingState: ProjectSessionListingState | undefined,
+): boolean {
+  return listingState === undefined || listingState === "loading";
+}
+
+/**
  * The chat rows a surface may DRAW as a listing (VC-279) — every one except a
  * Subagent Session, which is reached from the chat that delegated it.
  *
@@ -133,6 +146,36 @@ export function sessionTitleOf(
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
   return row.kind === "terminal" ? row.record.id : row.record.sessionId;
+}
+
+/**
+ * Every named project's rows as one global listing.
+ *
+ * The command palette is the app's one cross-project Session surface, and it
+ * used to build this list from its own `sessions.list` call per project on
+ * every single open (VC-385). That is the question this store already holds
+ * the answer to, pushed and kept fresh, so the palette reads the cache and
+ * folds it here instead.
+ *
+ * A project with no entry contributes nothing rather than an empty project:
+ * "not read yet" and "has no Sessions" stay different, exactly as
+ * `listingState` keeps them apart for every other consumer.
+ */
+export function mergedProjectSessionRows(
+  byProject: Readonly<Record<string, ProjectSessionRows>>,
+  projectIds: readonly string[],
+): ProjectSessionRows {
+  const terminal: SessionRecord[] = [];
+  const chat: ChatSessionRecord[] = [];
+  const provenance: Record<string, SessionProvenance> = {};
+  for (const projectId of projectIds) {
+    const rows = byProject[projectId];
+    if (rows === undefined) continue;
+    terminal.push(...rows.terminal);
+    chat.push(...rows.chat);
+    Object.assign(provenance, rows.provenance);
+  }
+  return { terminal, chat, provenance };
 }
 
 interface ProjectSessionsState {

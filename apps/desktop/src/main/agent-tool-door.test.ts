@@ -211,6 +211,9 @@ function harness(
     // and the no-runtime refusal (which is what `null` exercises).
     supervise: () => null,
     delegate: () => null,
+    // The MCP family's host, inert here for the reason the others are: its own
+    // suite (`mcp/verbs.test.ts`) drives a real settings owner over a real db.
+    mcp: () => null,
   });
   const call = (
     input: Record<string, unknown>,
@@ -765,6 +768,9 @@ function automationHarness(options: { host?: "absent" } = {}) {
     // this suite drives `automation.run` alone.
     supervise: () => null,
     delegate: () => null,
+    // The MCP family's host, inert here for the reason the others are: its own
+    // suite (`mcp/verbs.test.ts`) drives a real settings owner over a real db.
+    mcp: () => null,
   });
 
   async function save(input: {
@@ -1111,6 +1117,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       subscribeTicketWake: () => () => undefined,
       subscribeSessionWake: () => () => undefined,
       delegate: () => null,
+      mcp: () => null,
       supervise: () =>
         ({
           sessionEngine: {
@@ -1320,6 +1327,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       subscribeTicketWake: () => () => undefined,
       subscribeSessionWake: () => () => undefined,
       supervise: () => null,
+      mcp: () => null,
       // The operation is proved in `delegate-session.test.ts`; this suite
       // proves the door — identity binding, wording, and the refusals.
       delegate: () => ({

@@ -117,6 +117,31 @@ interface AutomationsState {
    * {@link AutomationsState.ensureLoaded} reads this.
    */
   enablementRead: boolean;
+  /**
+   * The planning version each of the four caches the Ticket rail decides from
+   * was last successfully read at (VC-373).
+   *
+   * Keyed by `list:<projectId>`, `arming:<projectId>`, `order:<projectId>` and
+   * the project-less `enablement`, so one map serves all four. A version a read
+   * FAILED to land at is deliberately absent: a failed re-read leaves the old
+   * value sitting in its slice looking read, and this is what lets the rail
+   * tell that apart from an answer that is current.
+   */
+  railReadAt: Readonly<Record<string, number>>;
+  /**
+   * Re-reads whichever of the four rail caches is not at `planningVersion`,
+   * and resolves whether all four now are.
+   *
+   * The rail used to re-read all four on every arrival — a ticket switch inside
+   * one project, a rail page flip — because a component cannot tell a fresh
+   * cache from a stale one. This can: the version each slice landed at is
+   * recorded, so only a slice the planning clock has moved past is spent on,
+   * and an arrival at a version everything already carries costs nothing.
+   *
+   * Resolves false when any read failed (each toasts its own failure), which
+   * leaves that slice's version untouched — the next arrival genuinely retries.
+   */
+  refreshRail(projectId: string, planningVersion: number): Promise<boolean>;
   editor: AutomationEditorTarget | null;
   /**
    * Re-fetches one project's list and replaces the cache. Toasts on failure.
@@ -221,7 +246,39 @@ export function createAutomationsStore() {
     runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
+    railReadAt: {},
     editor: null,
+
+    async refreshRail(projectId, planningVersion) {
+      const state = get();
+      const stale = {
+        list: state.railReadAt[railReadKey("list", projectId)] !== planningVersion,
+        arming: state.railReadAt[railReadKey("arming", projectId)] !== planningVersion,
+        order: state.railReadAt[railReadKey("order", projectId)] !== planningVersion,
+        enablement: state.railReadAt[railReadKey("enablement", projectId)] !== planningVersion,
+      };
+      // Nothing the planning clock has moved past: the whole arrival is the
+      // cache, and the answer is that it is current.
+      if (!stale.list && !stale.arming && !stale.order && !stale.enablement) return true;
+      const [list, arming, order, enablement] = await Promise.all([
+        stale.list ? state.refresh(projectId) : true,
+        stale.arming ? state.refreshArming(projectId) : true,
+        stale.order ? state.refreshOrder(projectId) : true,
+        stale.enablement ? state.refreshEnablement() : true,
+      ]);
+      // Only the reads that LANDED are marked at this version. A failed one
+      // keeps its older mark (or none), so its slice is retried rather than
+      // being trusted because a neighbour landed.
+      set((current) => {
+        const railReadAt = { ...current.railReadAt };
+        if (list) railReadAt[railReadKey("list", projectId)] = planningVersion;
+        if (arming) railReadAt[railReadKey("arming", projectId)] = planningVersion;
+        if (order) railReadAt[railReadKey("order", projectId)] = planningVersion;
+        if (enablement) railReadAt[railReadKey("enablement", projectId)] = planningVersion;
+        return { railReadAt };
+      });
+      return list && arming && order && enablement;
+    },
 
     async refresh(projectId) {
       try {
@@ -631,6 +688,39 @@ export function selectArmedAutomation(
     selectAutomations(state, projectId),
     selectArmings(state, projectId),
     status,
+  );
+}
+
+/** One of the four caches the Ticket rail decides from (VC-373). */
+type RailSlice = "list" | "arming" | "order" | "enablement";
+
+/**
+ * The key one rail slice's landed-version mark lives under. The three project
+ * slices are keyed by project; enablement is machine-local, so it is the same
+ * mark for every project and is stored under its own bare name.
+ */
+function railReadKey(slice: RailSlice, projectId: string): string {
+  return slice === "enablement" ? "enablement" : `${slice}:${projectId}`;
+}
+
+/**
+ * Whether every cache the Ticket rail decides from has landed AT
+ * `planningVersion` — the question an arrival asks before spending a read.
+ *
+ * False for a cold cache, for a cache last read before the planning clock's
+ * current tick, and for one whose re-read failed; true only when all four
+ * slices answer for the version the app is on.
+ */
+export function selectRailFresh(
+  state: AutomationsState,
+  projectId: string,
+  planningVersion: number,
+): boolean {
+  return (
+    state.railReadAt[railReadKey("list", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("arming", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("order", projectId)] === planningVersion &&
+    state.railReadAt[railReadKey("enablement", projectId)] === planningVersion
   );
 }
 

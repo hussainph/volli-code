@@ -15,6 +15,7 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   EMPTY_SESSION_USAGE_SUMMARY,
 } from "@volli/shared";
+import type { CommandRefusalSeverity } from "@volli/shared";
 import { AsyncQueue, createSessionRouter, RpcDiagnosticLog, sanitizeDiagnosticText } from "./index";
 
 type SessionAttachmentProjection = SessionRuntimeSnapshot["projection"]["attachments"][number];
@@ -296,7 +297,7 @@ function trackedValue(value: unknown): { id: string; data: unknown } {
   return { id, data };
 }
 
-function runtimeFixture(): {
+function runtimeFixture(refusal: CommandRefusalSeverity | null = null): {
   runtime: SessionRuntime;
   calls: {
     command: SessionRuntimeCommandRequest[];
@@ -339,6 +340,7 @@ function runtimeFixture(): {
         },
         receipt: null,
         throughSequence: 1,
+        refusal,
       };
     },
     snapshot: async () => snapshot(),
@@ -850,6 +852,86 @@ describe("Session tRPC router", () => {
       "session.projection:start",
       "session.projection:success",
     ]);
+  });
+
+  it("reports router, validation, and handler time without retaining payloads", async () => {
+    const fixture = runtimeFixture();
+    const samples: unknown[] = [];
+    let now = 20;
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => (now += 3),
+        record: (sample) => samples.push(sample),
+      },
+    });
+
+    await caller.session.projection({ sessionId: "session-private" });
+
+    expect(samples).toEqual([
+      {
+        procedure: "session.projection",
+        durationMs: 3,
+        outcome: "success",
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("session-private");
+  });
+
+  it("isolates procedure behavior from optional observer clock and record failures", async () => {
+    const fixture = runtimeFixture();
+    const defaultClockSamples: unknown[] = [];
+    const defaultClockCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: { record: (sample) => defaultClockSamples.push(sample) },
+    });
+    await expect(
+      defaultClockCaller.session.projection({ sessionId: "session-default-clock" }),
+    ).resolves.toBeDefined();
+    expect(defaultClockSamples).toHaveLength(1);
+
+    const throwingCaller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      diagnostics: new RpcDiagnosticLog(),
+      performanceObserver: {
+        now: () => {
+          throw new Error("clock failed");
+        },
+        record: () => {
+          throw new Error("record failed");
+        },
+      },
+    });
+    await expect(
+      throwingCaller.session.projection({ sessionId: "session-throwing-observer" }),
+    ).resolves.toBeDefined();
+  });
+
+  it("skips a procedure sample when either performance clock read fails", async () => {
+    for (const failedRead of [1, 2]) {
+      const fixture = runtimeFixture();
+      const samples: unknown[] = [];
+      let reads = 0;
+      const caller = createSessionRouter().createCaller({
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+        performanceObserver: {
+          now: () => {
+            reads += 1;
+            if (reads === failedRead) throw new Error("clock failed");
+            return reads;
+          },
+          record: (sample) => samples.push(sample),
+        },
+      });
+
+      await expect(
+        caller.session.projection({ sessionId: "session-clock-failure" }),
+      ).resolves.toBeDefined();
+      expect(samples).toEqual([]);
+    }
   });
 
   it("exposes Model Access without adapter, profile, or credential inputs", async () => {
@@ -1426,6 +1508,109 @@ describe("Session tRPC router", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("carries a client-requested Session id on create, UUID-checked at the edge (VC-358)", async () => {
+    const fixture = runtimeFixture();
+    const calls: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        calls.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+
+    // A provisional chat promotes under the id it minted; absent, nothing
+    // changes for callers that never state one.
+    const requested = "0f1a2b3c-4d5e-4f6a-8b7c-9d0e1f2a3b4c";
+    await caller.sessions.create({
+      operationId: "operation-1",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: "VC-1",
+      requestedSessionId: requested,
+    });
+    await caller.sessions.create({
+      operationId: "operation-2",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ requestedSessionId: requested }),
+      {
+        operationId: "operation-2",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+      },
+    ]);
+
+    await expect(
+      caller.sessions.create({
+        operationId: "operation-3",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        title: null,
+        requestedSessionId: "not a uuid",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("refuses a well-formed UUID that is not v4, and the nil and max ids", async () => {
+    // `docs/BOUNDARIES.md` rule 1: a durable id may never be built from
+    // anything machine-local. A v1 UUID carries the minting machine's MAC
+    // address in its last 48 bits, so accepting one would put a hardware
+    // identifier into a permanent Session id — and a durable id derivation is
+    // frozen the moment it ships, so this door cannot be narrowed later.
+    const fixture = runtimeFixture();
+    const admitted: unknown[] = [];
+    const caller = createSessionRouter().createCaller({
+      runtime: fixture.runtime,
+      createSession: async (input) => {
+        admitted.push(input);
+        return { sessionId: "session-1" };
+      },
+      diagnostics: new RpcDiagnosticLog(),
+    });
+    const refused = [
+      // v1: time-based, node field is a MAC.
+      "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      // v3 and v5: name-based, so two clients naming the same thing collide.
+      "3d813cbb-47fb-32ba-91df-831e1593ac29",
+      "886313e1-3b8a-5372-9b90-0c9aee199e5d",
+      "00000000-0000-0000-0000-000000000000",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    ];
+
+    for (const [index, requestedSessionId] of refused.entries()) {
+      await expect(
+        caller.sessions.create({
+          operationId: `refused-${index}`,
+          projectId: "project-1",
+          ticketId: "ticket-1",
+          title: null,
+          requestedSessionId,
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    // Refused at the edge means refused before the handler — no create ran.
+    expect(admitted).toEqual([]);
+
+    // And the shape the renderer actually mints still passes.
+    await caller.sessions.create({
+      operationId: "admitted",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      title: null,
+      requestedSessionId: "550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(admitted).toEqual([
+      expect.objectContaining({ requestedSessionId: "550e8400-e29b-41d4-a716-446655440000" }),
+    ]);
+  });
+
   it("withholds executor creation and attachment commands from Electron renderers", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
@@ -1580,6 +1765,30 @@ describe("Session tRPC router", () => {
     ]);
   });
 
+  // VC-141: the adapter's judgement is in-memory detail, so it only reaches a
+  // client if this edge forwards it deliberately. Nullable rather than
+  // optional, so it survives a transport that drops `undefined` keys
+  // (BOUNDARIES.md rule 3).
+  it.each(["benign", "failure", null] as const)(
+    "forwards a %s refusal mark to the renderer beside the receipt",
+    async (refusal) => {
+      const fixture = runtimeFixture(refusal);
+      const caller = createSessionRouter().createCaller({
+        runtime: fixture.runtime,
+        diagnostics: new RpcDiagnosticLog(),
+      });
+
+      const result = await caller.session.command({
+        commandId: "compact-command",
+        sessionId: "session-1",
+        command: { kind: "context.compact" },
+      });
+
+      expect(result.refusal).toBe(refusal);
+      expect("refusal" in result).toBe(true);
+    },
+  );
+
   it("passes executor retry attachment identity to the Session runtime only when supplied", async () => {
     const fixture = runtimeFixture();
     const caller = createSessionRouter().createCaller({
@@ -1701,6 +1910,7 @@ describe("Session tRPC router", () => {
       sessionId: "session-1",
       receipt: null,
       throughSequence: 1,
+      refusal: null,
     });
     expect(JSON.stringify(selected)).not.toMatch(/adapter|profile/i);
   });

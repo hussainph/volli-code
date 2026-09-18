@@ -1,6 +1,11 @@
-import { nativeObservationEventId, projectSession } from "@volli/shared";
+import {
+  advanceSessionProjection,
+  createSessionProjectionCheckpoint,
+  nativeObservationEventId,
+} from "@volli/shared";
 import type {
   CommandReceipt,
+  CommandRefusalSeverity,
   CompactionWorkReason,
   ModelSelection,
   ModelTier,
@@ -19,6 +24,7 @@ import type {
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
+  SessionProjectionCheckpoint,
   SessionRole,
   UnstampedCommandReceipt,
 } from "@volli/shared";
@@ -104,6 +110,16 @@ export interface SessionRuntimePorts {
   ids: SessionRuntimeIds;
   /** Host diagnostics seam for a failing client stream; failures are isolated. */
   onSubscriberFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Host diagnostics seam for a projection checkpoint that could not be read,
+   * folded, or written; failures are isolated.
+   *
+   * Every such failure is recovered by refolding the immutable log, so none of
+   * them can fail a read. That is precisely why they need reporting: a cache
+   * that misses permanently behaves exactly like one that is merely cold, and
+   * the only symptom would be that opening a long chat never got faster.
+   */
+  onProjectionCheckpointFailure?: (error: unknown) => void | Promise<void>;
 }
 
 export type SessionClientCommand =
@@ -116,6 +132,12 @@ export type SessionClientCommand =
       /** The delegating Session, for a `subagent`; null for a root Role. */
       parentSessionId: string | null;
       title: string | null;
+      /**
+       * A client-minted id the durable Session takes as its own (VC-358), so a
+       * provisional chat can be promoted without an id swap. Optional: absent
+       * keeps the ledger's own `ids.next("session")` derivation.
+       */
+      requestedSessionId?: string | null;
     }
   | { kind: "adapter.attach"; continuity: SessionAttachmentContinuity }
   | {
@@ -249,6 +271,17 @@ export interface SessionRuntimeCommandResult {
   command: SessionCommand;
   receipt: CommandReceipt | null;
   throughSequence: number;
+  /**
+   * How much a refusal on this result weighs, as the adapter judged it
+   * (VC-141). `null` on everything that was not refused, and on every refusal
+   * whose adapter did not answer the question — which reads as `"failure"`,
+   * the answer a client must assume when nobody vouched for the refusal.
+   *
+   * In memory only, like {@link SessionRuntimeCommandResult.delivery}: the
+   * durable Receipt records the code and the runtime's own sentence, and a
+   * later reader derives severity from those the same way this did.
+   */
+  refusal: CommandRefusalSeverity | null;
   /**
    * How the adapter delivered a `message.submit`, in memory only. This is the
    * authoritative distinction between a prompt that began a turn and a steer
@@ -608,26 +641,64 @@ class BufferedObservationSink implements ObservationSink {
 }
 
 /**
- * One Session's history, folded once.
+ * One Session's folded history and the resumable state behind it.
  *
- * `projection` is always exactly `projectSession(session, events, foldedAt)` —
- * the fold stays a pure total function over the whole log, and this only keeps
- * its result and the events it consumed so the next read folds the same log
- * plus whatever arrived after `throughSequence`.
+ * A cold cache hit retains only the tail after its durable checkpoint. The
+ * legacy full-snapshot route re-reads prefix events when it needs frames; a
+ * projection read never materializes them merely to recover current state.
  */
 interface ProjectedHistory {
   projection: SessionProjection;
+  /** Tail consumed in this runtime; the whole log only when `completeEvents` is true. */
   events: readonly SessionEvent[];
   throughSequence: number;
+  checkpoint: SessionProjectionCheckpoint;
+  completeEvents: boolean;
 }
 
 const EVENT_PAGE_SIZE = 500;
 /**
- * How many Sessions keep a folded history. A Session's events are held for as
- * long as its entry lives, so this is the bound on that memory; the desktop
- * reads one or two Sessions at a time and an evicted entry costs one re-read.
+ * How many transcript artifacts a snapshot reads at once (VC-383).
+ *
+ * A snapshot materializes one frame per event, and a frame with a transcript
+ * reference is one artifact read — an lstat, a file read, a gunzip and a
+ * digest, on disk. Awaited one at a time, a Session with a thousand turns paid
+ * a thousand serial round trips to the filesystem before its chat could paint
+ * a single message; the disk was idle for most of that wall time. A bounded
+ * window keeps the reads overlapped without turning a chat open into a burst
+ * of every file at once on a machine that is already running a dozen agents.
+ * Order is preserved: the frame list is positional, so the window only
+ * changes WHEN each artifact is read, never where it lands.
+ *
+ * The bound is exported deliberately: VC-383's behavioral test imports this
+ * source of truth through the package barrel instead of carrying a second
+ * magic number. It is an observable runtime limit, not a caller-tunable
+ * option.
  */
-const PROJECTION_CACHE_LIMIT = 8;
+export const SNAPSHOT_ARTIFACT_READ_CONCURRENCY = 16;
+/**
+ * How many UNWATCHED Sessions keep a folded history (VC-388, audit item D4).
+ *
+ * A Session's events are held for as long as its entry lives, so this is the
+ * bound on that memory: a measured entry is 17.4 KB for an ordinary Session
+ * and 272.5 KB for a 450-event one
+ * (`docs/research/perf/session-listing-vc388.md`).
+ *
+ * It used to read "the desktop reads one or two Sessions at a time", which
+ * stopped being true once a person could keep dozens of tabs open, and the
+ * obvious repair — raise the number until it covers them — is the wrong one.
+ * Any fixed number is a guess about how many tabs someone has, and a listing
+ * or a watchdog sweep would still evict them all in one pass. {@link
+ * DefaultSessionRuntime.keepHistory} exempts Sessions that have a subscriber
+ * instead, which is this process's own evidence that a surface has one open,
+ * so tabs are held by the thing that actually owns them and this number went
+ * back to meaning what it says.
+ *
+ * So it stays at eight, and eight is now a bound on background reads: the
+ * Sessions nobody is looking at, each of which costs exactly one re-read when
+ * it is dropped.
+ */
+export const PROJECTION_CACHE_LIMIT = 8;
 /**
  * How many Sessions keep a transient overlay, bounded the same way and for the
  * same reason as the fold cache above: the explicit drop points (attachment
@@ -790,6 +861,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         role: request.command.role,
         parentSessionId: request.command.parentSessionId,
         title: request.command.title,
+        requestedSessionId: request.command.requestedSessionId ?? null,
         provenance: userProvenance(null),
       });
       await this.#publish([result.commandEvent, result.event, result.receiptEvent]);
@@ -798,6 +870,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         command: result.command,
         receipt: result.receipt,
         throughSequence: result.receiptEvent.sequence,
+        // A session that was just created refused nothing.
+        refusal: null,
       };
     }
 
@@ -1427,7 +1501,16 @@ class DefaultSessionRuntime implements SessionRuntime {
       receipt,
       input.resultKind,
     );
-    return this.#result(request.sessionId, submitted.command, durable);
+    // The adapter's judgement rides out beside the durable receipt (VC-141):
+    // `/compact` is the one command whose refusal a person is waiting on, and
+    // whether that refusal is a failure is a question only the runtime that
+    // raised it can answer.
+    return this.#result(
+      request.sessionId,
+      submitted.command,
+      durable,
+      this.#refusalSeverity(receipt),
+    );
   }
 
   async #retry(
@@ -1780,6 +1863,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       outcome: "completed",
     });
     await this.#publish([closed]);
+    await this.#saveProjectionCheckpoint(request.sessionId);
     this.#bindings.delete(request.command.attachmentId);
     this.#overlays.delete(request.sessionId);
     this.#compactionProgress.delete(request.sessionId);
@@ -1828,11 +1912,16 @@ class DefaultSessionRuntime implements SessionRuntime {
   async snapshot(input: { sessionId: string }): Promise<SessionRuntimeSnapshot> {
     this.#assertOpen();
     const history = await this.#history(input.sessionId);
-    const frames: SessionStreamFrame[] = [];
+    // A persisted projection intentionally retains no prefix event rows. The
+    // legacy full snapshot still promises every frame, so only that procedure
+    // pays the full-log read; projection-first opens and routine state reads do
+    // not. A future paginated snapshot can remove this compatibility cost.
+    const events = history.completeEvents
+      ? history.events
+      : await this.#listEventsPaged({ sessionId: input.sessionId });
+    const frames = await this.#frames(events);
     const transcript: SessionTranscriptArtifact[] = [];
-    for (const event of history.events) {
-      const frame = await this.#frame(event);
-      frames.push(frame);
+    for (const frame of frames) {
       if (frame.transcript) transcript.push(frame.transcript);
     }
     return {
@@ -1883,6 +1972,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       await this.#enqueueCompactionProgressBaseline(subscriber);
     } catch (error) {
       subscribers.delete(subscriber);
+      // The empty Set has to go too: {@link #keepHistory} reads membership of
+      // this map as "a surface is watching", so a subscription that never
+      // opened would otherwise exempt the Session from eviction for ever.
+      if (subscribers.size === 0) this.#subscribers.delete(input.sessionId);
       throw error;
     }
     return () => {
@@ -1972,6 +2065,20 @@ class DefaultSessionRuntime implements SessionRuntime {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    // The cache is derived and best-effort: a failed shutdown write only makes
+    // the next launch refold. Capture before clearing so even an attachment
+    // that has not emitted its close yet leaves a reusable prefix. The results
+    // are inspected rather than discarded: shutdown is the write most likely to
+    // fail as a group (a closing database), and that is worth reporting once
+    // per failure instead of silently losing every session's prefix.
+    const shutdownWrites = await Promise.allSettled(
+      [...this.#histories.values()].map((history) =>
+        this.ports.engine.saveProjectionCheckpoint(history.checkpoint),
+      ),
+    );
+    for (const write of shutdownWrites) {
+      if (write.status === "rejected") await this.#reportCheckpointFailure(write.reason);
+    }
     for (const subscribers of this.#subscribers.values()) {
       for (const subscriber of subscribers) subscriber.active = false;
     }
@@ -2231,6 +2338,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;
     await this.#publish([event]);
     if (observation.kind === "attachment.closed" || observation.kind === "attachment.failed") {
+      await this.#saveProjectionCheckpoint(spec.sessionId);
       // The executor closed itself, so the stop is the same one `#release`
       // performs and belongs at the same point: after the closing fact is
       // durable, before anything behind it in the pipeline can be recorded
@@ -2868,28 +2976,77 @@ class DefaultSessionRuntime implements SessionRuntime {
     return { sessionId: event.sessionId, sequence: event.sequence, event, transcript };
   }
 
+  /**
+   * Every event's frame, in event order, with at most
+   * {@link SNAPSHOT_ARTIFACT_READ_CONCURRENCY} artifact reads in flight.
+   *
+   * A worker pool over a shared cursor rather than `Promise.all` over the whole
+   * list: the list is the Session's entire history, and one read per event all
+   * at once is the wrong shape for a long Session on a loaded machine. Each
+   * worker takes the next index, reads it, and writes the frame into that
+   * index's slot, so the result is positional regardless of which read
+   * finished first. VC-383 also stops workers before they claim another index
+   * after a read fails. The peer worker promises remain enrolled in
+   * `Promise.all`, so concurrent read failures are observed rather than
+   * becoming unhandled; its first rejection remains the snapshot's error, just
+   * as the serial loop did — a transcript the store cannot verify is not a
+   * frame to silently skip.
+   */
+  async #frames(events: readonly SessionEvent[]): Promise<SessionStreamFrame[]> {
+    const frames: SessionStreamFrame[] = [];
+    frames.length = events.length;
+    let next = 0;
+    let stopped = false;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (stopped) return;
+        const index = next++;
+        const event = events[index];
+        if (event === undefined) return;
+        try {
+          frames[index] = await this.#frame(event);
+        } catch (error) {
+          stopped = true;
+          throw error;
+        }
+      }
+    };
+    const workers = Math.min(SNAPSHOT_ARTIFACT_READ_CONCURRENCY, events.length);
+    await Promise.all(Array.from({ length: workers }, worker));
+    return frames;
+  }
+
+  /**
+   * The one place a command result is built, which is why `refusal` can be a
+   * required field without asking twenty-seven call sites about it: only the
+   * paths that carry an adapter's judgement pass one, and every other path
+   * gets the `null` that means "nobody vouched for this".
+   */
   async #result(
     sessionId: string,
     command: SessionCommand,
     receipt: CommandReceipt | null,
+    refusal: CommandRefusalSeverity | null = null,
   ): Promise<SessionRuntimeCommandResult> {
-    return { sessionId, command, receipt, throughSequence: await this.#latestSequence(sessionId) };
+    return {
+      sessionId,
+      command,
+      receipt,
+      throughSequence: await this.#latestSequence(sessionId),
+      refusal,
+    };
+  }
+
+  /** The adapter's judgement on a receipt it refused, or `null` if it gave none. */
+  #refusalSeverity(receipt: DeliveryReceipt): CommandRefusalSeverity | null {
+    return receipt.status === "rejected" ? (receipt.severity ?? null) : null;
   }
 
   async #latestSequence(sessionId: string): Promise<number> {
-    let afterSequence = 0;
-    for (;;) {
-      const page = await this.ports.engine.listEvents({
-        sessionId,
-        afterSequence,
-        limit: EVENT_PAGE_SIZE,
-      });
-      const latest = page.at(-1);
-      /* v8 ignore next -- #result is only called after its command event commits. */
-      if (!latest) throw new Error(`Session ${sessionId} has no committed command event`);
-      afterSequence = latest.sequence;
-      if (page.length < EVENT_PAGE_SIZE) return afterSequence;
-    }
+    const sequence = await this.ports.engine.latestEventSequence({ sessionId });
+    /* v8 ignore next -- #result is only called after its command event commits. */
+    if (sequence === 0) throw new Error(`Session ${sessionId} has no committed command event`);
+    return sequence;
   }
 
   async #listEventsPaged(input: {
@@ -2918,15 +3075,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   /**
    * A Session's folded history, kept between reads.
    *
-   * Every read asked the ledger for the whole log and folded it again, which is
-   * linear in Session length per read and quadratic across a streaming turn.
-   * This keeps the fold's *result* and the events behind it, and asks the
-   * ledger only for what arrived after `throughSequence`.
-   *
-   * The entry is served unchanged only when the ledger returned no event past
-   * the cursor. Otherwise the log it holds is extended and re-folded from the
-   * top, so `projection` is never a partial fold and `projectSession` is never
-   * asked to resume from one.
+   * Every read once asked the ledger for the whole log and folded it again,
+   * which is linear in Session length per read and quadratic across a streaming
+   * turn. A live entry and a persisted checkpoint now both retain the reducer's
+   * complete resumable state and ask only for events after `throughSequence`.
+   * The legacy full snapshot remains the one route that explicitly asks for
+   * every frame.
    *
    * That makes the invalidation rule the ledger's own contract, and the fold
    * has exactly two durable inputs, each covered by one clause of it:
@@ -2961,8 +3115,33 @@ class DefaultSessionRuntime implements SessionRuntime {
       // thrown away for the fold below.
       const known = await this.ports.engine.getBaseSession({ sessionId });
       if (!known) throw new SessionRuntimeNotFoundError(`Session ${sessionId} was not found`);
+      let persisted: SessionProjectionCheckpoint | null = null;
+      try {
+        persisted = await this.ports.engine.getProjectionCheckpoint({ sessionId });
+      } catch (error) {
+        // A host that cannot decode its cache still has the immutable log.
+        await this.#reportCheckpointFailure(error);
+      }
+      if (persisted) {
+        try {
+          const tail = await this.#listEventsPaged({
+            sessionId,
+            afterSequence: persisted.throughSequence,
+          });
+          const history = foldHistory(known, tail, persisted);
+          // Advance a stale checkpoint after the read that proved its tail.
+          if (tail.length > 0) await this.#persistProjectionCheckpoint(history.checkpoint);
+          return this.#keepHistory(sessionId, history);
+        } catch (error) {
+          // A checkpoint is a cache, never authority. Unsupported or corrupt
+          // JSON falls through to the same whole-log fold as a missing row.
+          await this.#reportCheckpointFailure(error);
+        }
+      }
       const events = await this.#listEventsPaged({ sessionId });
-      return this.#keepHistory(sessionId, foldHistory(known, events));
+      const history = foldHistory(known, events);
+      await this.#persistProjectionCheckpoint(history.checkpoint);
+      return this.#keepHistory(sessionId, history);
     }
     const appended = await this.#listEventsPaged({
       sessionId,
@@ -2971,16 +3150,76 @@ class DefaultSessionRuntime implements SessionRuntime {
     if (appended.length === 0) return this.#keepHistory(sessionId, cached);
     return this.#keepHistory(
       sessionId,
-      foldHistory(cached.projection.session, [...cached.events, ...appended]),
+      foldHistory(cached.projection.session, appended, cached.checkpoint, cached),
     );
   }
 
+  async #saveProjectionCheckpoint(sessionId: string): Promise<void> {
+    try {
+      const history = await this.#history(sessionId);
+      await this.#persistProjectionCheckpoint(history.checkpoint);
+    } catch (error) {
+      // Closing an attachment must not fail because its derived cache missed.
+      await this.#reportCheckpointFailure(error);
+    }
+  }
+
+  async #persistProjectionCheckpoint(checkpoint: SessionProjectionCheckpoint): Promise<void> {
+    try {
+      await this.ports.engine.saveProjectionCheckpoint(checkpoint);
+    } catch (error) {
+      // Missing a cache write is recoverable by definition. The immutable log
+      // remains canonical and the next read takes the full-fold fallback.
+      await this.#reportCheckpointFailure(error);
+    }
+  }
+
+  /**
+   * Reports a recovered checkpoint failure to the host.
+   *
+   * The seam's own failure is swallowed here for the same reason the callers
+   * swallow theirs: a diagnostic must never convert a recovered cache miss
+   * into a failed read.
+   */
+  async #reportCheckpointFailure(error: unknown): Promise<void> {
+    try {
+      await this.ports.onProjectionCheckpointFailure?.(error);
+    } catch {
+      // Observing a miss must not change the read it observes.
+    }
+  }
+
+  /**
+   * Keeps one Session's fold, evicting by recency among the Sessions nobody is
+   * watching (VC-388).
+   *
+   * A subscriber is this process's own evidence that a surface has the Session
+   * open: a tab subscribes when it mounts and the teardown removes it, so the
+   * set is neither a guess nor something a caller has to remember to declare.
+   * Recency alone cannot use that, and gets the common case backwards — a
+   * listing, an await or a watchdog sweep reads Sessions nobody has open, all
+   * of them more recently than the tab that has been sitting there, so the
+   * cheap-to-rebuild entries evict the expensive one.
+   *
+   * Watched entries are exempt, not pinned: the exemption lasts exactly as
+   * long as the subscription, and nothing outlives the tab that asked for it.
+   * The limit therefore bounds the UNWATCHED entries, and the watched ones are
+   * bounded by how many Sessions the user can have open at once — which is
+   * their choice to make, and which they are already paying for in the
+   * renderer.
+   */
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
     this.#histories.delete(sessionId);
     this.#histories.set(sessionId, history);
+    let evictable = 0;
+    for (const key of this.#histories.keys()) {
+      if (!this.#subscribers.has(key)) evictable += 1;
+    }
     for (const oldest of this.#histories.keys()) {
-      if (this.#histories.size <= PROJECTION_CACHE_LIMIT) break;
+      if (evictable <= PROJECTION_CACHE_LIMIT) break;
+      if (this.#subscribers.has(oldest)) continue;
       this.#histories.delete(oldest);
+      evictable -= 1;
     }
     return history;
   }
@@ -3023,11 +3262,21 @@ export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionR
   return new DefaultSessionRuntime(ports);
 }
 
-function foldHistory(session: Session, events: readonly SessionEvent[]): ProjectedHistory {
+function foldHistory(
+  session: Session,
+  events: readonly SessionEvent[],
+  checkpoint: SessionProjectionCheckpoint | null = null,
+  prior?: ProjectedHistory,
+): ProjectedHistory {
+  const folded = checkpoint
+    ? advanceSessionProjection(checkpoint, events, session)
+    : createSessionProjectionCheckpoint(session, events);
   return {
-    projection: projectSession(session, events),
-    events,
-    throughSequence: events.at(-1)?.sequence ?? 0,
+    projection: folded.projection,
+    events: prior ? [...prior.events, ...events] : events,
+    throughSequence: folded.throughSequence,
+    checkpoint: folded,
+    completeEvents: prior?.completeEvents ?? checkpoint === null,
   };
 }
 

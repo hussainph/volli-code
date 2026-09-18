@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
 import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
+import { internSessionEventProvenance } from "./session-event-provenance";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -3312,6 +3313,127 @@ function buildV45DbWithLabelCaseVariants(dbPath: string): Database.Database {
   return db;
 }
 
+describe("migrate — 048–049, Session projection checkpoints (VC-355)", () => {
+  it("adds an empty, JSON-checked cache table to an existing profile", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 47 });
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "session_projection_checkpoints")).toEqual([
+      "session_id",
+      "schema_version",
+      "through_sequence",
+      "checkpoint",
+      "digest",
+      "updated_at",
+    ]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get(),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'
+            ORDER BY name`,
+        )
+        .pluck()
+        .all(),
+    ).toEqual([
+      "session_projection_checkpoint_event_deleted",
+      "session_projection_checkpoint_event_updated",
+      "session_projection_checkpoint_provenance_updated",
+      "session_projection_checkpoint_session_updated",
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("adds repair invalidation to a profile that already claimed the pre-trigger v48", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 48 });
+
+    expect(tableExists(db, "session_projection_checkpoints")).toBe(true);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toEqual([]);
+
+    migrate(db, dbPath);
+
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'session_projection_checkpoint_%'`,
+        )
+        .all(),
+    ).toHaveLength(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("executes every repair trigger and removes the affected checkpoint", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    seedTicket(db);
+    db.prepare(
+      `INSERT INTO session_provenances (id, provenance)
+       VALUES (1, '{"source":{"kind":"user","id":"u","detail":null},"venue":null}')`,
+    ).run();
+    db.prepare(
+      "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s1', 'p1', 't1', 'One', 1)",
+    ).run();
+    db.prepare(
+      `INSERT INTO session_events
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES ('e1', 's1', 1, 1, 1, 1, NULL, NULL, '{"kind":"session.archived"}')`,
+    ).run();
+
+    const insertCheckpoint = db.prepare(
+      `INSERT INTO session_projection_checkpoints
+         (session_id, schema_version, through_sequence, checkpoint, digest, updated_at)
+       VALUES ('s1', 1, 1, '{}', ?, 1)`,
+    );
+    const checkpointCount = (): number =>
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM session_projection_checkpoints").get() as {
+          count: number;
+        }
+      ).count;
+    const expectInvalidated = (): void => expect(checkpointCount()).toBe(0);
+
+    insertCheckpoint.run("a".repeat(64));
+    db.prepare("UPDATE sessions SET title = 'Two' WHERE id = 's1'").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("b".repeat(64));
+    db.prepare("UPDATE session_provenances SET provenance = provenance WHERE id = 1").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("c".repeat(64));
+    db.prepare("UPDATE session_events SET recorded_at = 2 WHERE id = 'e1'").run();
+    expectInvalidated();
+
+    insertCheckpoint.run("d".repeat(64));
+    db.prepare("DELETE FROM session_events WHERE id = 'e1'").run();
+    expectInvalidated();
+    db.close();
+  });
+});
+
 describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", () => {
   it("folds the stray spelling into a retained alias and preserves every association", () => {
     const dbPath = tempDbPath();
@@ -3453,6 +3575,189 @@ describe("migrate — 046, one live Label identity per NOCASE name (VC-310)", ()
     expect(columnNames(db, "labels")).toEqual(
       expect.arrayContaining(["merged_into_id", "merged_at", "merged_by"]),
     );
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+describe("migrate — 050, MCP provenance and the management audit trail (VC-380)", () => {
+  it("adds provenance columns to an existing catalog without disturbing its rows", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 49 });
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO mcp_servers (id, project_id, name, enabled, transport, catalog, stale, error,
+                                refreshed_at, created_at, updated_at)
+       VALUES ('s1', 'p1', 'Fixture', 1, '{"type":"stdio"}', '[]', 0, NULL, NULL, 1, 1)`,
+    ).run();
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "mcp_servers")).toEqual([
+      "id",
+      "project_id",
+      "name",
+      "enabled",
+      "transport",
+      "catalog",
+      "stale",
+      "error",
+      "refreshed_at",
+      "created_at",
+      "updated_at",
+      "source",
+      "registry_type",
+      "version",
+      "digest",
+    ]);
+    // A server configured before provenance existed says so, rather than
+    // claiming an origin nobody recorded.
+    expect(
+      db.prepare("SELECT source, registry_type, version, digest FROM mcp_servers").get(),
+    ).toEqual({ source: null, registry_type: null, version: null, digest: null });
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("adds an append-only operations table that outlives the server it names", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 49 });
+    expect(tableExists(db, "mcp_operations")).toBe(false);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "mcp_operations")).toEqual([
+      "id",
+      "project_id",
+      "server_id",
+      "server_name",
+      "operation",
+      "outcome",
+      "summary",
+      "detail",
+      "source",
+      "registry_type",
+      "version",
+      "digest",
+      "session_id",
+      "ticket_id",
+      "created_at",
+    ]);
+    db.prepare(
+      `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+       VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO mcp_operations (id, project_id, server_id, server_name, operation, outcome,
+                                   summary, detail, source, registry_type, version, digest,
+                                   session_id, ticket_id, created_at)
+       VALUES ('op1', 'p1', 'gone', 'Fixture', 'remove', 'applied', 'Removed Fixture.', NULL,
+               NULL, NULL, NULL, NULL, NULL, NULL, 5)`,
+    ).run();
+
+    // The whole point of the record: it survives the thing it is about, so a
+    // person can read what was removed after the row is gone.
+    expect(db.prepare("SELECT server_id FROM mcp_operations").pluck().get()).toBe("gone");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims 050", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.pragma("user_version = 49");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(columnNames(db, "mcp_servers")).toContain("registry_type");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+/** A project, a Session, and one attachment with the events that decide it. */
+function seedAttachment(db: ReturnType<typeof openRawDb>, id: string, closed: boolean): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+     VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
+     VALUES (@id, 'p1', NULL, 'project', NULL, 'S', 1)`,
+  ).run({ id: `s-${id}` });
+  db.prepare(
+    `INSERT INTO session_attachments
+       (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id, native_detail,
+        observed_kind, failure, created_sequence)
+     VALUES (@id, @sessionId, 'terminal', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1)`,
+  ).run({ id, sessionId: `s-${id}` });
+  const provenanceId = internSessionEventProvenance(
+    db,
+    JSON.stringify({
+      source: { kind: "system", id: "desktop", detail: null },
+      venue: { id: "local", kind: "local" },
+    }),
+  );
+  const appendEvent = (sequence: number, payload: unknown): void => {
+    db.prepare(
+      `INSERT INTO session_events
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES (@eventId, @sessionId, @sequence, 1, 1, @provenanceId, NULL, NULL, @payload)`,
+    ).run({
+      eventId: `e-${id}-${sequence}`,
+      sessionId: `s-${id}`,
+      sequence,
+      provenanceId,
+      payload: JSON.stringify(payload),
+    });
+  };
+  appendEvent(1, { kind: "attachment.opened", attachment: { id, sessionId: `s-${id}` } });
+  if (closed) appendEvent(2, { kind: "attachment.closed", attachmentId: id, outcome: "completed" });
+}
+
+describe("migrate — 051, the attachment closure mark (VC-403)", () => {
+  it("backfills the mark from the events that already recorded the close", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 50 });
+    seedAttachment(db, "still-open", false);
+    seedAttachment(db, "already-closed", true);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "session_attachments")).toContain("closed_sequence");
+    // The close was always a fact; the migration only makes it indexable, so a
+    // history that predates the column reads exactly as the fold reads it.
+    expect(
+      db.prepare("SELECT id, closed_sequence FROM session_attachments ORDER BY id").all(),
+    ).toEqual([
+      { id: "already-closed", closed_sequence: 2 },
+      { id: "still-open", closed_sequence: null },
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims 051", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.pragma("user_version = 50");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(columnNames(db, "session_attachments")).toContain("closed_sequence");
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

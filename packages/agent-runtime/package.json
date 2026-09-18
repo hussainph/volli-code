@@ -2,6 +2,7 @@
   "name": "@volli/agent-runtime",
   "version": "0.0.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -15,13 +16,16 @@
     "test:coverage": "vp test run --coverage",
     "smoke": "vp test run --config vite.smoke.config.ts",
     "bench": "vp test run --config vite.bench.config.ts",
+    "bench:runtime": "vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
+    "bench:runtime:published": "BENCH_ARM=published vp test run --config vite.bench.config.ts bench/parallel-tools/runtime-cost.bench.test.ts",
+    "bench:runtime:profile": "node bench/parallel-tools/run-profile.mjs",
     "bench:live": "vp test run --config vite.bench-live.config.ts",
     "bench:probe": "node --experimental-strip-types bench/parallel-tools/probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.74",
-    "@earendil-works/pi-agent-core": "0.85.0",
-    "@earendil-works/pi-ai": "0.85.0",
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
     "@mozilla/readability": "^0.6.0",
     "@volli/shared": "workspace:*",
     "gpt-tokenizer": "^4.0.0",
@@ -35,7 +39,23 @@
     "@types/node": "catalog:",
     "@types/proper-lockfile": "4.1.4",
     "@types/turndown": "^5.0.6",
+    "esbuild": "0.28.2",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "volli": {
+    "notices": [
+      {
+        "title": "pi-automode path canonicalization and shell lexer",
+        "covers": [
+          "src/authority/vendor/paths.ts",
+          "src/authority/vendor/shell.ts"
+        ],
+        "upstream": "https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)",
+        "spdx": "MIT",
+        "evidence": "src/authority/vendor/README.md pins the upstream repository, revision and tag, and lists file-by-file what was taken and what diverges. The licence text is upstream's LICENSE.md at that revision.",
+        "text": "notices/pi-automode.LICENSE.txt"
+      }
+    ]
   }
 }

@@ -29,7 +29,8 @@ import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
 import type { SplitDragPayload } from "@renderer/components/split/split-drop";
-import { ListRow } from "@renderer/components/ui/list-row";
+import { ListRow, ListRowSkeleton } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-dot";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -57,13 +58,11 @@ import { delayUntil } from "@renderer/lib/boundary-timer";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
+import { launchAdapter, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import {
-  launchAdapter,
-  sessionPanes,
-  ticketScope,
-  useSessionsStore,
-} from "@renderer/stores/sessions";
-import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
+  ticketSessionListingStateOf,
+  useTicketSessionRecordsStore,
+} from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 import { renameTerminalSession } from "@renderer/terminal/session-lifecycle";
@@ -236,6 +235,26 @@ function SessionRow({
         </ContextMenuContent>
       </ContextMenu>
     </li>
+  );
+}
+
+/**
+ * Two rows' worth of the roster's own geometry, while the baseline read is in
+ * flight: the list's gap, a `ListRow`'s inset and height, a title at the left
+ * and the status phrase at the right. No words — the rows that replace this
+ * carry the words.
+ */
+function SessionListSkeleton() {
+  return (
+    <div
+      className="flex flex-col gap-1"
+      {...loadingRegionProps("sessions")}
+      data-testid="ticket-sessions-loading"
+    >
+      {(["w-3/5", "w-2/5"] as const).map((width) => (
+        <ListRowSkeleton key={width} mark primaryWidth={width} trailingWidth="w-12" />
+      ))}
+    </div>
   );
 }
 
@@ -464,7 +483,21 @@ export function TicketSessionsPanel({
   // and SessionsLayer's exit handler refreshes it directly so a just-ended
   // session's `endedAt`/resumability lands here without this panel needing to
   // be the one to notice the exit.
-  const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticketId] ?? NO_ROWS);
+  //
+  // VC-383 records the baseline's answer as data in the shared store: an
+  // unread/loading roster holds its rows' box, only `loaded` earns the empty
+  // sentence, and `failed` replaces either lie with the brief failure line.
+  // A component must not infer that lifecycle from whether its row array exists.
+  const listing = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
+  const listingState = useTicketSessionRecordsStore((state) =>
+    ticketSessionListingStateOf(state, ticketId),
+  );
+  const listingError = useTicketSessionRecordsStore(
+    (state) => state.listingError?.[ticketId] ?? null,
+  );
+  const pending = listingState === "loading";
+  const failed = listingState === "failed";
+  const rows = listing ?? NO_ROWS;
   const records = rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : []));
   const chatSessions = rows.flatMap((row) => (row.kind === "chat" ? [row.record] : []));
   // Narrowed to the stamps THIS ticket's rows can name — see `ticketOutputStamps`.
@@ -485,25 +518,23 @@ export function TicketSessionsPanel({
   const [historyQuery, setHistoryQuery] = React.useState("");
 
   const tabs = liveTabs ?? [];
-  // Signature of every currently-open PANE (not just tab roots) — refetch the
-  // durable list on any change (create, split, or close), since each split pane
-  // has its own durable record that must appear/fold alongside the tab roots.
-  const liveSignature = tabs
-    .map((tab) =>
-      sessionPanes(tab.layout)
-        .map((pane) => pane.sessionId)
-        .join("/"),
-    )
-    .join(",");
 
   const refresh = React.useCallback(
-    () => useTicketSessionRecordsStore.getState().refresh(ticketId),
+    () => useTicketSessionRecordsStore.getState().ensure(ticketId),
     [ticketId],
   );
 
+  // The BASELINE read, and only that. A window that has just opened has missed
+  // every push that came before it, so a ticket's rows are read once and
+  // `volli:session-activity` carries the list from there — which is why this no
+  // longer re-fires on the set of open panes (`liveSignature`). A split, a
+  // create and a close are all durable Session facts the push announces; a
+  // refetch on the same trigger would just race the push to say the same
+  // thing. `ensure` no-ops on a warm ticket, so a rail page flip or a ticket
+  // re-open paints from cache without re-asking main.
   React.useEffect(() => {
     void refresh();
-  }, [refresh, liveSignature]);
+  }, [refresh]);
 
   // Renaming the root pane of a live tab goes through the shared optimistic-
   // persist path (so its tab strip updates too); a non-root live pane or an
@@ -645,7 +676,18 @@ export function TicketSessionsPanel({
             onNewTerminal={onNewSession}
           />
         </RailSectionHeadingRow>
-        {current.length === 0 ? (
+        {pending ? (
+          // The baseline read is in flight. The heading and its "+" stay live
+          // above — a pending list blocks nothing about starting a Session —
+          // and the rows hold their box below.
+          <SessionListSkeleton />
+        ) : failed ? (
+          // The toast carries the bridge detail. This short line is the on-page
+          // truth: a failed roster must not keep pulsing or claim no Sessions.
+          <p className={SESSION_SECTION_EMPTY} title={listingError ?? undefined}>
+            Couldn&apos;t load sessions.
+          </p>
+        ) : current.length === 0 ? (
           // Nothing to read, so the block is the sentence alone: the header's
           // own control is 20px above it, and a second copy of the same act
           // inside the empty frame would be the same offer twice in one glance.

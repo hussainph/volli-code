@@ -27,13 +27,18 @@
  * the rail someone is working in would be the loudest thing on screen for the
  * least useful reason.
  *
- * ONE VERB, `refresh`, and no read-through cache beside it. An `ensure` that
- * answered from cache would be right exactly once: the rails unmount whenever
- * a reader changes page or Session, work keeps settling while they are gone,
- * and nothing here could know to drop the stale answer — so a rail coming back
- * would show a figure from some earlier minute and look entirely settled about
- * it. `refresh` keeps the cached entry visible while it re-reads, which buys
- * the same absence of flicker without the lie.
+ * The rails asked for `refresh` over an `ensure` because a rail unmounts on
+ * every page and Session change while work goes on settling behind it: an
+ * entry that answered from cache would show a figure from some earlier minute
+ * and look entirely settled about it. What answers that (VC-373) is the
+ * settle SIGNAL — the lifecycle string the rail already computes
+ * (`usage-rail.tsx` `useSettleSignal`) — carried on each entry as the value
+ * it was read under. Usage only changes when a turn settles, and a settle
+ * moves that signal, so `refresh` re-reads exactly when the answer could have
+ * moved: a ticket switch, a rail page flip or a remount with nothing settled
+ * in between is a no-op that repaints the same figure, never a second indexed
+ * read. `refresh` still keeps the cached entry visible while it re-reads,
+ * which buys the same absence of flicker without the lie.
  */
 import { create } from "zustand";
 import {
@@ -46,7 +51,7 @@ import {
 /** What is known about one rollup right now. */
 export type UsageEntry =
   | { status: "loading" }
-  | { status: "ready"; report: SessionUsageReport }
+  | { status: "ready"; report: SessionUsageReport; signal: string }
   | { status: "error"; error: string };
 
 /**
@@ -99,8 +104,12 @@ interface UsageState {
    * Reads the rollup again and replaces its entry. Concurrent reads of one
    * query share a single read — three rail blocks mounting on the same frame
    * is the shape that collision takes.
+   *
+   * `signal` is the app's settle signal the asker is reading under (see the
+   * module doc). A ready entry already tagged with it IS the answer: nothing
+   * has settled since it was read, so this resolves without a read.
    */
-  refresh(query: UsageQuery): Promise<void>;
+  refresh(query: UsageQuery, signal: string): Promise<void>;
 }
 
 /** Factory so tests get isolated instances (the store module's own convention). */
@@ -115,19 +124,29 @@ export function createUsageStore() {
   return create<UsageState>()((set, get) => ({
     byQuery: {},
 
-    refresh(query) {
+    refresh(query, signal) {
       const key = usageKey(query.scope, query.windowMs, query.groupBy);
       const existing = inFlight.get(key);
       if (existing !== undefined) return existing;
+      const cached = get().byQuery[key];
+      // Read under this same signal: nothing has settled since, and usage is
+      // written by settles alone, so the figure is current. Repainting it is
+      // the whole answer — and the read a rail flip used to spend is not.
+      if (cached?.status === "ready" && cached.signal === signal) return Promise.resolve();
       // Only the FIRST read announces itself as loading; a later one keeps the
       // figure already on screen until it is replaced, so a cost never blinks
       // out to make room for the same cost.
-      if (get().byQuery[key] === undefined) {
+      if (cached === undefined) {
         set((state) => ({ byQuery: { ...state.byQuery, [key]: { status: "loading" } } }));
       }
       const pending = read(query)
         .then((entry) => {
-          set((state) => ({ byQuery: { ...state.byQuery, [key]: entry } }));
+          set((state) => ({
+            byQuery: {
+              ...state.byQuery,
+              [key]: entry.status === "ready" ? { ...entry, signal } : entry,
+            },
+          }));
         })
         .finally(() => inFlight.delete(key));
       inFlight.set(key, pending);
@@ -137,7 +156,9 @@ export function createUsageStore() {
 }
 
 /** One read, with both failure shapes folded onto the same entry. */
-async function read(query: UsageQuery): Promise<UsageEntry> {
+async function read(
+  query: UsageQuery,
+): Promise<{ status: "ready"; report: SessionUsageReport } | { status: "error"; error: string }> {
   try {
     // `sinceMs` is resolved at read time rather than stored on the query: a
     // rolling window's lower bound moves with the clock, and a bound captured

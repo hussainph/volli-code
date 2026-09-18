@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
+  activateTab as activateSplitTab,
   arrangeTabs,
   baseNameOf,
   displayTicketId,
@@ -50,6 +51,8 @@ import {
 } from "@renderer/components/ticket/ticket-chat-tab";
 import { fileTabId } from "@renderer/components/ticket/ticket-file-tab";
 import { TicketBodyPanel } from "@renderer/components/ticket/ticket-body-panel";
+import { appendRefToTicketBody } from "@renderer/components/ticket/ticket-body-ref-append";
+import { useTicketBody } from "@renderer/components/ticket/use-ticket-body";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
 import {
   createTicketRecencyWatchOwner,
@@ -59,7 +62,6 @@ import {
 } from "@renderer/components/ticket/ticket-change-recency-owner";
 import { diffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import { browserTabId, parseBrowserTabId } from "@renderer/components/home/home-tabs";
-import { appendFileRef } from "@renderer/editor/file-refs";
 import { fileAttachHandlers } from "@renderer/components/attachments/file-drop";
 import { useAttachments } from "@renderer/hooks/use-attachments";
 import {
@@ -99,6 +101,7 @@ import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
+import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
@@ -107,7 +110,9 @@ import {
   stripBrowserTabs,
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
+import { isEmptyProvisionalChatDraft, useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProvisionalChatTabs } from "@renderer/hooks/use-provisional-chat-tabs";
 import { sessionPanes, ticketScope, useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
@@ -134,10 +139,15 @@ const NO_DIFF_META: Readonly<Record<string, { previousPath?: string | null; stat
  * fetch that fills it. `undefined` means the listing has never answered — which
  * is a different fact from a ticket that has no chats, and the only one a
  * relaunch may not act on.
+ *
+ * The read is the BASELINE only (VC-373): a ticket's rows are fetched once and
+ * `volli:session-activity` carries them after that, so returning to a ticket
+ * this window has already opened paints from the same cache the rail reads
+ * without re-asking main.
  */
 function useChatSessionRecordIds(ticketId: string): readonly string[] | undefined {
   React.useEffect(() => {
-    void useTicketSessionRecordsStore.getState().refresh(ticketId);
+    void useTicketSessionRecordsStore.getState().ensure(ticketId);
   }, [ticketId]);
   return useTicketSessionRecordsStore(
     useShallow((state) =>
@@ -197,6 +207,27 @@ export function TicketDetail({
   ticketPrefix: string;
   ticket: Ticket;
 }) {
+  // This workspace is built and on the DOM for THIS ticket (VC-385).
+  //
+  // A layout effect, not the render body. Rendering must stay free of side
+  // effects: the app runs under `StrictMode` and React is free to start a
+  // render and throw it away, so a mark stamped during render can describe a
+  // workspace that never committed — a measurement of something that did not
+  // happen. A layout effect runs after the subtree is on the DOM and before
+  // paint, which is both honest and the moment the phase is named for.
+  //
+  // Guarded by ticket id rather than by a bare `once` flag so it stays correct
+  // if this view ever stops being remounted per ticket: a re-render is not a
+  // new workspace, and stamping one would shorten the editor phase by exactly
+  // the time it was late.
+  const markedWorkspaceForRef = React.useRef<string | null>(null);
+  React.useLayoutEffect(() => {
+    if (markedWorkspaceForRef.current === ticket.id) return;
+    markedWorkspaceForRef.current = ticket.id;
+    markPerfPhase(PERF_PHASE.ticketWorkspaceMount);
+  }, [ticket.id]);
+
+  const ticketBody = useTicketBody(ticket);
   const closeTicket = useWorkspaceStore((state) => state.closeTicket);
   const openTicketFile = useWorkspaceStore((state) => state.openTicketFile);
   const previewTicketFile = useWorkspaceStore((state) => state.previewTicketFile);
@@ -260,11 +291,22 @@ export function TicketDetail({
   const chatTitles = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map(
-        (sessionId) =>
-          state.sessions[sessionId]?.projection?.session.title ?? CHAT_TAB_FALLBACK_LABEL,
+        (sessionId) => state.sessions[sessionId]?.projection?.session.title ?? null,
       ),
     ),
   );
+  // Everything this workspace needs to know about its Chat Drafts, and the
+  // rule about them, in one place shared with Home (VC-358).
+  const {
+    activeOverride: provisionalActive,
+    activeOverrideTabId: provisionalTabId,
+    emptyTabIds: emptyProvisionalTabIds,
+    guardLayoutWrites,
+    releaseActive,
+    shouldCommitActive,
+    takeActive,
+    titles: draftChatTitles,
+  } = useProvisionalChatTabs(ticket.id, openChatIds);
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
@@ -300,7 +342,6 @@ export function TicketDetail({
   // store instead, which is safe precisely because an unmounted editor has
   // already flushed its draft on the way out.
   const bodyEditorRef = React.useRef<MonacoDocumentEditorHandle>(null);
-  const updateTicket = useBoardStore((state) => state.updateTicket);
   /**
    * The Ticket's attachment strip, owned HERE rather than in the Files rail
    * that draws it (VC-106).
@@ -323,23 +364,32 @@ export function TicketDetail({
       // slice synchronously — the render-time body could still be a turn behind
       // and would drop the previous ref, which for a repo document is the whole
       // attachment (a pure ref creates no blob to fall back on).
-      const current =
-        useBoardStore
-          .getState()
-          .ticketsByProject[ticket.projectId]?.find((candidate) => candidate.id === ticket.id) ??
-        ticket;
-      void updateTicket({
-        ticketId: ticket.id,
-        body: appendFileRef(current.body, token),
-      });
+      //
+      // A body this renderer has never read is a `""` PLACEHOLDER, not an empty
+      // body (VC-387), so appending to it would save one `@ref` OVER the real
+      // Ticket Body. Read the canonical body first on that path, and append to
+      // what comes back.
+      void appendRefToTicketBody(ticket, token);
     },
     onError: (message) => toastError(message),
   });
   const resetAttachments = ticketAttachments.reset;
+  // Whether the strip's own read has landed. Until it has, the strip is
+  // UNKNOWN rather than empty: the materialized read below reads it through a
+  // revision, and a read issued against the not-yet-loaded "" would be paid a
+  // second time the moment the real strip arrives — two reads for a ticket
+  // with attachments, which is exactly the duplicate VC-373 removes.
+  const [attachmentsLoaded, setAttachmentsLoaded] = React.useState(false);
   React.useEffect(() => {
     let cancelled = false;
+    setAttachmentsLoaded(false);
     void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
-      if (!cancelled && result.ok) resetAttachments(result.blobs);
+      if (cancelled) return;
+      if (result.ok) resetAttachments(result.blobs);
+      // Settled either way: a failed read leaves the strip empty, which IS the
+      // strip as far as this view can know, and the materialized read is then
+      // the one read it costs.
+      setAttachmentsLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -351,11 +401,12 @@ export function TicketDetail({
    * Fetched ONCE here and shared with both surfaces below — the body editor
    * through a prop, the comment feed through context — so a picture cannot
    * render in one and fail in the other. Re-fetched when the strip changes, so
-   * a file dropped on the Body is resolvable without a remount.
+   * a file dropped on the Body is resolvable without a remount. `null` until
+   * the strip has landed (VC-373) — see {@link useMaterializedAttachments}.
    */
   const materializedAttachments = useMaterializedAttachments(
     { ticketId: ticket.id },
-    attachmentsRevision(ticketAttachments.attachments),
+    attachmentsLoaded ? attachmentsRevision(ticketAttachments.attachments) : null,
   );
   const [recencyOwner, dispatchRecencyOwner] = React.useReducer(
     reduceTicketRecencyOwner,
@@ -409,7 +460,8 @@ export function TicketDetail({
   // How its plane is SPLIT (VC-202) — null until someone splits it, and null
   // again the moment a close leaves one pane.
   const splitView = ticketTabsState?.splitView ?? null;
-  const activeTabId = ticketTabsState?.active ?? BODY_TAB_ID;
+  const persistedActiveTabId = ticketTabsState?.active ?? BODY_TAB_ID;
+  const activeTabId = provisionalTabId ?? persistedActiveTabId;
 
   // The per-tab worktree badge is driven by each file's resolved source, which
   // only the FileView knows after reading — it reports back via `onSource`.
@@ -686,9 +738,45 @@ export function TicketDetail({
   );
 
   const setActiveTab = React.useCallback(
-    (tabId: string) => setTicketActiveTab(projectId, ticket.id, tabId),
-    [setTicketActiveTab, projectId, ticket.id],
+    (tabId: string) => {
+      const chatId = parseChatTabId(tabId);
+      if (
+        chatId !== null &&
+        isEmptyProvisionalChatDraft(useChatDraftsStore.getState().drafts[chatId])
+      ) {
+        // Returning to an empty Draft is another renderer-only focus change,
+        // not the content boundary that earns a persisted workspace tab.
+        takeActive(chatId);
+        return;
+      }
+      releaseActive();
+      setTicketActiveTab(projectId, ticket.id, tabId);
+    },
+    [releaseActive, setTicketActiveTab, projectId, takeActive, ticket.id],
   );
+
+  // Empty Draft focus is renderer-only. The first content makes the Draft a
+  // relaunchable workspace tab under the same id; promotion later changes only
+  // its kind, never its identity or pane assignment.
+  React.useEffect(() => {
+    if (provisionalTabId === null || !shouldCommitActive) return;
+    // Preserve the focused pane the renderer-only overlay used before this tab
+    // crossed into persisted workspace layout.
+    if (splitView !== null) {
+      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, splitView.focusedPaneId);
+    }
+    setTicketActiveTab(projectId, ticket.id, provisionalTabId);
+    releaseActive();
+  }, [
+    projectId,
+    provisionalTabId,
+    releaseActive,
+    shouldCommitActive,
+    setTicketActiveTab,
+    moveTicketTabToPane,
+    splitView,
+    ticket.id,
+  ]);
 
   // The `@file` index + create/open wiring, shared by the Doc body editor and
   // every open markdown file tab so any of them can reference (and create) files.
@@ -890,7 +978,7 @@ export function TicketDetail({
     ...openChatIds.map((sessionId, index): TicketTabDescriptor => ({
       id: chatTabId(sessionId),
       kind: "chat",
-      label: chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
+      label: draftChatTitles[index] ?? chatTitles[index] ?? CHAT_TAB_FALLBACK_LABEL,
       status: chatStatuses[index],
     })),
     ...browserTabs.map((tab): TicketTabDescriptor => ({
@@ -925,7 +1013,11 @@ export function TicketDetail({
    * is exactly what a pane should show when the record names nothing live.
    */
   const split = resolveSplitView(
-    splitView ?? singlePaneSplitView([], activeTab.id, SPLIT_VIEW_ROOT_PANE_ID),
+    splitView === null
+      ? singlePaneSplitView([], activeTab.id, SPLIT_VIEW_ROOT_PANE_ID)
+      : provisionalActive === null
+        ? splitView
+        : activateSplitTab(splitView, chatTabId(provisionalActive)),
     tabs.map((tab) => tab.id),
     BODY_TAB_ID,
   );
@@ -933,7 +1025,11 @@ export function TicketDetail({
 
   // ⌘\ / ⇧⌘\ / ⌃⌘arrows, for this workspace. Home mounts the same hook; the
   // chord asks which surface is in front and exactly one of them acts.
-  useSplitShortcuts({ projectId, ticketId: ticket.id, orderedTabIds: tabs.map((tab) => tab.id) });
+  useSplitShortcuts({
+    projectId,
+    ticketId: ticket.id,
+    orderedTabIds: tabs.map((tab) => tab.id).filter((tabId) => !emptyProvisionalTabIds.has(tabId)),
+  });
 
   /**
    * The Session zen mode is holding, or null.
@@ -1103,16 +1199,19 @@ export function TicketDetail({
     async (chatSkills?: readonly string[]) => {
       await bootChatSession(ticketScope(projectId, ticket.id), {
         skills: chatSkills,
-        land: (sessionId) => {
+        land: (sessionId, isSession) => {
           // The ticket itself may have been deleted while the create was in
           // flight; a tab on a card that no longer exists is unreachable, so let
           // the Session go (its durable row stands — see `bootChatSession`).
           const tickets = useBoardStore.getState().ticketsByProject[projectId] ?? [];
           if (!tickets.some((candidate) => candidate.id === ticket.id)) return false;
           useChatSessionsStore.getState().openChatTab(ticket.id, sessionId);
-          setActiveTab(chatTabId(sessionId));
-          // So the rail's row for it appears without waiting on a terminal event.
-          void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+          if (isSession) {
+            setActiveTab(chatTabId(sessionId));
+            // So an immediate creator's rail row appears without waiting on a
+            // terminal event. Provisional promotion refreshes it later.
+            void useTicketSessionRecordsStore.getState().refresh(ticket.id);
+          }
           return true;
         },
       });
@@ -1206,9 +1305,9 @@ export function TicketDetail({
     if (tab.kind === "chat") {
       const chatId = parseChatTabId(tab.id);
       if (chatId === null) return;
-      // No busy guard and no confirm: the Session is durable, so closing the
-      // view loses nothing — reopening it from the rail adopts the same
-      // history. Standing the active tab down first, because the relaunch
+      // No busy guard and no confirm: close explicitly abandons a provisional
+      // Draft, while a durable Session keeps its history for the rail to reopen.
+      // Standing the active tab down first, because the relaunch
       // effect would otherwise read the persisted id, find the Session still on
       // record, and put the tab back. While SPLIT that stand-down is the split
       // view's own: it knows which pane held the tab and what succeeds it
@@ -1244,17 +1343,26 @@ export function TicketDetail({
    * activation door, the first split's strip claim — live in the seam, one
    * copy shared with Home.
    */
-  const dropWrites: SplitSurfaceWrites = {
+  // Every writer here records durable workspace layout, so each is wrapped by
+  // the one rule about an empty Chat Draft — see `useProvisionalChatTabs`,
+  // which Home shares.
+  const paneWrites: SplitSurfaceWrites = {
     reorderSurface: (movedId, ids) => moveTicketTab(projectId, ticket.id, movedId, ids),
     reorderPane: (paneId, movedId, ids) =>
       moveTicketTabInPane(projectId, ticket.id, paneId, movedId, ids),
     moveTabToPane: (tabId, paneId) => moveTicketTabToPane(projectId, ticket.id, tabId, paneId),
     splitPane: (paneId, edge, tabId, surfaceTabIds) =>
-      splitTicketPane(projectId, ticket.id, paneId, edge, { tabId, surfaceTabIds }),
+      splitTicketPane(projectId, ticket.id, paneId, edge, {
+        ...(tabId === null ? {} : { tabId }),
+        surfaceTabIds,
+      }),
     // The door the strip's own select takes.
     activateTab: (tabId) => setActiveTab(tabId),
     openPayload: openDroppedPayload,
   };
+  const dropWrites = guardLayoutWrites(paneWrites, (paneId) =>
+    focusTicketPane(projectId, ticket.id, paneId),
+  );
   const dropState = { isSplit: splitView !== null, orderedTabIds: tabs.map((tab) => tab.id) };
 
   /** A drop on one pane's strip — surface arrangement unsplit, pane order split. */
@@ -1351,6 +1459,8 @@ export function TicketDetail({
                 fileRefs={fileRefs}
                 editorRef={bodyEditorRef}
                 attachments={materializedAttachments}
+                bodyStatus={ticketBody.status}
+                onRetryBody={ticketBody.retry}
               />
             </div>
           ) : null}
@@ -1592,7 +1702,14 @@ export function TicketDetail({
 function renameSessionTab(tabId: string, title: string): void {
   const chatSessionId = parseChatTabId(tabId);
   if (chatSessionId !== null) {
-    void renameChatSession(chatSessionId, title);
+    // Before the create lands the title is the Draft's; after it, the same
+    // gesture is a Session rename. Routing by phase means a rename typed in the
+    // promotion window lands somewhere rather than being dropped.
+    if (useChatDraftsStore.getState().drafts[chatSessionId]?.provisional?.phase === "draft") {
+      useChatDraftsStore.getState().setProvisionalTitle(chatSessionId, title);
+    } else {
+      void renameChatSession(chatSessionId, title);
+    }
     return;
   }
   renameTerminalSession(tabId, title);

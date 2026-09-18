@@ -53,6 +53,9 @@ import type {
   LatestSessionSignal,
   LegacyProject,
   ManifestError,
+  McpServerDraft,
+  McpOperationRecord,
+  McpServerRecord,
   ModelAccessSignInType,
   DeliberateMoveChoice,
   ModelSelection,
@@ -101,6 +104,7 @@ import type {
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
+  TicketSummary,
   ValidAutomationRuntime,
   VenueReading,
   WorkspaceDependenciesStatus,
@@ -159,6 +163,52 @@ export interface ProjectAuthorityPolicyInput {
   /** An `AuthorityPolicyOverride`-shaped document, or `null` to inherit everything. */
   override: unknown;
 }
+
+export interface McpProjectInput {
+  projectId: string;
+}
+
+export interface McpServerInput extends McpProjectInput {
+  server: McpServerDraft;
+}
+
+export interface McpSaveInput extends McpServerInput {
+  enabledTools: readonly string[];
+}
+
+export interface McpServerIdInput extends McpProjectInput {
+  serverId: string;
+}
+
+export interface McpSetEnabledInput extends McpServerIdInput {
+  enabled: boolean;
+}
+
+export interface McpSetToolsInput extends McpServerIdInput {
+  enabledTools: readonly string[];
+}
+
+export type McpServersResult =
+  | {
+      ok: true;
+      servers: readonly McpServerRecord[];
+      /**
+       * This project's MCP management history, newest first (VC-380).
+       *
+       * Carried by the same read that fetches the servers rather than by a
+       * channel of its own: it is the same project scope, wanted at the same
+       * moment, and a removal's record is the one a person most needs to see
+       * precisely when its server is no longer in the list beside it.
+       */
+      operations: readonly McpOperationRecord[];
+    }
+  | { ok: false; error: string };
+export type McpServerResult =
+  | { ok: true; server: McpServerRecord }
+  | { ok: false; error: string; server?: McpServerRecord };
+export type McpCatalogResult =
+  | { ok: true; catalog: McpServerRecord["catalog"] }
+  | { ok: false; error: string };
 
 /**
  * A policy write that was refused, with every reason.
@@ -323,14 +373,16 @@ export interface BlobLinkIdInput {
 }
 
 /**
- * Attaches Blobs imported before their Ticket existed. The new-Ticket composer
+ * Attaches Blobs imported before their owner existed. The new-Ticket composer
  * imports eagerly (so size is refused and previews drawn while the file is
- * still in hand) and calls this once `ticket.create` has returned an id.
+ * still in hand) and calls this once `ticket.create` has returned an id; a
+ * promoted chat Draft (VC-358) imports the same way and calls this once its
+ * `session.create` has returned the id its staged blobs were waiting beside.
+ * Exactly one owner — the `blob_links` CHECK enforces the same thing durably.
  */
-export interface BlobLinkDraftsInput {
-  ticketId: string;
+export type BlobLinkDraftsInput = {
   blobs: { blobHash: string; label?: string }[];
-}
+} & ({ ticketId: string; sessionId?: undefined } | { sessionId: string; ticketId?: undefined });
 
 /** `{ sessionId, title }` with a non-blank title — the rename handler trims before persisting. */
 export interface SessionRenameInput {
@@ -628,6 +680,11 @@ export interface ArtifactCreateInput {
  */
 export interface VolliDataIpcContract {
   "volli:data-bootstrap": { args: []; result: BootstrapResult };
+  /**
+   * One project's live tickets (bodies excluded) and labels — the read a
+   * targeted refresh makes in place of a whole-board bootstrap (VC-387).
+   */
+  "volli:data-project-roster": { args: [input: ProjectIdInput]; result: ProjectRosterResult };
   /** Main owns the database path; an omitted action reads its size. */
   "volli:database": { args: [action?: DatabaseAction]; result: DatabaseResult };
   /** One-time localStorage → SQLite import; a no-op (returns current state) once the db is non-empty. */
@@ -661,6 +718,14 @@ export interface VolliDataIpcContract {
     args: [input: ProjectAuthorityPolicyInput];
     result: ProjectAuthorityPolicyResult;
   };
+  /** App-owned per-project MCP settings. No repository configuration is read. */
+  "volli:mcp-list": { args: [input: McpProjectInput]; result: McpServersResult };
+  "volli:mcp-test": { args: [input: McpServerInput]; result: McpCatalogResult };
+  "volli:mcp-save": { args: [input: McpSaveInput]; result: McpServerResult };
+  "volli:mcp-refresh": { args: [input: McpServerIdInput]; result: McpServerResult };
+  "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
+  "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
+  "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -683,6 +748,8 @@ export interface VolliDataIpcContract {
   "volli:ticket-list-archived": { args: [projectId: string]; result: ArchivedTicketsResult };
   /** A ticket's full event history, chronological — backs the Activity feed. */
   "volli:ticket-events": { args: [input: TicketIdInput]; result: TicketEventsResult };
+  /** One ticket's Markdown body — read by the ticket that is OPEN, since the refresh roster no longer carries it (VC-387). */
+  "volli:ticket-body": { args: [input: TicketIdInput]; result: TicketBodyResult };
   /** The latest durable Session outcome per ticket — one batched read backing the sidebar's attention rows. */
   "volli:ticket-latest-signals": {
     args: [input: ProjectIdInput];
@@ -2281,7 +2348,7 @@ export interface VolliSystemIpcContract {
     args: [sessionId: string, command: string];
     result: TerminalCommandResult;
   };
-  /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+  /** Reads the user's resolved Ghostty config as the renderer's terminal appearance. */
   "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
 }
 
@@ -2907,6 +2974,23 @@ export interface BootstrapPayload {
 }
 
 export type BootstrapResult = Result<{ data: BootstrapPayload }>;
+
+/**
+ * One project's live board — the read a targeted `volli:data-changed` makes
+ * instead of re-reading every project (VC-387). The rows are
+ * {@link TicketSummary}: bodies are ~90% of a board's bytes (measured: 1056 KiB
+ * of payload becomes 123 KiB without them) and no board surface renders one, so
+ * a body rides in once on the boot payload and after that only the OPEN ticket
+ * reads its own through {@link TicketBodyResult}.
+ *
+ * `labels` is the project's label set, which a label rename/retire moves in step
+ * with the tickets that carry it, so the two travel together exactly as they do
+ * in the boot payload.
+ */
+export type ProjectRosterResult = Result<{ tickets: TicketSummary[]; labels: Label[] }>;
+
+/** One ticket's Markdown body — what the roster no longer carries (VC-387). */
+export type TicketBodyResult = Result<{ body: string }>;
 
 export interface LegacyImportRequest {
   projects: LegacyProject[];

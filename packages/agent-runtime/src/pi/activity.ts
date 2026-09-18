@@ -15,7 +15,7 @@ import type {
   RuntimeActivityObservation,
   RuntimeActivityValue,
 } from "@volli/shared";
-import { isActivityBrowseAction, readActivityBrowse } from "@volli/shared";
+import { isActivityBrowseAction, isMcpToolId, readActivityBrowse } from "@volli/shared";
 import { sanitizeDiagnostic } from "./transcript";
 
 /** Maximum characters retained in a user-facing activity summary or error. */
@@ -93,8 +93,8 @@ const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
   browser_console: "console",
 };
 
-/** Image bytes never enter an activity payload; the picture travels as the host's id. */
-const IMAGE_OMITTED = "[image]";
+/** Binary content never enters an activity payload. */
+const BINARY_OMITTED = { image: "[image]", audio: "[audio]" } as const;
 
 const PREFIXED_SECRET = /\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_][A-Za-z0-9_-]+/gi;
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
@@ -102,6 +102,11 @@ const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s
 const NAMED_SECRET =
   /\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi;
 const SENSITIVE_KEY = /(?:token|apikey|password|secret|authorization|credential)/i;
+// Every redaction pattern starts with one of these markers. Most tool output
+// has none, so one scan avoids four full-string replacement scans while
+// retaining the exact slow path for anything that might contain a secret.
+const SECRET_MARKER =
+  /(?:\b(?:sk|pk|ghp|gho|xox[a-z]?)[-_]|\bbearer\s|\bauthorization\s*:|\b(?:api[ _-]?key|token|password|secret|credential)\s*(?:=|:))/i;
 const REDACTED_VALUE = "[redacted]";
 
 /**
@@ -132,7 +137,9 @@ export function mapPiActivity(
           : null;
     const input = normalizeInput(sourceInput);
     const output = normalizeActivityValue(
-      toolName in BROWSER_TOOL_ACTION ? withoutImageBytes(sourceOutput) : sourceOutput,
+      toolName in BROWSER_TOOL_ACTION || isMcpToolId(toolName)
+        ? withoutBinaryBytes(sourceOutput)
+        : sourceOutput,
     );
     const startedAt =
       type === "tool_execution_start"
@@ -326,26 +333,23 @@ export function displayUrl(url: string | null): string | null {
 }
 
 /**
- * A BROWSER tool result with its image blocks' bytes removed, before the value
- * bound ever sees them. A screenshot is ~100 KB of base64 against a 32 KB
- * string bound: kept, it would be cut mid-string and shown to nobody; the host
- * holds the real picture and the facet names it.
- *
- * Only browser tools, deliberately. This slice built the picture path for
- * `browser_screenshot` alone, and stripping every tool's image blocks would
- * silently change what an unrelated tool's activity payload carries with
- * nothing standing in for the bytes — a loss where here it is a substitution.
+ * Remove binary blocks before the durable value bound sees them. Browser
+ * screenshots travel by the host's picture id; MCP images remain available to
+ * the model in Pi's live result but history keeps only a typed placeholder.
+ * MCP audio is already converted to text by the tool wrapper, and is stripped
+ * here too so this durable boundary stays safe if Pi exposes a raw block.
  */
-function withoutImageBytes(rawOutput: unknown): unknown {
+function withoutBinaryBytes(rawOutput: unknown): unknown {
   const result = recordOf(rawOutput);
   const content = readField(result, "content");
   if (result === null || !Array.isArray(content)) return rawOutput;
   const stripped: unknown[] = [];
   for (const block of content) {
     const item = recordOf(block);
+    const type = readField(item, "type");
     stripped.push(
-      item !== null && readField(item, "type") === "image" && "data" in item
-        ? { ...item, data: IMAGE_OMITTED }
+      item !== null && (type === "image" || type === "audio") && "data" in item
+        ? { ...item, data: BINARY_OMITTED[type] }
         : block,
     );
   }
@@ -440,14 +444,15 @@ function outcomeFor(
   const rawDetails = recordOf(readField(rawResult, "details")) ?? rawResult;
   const patch = cleanPayloadText(readField(details, "patch"));
   const completePatch = stringOf(readField(rawDetails, "patch"));
+  const diffLines = completePatch === null ? null : countDiffLines(completePatch);
   return {
     exitCode: finiteNumber(readField(details, "exitCode")),
     matchCount: finiteNumber(readField(details, "matchCount")),
     fileCount: finiteNumber(readField(details, "fileCount")),
     lineCount: finiteNumber(readField(details, "lineCount")),
     bytes: finiteNumber(readField(details, "bytes")),
-    addedLines: completePatch === null ? null : countDiffLines(completePatch, "+"),
-    removedLines: completePatch === null ? null : countDiffLines(completePatch, "-"),
+    addedLines: diffLines?.added ?? null,
+    removedLines: diffLines?.removed ?? null,
     diff: patch,
     summary: summaryFor(result),
     // One child per delegate call today; counted off the fact that a child
@@ -458,20 +463,23 @@ function outcomeFor(
   };
 }
 
-function countDiffLines(diff: string, prefix: "+" | "-"): number {
-  let count = 0;
+function countDiffLines(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
   let lineStart = 0;
   for (let index = 0; index <= diff.length; index += 1) {
     if (index !== diff.length && diff.charCodeAt(index) !== 10) continue;
+    const prefix = diff.charAt(lineStart);
     if (
-      diff.charAt(lineStart) === prefix &&
+      (prefix === "+" || prefix === "-") &&
       !(diff.charAt(lineStart + 1) === prefix && diff.charAt(lineStart + 2) === prefix)
     ) {
-      count += 1;
+      if (prefix === "+") added += 1;
+      else removed += 1;
     }
     lineStart = index + 1;
   }
-  return count;
+  return { added, removed };
 }
 
 function summaryFor(result: Record<string, RuntimeActivityValue> | null): string | null {
@@ -597,8 +605,11 @@ function normalizedNumber(value: number, state: { remaining: number }): number |
 
 function normalizedString(value: string, state: { remaining: number }): string | typeof OMITTED {
   const bounded = boundPayloadText(value);
-  if (JSON.stringify(bounded).length <= state.remaining) {
-    state.remaining -= JSON.stringify(bounded).length;
+  // V8's native serializer is faster than a JavaScript escape scan. Keep its
+  // first result instead of allocating and scanning the same string twice.
+  const encodedLength = JSON.stringify(bounded).length;
+  if (encodedLength <= state.remaining) {
+    state.remaining -= encodedLength;
     return bounded;
   }
   if (state.remaining < 3) return OMITTED;
@@ -611,8 +622,7 @@ function normalizedString(value: string, state: { remaining: number }): string |
     else high = middle - 1;
   }
   const truncated = `${bounded.slice(0, low)}…`;
-  const length = JSON.stringify(truncated).length;
-  state.remaining -= length;
+  state.remaining -= JSON.stringify(truncated).length;
   return truncated;
 }
 
@@ -641,6 +651,7 @@ function boundSummaryText(value: string): string {
 }
 
 function redactPayloadSecrets(value: string): string {
+  if (!SECRET_MARKER.test(value)) return value;
   return value
     .replace(PREFIXED_SECRET, "[redacted]")
     .replace(
