@@ -2,12 +2,14 @@
   "name": "@volli/website",
   "version": "0.0.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
-    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs && pnpm run licenses:check",
     "check:licenses": "node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs",
+    "licenses:check": "check-font-notices .",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-code --branch main",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",
     "brand": "node scripts/generate-brand-assets.mjs",
@@ -20,6 +22,7 @@
   "dependencies": {
     "@astrojs/react": "^6.0.4",
     "@fontsource-variable/mona-sans": "5.3.0",
+    "@volli/font-notices": "workspace:*",
     "astro": "7.2.8",
     "gsap": "^3.15.0",
     "react": "^19.2.8",

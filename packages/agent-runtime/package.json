@@ -2,6 +2,7 @@
   "name": "@volli/agent-runtime",
   "version": "0.0.1",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -41,5 +42,20 @@
     "esbuild": "0.28.2",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "volli": {
+    "notices": [
+      {
+        "title": "pi-automode path canonicalization and shell lexer",
+        "covers": [
+          "src/authority/vendor/paths.ts",
+          "src/authority/vendor/shell.ts"
+        ],
+        "upstream": "https://github.com/czottmann/pi-automode at revision bd82e29 (tag v1.11.0)",
+        "spdx": "MIT",
+        "evidence": "src/authority/vendor/README.md pins the upstream repository, revision and tag, and lists file-by-file what was taken and what diverges. The licence text is upstream's LICENSE.md at that revision.",
+        "text": "notices/pi-automode.LICENSE.txt"
+      }
+    ]
   }
 }

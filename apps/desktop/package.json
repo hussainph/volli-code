@@ -2,6 +2,7 @@
   "name": "@volli/desktop",
   "version": "0.2.0-canary.11",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -18,6 +19,7 @@
     "licenses:verify-sources": "node scripts/generate-lgpl-source-offer.mjs --verify-sources",
     "check:library-validation": "node scripts/check-library-validation.mjs --self-test && node scripts/check-library-validation.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
+    "check:theme-provenance": "node scripts/check-theme-provenance.mjs --self-test && node scripts/check-theme-provenance.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vp test run",

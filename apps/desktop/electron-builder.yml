@@ -132,16 +132,38 @@ asarUnpack:
   # "Search is unavailable" only in the packaged app is that rewrite missing.
   - "**/node_modules/@vscode/**"
 
-# LGPL compliance material, shipped INSIDE the bundle rather than kept in the
-# repository (VC-409). libvips is LGPLv3, and section 4 of that license is not
-# satisfied by documents a user cannot reach: 4(a)'s notice, the Corresponding
-# Source directions 4(d)(0) reaches through GPLv3 6(d), and the Installation
-# Information 4(e) asks for all have to ACCOMPANY the binary.
+# Licence notices travel with the artifact (VC-407). All three files land in
+# Contents/Resources, the place a user reaches through Finder's "Show Package
+# Contents" and the conventional home for a desktop app's notices — inside the
+# asar they would be unreadable without unpacking it.
 #
-# Lands at Contents/Resources/licensing/. relink-libvips.sh is executable and
-# is meant to be run from there — the path is quoted in RELINK-LIBVIPS.md.
-# `check:licenses` fails if this block or any of those files goes missing.
+# THIRD-PARTY-NOTICES is generated from the resolved production dependency set
+# by the repo-root scripts/generate-third-party-notices.mjs and committed;
+# `check:notices` (CI) fails when it drifts from what is installed, when a file
+# named here goes missing, and when a package this config ships — including a
+# platform-native one the dependency walk skips — has no notice covering it. That
+# check reads THIS block — renaming a destination without telling the generator
+# fails rather than silently shipping to the old path. The Electron Chromium
+# catalogue source is intentionally not checked in: electron-builder resolves
+# the downloaded Electron distribution for packaging, while check:notices lets
+# that source be absent on offline CI and rejects it when present but empty.
+#
+# The `licensing/` directory beside them is VC-409's LGPL compliance material,
+# and it is a DIFFERENT obligation from the notices above. libvips is LGPLv3,
+# and section 4 of that licence is not satisfied by documents a user cannot
+# reach: 4(a)'s notice, the verbatim GPL and LGPL texts 4(b) requires, the
+# Corresponding Source directions 4(d)(0) reaches through GPLv3 6(d), and the
+# Installation Information 4(e) asks for all have to ACCOMPANY the binary.
+# It lands at Contents/Resources/licensing/; relink-libvips.sh is executable
+# and is meant to be run from there — the path is quoted in RELINK-LIBVIPS.md.
+# `check:licenses` fails if that block or any of those files goes missing.
 extraResources:
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: THIRD-PARTY-NOTICES
+    to: THIRD-PARTY-NOTICES.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: LICENSES.chromium.html
   - from: licensing
     to: licensing
 
