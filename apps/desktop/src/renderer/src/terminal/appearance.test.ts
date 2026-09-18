@@ -189,7 +189,7 @@ describe("the token-derived terminal fallback", () => {
 
     expect(colors.background).toEqual({ r: 0x15, g: 0x10, b: 0x0e });
     expect(ember["--background"]).toBe("#15100e");
-    expect(colors.cursor).toEqual({ r: 0xe8, g: 0x65, b: 0x2a });
+    expect(colors.cursor).toEqual(parseHexColor(ember["--primary"]));
   });
 
   it("repaints when the app theme changes", () => {
@@ -203,11 +203,9 @@ describe("the token-derived terminal fallback", () => {
       g: 0x11,
       b: 0x17,
     });
-    expect(getCurrentAppearance().theme.colors.cursor).toEqual({
-      r: 0x65,
-      g: 0x89,
-      b: 0xff,
-    });
+    expect(getCurrentAppearance().theme.colors.cursor).toEqual(
+      parseHexColor(midnight["--primary"]),
+    );
   });
 
   it("notifies live terminals so they re-theme in place", () => {

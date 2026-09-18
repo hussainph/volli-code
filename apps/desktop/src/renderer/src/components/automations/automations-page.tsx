@@ -152,7 +152,7 @@ function ViewChoice({
       onClick={() => onChange(value)}
       className={cn(
         "flex h-7 items-center gap-2 rounded-md px-2 text-ui outline-none",
-        "focus-visible:ring-2 focus-visible:ring-ring/45",
+        "focus-visible:ring-2 focus-visible:ring-ring",
         active
           ? "bg-accent text-foreground shadow-raised"
           : "text-muted-foreground hover:text-foreground",
@@ -498,7 +498,7 @@ function AutomationRail({
               type="button"
               aria-label={`New automation in ${group.label}`}
               onClick={onCreate}
-              className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
+              className="ml-auto grid size-5 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               <PlusIcon weight="bold" className="size-3" />
             </button>
@@ -515,7 +515,7 @@ function AutomationRail({
                 onClick={() => onSelect(automation)}
                 className={cn(
                   "flex w-full flex-col gap-1 rounded-lg px-2 py-2 text-left outline-none",
-                  "focus-visible:ring-2 focus-visible:ring-ring/45",
+                  "focus-visible:ring-2 focus-visible:ring-ring",
                   automation.id === selectedId
                     ? "bg-accent text-foreground"
                     : "text-muted-foreground hover:bg-accent/50",
