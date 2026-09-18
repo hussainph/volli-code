@@ -157,7 +157,7 @@ export function ListRow({
   // pointer and a right-click land on, and a target shorter than its own row
   // leaves a dead strip above and below every entry in the list.
   const target =
-    "flex min-w-0 flex-1 items-center gap-2 self-stretch text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
+    "flex min-w-0 flex-1 items-center gap-2 self-stretch text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
   return (
     <div

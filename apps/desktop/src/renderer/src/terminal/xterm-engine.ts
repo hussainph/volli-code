@@ -43,6 +43,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import type { IDisposable } from "@xterm/xterm";
+import { toast } from "sonner";
 
 import "@xterm/xterm/css/xterm.css";
 
@@ -113,6 +114,8 @@ export class XtermEngine implements TerminalEngine {
   /** Pane-local zoom layered over the live Ghostty-config base size. */
   private fontSizeOffset = 0;
   private disposed = false;
+  /** Pane-local and kept across re-parent/hide/show, just like the terminal. */
+  private tabMovesFocus = false;
 
   constructor() {
     this.hostEl = document.createElement("div");
@@ -137,6 +140,10 @@ export class XtermEngine implements TerminalEngine {
       // Re-parenting can leave stale layout; force a re-measure on the new box.
       this.fit();
     }
+    // The host's live name includes the tab title and split pane number. Use
+    // a reference so renaming the tab updates the input without remounting it.
+    if (container.id) this.term?.textarea?.setAttribute("aria-labelledby", container.id);
+    else this.term?.textarea?.removeAttribute("aria-labelledby");
   }
 
   /** Build the terminal inside hostEl and flush the pre-attach buffer. */
@@ -157,6 +164,9 @@ export class XtermEngine implements TerminalEngine {
       // which is the only way to copy out of one.
       macOptionClickForcesSelection: true,
       macOptionIsMeta: macOptionIsMeta(appearance.macosOptionAsAlt),
+      // DOM renderer rows are aria-hidden too. Only xterm's accessibility
+      // tree exposes parsed rows, scrollback navigation and live output to AT.
+      screenReaderMode: true,
       scrollOnUserInput: true,
       scrollback: scrollbackLines(appearance.scrollbackLimitBytes),
       theme: xtermTheme(appearance.theme),
@@ -181,6 +191,7 @@ export class XtermEngine implements TerminalEngine {
       this.dimensions = { cols, rows };
       fanOut(this.resizeCbs, "resize", this.dimensions);
     });
+    term.onScroll(() => this.syncScrollState());
     term.attachCustomKeyEventHandler(this.handleKeyEvent);
 
     // Safe while the host is `display:none` (a background tab's first attach):
@@ -188,6 +199,7 @@ export class XtermEngine implements TerminalEngine {
     // the grid it opens with is real and `fit()` on reveal corrects it.
     term.open(this.hostEl);
     this.term = term;
+    this.updateInputAccessibility();
     this.fitAddon = fitAddon;
     this.applyMouseReporting(appearance.mouseReporting);
     // xterm has NO auto-resize of its own — unlike the renderer this replaces,
@@ -244,6 +256,32 @@ export class XtermEngine implements TerminalEngine {
    * xterm calls this handler for keyup and keypress too, hence the type guard.
    */
   private readonly handleKeyEvent = (event: KeyboardEvent): boolean => {
+    // Preserve shell completion by default, but provide the same explicit
+    // Tab-navigation toggle used by code editors. Never send the chord (or
+    // its repeat/keypress) to the PTY as a control character.
+    if (
+      event.ctrlKey &&
+      event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      (event.code === "KeyM" || event.key.toLowerCase() === "m")
+    ) {
+      event.preventDefault();
+      if (event.type === "keydown" && !event.repeat) {
+        this.tabMovesFocus = !this.tabMovesFocus;
+        this.updateInputAccessibility();
+        toast(this.tabMovesFocus ? "Tab moves focus" : "Tab sends to terminal");
+      }
+      return false;
+    }
+    if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Do NOT preventDefault in navigation mode: Chromium owns traversal.
+      if (this.tabMovesFocus) return false;
+      // screenReaderMode otherwise lets Shift-Tab both send ESC[Z AND move
+      // focus. Keep completion/TUI input and app navigation mutually exclusive.
+      if (event.type === "keydown") event.preventDefault();
+      return true;
+    }
     if (event.type !== "keydown") return true;
     const sides = heldAltSides();
     const seq = optionAsAltSequence(
@@ -257,6 +295,13 @@ export class XtermEngine implements TerminalEngine {
     this.emitData(seq);
     return false;
   };
+
+  private updateInputAccessibility(): void {
+    const description = `${this.tabMovesFocus ? "Tab moves focus." : "Tab sends to terminal."} Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.`;
+    this.term?.textarea?.setAttribute("aria-description", description);
+    this.term?.textarea?.setAttribute("aria-keyshortcuts", "Control+Shift+M");
+    this.term?.textarea?.setAttribute("title", description);
+  }
 
   onData(callback: (data: string) => void): () => void {
     this.dataCbs.add(callback);
@@ -312,7 +357,28 @@ export class XtermEngine implements TerminalEngine {
       return;
     }
     this.pendingFit = false;
+    // xterm preserves the buffer's line index while FitAddon changes the row
+    // count. If the person was following the tail, that index is no longer the
+    // bottom after a row-count change, so the next PTY output would land below
+    // the viewport. Preserve intentional scrollback inspection, but restore
+    // the tail only when it was selected before the geometry change.
+    const active = this.term?.buffer.active;
+    const wasAtBottom = active !== undefined && active.viewportY >= active.baseY;
     this.fitAddon.fit();
+    if (wasAtBottom) this.term?.scrollToBottom();
+    this.syncScrollState();
+  }
+
+  /** Keep the current xterm line-based viewport state available to the
+   * desktop smoke harness, whose old native-scroll reader predates xterm's
+   * custom scrollbar. This is not layout state: it is the same public buffer
+   * API used by fit's follow-bottom decision above. */
+  private syncScrollState(): void {
+    const active = this.term?.buffer.active;
+    const renderer = this.hostEl.querySelector(".xterm");
+    if (active === undefined || renderer === null) return;
+    renderer.setAttribute("data-terminal-scroll-top", String(active.viewportY));
+    renderer.setAttribute("data-terminal-scroll-max", String(active.baseY));
   }
 
   focus(): void {

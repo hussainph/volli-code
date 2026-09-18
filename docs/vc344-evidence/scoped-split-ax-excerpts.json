@@ -1,0 +1,102 @@
+{
+  "native": {
+    "trusted": true,
+    "nodeCount": 580,
+    "matches": [
+      {
+        "AXDescription": "Terminal 1 \u2014 pane 1",
+        "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+        "AXRole": "AXGroup",
+        "depth": 19
+      },
+      {
+        "AXRole": "AXStaticText",
+        "AXValue": "VC344-SPLIT-1",
+        "depth": 24
+      },
+      {
+        "AXRole": "AXStaticText",
+        "AXValue": "\\033[2J\\03[H\\126\\10 \\\\120\\ VC344-SPLIT-1 % phalasiya@V2027 project-XpNR8U %",
+        "depth": 23
+      },
+      {
+        "AXRole": "AXTextField",
+        "AXTitle": "Terminal 1 \u2014 pane 1",
+        "depth": 23
+      },
+      {
+        "AXDescription": "Terminal 1 \u2014 pane 2",
+        "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+        "AXRole": "AXGroup",
+        "depth": 19
+      },
+      {
+        "AXRole": "AXStaticText",
+        "AXValue": "VC344-SPLIT-2",
+        "depth": 24
+      },
+      {
+        "AXRole": "AXStaticText",
+        "AXValue": "% phalasiya@V2027 project-XpNR8U % printf ' \\\\03[2J\\03[H\\ \\\\120\\ VC344-SPLIT-2 % phalasiya@V2027 project-XpNR8U %",
+        "depth": 23
+      },
+      {
+        "AXRole": "AXTextField",
+        "AXTitle": "Terminal 1 \u2014 pane 2",
+        "depth": 23
+      }
+    ]
+  },
+  "chromium": [
+    {
+      "role": "region",
+      "name": "Terminal 1 \u2014 pane 1",
+      "ignored": false
+    },
+    {
+      "role": "region",
+      "name": "Terminal 1 \u2014 pane 2",
+      "ignored": false
+    },
+    {
+      "role": "StaticText",
+      "name": "\\033[2J\\03[H\\126\\10 \\\\120\\ VC344-SPLIT-1 % phalasiya@V2027 project-XpNR8U %",
+      "ignored": false
+    },
+    {
+      "role": "textbox",
+      "name": "Terminal 1 \u2014 pane 1",
+      "ignored": false
+    },
+    {
+      "role": "StaticText",
+      "name": "% phalasiya@V2027 project-XpNR8U % printf ' \\\\03[2J\\03[H\\ \\\\120\\ VC344-SPLIT-2 % phalasiya@V2027 project-XpNR8U %",
+      "ignored": false
+    },
+    {
+      "role": "textbox",
+      "name": "Terminal 1 \u2014 pane 2",
+      "ignored": false
+    },
+    {
+      "role": "StaticText",
+      "name": "VC344-SPLIT-1",
+      "ignored": false
+    },
+    {
+      "role": "StaticText",
+      "name": "VC344-SPLIT-2",
+      "ignored": false
+    },
+    {
+      "role": "InlineTextBox",
+      "name": "VC344-SPLIT-1",
+      "ignored": false
+    },
+    {
+      "role": "InlineTextBox",
+      "name": "VC344-SPLIT-2",
+      "ignored": false
+    }
+  ]
+}

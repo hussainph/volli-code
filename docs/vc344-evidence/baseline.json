@@ -1,0 +1,266 @@
+{
+  "ticket": "VC-344",
+  "baseline": true,
+  "marker": "VC344-OUTPUT-READABLE",
+  "startedAt": "2026-09-18T18:07:43.596Z",
+  "commit": "3bf58945273ea876fac744f2f50483eec69ab378",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.5.1\nBuildVersion:\t\t25F80",
+  "checks": [
+    {
+      "name": "before-focus-is-chrome",
+      "ok": true
+    },
+    {
+      "name": "AX-before-focus",
+      "ok": false,
+      "containsMarker": false,
+      "exposedNodes": 209
+    },
+    {
+      "name": null,
+      "ok": false,
+      "role": null,
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": null,
+      "inputDescription": null,
+      "tabIndex": 0,
+      "accessibleRows": 0
+    },
+    {
+      "name": "mac-AX-before-focus",
+      "ok": false,
+      "bytes": 1,
+      "containsMarker": false,
+      "usable": false
+    },
+    {
+      "name": "AX-after-focus",
+      "ok": false,
+      "containsMarker": false,
+      "exposedNodes": 209
+    },
+    {
+      "name": null,
+      "ok": false,
+      "role": null,
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": null,
+      "inputDescription": null,
+      "tabIndex": 0,
+      "accessibleRows": 0
+    },
+    {
+      "name": "mac-AX-after-focus",
+      "ok": false,
+      "bytes": 1,
+      "containsMarker": false,
+      "usable": false
+    },
+    {
+      "name": "normal-Tab-stays-in-PTY",
+      "ok": true,
+      "walk": [
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        }
+      ]
+    },
+    {
+      "name": "normal-Shift+Tab-stays-in-PTY",
+      "ok": true,
+      "walk": [
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        }
+      ]
+    },
+    {
+      "name": "Terminal input",
+      "ok": false,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "Terminal input",
+      "ok": true,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "Terminal input",
+      "ok": false,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "Terminal input",
+      "ok": true,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "navigation-does-not-write-PTY",
+      "ok": false,
+      "hex": "09"
+    },
+    {
+      "name": "AX-terminal-focus",
+      "ok": false,
+      "containsMarker": false,
+      "exposedNodes": 34
+    },
+    {
+      "name": null,
+      "ok": false,
+      "role": null,
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": null,
+      "inputDescription": null,
+      "tabIndex": 0,
+      "accessibleRows": 0
+    },
+    {
+      "name": "mac-AX-terminal-focus",
+      "ok": false,
+      "bytes": 1,
+      "containsMarker": false,
+      "usable": false
+    },
+    {
+      "name": "AX-hidden",
+      "ok": true,
+      "containsMarker": false,
+      "exposedNodes": 162
+    },
+    {
+      "name": "AX-hide-show",
+      "ok": false,
+      "containsMarker": false,
+      "exposedNodes": 209
+    },
+    {
+      "name": null,
+      "ok": false,
+      "role": null,
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": null,
+      "inputDescription": null,
+      "tabIndex": 0,
+      "accessibleRows": 0
+    },
+    {
+      "name": "mac-AX-hide-show",
+      "ok": false,
+      "bytes": 1,
+      "containsMarker": false,
+      "usable": false
+    },
+    {
+      "name": "AX-split",
+      "ok": false,
+      "containsMarker": false,
+      "exposedNodes": 217
+    },
+    {
+      "name": null,
+      "ok": false,
+      "role": null,
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": null,
+      "inputDescription": null,
+      "tabIndex": 0,
+      "accessibleRows": 0
+    },
+    {
+      "name": "mac-AX-split",
+      "ok": false,
+      "bytes": 1,
+      "containsMarker": false,
+      "usable": false
+    },
+    {
+      "name": "split-has-distinct-names",
+      "ok": false,
+      "names": [
+        null,
+        null
+      ]
+    }
+  ],
+  "appPid": 922,
+  "finishedAt": "2026-09-18T18:08:28.571Z"
+}

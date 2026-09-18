@@ -420,26 +420,15 @@ describe("the accent", () => {
     "--ring",
   ];
 
-  it("walks from a near-neutral chrome to the brand color exactly, as vibrancy travels", () => {
-    // The four rows the curve was settled on. Vibrancy 1 is the row that
-    // matters most: ember `#e8652a` is an exact fixed point of `generate.ts`'s
-    // accent math (its authored L 0.6614 IS `PRIMARY_LIGHTNESS`), so a canvas
-    // authored on the brand color at full vibrancy has to come back out as the
-    // brand color. Under the gradient's own cap it could not — the dark ceiling
-    // held it to 51% of ember's chroma at EVERY setting of the slider, which
-    // made the app's accent unreachable in its own default theme.
-    //
-    // Vibrancy 0 is the other end of the same statement, and it is what says
-    // the accent goes through `generateAccentTokens` rather than a second read
-    // of `generateThemeTokens`: 0.0248 is below that function's authored-seed
-    // chroma floor, so a seed pushed through it would come back `#b38776` — a
-    // visible ember on a wash with no color in it at all.
+  it("preserves the vibrancy chroma curve while solving fill lightness for AA", () => {
+    // No chroma floor: a neutral wash remains neutral. Full vibrancy retains
+    // authored chroma up to gamut mapping, but brand lightness yields to AA.
     const authored = hexToOklch("#e8652a").C;
     const rows = [
-      { vibrancy: 0, chroma: 0.0248, primary: "#a08e87" },
-      { vibrancy: 0.3, chroma: 0.0864, primary: "#c08168" },
-      { vibrancy: 0.6, chroma: 0.1285, primary: "#d37550" },
-      { vibrancy: 1, chroma: 0.1769, primary: "#e8652a" },
+      { vibrancy: 0, chroma: 0.0248, primary: "#85736c" },
+      { vibrancy: 0.3, chroma: 0.0864, primary: "#a46750" },
+      { vibrancy: 0.6, chroma: 0.1285, primary: "#b85d38" },
+      { vibrancy: 1, chroma: 0.1769, primary: "#cd4d01" },
     ];
     for (const row of rows) {
       const canvas = { ...DEFAULT_CANVAS, vibrancy: row.vibrancy };
@@ -450,7 +439,7 @@ describe("the accent", () => {
       }).toEqual({ vibrancy: row.vibrancy, chroma: row.chroma, primary: row.primary });
     }
     // 0.6 is what the app ships at, so it is also the default's accent.
-    expect(deriveCanvasTokens(DEFAULT_CANVAS, "dark")["--primary"]).toBe("#d37550");
+    expect(deriveCanvasTokens(DEFAULT_CANVAS, "dark")["--primary"]).toBe("#b85d38");
   });
 
   it("is one color in both appearances, unlike every surface around it", () => {
