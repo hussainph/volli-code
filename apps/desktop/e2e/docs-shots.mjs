@@ -287,9 +287,7 @@ try {
   await attempt(7, "canvas-editor.png", async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).first().click();
     const settings = page.getByRole("navigation", { name: "Settings categories" });
-    await settings
-      .getByRole("button", { name: "Appearance", exact: true })
-      .click();
+    await settings.getByRole("button", { name: "Appearance", exact: true }).click();
     await page.getByTestId("appearance-mode").waitFor({ timeout: 15000 });
     const pad = page.getByTestId("canvas-pad");
     await pad.waitFor({ timeout: 15000 });
