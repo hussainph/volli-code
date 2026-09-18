@@ -6,7 +6,10 @@ import * as React from "react";
  */
 export function useDialogFocusReturn(open: boolean) {
   const candidate = React.useMemo(() => {
-    const active = open ? document.activeElement : null;
+    // The chrome is also rendered by Node-only static-markup tests. A closed
+    // palette needs no invoker, and server rendering cannot supply one.
+    if (!open || typeof document === "undefined") return null;
+    const active = document.activeElement;
     return active instanceof HTMLElement ? active : null;
   }, [open]);
   const invoker = React.useRef<HTMLElement | null>(null);

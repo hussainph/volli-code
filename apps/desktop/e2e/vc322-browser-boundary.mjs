@@ -8,15 +8,23 @@ import {
   makeGitRepo,
   assertBuiltRendererLoaded,
   assertProfileIsolated,
+  closeAppBounded,
 } from "./lib/smoke-kit.mjs";
-const out = resolve("evidence/vc322/browser-boundary");
+const nativeWindow = process.argv.includes("--native-window");
+const out = resolve(
+  process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "evidence/vc322/browser-boundary",
+);
 await fs.mkdir(out, { recursive: true });
 const scratch = await fs.mkdtemp(join(out, "run-"));
 const userDataDir = join(scratch, "user-data");
 await fs.mkdir(userDataDir);
 const server = http.createServer((_req, res) =>
   res.end(
-    '<!doctype html><title>Keyboard fixture</title><input aria-label="Fixture input" autofocus><button>Page action</button>',
+    `<!doctype html><title>Keyboard fixture</title>
+     <input aria-label="Fixture input" autofocus><button>Page action</button>
+     <script>window.fixtureKeys=[];document.addEventListener('keydown',event=>{
+       window.fixtureKeys.push({key:event.key,meta:event.metaKey,target:event.target.tagName});
+     });</script>`,
   ),
 );
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -24,7 +32,10 @@ const url = `http://127.0.0.1:${server.address().port}/`;
 const app = await launch({
   dbPath: join(scratch, "volli.db"),
   userDataDir,
-  extraEnv: { HOME: join(scratch, "home") },
+  extraEnv: {
+    HOME: join(scratch, "home"),
+    VOLLI_QUIET_WINDOWS: nativeWindow ? "0" : "1",
+  },
 });
 const results = [];
 try {
@@ -46,17 +57,26 @@ try {
     { keyCode: "Tab", modifiers: ["shift"] },
   ]) {
     await app.evaluate(
-      ({ webContents }, input) => {
+      ({ webContents, BrowserWindow }, input) => {
+        if (input.nativeWindow) BrowserWindow.getAllWindows()[0].focus();
         const wc = webContents.getAllWebContents().find((w) => w.getURL() === input.url);
         wc.focus();
         wc.sendInputEvent({ type: "keyDown", ...input.key });
         wc.sendInputEvent({ type: "keyUp", ...input.key });
       },
-      { url, key },
+      { url, key, nativeWindow },
     );
     await page.waitForTimeout(300);
     results.push({
       key,
+      nativeWindow,
+      // The fixture is authored above: prove delivery, not just a missing modal.
+      delivery: await app.evaluate(async ({ webContents }, fixtureUrl) => {
+        const wc = webContents.getAllWebContents().find((w) => w.getURL() === fixtureUrl);
+        return wc.executeJavaScript(
+          "({keys:window.fixtureKeys,active:document.activeElement.tagName})",
+        );
+      }, url),
       dialogs: await page.getByRole("dialog").count(),
       focus: await app.evaluate(({ webContents }) => {
         const w = webContents.getFocusedWebContents();
@@ -67,6 +87,6 @@ try {
   await fs.writeFile(join(out, "report.json"), JSON.stringify(results, null, 2));
   console.log(JSON.stringify(results, null, 2));
 } finally {
-  await app.close();
+  await closeAppBounded(app);
   await new Promise((r) => server.close(r));
 }

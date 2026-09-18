@@ -12,6 +12,7 @@ import {
   seedProjects,
   makeGitRepo,
   startTerminalSession,
+  closeAppBounded,
 } from "./lib/smoke-kit.mjs";
 const output = resolve(
   process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "evidence/vc322",
@@ -336,6 +337,23 @@ try {
       await page.waitForTimeout(200);
       steps.push({ key, active: await active() });
     }
+    // VC-344 deliberately preserves PTY Tab bytes by default. Test the
+    // advertised focus-navigation mode, rather than calling raw Tab a trap.
+    await input.focus();
+    await page.keyboard.press("Control+Shift+M");
+    const navigation = [];
+    for (const key of ["Tab", "Shift+Tab"]) {
+      await input.focus();
+      await page.keyboard.press(key);
+      await page.waitForTimeout(200);
+      navigation.push({
+        key,
+        outsideTerminal: await page.evaluate(
+          () => !document.activeElement?.closest("[data-terminal-renderer]"),
+        ),
+        active: await active(),
+      });
+    }
     const semantics = await page
       .locator("[data-terminal-renderer]")
       .last()
@@ -346,11 +364,20 @@ try {
         screenReaderLayer: !!e.querySelector(".xterm-accessibility"),
       }));
     await fs.writeFile(join(output, "terminal-ax.txt"), await page.locator("body").ariaSnapshot());
-    return { pass: steps.some((s) => s.active.tag !== "TEXTAREA"), steps, semantics };
+    return {
+      pass:
+        navigation.every((step) => step.outsideTerminal) &&
+        semantics.role === "region" &&
+        Boolean(semantics.label) &&
+        semantics.screenReaderLayer,
+      steps,
+      navigation,
+      semantics,
+    };
   });
 } finally {
   await fs.writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
-  await app.close();
+  await closeAppBounded(app);
 }
 // The broader release findings are observational and deliberately remain red.
 // Only opt-in fix regression checks determine this probe's process exit code.
