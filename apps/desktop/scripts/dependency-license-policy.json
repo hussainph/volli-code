@@ -1,0 +1,383 @@
+{
+  "$comment": [
+    "The reviewed inventory of every installed dependency whose license is not plainly permissive (VC-409).",
+    "check-dependency-licenses.mjs reads this file and fails when reality and this record disagree:",
+    "a new restricted dependency appears, a reviewed one changes version or relicenses, or a",
+    "containment rule that a review depended on stops holding.",
+    "",
+    "Adding an entry here is a claim that someone READ the license. Do not add one to make CI green.",
+    "docs/licensing/dependency-license-review.md carries the reasoning and the open legal questions.",
+    "",
+    "A key ending in `*` covers a family of per-platform packages. pnpm installs only the sibling",
+    "matching the current os/cpu, so `@img/sharp-libvips-darwin-arm64` on a developer Mac is",
+    "`@img/sharp-libvips-linux-x64` on CI. Three families need it; every other platform-specific",
+    "package in this tree is MIT or Apache-2.0."
+  ],
+
+  "permissive": {
+    "$comment": [
+      "Licenses that place no restriction on how Volli Code is used, shipped or charged for, beyond",
+      "attribution and warranty disclaimers. Attribution is still owed for these — that obligation",
+      "belongs to the centralized notice files, not to this gate.",
+      "A license is NOT listed here merely because it is common: copyleft (any GPL/LGPL/AGPL), the",
+      "weak-copyleft MPL, and every bespoke or unreadable license must be reviewed individually."
+    ],
+    "ids": [
+      "0BSD",
+      "AFL-2.1",
+      "Apache-2.0",
+      "BlueOak-1.0.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "CC-BY-4.0",
+      "CC0-1.0",
+      "ISC",
+      "MIT",
+      "MIT-0",
+      "OFL-1.1",
+      "Python-2.0",
+      "Unlicense",
+      "WTFPL",
+      "Zlib"
+    ]
+  },
+
+  "reviewed": {
+    "@img/sharp-libvips-*": {
+      "license": "LGPL-3.0-or-later",
+      "versions": ["1.3.1", "1.3.3"],
+      "disposition": "shipped",
+      "summary": [
+        "Prebuilt libvips and its dependency stack, as one dylib. LGPLv3 applies to libvips itself and",
+        "to seven bundled components (fribidi, glib, libexif, libheif, librsvg, pango, proxy-libintl);",
+        "the rest of the table in the package README is permissive.",
+        "1.3.3 is what apps/desktop ships. 1.3.1 is build-time only: astro's own sharp@0.35.2 pulls it",
+        "into the store while building the website, and nothing in a distributed artifact loads it.",
+        "The package ships NO license text of its own — only the README's table of component licenses —",
+        "so the full LGPLv3 and GPLv3 texts LGPLv3 section 4(b) requires must come from elsewhere."
+      ],
+      "obligations": [
+        "LGPLv3 4(a): prominent notice that the library is used and is covered by the LGPL.",
+        "LGPLv3 4(b): accompany the work with a copy of the GNU GPL and of the LGPL.",
+        "LGPLv3 4(c): name libvips among any copyright notices shown during execution.",
+        "LGPLv3 4(d): let the user relink the application against a modified libvips.",
+        "LGPLv3 4(e): Installation Information, where GPLv3 section 6 would require it."
+      ],
+      "direct": { "@volli/desktop": "optionalDependencies" },
+      "nativeLibrary": {
+        "$comment": [
+          "The 4(d) half this gate can actually verify: the addon must reach libvips as a SEPARATE",
+          "shared library, so a user can substitute their own build of it. A statically linked libvips",
+          "would move us from 4(d)(1) to 4(d)(0)'s much heavier obligation without anything saying so."
+        ],
+        "consumerPackage": "@img/sharp-darwin-arm64",
+        "addonPath": "lib/sharp-darwin-arm64-{consumerVersion}.node",
+        "dynamicLoadPathContains": "@rpath/libvips-cpp",
+        "electronBuilderAsarUnpackPattern": "**/node_modules/@img/**",
+        "electronBuilderFilesToken": "@img"
+      },
+      "correspondingSource": {
+        "$comment": [
+          "GPLv3 section 6(d), reached through LGPLv3 4(d)(0): the object code may be offered from a",
+          "network server as long as CLEAR DIRECTIONS to the Corresponding Source sit next to it, and",
+          "the source may live on a third party's server. These are those directions.",
+          "",
+          "PROVENANCE. Every template below was read out of the build script that produced the binary",
+          "we ship — lovell/sharp-libvips at tag v1.3.3, build/posix.sh, which is the same script the",
+          "darwin-arm64 dylib is compiled by. They are NOT reconstructed from project homepages: a",
+          "plausible-looking upstream URL that is not the one the build used is not Corresponding",
+          "Source. Re-read that script when the package is bumped and a template stops matching.",
+          "",
+          "COMPLETENESS. Upstream tarballs alone are NOT the whole Corresponding Source. The build",
+          "patches glib and libvips before compiling, and applies further in-tree edits from the build",
+          "script itself, so the script (buildRecipe) and the external patches are part of what a user",
+          "needs to reproduce the shipped library. `patches` carries the external ones.",
+          "",
+          "SCOPE. Only the LGPL-covered components are listed: those are the ones whose license",
+          "obliges us to convey source. The permissive components in the same dylib do not.",
+          "",
+          "PLACEHOLDERS, matching the helpers in upstream's own build script:",
+          "  {version} — the version verbatim from the package's versions.json",
+          "  {minor}   — {version} minus its last dot-component (upstream `without_patch`), the",
+          "              directory GNOME's download server files a release under",
+          "  {release} — {version} minus any prerelease suffix (upstream `without_prerelease`)"
+        ],
+        "versionsFile": "versions.json",
+        "allowedSourceHosts": [
+          "github.com",
+          "gist.github.com",
+          "gist.githubusercontent.com",
+          "codeload.github.com",
+          "release-assets.githubusercontent.com",
+          "download.gnome.org"
+        ],
+        "$allowedSourceHostsComment": [
+          "Where Corresponding Source may be fetched from. `--verify-sources` reads URLs out of this",
+          "file and requests them, which is file data reaching the network: CodeQL flags it, and it",
+          "is a fair flag. A mistyped or tampered entry could otherwise point the check at an",
+          "internal address, and 'it is only a repo file' is the assumption worth not making.",
+          "",
+          "Every URL must be https and its host must be on this list, checked BEFORE any request and",
+          "again offline in the generator, so a bad host fails `check:lgpl-source` rather than only",
+          "failing the day someone runs the network check. Adding a host is a deliberate edit here.",
+          "",
+          "EVERY HOP IS CHECKED, not just the first. `redirect: \"follow\"` would validate the address",
+          "we hand the client and then go wherever it is sent, so an allowlisted host answering",
+          "302 Location: http://169.254.169.254/... would walk past this list into the runner's own",
+          "network. requestThroughReviewedHosts follows redirects itself and re-checks each one.",
+          "",
+          "The last three hosts are here because GitHub actually redirects to them, observed rather",
+          "than assumed: release downloads answer 302 -> release-assets.githubusercontent.com,",
+          "archive tarballs 302 -> codeload.github.com, and gist.github.com 301 ->",
+          "gist.githubusercontent.com. Re-check with `licenses:verify-sources`, which prints the hop",
+          "count per address, if GitHub ever moves them."
+        ],
+        "contact": "https://github.com/hussainph/volli-code/issues",
+        "$contactComment": [
+          "Where a user asks us for the source directly, when one of the third-party addresses",
+          "above has gone. GPLv3 6(d) leaves the duty to keep source reachable with US, so this",
+          "has to be a channel that actually reaches someone — hence the public issue tracker of",
+          "the repository this app is built from, which demonstrably exists, rather than a",
+          "plausible-looking mailbox nobody has created. Replace it with a dedicated address if",
+          "one is ever set up; do not point it at an unmonitored inbox."
+        ],
+        "buildRecipe": {
+          "name": "sharp-libvips build scripts",
+          "url": "https://github.com/lovell/sharp-libvips/archive/refs/tags/v{packageVersion}.tar.gz",
+          "note": "The recipe the dylib was built by, at the tag matching the installed package version. Carries build/posix.sh and its in-tree source edits."
+        },
+        "components": {
+          "fribidi": {
+            "library": "fribidi",
+            "url": "https://github.com/fribidi/fribidi/releases/download/v{version}/fribidi-{version}.tar.xz"
+          },
+          "glib": {
+            "library": "glib",
+            "url": "https://download.gnome.org/sources/glib/{minor}/glib-{version}.tar.xz",
+            "patches": [
+              "https://gist.github.com/kleisauke/284d685efa00908da99ea6afbaaf39ae/raw/bdad5489a61c217850631571caf57f5db6ea8b2c/glib-without-gregex.patch"
+            ]
+          },
+          "exif": {
+            "library": "libexif",
+            "url": "https://github.com/libexif/libexif/releases/download/v{version}/libexif-{version}.tar.xz"
+          },
+          "heif": {
+            "library": "libheif",
+            "url": "https://github.com/strukturag/libheif/releases/download/v{version}/libheif-{version}.tar.gz"
+          },
+          "rsvg": {
+            "library": "librsvg",
+            "url": "https://download.gnome.org/sources/librsvg/{minor}/librsvg-{version}.tar.xz"
+          },
+          "pango": {
+            "library": "pango",
+            "url": "https://download.gnome.org/sources/pango/{minor}/pango-{version}.tar.xz"
+          },
+          "proxy-libintl": {
+            "library": "proxy-libintl",
+            "url": "https://github.com/frida/proxy-libintl/archive/{version}.tar.gz"
+          },
+          "vips": {
+            "library": "libvips",
+            "url": "https://github.com/libvips/libvips/releases/download/v{version}/vips-{release}.tar.xz",
+            "patches": [
+              "https://gist.githubusercontent.com/lovell/313a6901e9db1bf285f2a1f1180499e4/raw/3988223c7dfa4d22745d9392034b0117abef1446/libvips-cpp-soversion.patch"
+            ]
+          }
+        }
+      },
+      "shippedCompliance": {
+        "$comment": [
+          "VC-409 ruling: Volli keeps LGPL libvips (option B2-d, dropping it, was declined) and does",
+          "NOT weaken the packaged app's hardened runtime (option B2-b was declined). 4(d)/4(e) are",
+          "therefore discharged by B2-a + B2-c: convey the Corresponding Source directions, and ship",
+          "Installation Information that a user can actually follow on their own copy.",
+          "",
+          "These assertions keep that ruling true. The documents have to REACH the user: a compliance",
+          "file that exists in the repository but is not in the bundle discharges nothing."
+        ],
+        "directory": "licensing",
+        "electronBuilderExtraResource": "licensing",
+        "files": [
+          "licensing/LGPL-LIBVIPS.md",
+          "licensing/RELINK-LIBVIPS.md",
+          "licensing/relink-libvips.sh"
+        ],
+        "hardening": {
+          "$comment": [
+            "The other half of the same ruling, and the reason RELINK-LIBVIPS.md says what it says.",
+            "The packaged app keeps library validation ON, so a user's own libvips cannot load into",
+            "the build we sign — which is exactly why we owe them instructions for re-signing their",
+            "own copy. If this entitlement is ever added, the shipped instructions become wrong (they",
+            "would tell a user to do work macOS no longer requires) and a deliberate hardening",
+            "property is gone. Either change is a decision, not a drive-by."
+          ],
+          "entitlementsFile": "build/entitlements.mac.plist",
+          "forbiddenEntitlement": "com.apple.security.cs.disable-library-validation"
+        },
+        "licenseTexts": {
+          "$comment": [
+            "LGPLv3 4(b): the packaged app must be accompanied by a copy of BOTH the GPL and the LGPL.",
+            "The upstream package ships neither, and neither is generated here — a copy of the GPL has",
+            "to be the canonical text byte for byte, and anything assembled or re-flowed by a script",
+            "is a paraphrase with a license's name on it.",
+            "",
+            "`state` is the claim this record makes about the bundle, and the gate holds the claim to",
+            "the filesystem in BOTH directions: while it is \"missing\", finding the files fails and",
+            "tells you to flip it to \"shipped\" (4(b) is then discharged and the notice text may say",
+            "so); once it is \"shipped\", losing them fails. What it must never do is sit at",
+            "\"shipped\" over an empty directory.",
+            "",
+            "NOW SHIPPED. Both files were downloaded verbatim from gnu.org, never retyped or passed",
+            "through any transformation — the failure mode 4(b) actually cares about is a re-flowed",
+            "or truncated GPL that still calls itself the GPL. `sha256` pins exactly what was",
+            "downloaded, and the gate hashes the files on disk, so an edit, a truncation or a",
+            "well-meaning reformat fails by name instead of shipping quietly.",
+            "",
+            "Corroboration, recorded because 'I downloaded it' is not by itself evidence: 74 of 77",
+            "distinctive GPL paragraphs and 17 of 18 LGPL ones appear verbatim in the copy Chromium",
+            "vendors independently (electron/dist/LICENSES.chromium.html). The only difference is the",
+            "FSF header URL — Chromium's older copy says <http://fsf.org/>, current gnu.org says",
+            "<https://fsf.org/>. Ours is the FSF's current text, 674 and 165 lines, pure ASCII, LF."
+          ],
+          "state": "shipped",
+          "expected": [
+            {
+              "file": "licensing/GPL-3.0.txt",
+              "canonical": "https://www.gnu.org/licenses/gpl-3.0.txt",
+              "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+              "firstLine": "                    GNU GENERAL PUBLIC LICENSE"
+            },
+            {
+              "file": "licensing/LGPL-3.0.txt",
+              "canonical": "https://www.gnu.org/licenses/lgpl-3.0.txt",
+              "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+              "firstLine": "                   GNU LESSER GENERAL PUBLIC LICENSE"
+            }
+          ]
+        }
+      },
+      "blocked": "docs/licensing/dependency-license-review.md#lgpl-libvips"
+    },
+
+    "gsap": {
+      "license": "Standard 'no charge' license: https://gsap.com/standard-license.",
+      "versions": ["3.15.0"],
+      "disposition": "shipped",
+      "summary": [
+        "GreenSock Standard License (Webflow), effective 2025-04-30, read at gsap.com/standard-license.",
+        "Permitted Uses cover any website, web application or digital interface, commercial included and",
+        "at no charge. The one restriction that could reach Volli is Prohibited Uses: GSAP may not be",
+        "used in tools that let users build visual animations WITHOUT CODE in a way that competes with",
+        "Webflow's visual animation building. The licensor's own FAQ places AI code-generation tools",
+        "outside that prohibition.",
+        "Section III.3 additionally forbids removing GSAP's proprietary notices — which the production",
+        "website build was doing until this ticket; see apps/website/scripts/check-bundled-license-notices.mjs."
+      ],
+      "obligations": [
+        "Keep the /*! legal banners in the deployed bundles (III.3).",
+        "Stay out of the desktop product, where the no-code-animation-builder question would arise.",
+        "Re-read the terms on a version bump: section VI.2 lets Webflow revise them, and using a version",
+        "released after a revision is what accepts it."
+      ],
+      "direct": { "@volli/website": "dependencies" },
+      "imports": ["apps/website/src/components/*"],
+      "blocked": "docs/licensing/dependency-license-review.md#gsap"
+    },
+
+    "lightningcss*": {
+      "license": "MPL-2.0",
+      "versions": ["1.32.0", "1.33.0"],
+      "disposition": "build-only",
+      "summary": [
+        "Tailwind's CSS transformer, and astro's, plus its per-platform native binary. Weak copyleft at",
+        "FILE level: the reciprocity obligation attaches to modified MPL-covered files, and we modify",
+        "none — it is consumed as a published package and runs only while building.",
+        "No MPL-covered code reaches a distributed artifact; what ships is the CSS it emitted, which is",
+        "our own content."
+      ],
+      "obligations": [
+        "Do not fork or patch it without taking on MPL 2.0 section 3.2 source availability.",
+        "Attribution in the notice files, as for any dependency."
+      ],
+      "direct": {},
+      "blocked": null
+    },
+
+    "dompurify": {
+      "license": "(MPL-2.0 OR Apache-2.0)",
+      "versions": ["3.4.8", "3.4.14"],
+      "disposition": "shipped",
+      "summary": [
+        "Dual-licensed, so the choice is ours. Volli elects Apache-2.0, which is already the dominant",
+        "license in this tree and carries no reciprocity. Recorded because the elected half must appear",
+        "in the notices — an entry reading only \"MPL-2.0 OR Apache-2.0\" leaves the reader guessing."
+      ],
+      "obligations": ["Notices must state Apache-2.0 as the elected license."],
+      "electedLicense": "Apache-2.0",
+      "blocked": null
+    },
+
+    "node-forge": {
+      "license": "(BSD-3-Clause OR GPL-2.0)",
+      "versions": ["1.4.0"],
+      "disposition": "development-only",
+      "summary": [
+        "Dual-licensed; Volli elects BSD-3-Clause, so the GPL-2.0 half is never exercised. Reaches the",
+        "store under @anthropic-ai/sandbox-runtime and electron-builder's signing tooling."
+      ],
+      "obligations": ["Notices must state BSD-3-Clause as the elected license."],
+      "electedLicense": "BSD-3-Clause",
+      "blocked": null
+    },
+
+    "json-schema": {
+      "license": "(AFL-2.1 OR BSD-3-Clause)",
+      "versions": ["0.4.0"],
+      "disposition": "development-only",
+      "summary": ["Dual-licensed; Volli elects BSD-3-Clause."],
+      "obligations": ["Notices must state BSD-3-Clause as the elected license."],
+      "electedLicense": "BSD-3-Clause",
+      "blocked": null
+    },
+
+    "khroma": {
+      "license": "MIT",
+      "versions": ["2.1.0"],
+      "disposition": "shipped",
+      "licenseSource": "license-file",
+      "summary": [
+        "No `license` field in its manifest, so automated scans report it as unknown. Its `license` file",
+        "is the plain MIT text, copyright 2019-present Fabio Spampinato and Andrew Maney. Arrives under",
+        "mermaid, which the desktop renderer bundles."
+      ],
+      "obligations": ["MIT attribution, from the license file rather than the manifest."],
+      "blocked": null
+    },
+
+    "@yuku-codegen/binding-*": {
+      "license": "MIT",
+      "versions": ["0.5.48"],
+      "disposition": "build-only",
+      "licenseSource": "parent-package",
+      "summary": [
+        "A generated napi platform package with no `license` field and no license file — the shape most",
+        "native-binding sub-packages ship in. Its parent `yuku-codegen@0.5.48` declares MIT, and the",
+        "binding is published from the same repository (yuku-toolchain/yuku) in the same release."
+      ],
+      "obligations": ["MIT attribution, inherited from the parent package."],
+      "blocked": null
+    },
+
+    "@yuku-parser/binding-*": {
+      "license": "MIT",
+      "versions": ["0.5.48"],
+      "disposition": "build-only",
+      "licenseSource": "parent-package",
+      "summary": ["As @yuku-codegen/binding-*; parent `yuku-parser@0.5.48` declares MIT."],
+      "obligations": ["MIT attribution, inherited from the parent package."],
+      "blocked": null
+    }
+  }
+}
