@@ -7,12 +7,42 @@ sidebar:
 
 ## I cannot start a structured Session
 
-Choose a default model in **Settings → Model Access**. If no model is selected,
+Choose a default model in **Settings → Models**. If no model is selected,
 Volli refuses to start the Session rather than selecting one for you.
 
-If a provider is unavailable, open **Model Access** and use its recovery action
-to sign in again or refresh availability. The page lists only the models Volli
-can use without exposing credentials.
+If a provider is unavailable, open **Models** and use its recovery action to
+sign in again or refresh availability. The page lists only the models Volli can
+use without exposing credentials.
+
+## An Automation does not start automatically
+
+Check all of the conditions for the Trigger:
+
+- For a ticket-enter Trigger, the Automation must be **Enabled** on this Mac.
+- The destination column must offer the Automation and have it armed, not
+  **No Automation**.
+- The ticket must make a new **Deliberate move** into the column. Enabling or
+  arming a column does not process tickets already there.
+- A different Automation can be armed in the column; only one can fire on its
+  own.
+
+A switched-off Automation is still available for a manual Run. Use the Ticket
+workspace's **Automations** menu or the board card's **Automations** submenu to
+run it deliberately.
+
+## A scheduled Automation was skipped
+
+Volli must be open and awake enough to observe the due time. Open the
+Automation's **Runs** history and read the **Skipped** reason. **Run now**
+starts one current Run; it does not replay every missed occurrence.
+
+## A Run cannot use its Runtime
+
+An exact model pin can become unavailable after it was saved. Repair the
+Automation's Runtime in its editor or choose another model. Volli does not
+silently fall back to a different model. A Run already in flight can also
+block another Run on the same ticket; wait for it to finish or inspect the
+existing Session.
 
 ## `volli` exits with code 3
 
@@ -27,10 +57,11 @@ open elsewhere may need the CLI installed and connected separately.
 
 ## `volli: command not found`
 
-Open **Settings → CLI** to see which executable and shell integration Volli
-detected. Run **Doctor**, then use **Fix & Re-run** to regenerate the parts
-Volli owns. Terminal companions opened by the app already receive `volli` on
-`PATH`.
+Open **Settings → About** for the install's CLI checks; they run when the pane
+opens, and a fault offers **Fix** to regenerate the parts Volli owns, with
+**Re-check** to run them again. To see the detected executable and shell
+integration, copy the support report from that pane. Terminal companions opened
+by the app already receive `volli` on `PATH`.
 
 ## `pnpm install` fails on a native module
 
@@ -52,9 +83,9 @@ after the branch is landed, or remove it yourself:
 git worktree remove ~/.volli/worktrees/<project-dirname>-<short-id>/<TICKET-ID>-<slug>
 ```
 
-For tickets in Done, **Settings → General → Done worktree retention** controls
-when Volli can reclaim a clean folder automatically. **Keep worktree** exempts a
-ticket from that cleanup.
+For tickets in Done, use **Retention** in **Settings → Storage** to control when
+Volli can reclaim a clean folder automatically. **Keep worktree** exempts a ticket
+from that cleanup.
 
 ## A shortcut does nothing
 
