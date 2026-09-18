@@ -45,7 +45,7 @@ export function ComposerBreadcrumb({
           <button
             type="button"
             data-testid="composer-project-chip"
-            className="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
+            className="flex min-w-0 max-w-64 items-center gap-1 rounded-md px-1 py-1 text-ui font-medium text-foreground transition-colors duration-150 ease-out outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ProjectMonogram project={target} />
             <span className="truncate">{target.name}</span>

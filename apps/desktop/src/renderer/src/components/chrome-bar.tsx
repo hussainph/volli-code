@@ -336,7 +336,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       // grey patch on the band, not a hover. The border was already doing the
       // work (`border-border/50` → `border-border`); the fill now holds still at
       // the one wash rung and lets it.
-      className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+      className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>

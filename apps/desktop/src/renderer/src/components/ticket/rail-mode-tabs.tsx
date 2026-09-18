@@ -149,7 +149,7 @@ export function RailModeTabs<K extends string>({
                 // the transition below only made the depress instant, it never
                 // removed it, and `transform-none` could not have — see the
                 // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
+                "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:scale-100!",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 selected

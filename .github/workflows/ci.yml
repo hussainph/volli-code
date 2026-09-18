@@ -136,6 +136,13 @@ jobs:
       - name: Check workspace license metadata
         run: vp run check:workspace-licenses
 
+      # The other half of the license posture (VC-412): packages this project
+      # has decided not to carry must stay out of the manifests, out of the
+      # lockfile, and out of every import. A transitive reintroduction is
+      # invisible in a diff, which is why it is a step and not a convention.
+      - name: Check excluded dependencies
+        run: vp run check:excluded-dependencies
+
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
       # these is expressible as a lint rule, so this step is the only thing that
@@ -189,6 +196,43 @@ jobs:
       # rather than being skipped by the same rule that makes Linux agree.
       - name: Check licence notices
         run: vp run check:notices
+
+      # Dependency licenses against the reviewed record (VC-409). Not a lint
+      # rule and not expressible as one: it reads the installed pnpm store, the
+      # workspace manifests, every first-party import, and electron-builder's
+      # packaging lists, and fails when any of them drifts from
+      # scripts/dependency-license-policy.json — a new restricted dependency, a
+      # dependency that relicensed under us, an unreviewed version bump, or a
+      # containment rule a review relied on breaking.
+      #   check:licenses       — the gate, after self-testing its own matchers.
+      #   check:notice-inputs  — docs/licensing/notice-inputs.md still matches
+      #                          the installed tree, so the attribution text
+      #                          handed to the notice tickets cannot go stale.
+      #   check:lgpl-source    — apps/desktop/licensing/LGPL-LIBVIPS.md, which
+      #                          SHIPS inside the app as the LGPL notice and
+      #                          the Corresponding Source directions, still
+      #                          describes the installed library.
+      #   check:library-validation — the two macOS facts the shipped relink
+      #                          instructions rest on still hold.
+      # Two assertions need the darwin-arm64 binaries, which pnpm skips on this
+      # Linux runner by os/cpu: the Mach-O dynamic-linking check and the whole
+      # of check:notice-inputs. Both PRINT that they skipped rather than passing
+      # silently, so this step being green here is not read as having checked
+      # them — and the `smoke-boot` job below RUNS them on macos-15, so they are
+      # enforced by CI rather than only by a developer Mac. The store scan,
+      # manifests, import containment and packaging lists all run on every
+      # platform, and per-platform package families are keyed by pattern in the
+      # policy so the LGPL and MPL binaries are reviewed whichever sibling gets
+      # installed.
+      #
+      # GSAP's own gate is not here on purpose: it reads the BUILT site, so it
+      # runs as the last step of `vp run --filter @volli/website build` below.
+      - name: Check dependency licenses
+        run: |
+          vp run --filter @volli/desktop check:licenses
+          vp run --filter @volli/desktop check:notice-inputs
+          vp run --filter @volli/desktop check:lgpl-source
+          vp run --filter @volli/desktop check:library-validation
 
       # Two invocations: `vp run -r` covers workspace packages only — the root
       # vite.config.ts (quality-stack config) needs its own tsc pass.
@@ -254,6 +298,30 @@ jobs:
         run: |
           vp run --filter @volli/desktop build
           vp run --filter @volli/desktop ensure:electron
+
+      # The half of the license gates that Linux CANNOT run (VC-409). pnpm
+      # installs only the sibling matching the runner's os/cpu, so on ubuntu
+      # the Mach-O dynamic-linking assertion and the whole of check:notice-
+      # inputs and check:lgpl-source skip — they print that they skipped, but a
+      # green Linux run has not checked them. check:library-validation is a
+      # third: it compiles and signs a probe to confirm the two macOS facts the
+      # shipped relink instructions depend on, which only means anything here.
+      # This is the lane that has the darwin binaries and codesign.
+      #
+      # It is here rather than in its own macOS job because this runner has
+      # already paid for the checkout and the install; the checks themselves
+      # are seconds. It is BEFORE the smokes so a compliance failure is not
+      # buried under a boot-tier timeout.
+      #
+      # Gated with the rest of the desktop lanes: `changes` classifies the
+      # lockfile and every manifest as desktop-affecting, so any change that
+      # could move the dependency tree reaches this step.
+      - name: Check platform-specific license assertions
+        run: |
+          vp run --filter @volli/desktop check:licenses
+          vp run --filter @volli/desktop check:notice-inputs
+          vp run --filter @volli/desktop check:lgpl-source
+          vp run --filter @volli/desktop check:library-validation
 
       - name: Run boot tier and verify quiet native windows
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4

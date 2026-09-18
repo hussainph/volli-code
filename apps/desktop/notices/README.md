@@ -117,10 +117,13 @@ Recorded rather than decided. None is a conclusion about obligations; the
 licensing review that reaches conclusions is tracked separately.
 
 1. **APCA-W3 formulation.** `packages/shared/src/theme/color.ts` implements the
-   published APCA-W3 constants in shipped code (the `apca-w3` package itself is
-   a test-only devDependency). Whether that reproduction carries an obligation
-   is part of the separate licensing review. Declared by `@volli/shared` as
-   `unresolved`.
+   published APCA-W3 constants in shipped code. The `apca-w3` package is not
+   installed at all — VC-412 removed it, and with it transitively AGPL
+   `colorparsley`; `scripts/check-excluded-dependencies.mjs` fails the build if
+   either is declared, resolved in the lockfile, or imported. What remains open
+   is only whether reproducing the published constants carries an obligation of
+   its own, which is part of the separate licensing review. Declared by
+   `@volli/shared` as `unresolved`.
 2. **Terminal themes — CLOSED by removal (VC-413), not by a licence finding.**
    The app used to ship a catalog of 463 third-party terminal themes, and
    VC-410 chained it to iTerm2-Color-Schemes' MIT grant while recording that the

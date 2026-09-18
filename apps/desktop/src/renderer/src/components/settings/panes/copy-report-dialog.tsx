@@ -48,7 +48,7 @@ export function CopyReportPreview({
       <pre
         aria-label="Report preview"
         tabIndex={0}
-        className="max-h-64 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+        className="max-h-64 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-4 font-mono text-ui whitespace-pre-wrap focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
         {report}
       </pre>
