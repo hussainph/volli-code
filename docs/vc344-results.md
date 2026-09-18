@@ -106,6 +106,36 @@ output rows (including scrolling backwards), then repeat after hide/show and a
 split. Confirm that the mode notification and focus location are understandable.
 Do not mark that human checklist item passed from these automated results.
 
+## Reconciliation with VC-343
+
+Merged current `origin/main` (`349f3d2d`) into this branch as `70403316`.
+The engine retains VC-343's pre-fit follow-bottom decision, scrollback preservation
+and scroll-state instrumentation alongside screen-reader mode and the Tab toggle.
+The add/add test conflict is reconciled into one xterm mock with both regression
+groups, reset fit implementations between cases, and disposed engines.
+
+The rebuilt reconciled commit passes **35/35** native macOS / Chromium AX and
+keyboard assertions. See [`reconciled.json`](vc344-evidence/reconciled.json) and
+[`reconciled-ax-excerpts.json`](vc344-evidence/reconciled-ax-excerpts.json).
+The native tree exposes output before/after focus, in terminal-focus mode, after
+hide/show and after a split; hidden output remains absent. Raw PTY bytes remain
+exactly `09 1b 5b 5a 78` with no navigation/toggle bytes leaking through.
+
+Checks on the reconciled source:
+
+- `pnpm run build`: passed, including preload and packed-require checks.
+- `pnpm exec vp check`: passed (format and lint).
+- `pnpm -C apps/desktop typecheck`: passed.
+- Focused engine/view/registry/appearance tests with `--maxWorkers=1`: **42 passed**.
+- `node apps/desktop/e2e/terminal-a11y-smoke.mjs evidence/vc344/reconciled-native --mac-ax`: **35 passed**.
+- Initial parallel workspace coverage run failed at the unchanged CLI
+  `src/index.test.ts` build hook's 10-second timeout; dependent tasks were
+  interrupted. This attempt is not a green gate. A serial-workspace rerun is
+  recorded separately below.
+
+Spoken VoiceOver wording and interactive row/scrollback navigation still require
+human acceptance as described above; native AX exposure does not certify them.
+
 ## Checks run before upstream reconciliation
 
 - `pnpm run build`: passed, including standalone preload and packed-require checks.
