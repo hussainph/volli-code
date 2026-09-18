@@ -115,7 +115,13 @@ Work on a copy of the application and quit Volli Code and its helper processes
 before changing a file that may already be mapped. Do not replace the copy in
 a published artifact in place.
 
+This section and the two that follow continue the shell from the previous
+section. If you start a new shell, set `BUILT_LIB` again to the dylib you
+built; the guard below stops the copy rather than installing an empty path.
+
 ```sh
+BUILT_LIB="${BUILT_LIB:?set BUILT_LIB to the libvips-cpp dylib built above}"
+
 APP="$HOME/Applications/Volli Code-modified.app"
 UNPACKED="$APP/Contents/Resources/app.asar.unpacked/node_modules/@img"
 INSTALLED="$UNPACKED/sharp-libvips-darwin-arm64/lib/libvips-cpp.8.18.6.dylib"
@@ -207,6 +213,9 @@ of any individual component:
 A URL to a moving branch is not an exact source record. Pin source archives or
 commits and retain their digests; if a source server becomes unavailable, the
 release channel must still be able to provide the recorded source materials.
+That rule binds this record too. The shipped notice links this file at the
+branch tip so a reader can find it; that link is navigational, and the release
+record must retain the exact revision of this file with the materials above.
 The applicable license text and legal review determine the final scope of what
 must be offered or published; this document records the inputs needed to make
 that determination and to reproduce the shipped libvips binary.
