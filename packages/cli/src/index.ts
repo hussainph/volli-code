@@ -31,6 +31,20 @@ if (isHookInvocation) {
   process.on("unhandledRejection", () => {});
 }
 
+function exitQuietlyOnBrokenPipe(stream: NodeJS.WriteStream): void {
+  stream.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") {
+      // A reader such as `head` intentionally closes the pipe before this
+      // command has finished writing. There is nothing useful left to do.
+      process.exit(0);
+    }
+    throw error;
+  });
+}
+
+exitQuietlyOnBrokenPipe(process.stdout);
+exitQuietlyOnBrokenPipe(process.stderr);
+
 function detachedSpawn(executable: string, args: string[], childEnv: NodeJS.ProcessEnv): void {
   const child = spawn(executable, args, {
     detached: true,

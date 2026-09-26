@@ -97,6 +97,38 @@ function runHookProcess(mode: "idle" | "flood"): Promise<HookRun> {
   });
 }
 
+interface EarlyClosedPipeRun {
+  bytesReceived: number;
+  exitCode: number | null;
+  stderr: string;
+}
+
+/** Closes one of the CLI's output pipes as soon as its first bytes arrive. */
+function runWithEarlyClosedPipe(output: "stdout" | "stderr"): Promise<EarlyClosedPipeRun> {
+  const env = { ...process.env };
+  delete env["VOLLI_SOCKET"];
+  delete env["VOLLI_SESSION"];
+  return new Promise<EarlyClosedPipeRun>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [bundlePath, ...(output === "stdout" ? ["help"] : [])],
+      { env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const pipe = output === "stdout" ? child.stdout : child.stderr;
+    const stderr: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    let bytesReceived = 0;
+    pipe.once("data", (chunk: Buffer) => {
+      bytesReceived = chunk.length;
+      pipe.destroy();
+    });
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      resolve({ bytesReceived, exitCode, stderr: Buffer.concat(stderr).toString("utf8") });
+    });
+  });
+}
+
 describe("volli built entrypoint", () => {
   beforeAll(() => {
     const built = spawnSync(fileURLToPath(new URL("../node_modules/.bin/vp", import.meta.url)), [
@@ -122,6 +154,15 @@ describe("volli built entrypoint", () => {
     expect(run.stdout).not.toContain("source mode");
     expect(run.stdout).not.toContain("unbundled-source");
   });
+
+  for (const output of ["stdout", "stderr"] as const) {
+    it(`exits quietly when a downstream reader closes ${output}`, async () => {
+      const run = await runWithEarlyClosedPipe(output);
+      expect(run.bytesReceived).toBeGreaterThan(0);
+      expect(run.exitCode).toBe(0);
+      if (output === "stdout") expect(run.stderr).toBe("");
+    });
+  }
 
   // The read budget used to bound the promise and not the process: the `data`
   // listener left stdin flowing, a flowing pipe holds a referenced handle, and
