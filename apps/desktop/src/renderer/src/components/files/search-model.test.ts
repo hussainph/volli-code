@@ -119,6 +119,44 @@ describe("searchHighlight", () => {
     ).toEqual({ before: "const ", hit: "needle", after: " = 1;" });
   });
 
+  it("windows even a short line with a late hit, without changing its reveal column", () => {
+    const preview = `${"x".repeat(100)}needle = 1;`;
+    const found = match({ preview, start: 100, end: 106, column: 101 });
+    expect(searchHighlight(found)).toEqual({
+      before: `…${"x".repeat(12)}`,
+      hit: "needle",
+      after: " = 1;",
+    });
+    expect(searchRevealTarget(found, "needle")).toEqual({ line: 12, column: 101, length: 6 });
+  });
+
+  it("keeps long-line hits near the beginning, middle and end with honest ellipses", () => {
+    for (const leading of [0, 110, 220]) {
+      const preview = `${"x".repeat(leading)}needle${"y".repeat(230 - leading)}`;
+      const { before, hit, after } = searchHighlight(
+        match({ preview, start: leading, end: leading + 6 }),
+      );
+      expect(hit).toBe("needle");
+      expect(before).toBe(leading > 12 ? `…${"x".repeat(12)}` : "x".repeat(leading));
+      expect(after).toBe(
+        230 - leading > 60 ? `${"y".repeat(60)}…` : "y".repeat(230 - leading),
+      );
+    }
+  });
+
+  it("keeps Unicode graphemes whole at the context window boundary", () => {
+    for (const grapheme of ["😀", "e\u0301"]) {
+      const prefix = grapheme.repeat(30);
+      const preview = `${prefix}needle`;
+      const start = prefix.length;
+      expect(searchHighlight(match({ preview, start, end: start + 6 }))).toEqual({
+        before: `…${grapheme.repeat(12)}`,
+        hit: "needle",
+        after: "",
+      });
+    }
+  });
+
   it("never inverts a range a windowed preview clipped", () => {
     const clipped = searchHighlight(match({ preview: "    needle", start: 2, end: 1 }));
     expect(clipped.hit).toBe("");
