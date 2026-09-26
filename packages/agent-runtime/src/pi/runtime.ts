@@ -2418,8 +2418,9 @@ async function attachSession(
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
         // The live array already leads with the system message that carries
-        // the prompt and tools; handing the projector the pair as well would
-        // count the prefix twice.
+        // the prompt and tools; handing the projector the prompt as well would
+        // count it twice. (Tools would not — the estimator prices each
+        // declaration once over the transcript — but there is nothing to add.)
         const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,

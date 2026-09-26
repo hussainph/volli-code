@@ -10274,6 +10274,13 @@ describe("transcript context (pi 0.87)", () => {
     });
     expect(system[2]!.toolsRemoved).toEqual([{ name: "phantom_tool" }]);
     expect(system[2]!.toolsAdded).toBeUndefined();
+    // A delta Pi declares carries no prompt text and no sections. Native
+    // compaction leans on that: it strips every system message from the
+    // conversation it sends because the prompt rides the request's own field,
+    // and a Pi that started putting instructions on a delta would make that
+    // strip lossy. Pinned here, against the real loop, rather than assumed.
+    expect(system[2]!.content).toBe("");
+    expect(system[2]!.sections).toBeUndefined();
     // The transcript keeps the conversation's order around them...
     expect(recovered!.transcript.map((message) => message.role)).toEqual([
       "system",

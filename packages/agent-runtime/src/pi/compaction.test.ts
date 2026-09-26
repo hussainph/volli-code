@@ -20,6 +20,7 @@ import {
   type Context,
   type Model,
   type Models,
+  type Tool,
   type TranscriptContext,
   type Usage,
 } from "@earendil-works/pi-ai";
@@ -617,6 +618,60 @@ describe("compactSession", () => {
         branch.findEntries({ type: "compaction" }, piContext()),
       ),
     ).toEqual([outcome.entry]);
+  });
+
+  it("prices tokensBefore once for a tool the sidecar declares beside the attachment's own", async () => {
+    // The durable number on the entry, and the one the summary text quotes
+    // to the model. The path is read off the sidecar, which never holds the
+    // head but can hold a tool-change system message Pi persisted; priced
+    // beside the attachment's own tools, that declaration used to count twice
+    // (VC-421 review, finding A). A system message is not a cut point and
+    // says nothing to the summarizer, so the only difference between the two
+    // runs is the one declaration — and it must make none.
+    //
+    // No reply here carries a measurement: the projection would otherwise
+    // read the last one and estimate only what follows it, which is the
+    // shape of a fresh Session, not of one whose retained replies had their
+    // usage cleared by an earlier compaction. This is the path the whole
+    // request is estimated on, and the one the double count lived on.
+    const unmeasured = usage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
+    const tool: Tool = {
+      name: "read_file",
+      description: "Read a file from disk.",
+      parameters: { type: "object", properties: {} } as Tool["parameters"],
+    };
+    const redeclared: AgentMessage = {
+      role: "system",
+      content: "",
+      toolsAdded: [tool],
+      timestamp: 0,
+    };
+    const compactWith = async (path: Entry[]) => {
+      const sidecar = await memorySession();
+      const models = scriptedModels(["## Goal\nfinish the ticket"]);
+      const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+      const outcome = await compactSession({
+        sidecar,
+        path,
+        models,
+        model,
+        settings,
+        systemPrompt: "You are the runtime.",
+        tools: [tool],
+      });
+      expect(outcome.kind).toBe("compacted");
+      return outcome.kind === "compacted" ? outcome.entry.tokensBefore : Number.NaN;
+    };
+    const plain = [
+      messageEntry(user("the original request")),
+      messageEntry(assistant("a long early answer", { usage: unmeasured })),
+      messageEntry(user("x".repeat(90_000))),
+      messageEntry(assistant("the recent answer", { usage: unmeasured })),
+    ];
+    const withDelta = [plain[0]!, plain[1]!, messageEntry(redeclared), ...plain.slice(2)];
+    const before = await compactWith(plain);
+    expect(before).toBeGreaterThan(0);
+    expect(await compactWith(withDelta)).toBe(before);
   });
 
   it("summarizes through a request that shares no prefix with the Session", async () => {

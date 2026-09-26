@@ -124,8 +124,13 @@ on the next request.
 `src/pi/token-counting.ts` prices `system` messages using pi-ai's
 `getSystemMessageText` rendered text, tool declarations at the per-tool rate,
 and removed names. This makes a normalized transcript cost exactly what the
-old `(systemPrompt, tools)` pair cost. Callers pass the projector one spelling
-or the other, never both.
+old `(systemPrompt, tools)` pair cost. A whole-request estimate prices
+declarations once per name over the pair and the transcript together, through
+pi-ai's own `getCurrentTools` (later declarations win, removed tools are gone)
+— which is what every adapter is sent — so a sidecar conversation carrying a
+persisted tool-change message beside the attachment's own tools is not counted
+twice. The prompt still travels one way only: as the head inside the messages
+or as `systemPrompt`, never both.
 
 Native compaction in `src/pi/provider-compaction.ts` strips system messages from
 the conversation sent to `/responses/compact` and Anthropic's compaction

@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, SystemMessage, Tool, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 import {
   createContextTokenProjector,
@@ -223,6 +223,97 @@ describe("estimateMessageTokens", () => {
       ),
     ).toBe(estimateMessageTokens(user("phantom_tool"), model()) - 8);
     expect(estimateMessageTokens({ role: "system", content: "", timestamp: 0 }, model())).toBe(0);
+  });
+
+  // What a transcript's declarations cost is what a provider is sent: Pi's
+  // `getCurrentTools`, one declaration per name, later ones winning, removed
+  // ones gone — however many system messages carry them (VC-421 review, A).
+  describe("declarations over a whole transcript", () => {
+    const head: SystemMessage = {
+      role: "system",
+      content: "You are concise.",
+      toolsAdded: [tool],
+      timestamp: 0,
+    };
+    const otherTool: Tool = {
+      name: "write_file",
+      description: "Write a file to disk, replacing what was there.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+      } as Tool["parameters"],
+    };
+    const redeclared: SystemMessage = {
+      role: "system",
+      content: "",
+      toolsAdded: [tool],
+      timestamp: 2,
+    };
+
+    it("counts a declaration once however many system messages carry it", () => {
+      const once: AgentMessage[] = [head, user("hello")];
+      const twice: AgentMessage[] = [head, user("hello"), redeclared];
+      expect(estimateContextTokens(twice, model())).toBe(estimateContextTokens(once, model()));
+      // The memoizing projector agrees, and keeps agreeing off its per-tool memo.
+      const projector = createContextTokenProjector();
+      expect(projector(twice, model())).toBe(estimateContextTokens(twice, model()));
+      expect(projector(twice, model())).toBe(estimateContextTokens(twice, model()));
+    });
+
+    it("prices the pair beside a persisted delta as the one request it is", () => {
+      // The compaction shape: a sidecar conversation, which never holds the
+      // head but can hold a tool-change message Pi persisted, priced with the
+      // attachment's own prompt and tools beside it. Previously the tool in
+      // both was counted twice and `tokensBefore` read too high.
+      const conversation: AgentMessage[] = [user("hello"), redeclared];
+      expect(estimateContextTokens(conversation, model(), "You are concise.", [tool])).toBe(
+        estimateContextTokens([user("hello")], model(), "You are concise.", [tool]),
+      );
+      expect(projectedContextTokens(conversation, model(), "You are concise.", [tool])).toBe(
+        estimateContextTokens([head, user("hello")], model()),
+      );
+    });
+
+    it("prices a removed tool at its name and not its declaration", () => {
+      const both: SystemMessage = { ...head, toolsAdded: [tool, otherTool] };
+      const removal: SystemMessage = {
+        role: "system",
+        content: "",
+        toolsRemoved: [{ name: otherTool.name }],
+        timestamp: 2,
+      };
+      expect(estimateContextTokens([both, user("hello"), removal], model())).toBe(
+        estimateContextTokens([head, user("hello")], model()) +
+          estimateMessageTokens(removal, model()),
+      );
+    });
+
+    it("lets a later declaration replace an earlier one", () => {
+      const revised: Tool = { ...tool, description: "Read a file from disk, with line numbers." };
+      const redeclaredRevised: SystemMessage = { ...redeclared, toolsAdded: [revised] };
+      expect(estimateContextTokens([head, user("hello"), redeclaredRevised], model())).toBe(
+        estimateContextTokens([{ ...head, toolsAdded: [revised] }, user("hello")], model()),
+      );
+    });
+
+    it("prices a delta after the measured reply whole, declarations included", () => {
+      // The request the measurement covers did not carry the added tool, so
+      // the delta is exactly the unmeasured part — whole, not text alone.
+      const measured = assistant([{ type: "text", text: "reply" }], {
+        usage: usage({ totalTokens: 900 }),
+      });
+      const added: SystemMessage = {
+        role: "system",
+        content: "",
+        toolsAdded: [otherTool],
+        timestamp: 3,
+      };
+      expect(projectedContextTokens([head, user("hello"), measured, added], model())).toBe(
+        projectedContextTokens([head, user("hello"), measured], model()) +
+          estimateMessageTokens(added, model()),
+      );
+      expect(estimateMessageTokens(added, model())).toBeGreaterThan(0);
+    });
   });
 
   it("prices block content as the joined text pi-ai renders", () => {
