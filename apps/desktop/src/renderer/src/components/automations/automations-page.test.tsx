@@ -188,6 +188,32 @@ function button(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+/** The one Run history on screen: the selected editor's, or the project's. */
+function historySection(): HTMLElement {
+  const sections = document.querySelectorAll<HTMLElement>("[data-run-history]");
+  if (sections.length !== 1) throw new Error(`${sections.length} Run histories on screen`);
+  return sections.item(0);
+}
+
+/** The ids the history actually drew, in drawn order. */
+function historyRowIds(kind: "run" | "skip"): string[] {
+  return [...historySection().querySelectorAll(`[data-run-history-${kind}]`)].map(
+    (row) => row.getAttribute(`data-run-history-${kind}`) ?? "",
+  );
+}
+
+function historyRun(id: string): HTMLElement {
+  const found = historySection().querySelector<HTMLElement>(`[data-run-history-run="${id}"]`);
+  if (found === null) throw new Error(`no Run row for ${id}`);
+  return found;
+}
+
+function railRow(id: string): HTMLElement {
+  const found = document.querySelector<HTMLElement>(`[data-automation-rail-row="${id}"]`);
+  if (found === null) throw new Error(`no rail row for ${id}`);
+  return found;
+}
+
 function paragraph(copy: string): HTMLParagraphElement {
   const found = [...document.querySelectorAll("p")].find(
     (candidate) => candidate.textContent === copy,
@@ -496,6 +522,145 @@ describe("run history", () => {
       sessionId: "s1",
       projectId: "p1",
       ticketId: null,
+    });
+  });
+});
+
+/**
+ * Whose history the editor is showing (VC-297).
+ *
+ * The store fills `runs`/`skips` for the whole PROJECT — a Run is filed
+ * through its own Session's project, which is the only scope main can answer
+ * — so the editor has to narrow them itself. Two Automations running in the
+ * same week interleave, and an editor that printed the merged list would say
+ * the selected record did work it never did. The rows name their origin, but
+ * provenance on a row is not scope on a list.
+ */
+describe("history is scoped to the selected Automation", () => {
+  const REVIEW = automation();
+  const NIGHTLY = automation({ id: "automation-2", name: "Nightly sweep" });
+  // Interleaved on purpose: newest first across BOTH records is
+  // nightly-skip, nightly-run, review-skip, review-run.
+  const INTERLEAVED = {
+    automations: [REVIEW, NIGHTLY],
+    runs: [
+      run({
+        id: "run-nightly",
+        automationId: "automation-2",
+        automationName: "Nightly sweep",
+        sessionId: "s2",
+        createdAt: 400,
+      }),
+      run({ id: "run-review", automationId: "automation-1", createdAt: 100 }),
+    ],
+    skips: [
+      skip({ id: "skip-nightly", automationId: "automation-2", dueAt: 500 }),
+      skip({
+        id: "skip-review",
+        automationId: "automation-1",
+        automationName: "Review sweep",
+        dueAt: 200,
+      }),
+    ],
+  };
+
+  it("shows the selected record's own Runs and skips, and none of its neighbour's", async () => {
+    await mount(INTERLEAVED);
+
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-1");
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+    expect(historyRowIds("skip")).toEqual(["skip-review"]);
+  });
+
+  it("answers the neighbour's editor with the neighbour's history", async () => {
+    // The other half of the same rule: neither record may masquerade as the
+    // other's history, so selecting the second one swaps the whole list.
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
+    expect(historyRowIds("skip")).toEqual(["skip-nightly"]);
+  });
+
+  it("keeps a scoped Run a door to its OWN Session", async () => {
+    // Narrowing the list must not re-aim the rows: each Run still opens the
+    // Session it actually created.
+    await mount(INTERLEAVED);
+
+    await act(async () => {
+      historyRun("run-review").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledTimes(1);
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
+    });
+  });
+
+  it("says nothing has run THIS Automation while the project has other Runs", async () => {
+    await mount({
+      automations: [REVIEW],
+      runs: [
+        run({
+          id: "run-nightly",
+          automationId: "automation-2",
+          automationName: "Nightly sweep",
+        }),
+      ],
+    });
+
+    expect(historyRowIds("run")).toEqual([]);
+    expect(paragraph("Nothing has run this Automation yet.")).not.toBeNull();
+    expect(historySection().textContent).not.toContain("Nightly sweep");
+  });
+});
+
+/**
+ * Project activity (VC-297): the interleaved list, labelled as what it is.
+ *
+ * It keeps its home on the empty state, where there is no selected record for
+ * it to be mistaken for — and it is where a Run whose definition is gone, or
+ * was never bound to one, remains visible and still opens its Session.
+ */
+describe("project activity", () => {
+  it("labels the unfiltered list as the project's, not as one record's", async () => {
+    await mount({ runs: [run()], skips: [skip({ automationId: "automation-2" })] });
+
+    expect(historySection().getAttribute("data-run-history")).toBe("project");
+    expect(historySection().textContent).toContain("Project activity");
+    // Every record's, interleaved — including a skip belonging to another.
+    expect(historyRowIds("run")).toEqual(["run-1"]);
+    expect(historyRowIds("skip")).toEqual(["skip-1"]);
+  });
+
+  it("keeps a deleted definition identifiable, by the name its Run recorded", async () => {
+    // Deleting an Automation deletes the record; the history of what it did is
+    // not the record. The row still names "Retired sweep" and still opens the
+    // Session that Run created.
+    await mount({
+      runs: [
+        run({ id: "run-retired", automationId: "gone", automationName: "Retired sweep" }),
+        run({ id: "run-unbound", automationId: null, automationName: null, sessionId: "s3" }),
+      ],
+    });
+
+    expect(historySection().textContent).toContain("Retired sweep");
+    expect(historySection().textContent).toContain("Run once");
+
+    await act(async () => {
+      historyRun("run-retired").click();
+    });
+
+    expect(openRunSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      projectId: "p1",
+      ticketId: "t1",
     });
   });
 });

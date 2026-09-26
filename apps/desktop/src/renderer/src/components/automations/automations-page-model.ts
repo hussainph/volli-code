@@ -345,6 +345,39 @@ export function automationHistory(
 }
 
 /**
+ * The same history narrowed to ONE definition — what the selected editor shows
+ * (VC-297).
+ *
+ * The project's history and one Automation's are two different questions, and
+ * the editor asks the second one. Runs and skips arrive here scoped to the
+ * project (`runsForProject` files a Run through its own Session's project), so
+ * an editor handed that list unfiltered would print a neighbour's Runs under
+ * the record on screen — the rows name their origin, but a reader who came to
+ * ask "what has THIS one been doing" is answered with somebody else's work.
+ *
+ * BOTH lists are narrowed, because a skip is a claim about a schedule: showing
+ * the nightly sweep's missed occurrences beneath a manual Automation would
+ * say that record has a schedule it does not have.
+ *
+ * An Unbound Run (`automationId` null, VC-112) matches no definition and is
+ * therefore only ever seen in the project's own activity — which is the honest
+ * answer, since there is no record for it to belong to. Filtering on the id
+ * rather than the snapshotted name for the same reason the name is snapshotted
+ * at all: two definitions may share a name, and a rename must not move history
+ * from one to the other.
+ */
+export function historyForAutomation(
+  automationId: string,
+  runs: readonly AutomationRun[],
+  skips: readonly AutomationSkippedOccurrence[],
+): AutomationHistoryEntry[] {
+  return automationHistory(
+    runs.filter((run) => run.automationId === automationId),
+    skips.filter((skip) => skip.automationId === automationId),
+  );
+}
+
+/**
  * What a Skipped occurrence says it is — the sentence that keeps a skip from
  * looking like a silence (VC-112).
  *

@@ -8,6 +8,7 @@ import {
   automationHistory,
   duplicateName,
   groupByOwnership,
+  historyForAutomation,
   laneDropRank,
   laneRowId,
   listingRunTarget,
@@ -357,6 +358,58 @@ describe("automationHistory", () => {
 
   it("is empty when nothing has happened at all", () => {
     expect(automationHistory([], [])).toEqual([]);
+  });
+});
+
+describe("historyForAutomation", () => {
+  // The two records the editor must never confuse (VC-297), with their Runs
+  // and skips interleaved in time so a filter that merely truncated the list
+  // could not pass.
+  const mineEarly = run({ id: "mine-early", createdAt: 100 });
+  const theirs = run({
+    id: "theirs",
+    automationId: "automation-2",
+    automationName: "Nightly sweep",
+    createdAt: 400,
+  });
+  const mineLate = run({ id: "mine-late", createdAt: 900 });
+  const mySkip = skip({ id: "skip-mine", dueAt: 300 });
+  const theirSkip = skip({ id: "skip-theirs", automationId: "automation-2", dueAt: 600 });
+
+  it("keeps only the named definition's Runs and skips, still newest first", () => {
+    expect(
+      historyForAutomation("automation-1", [mineLate, theirs, mineEarly], [mySkip, theirSkip]).map(
+        (entry) => (entry.kind === "run" ? entry.run.id : entry.skip.id),
+      ),
+    ).toEqual(["mine-late", "skip-mine", "mine-early"]);
+  });
+
+  it("answers the other definition with its own rows, not the first one's", () => {
+    // The same call from the neighbour's editor: two automations with
+    // interleaved history never masquerade as each other's.
+    expect(
+      historyForAutomation("automation-2", [mineLate, theirs, mineEarly], [mySkip, theirSkip]).map(
+        (entry) => (entry.kind === "run" ? entry.run.id : entry.skip.id),
+      ),
+    ).toEqual(["skip-theirs", "theirs"]);
+  });
+
+  it("leaves an Unbound Run to the project's own activity", () => {
+    // It belongs to no record, so no record's editor may claim it.
+    const unbound = run({ id: "unbound", automationId: null, automationName: null });
+    expect(historyForAutomation("automation-1", [unbound, mineEarly], [])).toHaveLength(1);
+    expect(automationHistory([unbound, mineEarly], [])).toHaveLength(2);
+  });
+
+  it("scopes by id rather than by the snapshotted name", () => {
+    // Two records may share a name, and a rename must not move history between
+    // them: the Run's stored name is provenance, never the filter.
+    const sameName = run({ id: "same-name", automationId: "automation-2" });
+    expect(historyForAutomation("automation-1", [sameName], [])).toEqual([]);
+  });
+
+  it("is empty for a definition that has never run", () => {
+    expect(historyForAutomation("automation-3", [mineLate], [mySkip])).toEqual([]);
   });
 });
 

@@ -55,6 +55,7 @@ import {
 import {
   automationHistory,
   groupByOwnership,
+  historyForAutomation,
   listingRunTarget,
   runAutomationLabel,
   runModelLabel,
@@ -393,6 +394,7 @@ function AutomationsSurface({
                   ticketPrefix={ticketPrefix}
                   runs={runs}
                   skips={skips}
+                  automationId={selectedAutomation.id}
                 />
               )
             }
@@ -406,6 +408,7 @@ function AutomationsSurface({
                 ticketPrefix={ticketPrefix}
                 runs={runs}
                 skips={skips}
+                automationId={null}
               />
             }
           />
@@ -686,24 +689,47 @@ function RunOnTicketDialog({
  * the Run history", and a skip and a silence must never look the same. A
  * schedule that fired on Monday and did not on Tuesday tells one story, and
  * two lists would make the reader assemble it.
+ *
+ * ONE component, TWO scopes, and the scope is on screen (VC-297). Inside the
+ * editor it is the selected definition's own history and says "Runs"; where
+ * there is no record selected it is the whole project's and says "Project
+ * activity". They are the same rows drawn by the same code because they are
+ * the same story at two scopes — what must never happen is the narrow heading
+ * over the wide list, which is a page telling a reader that a neighbour's work
+ * was this record's.
  */
 function RunHistory({
   projectId,
   ticketPrefix,
   runs,
   skips,
+  automationId,
 }: {
   projectId: string;
   ticketPrefix: string;
   runs: readonly AutomationRun[];
   skips: readonly AutomationSkippedOccurrence[];
+  /** The definition to scope to, or `null` for the project's whole activity. */
+  automationId: string | null;
 }) {
-  const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
+  const entries = React.useMemo(
+    () =>
+      automationId === null
+        ? automationHistory(runs, skips)
+        : historyForAutomation(automationId, runs, skips),
+    [automationId, runs, skips],
+  );
   return (
-    <section className="flex flex-col gap-1">
-      <SectionHeading className="h-6 leading-6">Runs</SectionHeading>
+    <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
+      <SectionHeading className="h-6 leading-6">
+        {automationId === null ? "Project activity" : "Runs"}
+      </SectionHeading>
       {entries.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">Nothing has run in this project yet.</p>
+        <p className="py-2 text-ui text-muted-foreground">
+          {automationId === null
+            ? "Nothing has run in this project yet."
+            : "Nothing has run this Automation yet."}
+        </p>
       ) : (
         entries.map((entry) =>
           entry.kind === "run" ? (
@@ -803,6 +829,7 @@ function RunRow({
 
   return (
     <ListRow
+      data-run-history-run={run.id}
       // The door back to the Session the Run opened, always. A Run whose
       // Ticket is gone kept its Session and its place in this history, so it
       // opens in Home — the project's own home for a Session no Ticket owns —
