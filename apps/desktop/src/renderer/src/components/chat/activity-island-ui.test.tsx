@@ -601,6 +601,28 @@ describe("row verbs", () => {
     expect(rowIn("agents", "a1").textContent).toContain("Audit icon weights");
   });
 
+  it("wraps long plan titles and breaks long words instead of truncating", async () => {
+    const title =
+      "Review every checklist item before implementation supercalifragilisticexpialidocious";
+    const plan: IslandPlan = {
+      id: "long-title-plan",
+      steps: [{ id: "long-step", title, state: "in_progress" }],
+      done: 0,
+    };
+    await render({ ...EMPTY_ACTIVITY_ISLAND, plan });
+    click(cluster("plan"));
+
+    const row = rowIn("plan", "long-step");
+    const titleNode = [...row.querySelectorAll<HTMLSpanElement>("span")].find(
+      (span) => span.textContent === title,
+    );
+    expect(titleNode?.textContent).toBe(title);
+    expect(titleNode?.classList.contains("truncate")).toBe(false);
+    expect(titleNode?.classList.contains("whitespace-normal")).toBe(true);
+    expect(titleNode?.classList.contains("break-words")).toBe(true);
+    expect(row.textContent).toContain("now");
+  });
+
   it("draws a step per id, so two steps may share a title", async () => {
     const repeated: IslandPlan = {
       id: "p2",
