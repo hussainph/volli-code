@@ -130,14 +130,11 @@ function collectOutcome(child: ChildProcess, intact: Readable): Promise<BrokenOu
  * reader closed its end before the CLI wrote a byte, which is the state
  * `head -12` leaves behind the moment it has taken its twelve lines.
  *
- * Closing the pipe from here *after* the CLI starts cannot reproduce that, and
- * no amount of care makes it. Every command writes its whole answer in one
- * call, the largest of those is some three kilobytes of reference, and a
- * kernel pipe buffer swallows all of it before any reader could hang up — so
- * the write succeeds, nothing errors, and the test passes just as happily
- * against an entrypoint that handles none of this. Doing it by size instead
- * means flooding a pipe with more than a buffer's worth of output and racing
- * the reader: slow, and it fails on somebody's machine one morning.
+ * These help/usage commands emit a small response in one write. Closing after
+ * the first chunk is not a reliable regression: the pipe buffer may already
+ * hold the whole response, so the test can pass without any EPIPE handler.
+ * A larger response could force backpressure, but this fixture avoids both
+ * payload-size assumptions and reader scheduling.
  *
  * So the close happens first and the CLI is held back until it has: `sh` holds
  * the write end, waits for a go-ahead on stdin, and only then `exec`s the CLI
