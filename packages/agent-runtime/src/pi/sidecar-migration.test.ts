@@ -85,9 +85,22 @@ function legacySidecar(cwd: string, id: string): string {
   );
 }
 
-/** The session-directory name Pi derives from a workspace path, both versions alike. */
+/**
+ * The session-directory name Pi derives from a workspace path, both versions
+ * alike.
+ *
+ * PI-RESTATED(0.87.1): `sessionDirectoryName` in
+ * `dist/harness/session/jsonl/repo.js`, which the package does not export. Only
+ * the leading slash and the path separators (and a drive colon) are rewritten;
+ * a dot, a space or an underscore in the path stays. An earlier restatement
+ * flattened every non-alphanumeric run to a hyphen and agreed with Pi only on
+ * the plain temp paths CI happens to use — with `.volli` in `TMPDIR` the
+ * fixture landed in one directory and Pi looked in another, and seven tests
+ * read an invisible session (VC-420). `directoryContract` below pins the two
+ * against each other on a dotted, spaced path.
+ */
 function sessionDirectoryName(cwd: string): string {
-  return `--${cwd.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "")}--`;
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
 interface Fixture {
@@ -98,8 +111,8 @@ interface Fixture {
   id: string;
 }
 
-function fixture(): Fixture {
-  const root = mkdtempSync(join(tmpdir(), "volli-sidecar-migration-"));
+function fixture(prefix = "volli-sidecar-migration-"): Fixture {
+  const root = mkdtempSync(join(tmpdir(), prefix));
   const cwd = join(root, "worktree");
   const sessionsRoot = join(root, "sessions");
   const id = "01a073a0-5102-7f36-8090-562632afb0c7";
@@ -117,6 +130,33 @@ function repoFor(owned: Fixture): JsonlSessionRepo {
     sessionsRoot: owned.sessionsRoot,
   });
 }
+
+describe("the session directory Pi derives from a workspace path", () => {
+  it("keeps dots, spaces and underscores, so a fixture lands where Pi looks (VC-420)", async () => {
+    // Asked of Pi itself rather than of the restatement: a repository is
+    // pointed at a workspace whose path carries every character the old
+    // helper flattened, and the file it creates must sit in the directory the
+    // restatement names — on both the current format and the legacy one.
+    const owned = fixture("volli .sidecar_migration-");
+    expect(owned.cwd).toMatch(/[ ._]/);
+    const repo = repoFor(owned);
+    const created = await repo.create({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
+    await created.close(BACKGROUND_CONTEXT);
+    expect(
+      created.metadata.path.startsWith(
+        join(owned.sessionsRoot, sessionDirectoryName(owned.cwd)) + "/",
+      ),
+    ).toBe(true);
+
+    // The legacy file was written into the same directory, so once migrated
+    // it is listed beside the one Pi just created.
+    await migrateLegacySidecar(owned.path);
+    const listed = await repo.list({ cwd: owned.cwd }, BACKGROUND_CONTEXT);
+    expect(listed.map((candidate) => candidate.id).toSorted()).toEqual(
+      [owned.id, created.metadata.id].toSorted(),
+    );
+  });
+});
 
 describe("migrating a sidecar written before the Pi 0.85.0 bump", () => {
   it("is the difference between an invisible session and a readable one", async () => {
