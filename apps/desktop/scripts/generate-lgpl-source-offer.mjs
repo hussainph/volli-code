@@ -835,8 +835,10 @@ async function selfTest() {
   );
   expect(
     "a bundled component version change still changes the notice",
-    renderSourceOffer({ ...offerFixture, versions: { ...offerFixture.versions, vips: "8.18.7" } }) !==
-      rendered,
+    renderSourceOffer({
+      ...offerFixture,
+      versions: { ...offerFixture.versions, vips: "8.18.7" },
+    }) !== rendered,
   );
   expect(
     "a native package version change still changes the notice",
