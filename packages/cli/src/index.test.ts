@@ -109,11 +109,10 @@ function runWithEarlyClosedPipe(output: "stdout" | "stderr"): Promise<EarlyClose
   delete env["VOLLI_SOCKET"];
   delete env["VOLLI_SESSION"];
   return new Promise<EarlyClosedPipeRun>((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [bundlePath, ...(output === "stdout" ? ["help"] : [])],
-      { env, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const child = spawn(process.execPath, [bundlePath, ...(output === "stdout" ? ["help"] : [])], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const pipe = output === "stdout" ? child.stdout : child.stderr;
     const stderr: Buffer[] = [];
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));

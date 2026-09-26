@@ -641,7 +641,9 @@ export function registerDataIpcHandlers(
       if (!stats.isDirectory()) {
         return { ok: false, error: "Project path is not a directory" };
       }
-      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(input.path);
+      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
+        input.path,
+      );
       // Detection yields to other IPC requests. Re-read mutable project state only
       // after it returns, then validate and insert without another await.
       const createdWhileDetecting = findProjectByPath(db, input.path);

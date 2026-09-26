@@ -138,9 +138,7 @@ describe("searchHighlight", () => {
       );
       expect(hit).toBe("needle");
       expect(before).toBe(leading > 12 ? `…${"x".repeat(12)}` : "x".repeat(leading));
-      expect(after).toBe(
-        230 - leading > 60 ? `${"y".repeat(60)}…` : "y".repeat(230 - leading),
-      );
+      expect(after).toBe(230 - leading > 60 ? `${"y".repeat(60)}…` : "y".repeat(230 - leading));
     }
   });
 

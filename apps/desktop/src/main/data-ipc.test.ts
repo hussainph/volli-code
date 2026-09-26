@@ -532,18 +532,18 @@ describe("volli:project-authority-policy", () => {
   });
 });
 
-describe("volli:project-create — workspace-unique ticket prefixes", () => {
-  function deferredBranch(): {
-    promise: Promise<string | null>;
-    resolve: (branch: string | null) => void;
-  } {
-    let resolve!: (branch: string | null) => void;
-    const promise = new Promise<string | null>((done) => {
-      resolve = done;
-    });
-    return { promise, resolve };
-  }
+function deferredBranch(): {
+  promise: Promise<string | null>;
+  resolve: (branch: string | null) => void;
+} {
+  let resolve!: (branch: string | null) => void;
+  const promise = new Promise<string | null>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
+describe("volli:project-create — workspace-unique ticket prefixes", () => {
   it("pins the repository's detected base branch when a project is added", async () => {
     handlers.clear();
     const volliPath = freshProjectDir();
