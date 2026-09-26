@@ -26,16 +26,22 @@ import {
   createAssistantMessageEventStream,
   createModels,
   fauxProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   InMemoryCredentialStore,
   ModelsError,
+  normalizeContext,
   type AnthropicMessagesCompat,
   type AssistantMessage,
   type Context,
   type CredentialStore,
+  type JsonObject,
   type Message,
   type Model,
   type Models,
+  type SystemMessage,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { stream as anthropicStream } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
@@ -66,9 +72,11 @@ import { piContext } from "./pi-context";
 import { toAnthropicMessages } from "./provider-compaction";
 import { projectedContextTokens } from "./token-counting";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
-import { MAIN_BRANCH_TIP } from "./sidecar-storage";
+import { MAIN_BRANCH_TIP, SIDECAR_IDENTITY } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
 import { withoutReasoning } from "./reasoning";
+import { recoveryRefFor } from "./transcript";
+import { withoutSystemMessages } from "./transcript-context";
 import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import type { UsageProbeFetch } from "./usage-limits/probe";
@@ -101,9 +109,39 @@ const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
 // the provider call is scripted. Each entry in the script answers one provider
 // request, in order.
 
+/**
+ * One provider request as a scripted step reads it.
+ *
+ * Pi 0.86 hands a stream function a normalized `TranscriptContext`: the system
+ * prompt and the tool declarations are no longer fields of the request but
+ * system messages inside it, the leading one carrying both and any later one
+ * a prompt addition or a tool delta. The three fields the old `Context` had
+ * are replayed off those messages here, and the conversation is read without
+ * them, so a test about the prompt, the tools or the turns keeps asking the
+ * question it always asked. `transcript` is the request exactly as the
+ * provider met it, for the tests about the system messages themselves.
+ */
+interface ScriptContext extends Context {
+  transcript: readonly Message[];
+}
+
+function scriptContext(context: TranscriptContext): ScriptContext {
+  return {
+    systemPrompt: getCurrentSystemPrompt(context.messages),
+    tools: getCurrentTools(context.messages),
+    messages: withoutSystemMessages(context.messages),
+    transcript: context.messages,
+  };
+}
+
+/** The system messages of a recorded request, in transcript order. */
+function systemMessagesOf(transcript: readonly Message[]): SystemMessage[] {
+  return transcript.filter((message): message is SystemMessage => message.role === "system");
+}
+
 type ScriptStep = (
   emit: EmitApi,
-  context: Context,
+  context: ScriptContext,
   signal: AbortSignal | undefined,
   model: Model<string>,
   reasoning: string | undefined,
@@ -118,7 +156,7 @@ interface EmitApi {
    */
   thinking(delta: string, signature?: string): void;
   text(delta: string): void;
-  toolCall(name: string, args: Record<string, unknown>): void;
+  toolCall(name: string, args: JsonObject): void;
   /**
    * A provider diagnostic on the reply, as pi-ai appends them.
    *
@@ -127,7 +165,7 @@ interface EmitApi {
    * dropped-block report, and it is appended after a SUCCESSFUL stream, just
    * before `done` (VC-254).
    */
-  diagnostic(type: string, details: Record<string, unknown>): void;
+  diagnostic(type: string, details: JsonObject): void;
   finish(): void;
   fail(message: string): void;
   cancel(): void;
@@ -279,7 +317,7 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
       }
       await step(
         emit,
-        context,
+        scriptContext(context),
         options?.signal,
         model as Model<string>,
         (options as { reasoning?: string } | undefined)?.reasoning,
@@ -402,6 +440,8 @@ interface ProviderCall {
    * wire — see {@link wireOf}.
    */
   context: readonly Message[];
+  /** The normalized transcript as the provider met it, system messages included. */
+  transcript: readonly Message[];
   piModel: Model<string>;
   /** The reasoning level the runtime asked this provider call to use. */
   reasoning: string | undefined;
@@ -426,6 +466,7 @@ function recording(calls: ProviderCall[], step: ScriptStep): ScriptStep {
       model: `${model.provider}/${model.id}`,
       messages: JSON.stringify(context.messages),
       context: context.messages,
+      transcript: context.transcript,
       piModel: model,
       reasoning,
       systemPrompt: context.systemPrompt,
@@ -509,7 +550,7 @@ async function anthropicRequestBody(
   };
   const stream = anthropicStream(
     call.piModel as Model<"anthropic-messages">,
-    { systemPrompt: call.systemPrompt, messages: [...call.context], tools: [] },
+    normalizeContext({ systemPrompt: call.systemPrompt, messages: [...call.context], tools: [] }),
     {
       client: client as never,
       thinkingEnabled: true,
@@ -6074,12 +6115,9 @@ describe("compacting a context that reached its reserve", () => {
     let occupied = 0;
     const stream: StreamFn = (model, context, options) => {
       ceiling = options?.maxTokens ?? 0;
-      occupied = projectedContextTokens(
-        context.messages,
-        model,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The normalized transcript prices its own prefix: the leading system
+      // message IS the prompt and the tools.
+      occupied = projectedContextTokens(context.messages, model);
       return script(model, context, options);
     };
     const runtime = createPiAgentRuntime({
@@ -9481,7 +9519,12 @@ function utilityModels(
     streamSimple: ((model, context, options) => {
       onCall?.({
         model: model as Model<string>,
-        context,
+        // The request as `completeSimple` was asked for it, replayed off the
+        // normalized transcript pi-ai 0.86 hands the provider.
+        context: {
+          systemPrompt: getCurrentSystemPrompt(context.messages),
+          messages: withoutSystemMessages(context.messages),
+        },
         options: options as { reasoning?: string } | undefined,
       });
       const stream = createAssistantMessageEventStream();
@@ -9934,5 +9977,423 @@ describe("usage limits", () => {
       windows: [],
       unavailable: { reason: "unsupported" },
     });
+  });
+});
+
+/**
+ * Pi 0.86 moved the system prompt and the tool declarations INTO the transcript:
+ * a provider request is a normalized `TranscriptContext` whose leading system
+ * message carries both, and `AgentState.systemPrompt` is a read-only replay of
+ * the system messages in the live array. Everything this runtime does to that
+ * array — seed it, rebuild it after a compaction or a model switch, retry from
+ * it, recover it from the sidecar — is now also responsible for the prompt, and
+ * the failure when it forgets is silent: Pi replays an empty prompt, declares
+ * every tool again in a bare system message, and carries on. These pin each
+ * path against the request the provider actually met (VC-421).
+ */
+/** The names a system message declares, in order; empty for one that adds nothing. */
+function declaredNames(message: SystemMessage): string[] {
+  return (message.toolsAdded ?? []).map((tool) => tool.name);
+}
+
+describe("transcript context (pi 0.87)", () => {
+  /** The one system message a well-formed Volli request carries, asserted as such. */
+  function onlySystemMessage(call: ProviderCall): SystemMessage {
+    const system = systemMessagesOf(call.transcript);
+    expect(system).toHaveLength(1);
+    return system[0]!;
+  }
+
+  it("leads the first request with one system message carrying the composed prompt and every session tool", async () => {
+    const attachment = fixture({ tools: { tools: ["read", "edit"] } });
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("hello"))])),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("first words");
+    await handle.close();
+
+    expect(calls).toHaveLength(1);
+    const [first] = calls;
+    // The head is the FIRST message, ahead of the Brief-carrying user message,
+    // and it is the only system message: no bare tool re-declaration follows
+    // it, because the executable tools and the declared ones agree.
+    expect(first!.transcript[0]?.role).toBe("system");
+    const head = onlySystemMessage(first!);
+    expect(typeof head.content === "string" ? head.content : "").toContain("# Operating");
+    expect(declaredNames(head)).toEqual(sessionToolIds(attachment.spec));
+    expect(head.timestamp).toBe(0);
+    // A declaration is what the model sees and nothing it cannot: no `execute`
+    // rides the transcript, and so none can reach a sidecar.
+    for (const tool of head.toolsAdded ?? []) {
+      expect(Object.keys(tool).toSorted()).toEqual(["description", "name", "parameters"]);
+    }
+    // The array is never empty now that the head lives in it, and the Brief is
+    // still composed onto the first thing a person says — the question is
+    // asked of the conversation, not of the array.
+    expect(first!.transcript[1]?.role).toBe("user");
+    expect(first!.messages).toContain("VC-12 — read the marker.");
+    expect(first!.messages).toContain("first words");
+  });
+
+  it("keeps one byte-identical head across a tool round and writes no system entry for it", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => {
+            emit.toolCall("read", { path: "MARKER.txt" });
+            emit.finish();
+          }),
+          recording(calls, settles("the marker is volli-marker-42")),
+          recording(calls, settles("and again")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("read the marker");
+    await handle.submitUserMessage("say it again");
+    const sidecarPath = handle.recovery!.sessionFilePath;
+    await handle.close();
+
+    expect(calls).toHaveLength(3);
+    const heads = calls.map((call) => JSON.stringify(onlySystemMessage(call)));
+    expect(heads[1]).toBe(heads[0]);
+    expect(heads[2]).toBe(heads[0]);
+    // The tool result rode the second request behind the same head, and the
+    // third request grew append-only from the second: a prefix a provider can
+    // reuse, exactly as before the head became a message.
+    expect(calls[1]!.context.some((message) => message.role === "toolResult")).toBe(true);
+    expectAppendOnly(calls[0]!, calls[1]!);
+    expectAppendOnly(calls[1]!, calls[2]!);
+    // Nothing about the prompt or the tools was persisted: the head is this
+    // attachment's and is recomposed on attach, and Pi had no delta to declare.
+    const persistedRoles = entryRecords(sidecarPath)
+      .filter((record) => record["type"] === "message")
+      .map((record) => (record["message"] as { role: string }).role);
+    expect(persistedRoles).not.toContain("system");
+    expect(persistedRoles).toContain("toolResult");
+  });
+
+  it("puts the head back after a compaction and after a model switch", async () => {
+    const OVER_RESERVE = 200_000;
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, settles("first answer")),
+          recording(calls, settlesHolding("second answer", OVER_RESERVE)),
+          recording(calls, settles("## Goal\nfinish the marker work")),
+          recording(calls, settles("third answer")),
+          recording(calls, settles("fourth answer")),
+        ]),
+        [
+          { id: MODEL_ID, reasoning: true },
+          { id: CHAT_MODEL_ID, reasoning: true },
+        ],
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("remember the marker");
+    await handle.submitUserMessage(PASTED);
+    await handle.submitUserMessage("carry on");
+    await expect(
+      handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      }),
+    ).resolves.toEqual({ kind: "selected" });
+    await handle.submitUserMessage("and on the other model");
+    await handle.close();
+
+    expect(calls).toHaveLength(5);
+    const [firstTurn, , summarization, afterCompaction, afterSwitch] = calls;
+    const head = onlySystemMessage(firstTurn!);
+    // The summarizer's request is Pi's own — its prompt, no tools — and is the
+    // one request of the five that does not lead with this Session's head.
+    expect(summarization!.systemPrompt).not.toBe(firstTurn!.systemPrompt);
+    expect(summarization!.tools).toBe("[]");
+    // The compacted context leads with the same head, then the summary. Not
+    // an empty prompt with the tools re-declared beneath it, which is what an
+    // array replaced without its head would have replayed as.
+    expect(JSON.stringify(onlySystemMessage(afterCompaction!))).toBe(JSON.stringify(head));
+    expect(afterCompaction!.transcript[0]?.role).toBe("system");
+    expect(afterCompaction!.context[0]?.role).toBe("user");
+    expect(afterCompaction!.messages).toContain("finish the marker work");
+    expect(afterCompaction!.messages).not.toContain("first answer");
+    // And so does the context rebuilt for the other model.
+    expect(afterSwitch!.model).toBe(`${PROVIDER_ID}/${CHAT_MODEL_ID}`);
+    expect(JSON.stringify(onlySystemMessage(afterSwitch!))).toBe(JSON.stringify(head));
+    expect(afterSwitch!.messages).toContain("and on the other model");
+  });
+
+  it("retries a failed turn behind the head, with nothing re-delivered", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, (emit) => emit.fail("invalid x-api-key secret-token")),
+          recording(calls, settles("authenticated now")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("first");
+    await expect(handle.retry()).resolves.toEqual({ kind: "delivered", delivery: "retry" });
+    await handle.close();
+
+    expect(calls).toHaveLength(2);
+    const [failed, retried] = calls;
+    expect(JSON.stringify(onlySystemMessage(retried!))).toBe(
+      JSON.stringify(onlySystemMessage(failed!)),
+    );
+    // The same one user message, once: the retry dropped the failed reply and
+    // continued from what it was answering.
+    expect(retried!.context.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(retried!.messages).toBe(failed!.messages);
+  });
+
+  it("delivers a queued message behind the head and ahead of no second one", async () => {
+    const attachment = fixture();
+    const calls: ProviderCall[] = [];
+    const streaming = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          recording(calls, async (emit) => {
+            emit.text("working");
+            streaming.resolve();
+            await release.promise;
+            emit.finish();
+          }),
+          recording(calls, settles("queued answer")),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    const first = handle.submitUserMessage("first", "queue", "command-first");
+    await streaming.promise;
+    await expect(
+      handle.submitUserMessage("queued while busy", "queue", "command-queued"),
+    ).resolves.toEqual({ kind: "delivered", delivery: "queue" });
+    release.resolve();
+    await first;
+    await handle.close();
+
+    expect(calls).toHaveLength(2);
+    const [opening, queued] = calls;
+    expect(JSON.stringify(onlySystemMessage(queued!))).toBe(
+      JSON.stringify(onlySystemMessage(opening!)),
+    );
+    expect(queued!.context.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(queued!.messages).toContain("queued while busy");
+    expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
+      "command-first",
+      "command-queued",
+    ]);
+  });
+
+  it("replays a persisted tool-change system entry in place and reconciles it against the executable tools", async () => {
+    // What a sidecar holds when Pi's loop found the executable tools and the
+    // declared ones disagreeing: a system message with the delta, persisted
+    // through `message_end` like any other message. This runtime never
+    // changes its tools mid-attachment, so the entry is forged here — and
+    // forged as Pi would write it, with a declaration nothing here can run.
+    const attachment = fixture();
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([settles("first answer")])),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    await firstHandle.submitUserMessage("start");
+    const recovery = firstHandle.recovery;
+    await firstHandle.close();
+
+    const sidecars = new JsonlSessionRepo({
+      fileSystem: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      sessionsRoot: attachment.sessionDataDir,
+    });
+    const found = (await sidecars.list({ cwd: attachment.worktreePath }, piContext())).find(
+      (candidate) => candidate.id === recovery!.sessionId,
+    );
+    const sidecar = await sidecars.open(found!, piContext());
+    const main = (await sidecar.branch("main", piContext()))!;
+    const phantom = {
+      name: "phantom_tool",
+      description: "A tool a later attachment does not have.",
+      parameters: { type: "object", properties: {} },
+    };
+    await main.appendMessage(
+      { role: "system", content: "", toolsAdded: [phantom], timestamp: 7 },
+      piContext(),
+    );
+    await sidecar.close(piContext());
+
+    const calls: ProviderCall[] = [];
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([recording(calls, settles("after")), recording(calls, settles("again"))]),
+      ),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    await secondHandle.submitUserMessage("continue");
+    await secondHandle.submitUserMessage("once more");
+    const sidecarPath = secondHandle.recovery!.sessionFilePath;
+    await secondHandle.close();
+
+    expect(calls).toHaveLength(2);
+    const [recovered, later] = calls;
+    const system = systemMessagesOf(recovered!.transcript);
+    // Three system messages, in order: this attachment's composed head first
+    // — recomposed on attach, never read off the sidecar — then the persisted
+    // delta exactly where it was, then the one Pi declared before the new
+    // prompt because `phantom_tool` is declared and not executable.
+    expect(system).toHaveLength(3);
+    expect(system[0]!.timestamp).toBe(0);
+    expect(typeof system[0]!.content === "string" ? system[0]!.content : "").toContain(
+      "# Operating",
+    );
+    expect(declaredNames(system[0]!)).toEqual(sessionToolIds(attachment.spec));
+    expect(system[1]).toEqual({
+      role: "system",
+      content: "",
+      toolsAdded: [phantom],
+      timestamp: 7,
+    });
+    expect(system[2]!.toolsRemoved).toEqual([{ name: "phantom_tool" }]);
+    expect(system[2]!.toolsAdded).toBeUndefined();
+    // The transcript keeps the conversation's order around them...
+    expect(recovered!.transcript.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "system",
+      "system",
+      "user",
+    ]);
+    // ...and replays to exactly the executable set, so the model is offered
+    // what this attachment can run and nothing it cannot.
+    expect(recovered!.toolNames).toEqual(sessionToolIds(attachment.spec));
+    expect(recovered!.systemPrompt).toContain("# Operating");
+    // The removal Pi declared was persisted, so the next attach reads a
+    // transcript that already agrees with itself; the next request of THIS
+    // attachment declares nothing further.
+    expect(systemMessagesOf(later!.transcript)).toHaveLength(3);
+    const persistedSystem = entryRecords(sidecarPath)
+      .filter((record) => record["type"] === "message")
+      .map((record) => record["message"] as { role: string; toolsRemoved?: unknown })
+      .filter((message) => message.role === "system");
+    expect(persistedSystem).toEqual([
+      expect.objectContaining({ toolsAdded: [phantom] }),
+      expect.objectContaining({ toolsRemoved: [{ name: "phantom_tool" }] }),
+    ]);
+  });
+
+  it("still composes the prompt when the sidecar's first replayable entry is a system message", async () => {
+    // The case the `Agent` alone gets wrong: handed an array that already
+    // starts with a system message, it seeds no head of its own. A sidecar
+    // whose first entry is a tool delta Pi declared ahead of the first prompt
+    // is exactly that array, and the composed prompt would be gone.
+    const attachment = fixture();
+    const sidecars = new JsonlSessionRepo({
+      fileSystem: new NodeExecutionEnv({ cwd: attachment.sessionDataDir }),
+      sessionsRoot: attachment.sessionDataDir,
+    });
+    const sidecar = await sidecars.create({ cwd: attachment.worktreePath }, piContext());
+    await sidecar.setValue(
+      SIDECAR_IDENTITY,
+      {
+        volliSessionId: attachment.spec.identity.sessionId,
+        volliThreadId: attachment.spec.identity.rootThreadId,
+        volliAttachmentId: attachment.spec.identity.attachmentId,
+      },
+      piContext(),
+    );
+    const main = await sidecar.createBranch("main", null, piContext());
+    await main.appendMessage(
+      {
+        role: "system",
+        content: "",
+        toolsAdded: [{ name: "phantom_tool", description: "gone", parameters: { type: "object" } }],
+        timestamp: 7,
+      },
+      piContext(),
+    );
+    await main.appendMessage({ role: "user", content: "start", timestamp: 8 }, piContext());
+    const recovery = recoveryRefFor(sidecar.metadata.id, sidecar.metadata.path);
+    await sidecar.close(piContext());
+
+    const calls: ProviderCall[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([recording(calls, settles("after"))])),
+    });
+    const handle = await runtime.startSession({ ...attachment.spec, recovery });
+    await handle.submitUserMessage("continue");
+    await handle.close();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.systemPrompt).toContain("# Operating");
+    expect(calls[0]!.toolNames).toEqual(sessionToolIds(attachment.spec));
+    expect(calls[0]!.transcript.map((message) => message.role)).toEqual([
+      "system",
+      "system",
+      "user",
+      "system",
+      "user",
+    ]);
+    // A recovered conversation is not an empty one: no second Brief.
+    expect(calls[0]!.messages.split("VC-12 — read the marker.").length - 1).toBe(0);
+  });
+
+  it("prices the head into the context budget, once", async () => {
+    // The output ceiling and the compaction preflight both read the projector,
+    // and both now hand it the transcript with the head inside rather than the
+    // prompt and tools beside it. The two spellings must cost the same, and the
+    // head must not be counted twice.
+    const attachment = fixture();
+    let ceiling = 0;
+    let transcriptTokens = 0;
+    let conversationTokens = 0;
+    let pairTokens = 0;
+    const script = scriptedStream([settles("answer")]);
+    const stream: StreamFn = (model, context, options) => {
+      ceiling = options?.maxTokens ?? 0;
+      transcriptTokens = projectedContextTokens(context.messages, model);
+      const conversation = withoutSystemMessages(context.messages);
+      conversationTokens = projectedContextTokens(conversation, model);
+      pairTokens = projectedContextTokens(
+        conversation,
+        model,
+        getCurrentSystemPrompt(context.messages),
+        getCurrentTools(context.messages),
+      );
+      return script(model, context, options);
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(stream, [{ id: MODEL_ID, contextWindow: 48_000 }]),
+    });
+    const handle = await runtime.startSession(attachment.spec);
+    await handle.submitUserMessage("dense input ".repeat(8_000));
+    await handle.close();
+
+    expect(transcriptTokens).toBe(pairTokens);
+    expect(transcriptTokens).toBeGreaterThan(conversationTokens);
+    // The ceiling is what the window has left after the whole transcript, prefix
+    // included, less the reply's headroom — so the head is inside the budget.
+    expect(ceiling).toBe(48_000 - transcriptTokens - 4_096);
   });
 });

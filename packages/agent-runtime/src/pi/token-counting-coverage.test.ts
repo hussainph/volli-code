@@ -5,7 +5,7 @@
  * evolve independently.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, Tool, ToolCall, Usage } from "@earendil-works/pi-ai";
 import { countTokens as countO200kRaw } from "gpt-tokenizer/encoding/o200k_base";
 import { countTokens as countCl100kRaw } from "gpt-tokenizer/encoding/cl100k_base";
 import { describe, expect, it } from "vite-plus/test";
@@ -130,10 +130,19 @@ describe("conservative fallback", () => {
 
 describe("tool-call argument JSON", () => {
   it("prices an unserializable (cyclic) argument payload at its framing, not a crash", () => {
+    // pi-ai 0.86 types `ToolCall.arguments` as JSON, which a cycle can never
+    // be; the cast stands for a provider that streamed one anyway.
     const cyclic: Record<string, unknown> = { path: "src/x.ts" };
     cyclic.self = cyclic;
     const tokens = estimateMessageTokens(
-      assistant([{ type: "toolCall", id: "call_1", name: "edit_file", arguments: cyclic }]),
+      assistant([
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "edit_file",
+          arguments: cyclic as ToolCall["arguments"],
+        },
+      ]),
       model(),
     );
     // The "{}" replacement plus the tool name: tiny but non-zero.

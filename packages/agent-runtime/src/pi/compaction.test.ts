@@ -14,12 +14,16 @@ import {
   createAssistantMessageEventStream,
   createModels,
   fauxProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
   type Context,
   type Model,
   type Models,
+  type TranscriptContext,
   type Usage,
 } from "@earendil-works/pi-ai";
+import { withoutSystemMessages } from "./transcript-context";
 import { describe, expect, it } from "vite-plus/test";
 import { composeFirstUserMessage } from "../prompt";
 import {
@@ -113,8 +117,14 @@ function scriptedModels(replies: readonly string[], sent: Context[] = []): Model
   let call = 0;
   models.setProvider({
     ...faux.provider,
-    streamSimple: ((model: Model<string>, context: Context) => {
-      sent.push(context);
+    streamSimple: ((model: Model<string>, context: TranscriptContext) => {
+      // pi-ai 0.86 hands the provider a normalized transcript; read it back
+      // as the request shape the assertions below are about.
+      sent.push({
+        systemPrompt: getCurrentSystemPrompt(context.messages),
+        tools: getCurrentTools(context.messages),
+        messages: withoutSystemMessages(context.messages),
+      });
       const stream = createAssistantMessageEventStream();
       const text = replies[call++];
       const message: AssistantMessage = {

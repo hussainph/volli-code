@@ -9,7 +9,14 @@ import { Buffer } from "node:buffer";
 import { countTokens as countO200k } from "gpt-tokenizer/encoding/o200k_base";
 import { countTokens as countCl100k } from "gpt-tokenizer/encoding/cl100k_base";
 import { calculateContextTokens, type AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Model, Tool } from "@earendil-works/pi-ai";
+import {
+  getSystemMessageText,
+  type Api,
+  type AssistantMessage,
+  type Model,
+  type SystemMessage,
+  type Tool,
+} from "@earendil-works/pi-ai";
 
 // ASCII code/JSON is denser than prose. Non-ASCII uses UTF-8 bytes as an
 // upper-bound-style fallback; dividing UTF-16 length by four badly undercounts
@@ -119,6 +126,16 @@ function isCurrentModelUsage(message: AgentMessage, model: Model<Api>): boolean 
  * Tokens for one message as the current model's provider would hold it.
  *
  * Per role:
+ * - `system`: the rendered prompt text (content and sections, exactly as
+ *   Pi's `getSystemMessageText` sends the leading one) plus every tool
+ *   declaration it adds and the name of every tool it removes. Pi 0.86 moved
+ *   the system prompt and tool declarations INTO the transcript as system
+ *   messages, so a normalized request's prefix is now a message like any
+ *   other, and the leading one costs exactly what the separate
+ *   `systemPrompt` + `tools` pair cost before: same framing, same tool
+ *   serialization. A later one, which a provider that accepts mid-conversation
+ *   system messages sends in place and every other provider folds into the
+ *   leading prompt, is priced the same way — the folded text is the same text.
  * - `user` / `toolResult` / `custom`: text through the counter, images at the
  *   flat conservative figure.
  * - `assistant`: text, thinking (it is replayed context for the providers
@@ -134,6 +151,8 @@ function isCurrentModelUsage(message: AgentMessage, model: Model<Api>): boolean 
 export function estimateMessageTokens(message: AgentMessage, model: Model<Api>): number {
   const count = counterFor(model);
   switch (message.role) {
+    case "system":
+      return systemMessageTokens(message, count);
     case "user":
       return PER_MESSAGE_FRAMING + contentTokens(message.content, count);
     case "assistant": {
@@ -175,6 +194,22 @@ export function estimateMessageTokens(message: AgentMessage, model: Model<Api>):
       // other signals carry the occupancy.
       return 0;
   }
+}
+
+/**
+ * One system message as the provider holds it: prompt text with its framing,
+ * added declarations at the per-tool rate, removed names as bare text.
+ *
+ * An empty message — Pi's loop emits one carrying only tool deltas when the
+ * executable set and the transcript disagree — costs only its deltas, so a
+ * transcript with no prompt still prices its tools and nothing else.
+ */
+function systemMessageTokens(message: SystemMessage, count: TokenCounter): number {
+  const text = getSystemMessageText(message);
+  let tokens = text.length > 0 ? SYSTEM_PROMPT_FRAMING + count(text) : 0;
+  tokens += toolsTokens(message.toolsAdded, count);
+  for (const removed of message.toolsRemoved ?? []) tokens += count(removed.name);
+  return tokens;
 }
 
 /** Tokens for the tool definitions a request carries. */
@@ -236,6 +271,12 @@ function wholeContextTokens(
  * Model-aware estimate of the whole request: system prompt, tool definitions
  * and every message. No provider usage is consulted — this is the pure
  * estimate, for contexts the model has not measured yet.
+ *
+ * The prompt and tools may arrive either way: as the separate pair, for a
+ * caller holding a sidecar conversation and the attachment's own prompt, or
+ * already inside `messages` as the leading system message of a normalized
+ * transcript. A caller must not hand over both for one request — the two
+ * spellings are the same tokens and would be counted twice.
  */
 export function estimateContextTokens(
   messages: readonly AgentMessage[],

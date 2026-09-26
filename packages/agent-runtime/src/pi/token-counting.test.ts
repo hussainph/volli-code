@@ -175,6 +175,72 @@ describe("estimateMessageTokens", () => {
     expect(estimateMessageTokens(excluded, model())).toBe(0);
   });
 
+  // Pi 0.86 carries the prompt and the tool declarations as system messages
+  // inside the transcript. The estimator prices them there so a normalized
+  // request costs exactly what the separate `(systemPrompt, tools)` pair cost.
+  it("prices a system head exactly as the prompt-and-tools pair it replaces", () => {
+    const systemPrompt = "You are concise.";
+    const head = {
+      role: "system" as const,
+      content: systemPrompt,
+      toolsAdded: [tool],
+      timestamp: 0,
+    };
+    const conversation = [user("hello")];
+    const withHead = [head, ...conversation];
+    expect(estimateContextTokens(withHead, model())).toBe(
+      estimateContextTokens(conversation, model(), systemPrompt, [tool]),
+    );
+    expect(projectedContextTokens(withHead, model())).toBe(
+      projectedContextTokens(conversation, model(), systemPrompt, [tool]),
+    );
+    const projector = createContextTokenProjector();
+    const first = projector(withHead, model());
+    // Memoized by the head's identity, and the same answer as the pair.
+    expect(projector(withHead, model())).toBe(first);
+    expect(first).toBe(projector(conversation, model(), systemPrompt, [tool]));
+  });
+
+  it("prices sections as rendered and a removed section as nothing", () => {
+    const plain = { role: "system" as const, content: "base", timestamp: 0 };
+    expect(
+      estimateMessageTokens(
+        { ...plain, sections: { style: "Spell units out.", gone: null } },
+        model(),
+      ),
+    ).toBeGreaterThan(estimateMessageTokens(plain, model()));
+    expect(estimateMessageTokens({ ...plain, sections: { gone: null } }, model())).toBe(
+      estimateMessageTokens(plain, model()),
+    );
+  });
+
+  it("prices a tool delta at its names alone, and an empty system message at nothing", () => {
+    // No prompt text means no prompt framing: only the removed name is sent.
+    expect(
+      estimateMessageTokens(
+        { role: "system", content: "", toolsRemoved: [{ name: "phantom_tool" }], timestamp: 0 },
+        model(),
+      ),
+    ).toBe(estimateMessageTokens(user("phantom_tool"), model()) - 8);
+    expect(estimateMessageTokens({ role: "system", content: "", timestamp: 0 }, model())).toBe(0);
+  });
+
+  it("prices block content as the joined text pi-ai renders", () => {
+    expect(
+      estimateMessageTokens(
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "a" },
+            { type: "text", text: "b" },
+          ],
+          timestamp: 0,
+        },
+        model(),
+      ),
+    ).toBe(estimateMessageTokens({ role: "system", content: "a\nb", timestamp: 0 }, model()));
+  });
+
   it("estimates an unrecognized custom role at zero rather than guessing", () => {
     expect(estimateMessageTokens({ role: "mystery" } as unknown as AgentMessage, model())).toBe(0);
   });
