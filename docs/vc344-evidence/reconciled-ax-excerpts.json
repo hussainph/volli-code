@@ -1,0 +1,281 @@
+{
+  "before-focus": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 473,
+      "matches": [
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 1",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "VC344-OUTPUT-READABLE",
+          "depth": 24
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "22f45 --native VC344-OUTPUT-READABLE % phalasiya@V2027 project-WtBqkw %",
+          "depth": 23
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 1",
+          "depth": 23
+        }
+      ]
+    },
+    "chromium": [
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "22f45 --native VC344-OUTPUT-READABLE % phalasiya@V2027 project-WtBqkw %",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      },
+      {
+        "role": "InlineTextBox",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      }
+    ]
+  },
+  "after-focus": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 474,
+      "matches": [
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 1",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "VC344-OUTPUT-READABLE",
+          "depth": 24
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "22f45 --native VC344-OUTPUT-READABLE % phalasiya@V2027 project-WtBqkw %",
+          "depth": 23
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 1",
+          "depth": 23
+        }
+      ]
+    },
+    "chromium": [
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "22f45 --native VC344-OUTPUT-READABLE % phalasiya@V2027 project-WtBqkw %",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      },
+      {
+        "role": "InlineTextBox",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      }
+    ]
+  },
+  "terminal-focus": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 363,
+      "matches": [
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 1",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "VC344-OUTPUT-READABLE",
+          "depth": 24
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 1",
+          "depth": 23
+        }
+      ]
+    },
+    "chromium": [
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      },
+      {
+        "role": "InlineTextBox",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      }
+    ]
+  },
+  "hidden": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 354,
+      "matches": []
+    },
+    "chromium": []
+  },
+  "hide-show": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 473,
+      "matches": [
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 1",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "VC344-OUTPUT-READABLE",
+          "depth": 24
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 1",
+          "depth": 23
+        }
+      ]
+    },
+    "chromium": [
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      },
+      {
+        "role": "InlineTextBox",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      }
+    ]
+  },
+  "split": {
+    "native": {
+      "trusted": true,
+      "nodeCount": 573,
+      "matches": [
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 1",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXStaticText",
+          "AXValue": "VC344-OUTPUT-READABLE",
+          "depth": 24
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 1",
+          "depth": 23
+        },
+        {
+          "AXDescription": "Terminal 1 \u2014 pane 2",
+          "AXHelp": "Control+Shift+M toggles Tab focus navigation",
+          "AXRole": "AXGroup",
+          "depth": 19
+        },
+        {
+          "AXRole": "AXTextField",
+          "AXTitle": "Terminal 1 \u2014 pane 2",
+          "depth": 23
+        }
+      ]
+    },
+    "chromium": [
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "region",
+        "name": "Terminal 1 \u2014 pane 2",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 1",
+        "ignored": false
+      },
+      {
+        "role": "textbox",
+        "name": "Terminal 1 \u2014 pane 2",
+        "ignored": false
+      },
+      {
+        "role": "StaticText",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      },
+      {
+        "role": "InlineTextBox",
+        "name": "VC344-OUTPUT-READABLE",
+        "ignored": false
+      }
+    ]
+  }
+}

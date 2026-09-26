@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "ASTRO_TELEMETRY_DISABLED=1 astro dev",
     "check": "ASTRO_TELEMETRY_DISABLED=1 astro check",
-    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && pnpm run licenses:check",
+    "build": "ASTRO_TELEMETRY_DISABLED=1 astro check && ASTRO_TELEMETRY_DISABLED=1 astro build && node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs && pnpm run licenses:check",
+    "check:licenses": "node scripts/check-bundled-license-notices.mjs --self-test && node scripts/check-bundled-license-notices.mjs",
     "licenses:check": "check-font-notices .",
     "deploy": "pnpm run build && wrangler pages deploy dist --project-name volli-code --branch main",
     "preview": "ASTRO_TELEMETRY_DISABLED=1 astro preview",

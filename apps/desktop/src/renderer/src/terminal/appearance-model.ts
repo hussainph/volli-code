@@ -4,7 +4,7 @@
  * the glue that reads design tokens and talks to the preload bridge lives in
  * appearance.ts; this module is the unit-tested logic layer.
  */
-import { getGhosttyTheme, parseGhosttyTerminalPrefs, parseGhosttyTheme } from "@volli/shared";
+import { parseGhosttyTerminalPrefs, parseGhosttyTheme } from "@volli/shared";
 import type { GhosttyAppearancePayload, GhosttyTheme, ResolvedAppearance } from "@volli/shared";
 
 import type { TerminalAppearance } from "./engine";
@@ -85,10 +85,28 @@ function liveThemeName(
 }
 
 /**
- * Resolve the theme for a payload: named custom theme file, else the vendored
- * catalog (Ghostty's own theme collection — see `ghostty-theme.ts`), else the
- * app's token-derived fallback — then overlay any explicit color keys from
- * the config text on whichever base won.
+ * Resolve the theme for a payload: the theme FILE main read off the user's own
+ * disk, else the app's token-derived fallback — then overlay any explicit color
+ * keys from the config text on whichever base won.
+ *
+ * TWO SOURCES, AND THERE USED TO BE THREE (VC-413). A name that resolved to no
+ * file on the user's machine used to be looked up in a catalog vendored out of
+ * Ghostty.app's bundled collection, which the app no longer ships — the
+ * individual provenance of those 463 themes was never verified, so none of them
+ * is ours to redistribute. A name we cannot read a file for is therefore an
+ * UNAVAILABLE override rather than an error: the terminal wears the
+ * token-derived palette, which follows the app's own canvas and its light/dark
+ * resolution. Nothing is written, nothing is lost — `theme = X` stays in the
+ * user's config (or Volli's overlay) and starts painting again the moment X is
+ * a file Ghostty's own theme directories hold. That is the honest answer for a
+ * name we have no colors for, and it is the same answer a user who never named
+ * a theme already gets.
+ *
+ * `themeSource` is the file main read for the half IT resolved. When the live
+ * mode picks the other half of a `light:X,dark:Y` pair, that text belongs to the
+ * wrong theme, so the mode-correct token fallback has to answer instead —
+ * painting a dark theme's file in light mode is the exact failure the live
+ * re-resolution above exists to prevent.
  */
 export function resolveGhosttyThemeChoice(
   payload: GhosttyAppearancePayload,
@@ -96,17 +114,10 @@ export function resolveGhosttyThemeChoice(
   appearance: ResolvedAppearance,
 ): GhosttyTheme {
   const themeName = liveThemeName(payload, appearance);
-  let base: GhosttyTheme | null = null;
-  // `themeSource` is the file main read for the half IT resolved. When the live
-  // mode picks the other half that text belongs to the wrong theme, so the
-  // catalog (and failing that, the mode-correct token fallback) has to answer
-  // instead — painting a dark theme's file in light mode is the exact failure
-  // being fixed here.
-  if (payload.themeSource !== null && themeName === payload.prefs.themeName) {
-    base = parseGhosttyTheme(payload.themeSource);
-  } else if (themeName !== null) {
-    base = getGhosttyTheme(themeName);
-  }
+  const base =
+    payload.themeSource !== null && themeName === payload.prefs.themeName
+      ? parseGhosttyTheme(payload.themeSource)
+      : null;
   let resolved = base ?? fallbackTheme;
   if (payload.configText !== null) {
     resolved = overlayGhosttyTheme(resolved, parseGhosttyTheme(payload.configText));

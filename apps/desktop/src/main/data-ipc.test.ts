@@ -1915,6 +1915,10 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         bornTicketless: false,
         role: "ticket",
         parentSessionId: null,
+        // What this Session is pinned to (VC-416). Null here because it has
+        // never recorded a policy — it was minted and never attached, which is
+        // exactly the state a row must not dress up as a reading.
+        model: null,
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both

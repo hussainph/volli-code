@@ -52,7 +52,8 @@ export interface TerminalEngine {
    * Mount (or re-parent) the engine's rendered surface into `container`.
    * Idempotent and re-parent-safe: the engine keeps a persistent host element
    * so switching containers (React remounts, keep-alive re-reveals) never
-   * destroys the live terminal.
+   * destroys the live terminal. A named container with an id also supplies the
+   * input's accessible name by reference, so tab renames stay live.
    */
   attach(container: HTMLElement): void;
 

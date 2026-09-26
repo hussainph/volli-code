@@ -99,6 +99,7 @@ import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { openQuickOpen } from "@renderer/hooks/use-quick-open-shortcut";
 import { useSplitShortcuts } from "@renderer/hooks/use-split-shortcuts";
+import { useTicketEntryFocus } from "@renderer/hooks/use-ticket-focus-handoff";
 import { chatWorktreeRefs, resolveChatOpenTarget } from "@renderer/lib/chat-open-target";
 import { isEscapeExempt } from "@renderer/lib/escape-guard";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
@@ -1255,6 +1256,12 @@ export function TicketDetail({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleClose, terminalFocused]);
+
+  // …and the other end of that key: a ticket ENTERED from the keyboard takes
+  // focus onto its primary tab, rather than leaving it on the body of a page
+  // whose board has just unmounted (VC-419). Inert for a ticket opened any
+  // other way — see `use-ticket-focus-handoff.ts`.
+  useTicketEntryFocus(projectId, ticket.id);
 
   /**
    * Close one tab, from whichever pane's strip raised it.
