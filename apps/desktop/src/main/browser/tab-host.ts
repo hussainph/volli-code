@@ -1609,8 +1609,8 @@ export class BrowserTabHost {
   }
 
   /**
-   * Takes every plane off ONE window and parks it back on the stage, for the
-   * app page that is about to be replaced (VC-424).
+   * Takes every plane off ONE window and parks it back on the stage, for an app
+   * page that has just been replaced or died (VC-424).
    *
    * Hide is otherwise the renderer's word: its plane controller emits it from
    * React cleanup as a pane unmounts. A main-frame reload, an
