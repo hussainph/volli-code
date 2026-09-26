@@ -468,6 +468,7 @@ export function TicketSessionsPanel({
   onNewBrowser,
   onActivateSession,
   onActivateChat,
+  children,
 }: {
   /** Whose project this ticket is — half of a row's drag payload (VC-202 §4). */
   projectId: string;
@@ -479,6 +480,13 @@ export function TicketSessionsPanel({
   onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
+  /**
+   * What the page stacks BETWEEN the working set and the record, if anything.
+   * One read of the roster still feeds both sections; this only lets a page put
+   * a rarely-read block under the rows that are read constantly and above the
+   * rows that are read rarely (VC-406 comparison — see `lab/scratches/rail-now-compare.tsx`).
+   */
+  children?: React.ReactNode;
 }) {
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const parkState = useSessionsStore((state) => state.parkState);
@@ -712,6 +720,7 @@ export function TicketSessionsPanel({
           <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
         )}
       </section>
+      {children}
       {history.length > 0 ? (
         <section className={SECTION} data-testid="session-history">
           <RailSectionHeadingRow label="History">
