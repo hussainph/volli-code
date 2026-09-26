@@ -89,7 +89,7 @@ function legacySidecar(cwd: string, id: string): string {
  * The session-directory name Pi derives from a workspace path, both versions
  * alike.
  *
- * PI-RESTATED(0.87.1): `sessionDirectoryName` in
+ * PI-RESTATED(0.85.1, 0.87.1): `sessionDirectoryName` in
  * `dist/harness/session/jsonl/repo.js`, which the package does not export. Only
  * the leading slash and the path separators (and a drive colon) are rewritten;
  * a dot, a space or an underscore in the path stays. An earlier restatement
