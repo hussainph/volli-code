@@ -31,19 +31,37 @@ if (isHookInvocation) {
   process.on("unhandledRejection", () => {});
 }
 
-function exitQuietlyOnBrokenPipe(stream: NodeJS.WriteStream): void {
+/**
+ * A reader that walks away is not a failure of this command.
+ *
+ * `volli session list | head -12` ends with `head` closing the pipe while this
+ * process is still writing into it. The write fails EPIPE, an unhandled
+ * `error` event on a stream is an uncaught exception, and what the user gets
+ * for asking a normal question is their rows followed by a `node:events` stack
+ * trace (VC-422).
+ *
+ * What that buys is narrow on purpose, in three directions:
+ *
+ * - Only EPIPE. Every other write failure — a bad descriptor, a full disk —
+ *   is rethrown and stays exactly as loud as it was before this existed.
+ * - The exit code is left where the command put it. A departed reader may not
+ *   turn a usage refusal (bare `volli`, exit 2) or a failed mutation into a
+ *   success, and forcing an exit from here is how that happens: this handler
+ *   runs while the command is still deciding, so the only status it could name
+ *   is one it invented. The process ends on its own, with what was earned.
+ * - Nothing is torn down. Later writes to the same dead pipe fail the same
+ *   way and are absorbed the same way; none of them could reach anybody, and
+ *   destroying the stream would only trade EPIPE for a different error.
+ */
+function tolerateBrokenPipe(stream: NodeJS.WriteStream): void {
   stream.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EPIPE") {
-      // A reader such as `head` intentionally closes the pipe before this
-      // command has finished writing. There is nothing useful left to do.
-      process.exit(0);
-    }
+    if (error.code === "EPIPE") return;
     throw error;
   });
 }
 
-exitQuietlyOnBrokenPipe(process.stdout);
-exitQuietlyOnBrokenPipe(process.stderr);
+tolerateBrokenPipe(process.stdout);
+tolerateBrokenPipe(process.stderr);
 
 function detachedSpawn(executable: string, args: string[], childEnv: NodeJS.ProcessEnv): void {
   const child = spawn(executable, args, {

@@ -8,8 +8,18 @@
  * exactly like one that is about to exit. Only a child that has actually been
  * reaped proves it.
  */
-import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  constants,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 
@@ -97,33 +107,104 @@ function runHookProcess(mode: "idle" | "flood"): Promise<HookRun> {
   });
 }
 
-interface EarlyClosedPipeRun {
-  bytesReceived: number;
-  exitCode: number | null;
-  stderr: string;
+interface OutputTarget {
+  /** A descriptor to hand the child as one of its two output streams. */
+  fd: number;
+  dispose(): void;
 }
 
-/** Closes one of the CLI's output pipes as soon as its first bytes arrive. */
-function runWithEarlyClosedPipe(output: "stdout" | "stderr"): Promise<EarlyClosedPipeRun> {
+function outputTarget(openDescriptor: (directory: string) => number): OutputTarget {
+  const directory = mkdtempSync(join(tmpdir(), "volli-cli-output-"));
+  const fd = openDescriptor(directory);
+  return {
+    fd,
+    dispose: () => {
+      closeSync(fd);
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * A pipe whose only reader has hung up: the descriptor `head` leaves behind.
+ *
+ * Closing a pipe from the test after its first chunk does not reproduce the
+ * bug and cannot be made to. Every command writes its whole answer in one
+ * call, the largest thing this suite can ask for is some three kilobytes of
+ * reference, and a kernel pipe buffer swallows all of it before any reader
+ * could hang up — so the write succeeds, nothing errors, and the test passes
+ * just as happily against a CLI that handles none of this. Reproducing it by
+ * size instead means flooding a pipe with more than a buffer's worth of
+ * output and racing the reader: a slow test that fails on somebody's machine
+ * one morning.
+ *
+ * A FIFO abandoned by its reader is that same descriptor in its final state,
+ * reached by construction rather than by timing: `write(2)` to a pipe with no
+ * readers is EPIPE on the first byte, every time, however few bytes there are.
+ */
+function abandonedPipe(): OutputTarget {
+  return outputTarget((directory) => {
+    const fifoPath = join(directory, "fifo");
+    execFileSync("mkfifo", [fifoPath]);
+    // Opening a FIFO's read end normally waits for a writer, hence O_NONBLOCK.
+    // The write end then opens without waiting because this reader exists, and
+    // closing it leaves a pipe nobody will ever read again.
+    const readFd = openSync(fifoPath, constants.O_RDONLY | constants.O_NONBLOCK);
+    const writeFd = openSync(fifoPath, constants.O_WRONLY);
+    closeSync(readFd);
+    return writeFd;
+  });
+}
+
+/** A descriptor that refuses every write for a reason nobody chose: EBADF. */
+function unwritableFile(): OutputTarget {
+  return outputTarget((directory) => {
+    const filePath = join(directory, "output");
+    writeFileSync(filePath, "");
+    return openSync(filePath, constants.O_RDONLY);
+  });
+}
+
+interface BrokenOutputRun {
+  exitCode: number | null;
+  /** Everything the CLI managed to say on the stream that still worked. */
+  intactOutput: string;
+}
+
+/**
+ * Runs the built CLI with one output stream wired to a descriptor that fails,
+ * and captures the other one — which is where a stack trace would land, and
+ * where a fault that is not a broken pipe still has to be reported.
+ */
+function runWithBrokenOutput(
+  target: OutputTarget,
+  broken: "stdout" | "stderr",
+  argv: readonly string[],
+): Promise<BrokenOutputRun> {
   const env = { ...process.env };
   delete env["VOLLI_SOCKET"];
   delete env["VOLLI_SESSION"];
-  return new Promise<EarlyClosedPipeRun>((resolve, reject) => {
-    const child = spawn(process.execPath, [bundlePath, ...(output === "stdout" ? ["help"] : [])], {
+  delete env["VOLLI_TICKET"];
+  return new Promise<BrokenOutputRun>((resolve, reject) => {
+    const child = spawn(process.execPath, [bundlePath, ...argv], {
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [
+        "ignore",
+        broken === "stdout" ? target.fd : "pipe",
+        broken === "stderr" ? target.fd : "pipe",
+      ],
     });
-    const pipe = output === "stdout" ? child.stdout : child.stderr;
-    const stderr: Buffer[] = [];
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    let bytesReceived = 0;
-    pipe.once("data", (chunk: Buffer) => {
-      bytesReceived = chunk.length;
-      pipe.destroy();
+    // Never null: whichever stream is not the broken one is always a pipe.
+    const intact = (broken === "stdout" ? child.stderr : child.stdout)!;
+    const chunks: Buffer[] = [];
+    intact.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.once("error", (error) => {
+      target.dispose();
+      reject(error);
     });
-    child.once("error", reject);
     child.once("close", (exitCode) => {
-      resolve({ bytesReceived, exitCode, stderr: Buffer.concat(stderr).toString("utf8") });
+      target.dispose();
+      resolve({ exitCode, intactOutput: Buffer.concat(chunks).toString("utf8") });
     });
   });
 }
@@ -154,14 +235,33 @@ describe("volli built entrypoint", () => {
     expect(run.stdout).not.toContain("unbundled-source");
   });
 
-  for (const output of ["stdout", "stderr"] as const) {
-    it(`exits quietly when a downstream reader closes ${output}`, async () => {
-      const run = await runWithEarlyClosedPipe(output);
-      expect(run.bytesReceived).toBeGreaterThan(0);
-      expect(run.exitCode).toBe(0);
-      if (output === "stdout") expect(run.stderr).toBe("");
-    });
-  }
+  // The reported bug, as a process: `volli session list | head -12` printed
+  // its first rows and then an unhandled `node:events` EPIPE stack, because a
+  // write whose reader had gone raised an `error` nobody was listening for.
+  // Without the handler this run exits 1 and puts that stack on stderr.
+  it("says nothing when the reader of stdout has gone", async () => {
+    const run = await runWithBrokenOutput(abandonedPipe(), "stdout", ["help"]);
+    expect(run.intactOutput).toBe("");
+    expect(run.exitCode).toBe(0);
+  });
+
+  // The other half, and the one an over-eager fix gets wrong: bare `volli` is
+  // a usage refusal that prints the whole reference to stderr and exits 2. A
+  // reader that left has no opinion about whether the command worked, so the
+  // status stays 2 — not 0 for having exited quietly, not 1 for crashing.
+  it("keeps the command's own failure status when the reader of stderr has gone", async () => {
+    const run = await runWithBrokenOutput(abandonedPipe(), "stderr", []);
+    expect(run.intactOutput).toBe("");
+    expect(run.exitCode).toBe(2);
+  });
+
+  // Quiet is owed to a departed reader and to nobody else. A descriptor that
+  // cannot be written is a real fault, and it still costs what it always did.
+  it("stays loud when a write fails for a reason other than a departed reader", async () => {
+    const run = await runWithBrokenOutput(unwritableFile(), "stdout", ["help"]);
+    expect(run.intactOutput).toContain("EBADF");
+    expect(run.exitCode).toBe(1);
+  });
 
   // The read budget used to bound the promise and not the process: the `data`
   // listener left stdin flowing, a flowing pipe holds a referenced handle, and
