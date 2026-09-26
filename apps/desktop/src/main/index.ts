@@ -338,6 +338,7 @@ import {
 import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
 import { BrowserPictureStore } from "./browser/picture-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { parkBrowserPlanes, replacesAppRenderer } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -2998,10 +2999,31 @@ app.whenReady().then(async () => {
     // both, so the next click parks for the fresh page instead of being pushed
     // into one that no longer listens. Same-document navigations (a hash
     // change) keep the page and are skipped.
+    //
+    // The same reset strands any Browser plane the old page had put on screen
+    // (VC-424): a native view is the window's child, not the page's, so it goes
+    // on compositing over a fresh app UI that cannot hide a tab it has never
+    // heard of. Park the planes of THIS window — the tabs, their holds and
+    // their engines all survive, and a pane in the new page shows them again.
     window.webContents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
+      if (!replacesAppRenderer(details)) return;
+      notifications.forgetRenderer(windowId);
+      parkBrowserPlanes({
+        host: browserTabs,
+        window,
+        why: "reloaded",
+        log: (message) => console.error(message),
+      });
     });
-    window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    window.webContents.on("render-process-gone", () => {
+      notifications.forgetRenderer(windowId);
+      parkBrowserPlanes({
+        host: browserTabs,
+        window,
+        why: "crashed",
+        log: (message) => console.error(message),
+      });
+    });
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps

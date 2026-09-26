@@ -146,6 +146,24 @@ const fakeWindow = {
   },
 };
 
+/** A second app window, for proving a rule is scoped to one of them (VC-424). */
+function newAppWindow(): typeof fakeWindow {
+  return {
+    isDestroyed: () => false,
+    contentView: {
+      addChildView: vi.fn(),
+      removeChildView: vi.fn(),
+    },
+  };
+}
+
+/**
+ * The window `getWindow` hands out, so a test can attach one tab's plane to a
+ * second window and watch the first window's sweep leave it alone (VC-424).
+ * {@link fakeWindow} for every test that does not care.
+ */
+let appWindow: typeof fakeWindow;
+
 function navigationDetails(url: string) {
   return {
     url,
@@ -235,6 +253,7 @@ beforeEach(() => {
   stageBuilds = "ok";
   nativeOrder = [];
   clock = 1_000;
+  appWindow = fakeWindow;
   let nextId = 0;
   let nextPicture = 0;
   pictures = new BrowserPictureStore({
@@ -268,7 +287,7 @@ beforeEach(() => {
       }
       return isolated as unknown as Session;
     },
-    getWindow: () => fakeWindow as unknown as BrowserWindow,
+    getWindow: () => appWindow as unknown as BrowserWindow,
     createStageWindow: newStage,
     publishState: (event) => published.push(event),
     publishClosed: (tabId) => published.push({ closedTabId: tabId }),
@@ -1488,6 +1507,157 @@ describe("BrowserTabHost plane, for the cursor overlay (VC-239)", () => {
     expect(host.heldBy("missing")).toBeNull();
     host.hold(one, { sessionId: "ses-a", attachmentId: "att-a" });
     expect(host.heldBy(one)).toMatchObject({ kind: "session", sessionId: "ses-a" });
+  });
+});
+
+describe("BrowserTabHost plane reset (VC-424)", () => {
+  const A = { sessionId: "ses-a", attachmentId: "att-a1" };
+  const PLANE = { x: 0, y: 0, width: 800, height: 600 };
+
+  /** The person's own Browser pane, placed and shown the way the renderer does it. */
+  function shownTab(url: string): string {
+    const tab = host.open({ url, projectId: "project-1", ticketId: null, createdBy: "user" });
+    host.setBounds(tab.tabId, PLANE);
+    host.show(tab.tabId);
+    return tab.tabId;
+  }
+
+  /** An agent tab the person revealed: the other way a plane reaches the window (VC-238). */
+  function shownAgentTab(url: string): string {
+    const tab = host.open({
+      url,
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+      ownerSessionId: A.sessionId,
+    });
+    host.setPresentation(tab.tabId, "preview");
+    host.setBounds(tab.tabId, PLANE);
+    host.show(tab.tabId);
+    return tab.tabId;
+  }
+
+  it("parks every plane the replaced page left on screen, keeping the tabs, their holds and their pages", () => {
+    const person = shownTab("https://one.example.com");
+    const revealed = shownAgentTab("https://two.example.com");
+    host.hold(revealed, A);
+    // A headless tab was never on the window, so it is not the sweep's business.
+    const headless = host.open({
+      url: "https://three.example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "session",
+      ownerSessionId: A.sessionId,
+    }).tabId;
+    stage().contentView.addChildView.mockClear();
+
+    // The app page is about to be replaced by a reload or a crash, and its
+    // React cleanup will never run.
+    expect(host.parkPlanesOn(fakeWindow as unknown as BrowserWindow)).toEqual([person, revealed]);
+
+    // Off the window, so nothing composites over the fresh app UI...
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
+    expect(host.attachedTabIds()).toEqual([]);
+    expect(host.isOnScreen(person)).toBe(false);
+    expect(host.isOnScreen(revealed)).toBe(false);
+    // ...and parked on the stage rather than left surfaceless (VC-278).
+    expect(stage().contentView.addChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
+
+    // The tabs themselves survive: a reload is not a reason to destroy live
+    // pages, release a Session's hold, or forget a headless tab.
+    expect(host.list({ projectId: "project-1" }).map((one) => one.tabId)).toEqual([
+      person,
+      revealed,
+      headless,
+    ]);
+    expect(views.every((view) => view.webContents.close.mock.calls.length === 0)).toBe(true);
+    expect(host.heldBy(revealed)).toMatchObject({ kind: "session", sessionId: A.sessionId });
+    expect(published).not.toContainEqual({ closedTabId: person });
+    expect(published).not.toContainEqual({ closedTabId: revealed });
+    expect(published).not.toContainEqual({ closedTabId: headless });
+    // And the revealed tab is still revealed: parking a plane is not a
+    // presentation change the person has to undo.
+    expect(host.list({ projectId: "project-1" })[1]?.presentation).toBe("preview");
+  });
+
+  it("tells the cursor overlay the planes went away, one detach at a time", () => {
+    const first = shownTab("https://one.example.com");
+    const second = shownTab("https://two.example.com");
+    const planes: string[][] = [];
+    host.onPlaneChange((ids) => planes.push([...ids]));
+
+    host.parkPlanesOn(fakeWindow as unknown as BrowserWindow);
+
+    // The overlay draws over an attached page only, so it has to hear this the
+    // same way it hears a hide (VC-239) — and by the end nothing is on screen.
+    expect(planes).toEqual([[second], []]);
+    expect(host.pageBoundsOf(first)).toBeNull();
+  });
+
+  it("lets the fresh page show the same tab again", () => {
+    const tab = shownTab("https://one.example.com");
+    host.parkPlanesOn(fakeWindow as unknown as BrowserWindow);
+    fakeWindow.contentView.addChildView.mockClear();
+    stage().contentView.removeChildView.mockClear();
+
+    // The reloaded renderer mounts its pane and places the plane again: the
+    // ordinary show, with no recovery step of its own.
+    host.setBounds(tab, { x: 4, y: 8, width: 640, height: 480 });
+    host.show(tab);
+
+    expect(stage().contentView.removeChildView.mock.calls).toEqual([[views[0]]]);
+    expect(fakeWindow.contentView.addChildView.mock.calls).toEqual([[views[0]]]);
+    expect(host.isOnScreen(tab)).toBe(true);
+    expect(host.pageBoundsOf(tab)).toEqual({ x: 4, y: 8, width: 640, height: 480 });
+  });
+
+  it("leaves another window's planes attached", () => {
+    const mine = shownTab("https://one.example.com");
+    const other = newAppWindow();
+    appWindow = other;
+    const theirs = shownTab("https://two.example.com");
+
+    host.parkPlanesOn(fakeWindow as unknown as BrowserWindow);
+
+    // One window's page reset says nothing about a plane the other window is
+    // still showing.
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]]]);
+    expect(other.contentView.removeChildView).not.toHaveBeenCalled();
+    expect(host.attachedTabIds()).toEqual([theirs]);
+    expect(host.isOnScreen(mine)).toBe(false);
+    expect(host.isOnScreen(theirs)).toBe(true);
+  });
+
+  it("parks nothing when the replaced page had no plane on screen", () => {
+    host.open({
+      url: "https://one.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+
+    expect(host.parkPlanesOn(fakeWindow as unknown as BrowserWindow)).toEqual([]);
+    expect(fakeWindow.contentView.removeChildView).not.toHaveBeenCalled();
+  });
+
+  it("takes every plane off the window even when one cannot be parked, and says so afterwards", () => {
+    shownTab("https://one.example.com");
+    shownTab("https://two.example.com");
+    // The stage died while the tabs were on screen and no replacement can be
+    // built, so parking fails for both.
+    stage().destroy();
+    stageBuilds = "throws";
+
+    expect(() => host.parkPlanesOn(fakeWindow as unknown as BrowserWindow)).toThrow(
+      BrowserStageUnavailableError,
+    );
+
+    // The sweep finished first: a stage this app cannot build is a fault worth
+    // raising, never a reason to leave the second page composited over a fresh
+    // app UI that cannot hide it.
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
+    expect(host.attachedTabIds()).toEqual([]);
+    expect(host.list({ projectId: "project-1" })).toHaveLength(2);
   });
 });
 
