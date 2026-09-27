@@ -17,23 +17,31 @@
  * fixtures is the app.
  *
  * Read it in this order:
- *   1. The two Now pages side by side at 300px — the resting width. The tiers
- *      to check, top to bottom: what the Ticket IS (Properties), what can be
- *      RUN on it (Automations), what is HAPPENING on it (Sessions, History),
- *      and what it COST, pinned under the scroller rather than stacked in it.
- *   2. The Ticket's Diffs pill — press it; that is where the worktree went.
- *      The repository card heads the list of files it would commit, so the act
- *      and its subject are on one surface. On Now it was a card above a button
- *      routing to the page that could actually show what was being committed.
- *      (Both columns read one `railMode`, as the app's two rails do, so this
- *      scratch mounts one Ticket rail rather than one per page.)
+ *   1. The two Now pages side by side at 300px — the resting width. The
+ *      Ticket's, top to bottom, in the order attention goes: what it IS
+ *      (Properties, as rows), what is HAPPENING on it (Sessions, with the
+ *      record folded under the eyebrow's own label — press `SESSIONS ›`), and
+ *      what can be RUN on it (Automations, no button under the rows). Under
+ *      the scroller, two pinned rows that fold open UPWARD without moving:
+ *      what it COST, and the worktree — press the fact at the right of the
+ *      branch and the repository card's body unfolds above it.
+ *   2. The Ticket's Diffs pill — press it. The page is the change set alone;
+ *      the worktree row stays under it, as under every page, and its body
+ *      still unfolds over the files it would commit. (Both columns read one
+ *      `railMode`, as the app's two rails do, so this scratch mounts one
+ *      Ticket rail rather than one per page.)
  *   3. The same rails at the 240px floor, where every truncation decision
  *      shows (the width control at the top switches both columns at once).
  *
  * WHAT TO LOOK FOR ACROSS THE PAIR, since that is what only this scratch can
- * show: one eyebrow recipe, one list row, one card frame, one control recipe
- * for the acts — and the same reading order at both scopes, so moving between
- * Home and a Ticket is a change of subject rather than a change of language.
+ * show: one eyebrow recipe, one list row, one fold, one card frame — and the
+ * same reading order at both scopes, so moving between Home and a Ticket is a
+ * change of subject rather than a change of language.
+ *
+ * The comparison that settled this shape — the first pass beside the reorder,
+ * the folds, the footer disclosures, Properties four ways — lived in
+ * `rail-now-compare.tsx` and left with the port; it is in this branch's
+ * history (`design(lab): the Now page compared`, rounds one and two).
  *
  * The honest limits of the lab here: Files and Search are not passed (both
  * navigators need a filesystem), so those two pills are present and their
@@ -531,11 +539,13 @@ function Intro({ width, onWidth }: { width: number; onWidth: (width: number) => 
     <div className="flex shrink-0 flex-col gap-3">
       <p className="max-w-[70ch] text-ui text-muted-foreground">
         Both rails, whole and live — the shipping components in the app&rsquo;s own frame. The
-        Ticket reads in tiers: what it <strong className="text-foreground">is</strong>, what can be{" "}
-        <strong className="text-foreground">run</strong> on it, what is{" "}
-        <strong className="text-foreground">happening</strong> on it, and what it{" "}
-        <strong className="text-foreground">cost</strong> — pinned under the scroller rather than
-        stacked in it. Home is the same reading order one scope up.
+        Ticket reads in the order attention goes: what it{" "}
+        <strong className="text-foreground">is</strong>, what is{" "}
+        <strong className="text-foreground">happening</strong> on it (the record folded under the
+        eyebrow), what can be <strong className="text-foreground">run</strong> on it — and, pinned
+        under the scroller, what it <strong className="text-foreground">cost</strong> and where its{" "}
+        <strong className="text-foreground">worktree</strong> stands, each a row that folds open
+        upward without moving. Home is the same language one scope up.
       </p>
       <div className="flex items-center gap-2">
         {[RAIL_DEFAULT, RAIL_FLOOR].map((candidate) => (

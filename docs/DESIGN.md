@@ -153,8 +153,8 @@ accent edge that catches at opposing corners. `PROMPT_SURFACE` in `chat/composer
 owns the shell; `globals.css` owns its material. Every color comes from generated theme tokens.
 There is no backdrop blur, animated glow, or focus-triggered shell change.
 
-This treatment reaches Session chat, New ticket, Automation instructions (including Run once),
-command-prompt creation, and ticket comments. Questions retain their quieter stacked-card
+This treatment reaches Session chat, New ticket, Automation instructions, command-prompt
+creation, and ticket comments. Questions retain their quieter stacked-card
 treatment.
 
 | Piece | Rung | Says |
@@ -399,62 +399,110 @@ Subagent Session and the island lists no sibling chat; the two surfaces split on
 scope rather than overlapping on it. A block that would only be true of the front chat is a block
 in the wrong place.
 
-**Every subject lives on the page that shows it.** The rail has four pages, and the reason a thing
-is on one rather than another is that its page is where its evidence is. The worktree is the
-worked example: the repository card — branch, Git state, CI, and the commit/push/PR split button —
-sits in the **Diffs** header, over the list of files it would commit. On Now it was a second,
-coarser drawing of that same header (a file count and a ± pair, above a button routing to the page
-that prints both), and it offered an irreversible act on a surface that could not show its
-subject. One worktree object, on the page about the worktree.
-
-**Now is what is left, in three tiers**: what this Ticket *is*, what can be *run* on it, what is
-*happening* on it — and the money last.
+**Now is ordered by where attention goes, most often first.** The first pass ordered it by kind —
+what the Ticket *is*, what can be *run* on it, what is *happening* on it — and that put a
+rarely-pressed list of Automations above the roster of live Sessions, which is the one block on the
+page a person consults every few minutes and the most direct way to the right chat. Taxonomy beat
+frequency; the comparison scratch drew the cost, and the order is by frequency now.
 
 | # | Block | What it is | Object kind |
 |---|---|---|---|
-| 1 | Properties | status, priority, labels — three editable facts as pills | chip run |
-| 2 | Automations | what this Ticket can be made to run, height-capped | section |
-| 3 | Sessions | the working set — one row per live Session, `+ Chat ▾` in the eyebrow | section |
-| 4 | History | the record; searchable past four rows | section |
-| 5 | Usage | what it cost, at one row | pinned footer |
+| 1 | Properties | status, priority, labels — three editable facts as rows | section |
+| 2 | Sessions | the working set, one row per live Session, `+ Chat ▾` in the eyebrow; the record folded under the eyebrow's own label | section (folds) |
+| 3 | Automations | what this Ticket can be made to run, height-capped | section |
+| — | Usage | what it cost, at one row | pinned footer (folds) |
+| — | Worktree | the branch and one fact about it; the repository card folded above | pinned footer (folds), **under every page** |
 
 Properties opens because it is the header of the thing every block below is about, and because the
-status it sets is what decides which Automation the next block marks Armed. Automations sits above
-the roster because a Run is how a row *appears* in that roster. History closes the scroller
-because a record only grows.
+status it sets is what decides which Automation the block below marks Armed. Sessions is second
+because it is read most. Automations closes the scroller because it is pressed least, and it is
+still on the page because a Run is how a row *appears* in the roster above it.
 
-**Usage is pinned, not stacked.** It is the one block on Now that is only ever read — the other
-four are worked in — and a read-only fact stacked among acts has the worst of both: it takes a
-turn in the reading order it does not need, and it scrolls out of sight exactly when the roster
-above it has grown long enough to make the question interesting. It is a sibling of the scroller,
-wearing a top rule rather than a card frame, because a footer's boundary is with the page above it
-rather than around itself.
-
-**Two object kinds carry a page**, and a block is one or the other. A *section* is an eyebrow row
+**One object kind carries the page**: every block on Now is a *section* — an eyebrow row
 (`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
-`ListRow`s at the rows' own `px-2`. *The card* is `RAIL_CARD_FRAME` — seamed rows inside one
-`rounded-xl` frame — and the rail has exactly one recipe for it. The page stacks with **one
-`gap-4`** and no block pays its own top padding: an absent block (History on a new Ticket) then
-leaves no hole behind it, and no block can drift from its neighbours by carrying a different inset.
+`ListRow`s at the rows' own `px-2`. Properties was a run of pills, the one block that was neither a
+section nor a card — unmarked, bordered at rest where every row is borderless until hovered, two
+facts to a line — and it is three rows now, in the roster's own grammar: a glyph, the **value** as
+the thing (what a reader scans for), the field name as the quiet qualifier at the right. *The card*
+(`RAIL_CARD_FRAME`, seamed rows inside one `rounded-xl` frame) is Home's and the Diffs page's
+costume; Now draws none. The page stacks with **one `gap-4`** and no block pays its own top
+padding: an absent block leaves no hole, and no block can drift from its neighbours by carrying a
+different inset.
+
+**The rail has one fold, and the trigger never moves.** Three things open and close in place —
+the roster's record under the Sessions eyebrow, the worktree body under its footer row, the cost
+breakdown under its — and they are one object (`RailFold` / `RailFoldBody` / `RailFoldCaret`,
+Radix Collapsible over the `collapsible-down/up` keyframes, 200ms on the strong `--ease-out`,
+`motion-reduce` dropping the height animation outright). A body that opens under an eyebrow grows
+down into the scroller; a body that opens under a pinned row grows **up** into the room the
+scroller gives back. Either way the thing the pointer is on stays under the pointer, and a second
+press lands where the first did. The alternative for a footer — header above body, the row rising
+by the body's height — reads conventionally and moves the target out from under the hand; it was
+drawn and rejected. A fold is a **global preference** (`railFolds`), not a per-Ticket state: it is
+how a person reads the rail. Every fold rests closed. *This is not the retired drawer*: nothing
+bleeds past the section's inset, the closed state still shows the rows that matter, and only the
+record folds.
+
+**An eyebrow that folds keeps its label as the trigger.** `SESSIONS ›` closed, `SESSIONS ⌄` open,
+the caret following the word so the eyebrow column stays one straight line down the page, and
+`+ Chat ▾` still the row's one control at the right. The count of what is folded is in the
+trigger's accessible name and nowhere on the face — the caret alone says there is more. A roster
+with no record offers no fold; a caret opening onto nothing is a lie about the block.
+
+**The worktree is a footer under every page.** It lived on Now, then on the Diffs page over the
+files it commits, and each home was right about something: the worktree is true of the whole
+Ticket, and the commit belongs beside its subject. A row pinned under the rail is both. It is the
+branch and **one fact** about it (`worktree-glance-model.ts`), chosen by priority — fault, ready to
+archive, checks failing, uncommitted, N to push, checks running, checks passed, up to date — in the
+words the body's own rows use, so unfolding never contradicts the row. The dot is quiet for local
+state (uncommitted work is the resting condition of a worktree an agent is in; a tone lit for it
+would be lit always) and lit only where something outside the worktree has an opinion: CI. The
+branch opens the identity popover as the card's first row always did; the fact opens the body —
+state strip, CI row, the commit/push/PR split. Diffs is the change set alone. One worktree object,
+in one place, reachable from every page.
+
+**Usage is pinned, not stacked, and folds rather than pops.** It is the one block on Now that is
+only ever read — the others are worked in — and a read-only fact stacked among acts has the worst
+of both: it takes a turn in the reading order it does not need, and it scrolls out of sight
+exactly when the roster above it has grown long enough to make the question interesting. It is a
+sibling of the scroller, wearing a top rule rather than a card frame, because a footer's boundary
+is with the page above it rather than around itself. Its body opens in the rail, not in a popover
+— a popover is a window over the page that closes when the reader looks elsewhere — and **the body
+is not the popover's body**: a popover had no height budget, and the full breakdown at ~400px
+evicted Automations from the scroller. The body keeps what the row does not say: the bar, the
+basis sentence, the cached share, the top model, the per-Session ranking.
 
 **A list bounds itself by height, never by hiding rows.** The Automations block is the case: it
 answers "what can I run here", so it draws every offered Automation as a row, with the current
 column's armed record first and marked, and caps itself at `max-h-40` with its own scroller. A
 project with thirty Automations therefore costs the same vertical space as one with three, and the
-roster underneath never moves. The alternative — one name on a button and the rest behind a caret
-— bounds the height too, by refusing to answer the block's own question.
+roster above it never moves. The alternative — one name on a button and the rest behind a caret —
+bounds the height too, by refusing to answer the block's own question. While the rail re-reads
+(every planning change) the block holds the list's own height as skeleton rows, so a re-read moves
+nothing.
+
+**A row's right edge says one thing.** An automation row used to trail `Manual only · Doing`, and
+at 300px the phrase cost the name half its width (`Review every b…`). The name is what a reader
+presses, the qualifier is what they check: the right edge now says only the column (or `Armed`),
+the switched-off fact moved into the bolt — `LightningSlash`; fill-vs-outline already said
+armed-or-not, so one glyph says all three states — and the words moved into the row's title and
+accessible name. The name keeps a `min-w-24` floor: a qualifier must not outlive the thing it
+qualifies.
 
 **Every act wears one costume, and a row is not an act.** `RAIL_CONTROL` (`outline`, the sidebar's
 border, a `/30` wash, `shadow-raised`) is the recipe for every button a rail page presses — the
-repository card's publish split, its `⋯`, its PR link, and Automations' Run once. A control is
-sized to its label and parked at the left, never stretched across the column. Everything else that
-is pressable is a `ListRow`, and a row opens or runs the thing it names. That pair is the whole
-answer to "is this a button": on this surface you can tell without reading either.
+worktree footer's publish split, its `⋯`, its PR link. A control is sized to its label and parked
+at the left, never stretched across the column. Everything else that is pressable is a `ListRow`,
+and a row opens or runs the thing it names. Now itself has no button any more: **Run once is
+gone** from the rail. Stripped to what it did, it minted a chat Session with a typed first
+message, in the background, wearing the bolt — `+ Chat ▾` with a worse text box and a
+Runs-history row named "Run once" — and the rail was its only host. Only saved records are run
+from the rail; a one-off is a chat and typing. (This reverses VC-112's "One-time work" for this
+surface; main still starts an Unbound Run for the CLI.)
 
 **What a block does not draw.** Runs are Sessions, so they are listed once, in the roster, wearing
 the bolt (`SessionProvenanceMark`) — never a second time under Automations. The usage footer's
-face is the figure, the token count and a caret; the bar, its legend, the cached share, the basis
-sentence, the top model and the per-Session ranking are one popover behind it, not lines on the
+face is the figure, the token count and a caret; the rest is one fold behind it, not lines on the
 page.
 
 **Cost notation.** A hedged figure carries a small word *after* the money, a step down and muted
@@ -476,9 +524,10 @@ row inset, because they are *the* rail card rather than two cards that resemble 
 a `<dl>` — Model, Effort, Activity, each label parked at the left with its value right-aligned
 against it — beside a hand-rolled venue card with its own radius and its own inset. A string table
 says "here are some fields"; the rail's job is to say "here is a Session". The pill run is not the
-alternative either: pills are what the ticket rail's Properties fold wears, and those *edit* what
-they name (`docs/DESIGN.md` above: every act wears one costume). Facts that are only read wear the
-card row.
+alternative either — the ticket rail retired its own (the Properties rows above), and pills on a
+read-only card would promise an edit that is not there. Facts that are only read wear the card
+row; facts that are edited wear the section row (the ticket rail's Properties: the value as the
+thing, the field name as the qualifier).
 
 **The identity row is a roster row in the card's clothes**: a mark, a name, a quieter line under
 it, and one tone dot plus one short phrase at the right edge — the reading order the ticket rail's

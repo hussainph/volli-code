@@ -8,20 +8,17 @@
  * filename over its muted parent, and the two line counts in a fixed column so
  * the numbers line up down the list.
  *
- * THE REPOSITORY CARD LIVES IN THAT HEADER (VC-406). This page used to list
- * what changed while the Now page, one tab away, carried the branch it lands
- * on and the button that commits it — so the act was on the surface that could
- * not show its own subject. The card is here now, between the count and the
- * files: branch, where it stands, whether CI is happy, and the done-flow
- * button, read top to bottom into the list underneath. The card's own Git-state
- * strip used to float in this header as a `bg-muted` mini-table; it is a row
- * inside the card now, so the page draws ONE worktree object.
- *
- * That costs no extra git: main keeps the last good `status` + Change Set per
- * ticket while a watcher covers the worktree (VC-372), so the card's read is
- * served from the answer this panel's own read just took. What this panel no
- * longer does is ask for `worktree.status` at all — the strip was its only
- * reader, and the card asks for its own.
+ * THE PAGE IS THE CHANGE SET ALONE (VC-406, second pass). The repository card
+ * — branch, where it stands, whether CI is happy, and the done-flow button —
+ * spent one pass in this header, over the files it commits, so the act sat
+ * beside its subject. It is the rail's worktree FOOTER now
+ * (`ticket-repository-summary.tsx`): one pinned row under every rail page,
+ * its body folded above it. On this page the body still unfolds over the
+ * list it acts on, and on every other page the row is the one worktree fact
+ * the resting view had lost. What this panel keeps is the count, the ± pair,
+ * refresh and the filter; what it never does is ask for `worktree.status` —
+ * the footer asks for its own, and main serves both from one snapshot
+ * (VC-372).
  *
  * Selecting a row asks the host to open/focus a Monaco diff tab via
  * `onOpenDiff` (`openTicketDiff`, CONCEPT #48/#51). Refresh handlers never
@@ -72,7 +69,6 @@ import {
 } from "@renderer/components/ticket/ticket-changes-model";
 import { parseDiffTabId } from "@renderer/components/ticket/ticket-diff-tab";
 import type { ChangeRecencyState } from "@renderer/components/ticket/ticket-change-recency";
-import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { subscribeWorktreeChanges } from "@renderer/components/ticket/worktree-change-watch";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -401,7 +397,7 @@ export function TicketChangesList({
   if (rows.length === 0) {
     // A framed note rather than a centred sentence in an empty column: "nothing
     // changed" is a state the branch is IN, and a card says that the way the
-    // repository card above says everything else about the worktree.
+    // rail's worktree footer says everything else about the worktree.
     return (
       <Notice
         tone="positive"
@@ -518,8 +514,8 @@ export function TicketChangesPanel({
       loading.current = true;
       try {
         // The Change Set alone. `worktree.status` was only ever read for the
-        // Git-state strip, and the strip is the repository card's row now
-        // (VC-406) — the card asks for its own, off main's shared snapshot.
+        // Git-state strip, and the strip is the worktree footer's row now
+        // (VC-406) — the footer asks for its own, off main's shared snapshot.
         const result = await window.api.worktree.changeSet(ticket.id);
         if (!result.ok) {
           setError(result.error);
@@ -597,7 +593,7 @@ export function TicketChangesPanel({
     <div data-testid="ticket-changes-panel" className="flex min-h-0 flex-1 flex-col">
       <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
         {/* Nothing to refine or total up on a clean branch, so the first row
-            keeps only its name and zero. The card's Git-state row still
+            keeps only its name and zero. The footer's worktree row still
             distinguishes a clean pushed branch from one with nothing committed. */}
         <div className="flex min-h-7 items-center gap-1">
           <ChangesTitle count={total} />
@@ -626,12 +622,6 @@ export function TicketChangesPanel({
             </>
           )}
         </div>
-        {/* The worktree the list below belongs to, and the one act on it
-            (VC-406). Drawn on a ticket with no worktree too — that is the only
-            window in which the worktree/main-checkout scoping is still
-            changeable, and its control lives in this card's identity popover
-            (VC-16). */}
-        <TicketRepositorySummary projectId={ticket.projectId} ticket={ticket} />
         {filtering ? (
           <Input
             autoFocus
@@ -644,11 +634,9 @@ export function TicketChangesPanel({
         ) : null}
       </header>
       {watchError !== null ? <RailFaultBanner error={watchError} onRetry={retryWatch} /> : null}
-      {/* The BODY swaps; the header above never does (VC-406). It carries the
-          repository card, and the card is where a ticket with no worktree yet
-          still reaches its scoping choice — an early return that replaced the
-          whole page would take that control off screen in exactly the state it
-          exists for. */}
+      {/* The BODY swaps; the header above never does. A ticket with no
+          worktree yet still reaches its scoping choice through the rail's
+          worktree footer, which stands under this page as under every other. */}
       {ticket.worktreePath === null ? (
         <div data-testid="ticket-changes-no-worktree" className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
           <p className="text-ui font-medium text-muted-foreground">No worktree yet</p>

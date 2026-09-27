@@ -126,24 +126,32 @@ describe("TicketRail's Now page", () => {
     expect(html).toContain("Sessions");
   });
 
-  // The worktree is a Diffs-page subject now (VC-406) — the act that commits
-  // belongs on the page showing what it would commit. Asserted as an ABSENCE
-  // here because re-adding the card to Now is a one-line change that would
-  // otherwise leave two worktree surfaces one tab apart, which is the state
-  // this ticket exists to end.
-  it("carries no worktree surface — that moved to the Diffs page", () => {
+  // The worktree is the rail's FOOTER (VC-406, second pass): one pinned row
+  // under every page, outside the tabpanel, with the card's body folded above
+  // it. Asserted on position because putting the card back inside a page is a
+  // one-line change that would leave the resting page with no git signal
+  // again, or two worktree surfaces one tab apart — the two states this ticket
+  // exists to end.
+  it("pins the worktree row under the page, outside the tabpanel", () => {
     const html = render();
+    const page = html.indexOf('id="ticket-rail-page-now"');
+    const pageEnd = html.indexOf("</section>", html.lastIndexOf("overflow-y-auto"));
+    const footer = html.indexOf('data-testid="ticket-repository-summary"');
 
-    expect(html).not.toContain('data-testid="ticket-repository-summary"');
+    expect(footer).toBeGreaterThan(pageEnd);
+    expect(page).toBeGreaterThan(-1);
+    // The row alone: the body (state strip, publish row) is folded by default.
+    expect(html).toContain('data-testid="ticket-repository-branch"');
     expect(html).not.toContain('data-testid="ticket-changes-git-state"');
-    expect(html).not.toContain("volli/VC-6-calm-stack");
+    expect(html).toContain("volli/VC-6-calm-stack");
   });
 
-  // The order IS the design (VC-406), and it is a hierarchy rather than a
-  // ranking: what the ticket IS, what can be run on it, what is happening on
-  // it. Asserted on the markup's own sequence because a reorder in the
-  // composition is a one-line change that no other test would notice.
-  it("opens with the facts, then the acts, then the roster", () => {
+  // The order IS the design (VC-406, second pass), and it is by frequency of
+  // attention rather than by kind: the facts, then the roster a person reads
+  // every few minutes, then the list they press now and again. Asserted on the
+  // markup's own sequence because a reorder in the composition is a one-line
+  // change that no other test would notice.
+  it("opens with the facts, then the roster, then the acts", () => {
     const html = render();
     const at = (needle: string) => {
       const index = html.indexOf(needle);
@@ -152,11 +160,29 @@ describe("TicketRail's Now page", () => {
     };
 
     const properties = at('data-testid="ticket-rail-properties"');
-    const automations = at('data-testid="ticket-rail-automations"');
     const sessions = at('aria-label="New chat"');
+    const automations = at('data-testid="ticket-rail-automations"');
 
-    expect(properties).toBeLessThan(automations);
-    expect(automations).toBeLessThan(sessions);
+    expect(properties).toBeLessThan(sessions);
+    expect(sessions).toBeLessThan(automations);
+  });
+
+  it("draws every block on Now as a section — an eyebrow over rows, no card, no button", () => {
+    const html = render();
+    const page = html.slice(
+      html.indexOf('id="ticket-rail-page-now"'),
+      html.indexOf('data-testid="ticket-repository-summary"'),
+    );
+
+    // Three eyebrows, in order.
+    const eyebrows = [
+      ...page.matchAll(/<h2[^>]*>(?:<button[^>]*>)?(Properties|Sessions|Automations)/g),
+    ].map((match) => match[1]);
+    expect(eyebrows).toEqual(["Properties", "Sessions", "Automations"]);
+    // No framed card and no `RAIL_CONTROL` button inside the page any more.
+    expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
+    expect(page).not.toContain("shadow-raised");
+    expect(page).not.toContain("Run once");
   });
 
   // Pinned, not stacked: it is a sibling of the scroller rather than a block
@@ -194,18 +220,23 @@ describe("TicketRail's Now page", () => {
     expect(html).not.toContain('id="ticket-rail-page-search"');
   });
 
-  it("keeps the ticket's repository facts out of the properties fold", () => {
+  it("keeps the ticket's repository facts out of the properties section", () => {
     const html = render();
-    const properties = html.slice(html.indexOf('data-testid="ticket-rail-properties"'));
+    const properties = html.slice(
+      html.indexOf('data-testid="ticket-rail-properties"'),
+      html.indexOf('data-testid="ticket-sessions"'),
+    );
 
     expect(properties).not.toContain("volli/VC-6-calm-stack");
     expect(properties).not.toContain("/worktrees/");
   });
 });
 
-// The card itself, rendered as the Diffs page mounts it. `renderToStaticMarkup`
-// runs no effects, so it is frozen in the state it holds on the very first
-// frame — before `worktree.status` or the Change Set has answered.
+// The worktree footer itself, rendered as the rail mounts it.
+// `renderToStaticMarkup` runs no effects, so it is frozen in the state it holds
+// on the very first frame — before `worktree.status` or the Change Set has
+// answered — and reads the UI store's INITIAL state, in which every fold is
+// closed.
 const renderCard = (subject: Ticket = ticket) =>
   renderToStaticMarkup(
     <TooltipProvider>
@@ -213,41 +244,50 @@ const renderCard = (subject: Ticket = ticket) =>
     </TooltipProvider>,
   );
 
-describe("the repository card", () => {
-  it("opens on the branch, and draws no changes row of its own", () => {
+describe("the worktree footer", () => {
+  it("is one row: the branch, and the fold's trigger beside it", () => {
     const html = renderCard();
 
-    // The page under it IS the change list, and its header two lines up
-    // already carries the count and the ± pair (VC-406). A card row saying
-    // "12 changes" over that list was the same fact drawn twice, coarser, with
-    // a button that routed to the page it was already on.
+    // The row wears the footer's rule, not the card frame, and draws no
+    // changes row of its own — the Diffs page IS the change list.
+    expect(html).toContain("border-t border-sidebar-border/70");
+    expect(html).not.toContain("rounded-xl");
     expect(html).not.toContain('data-testid="ticket-repository-changes"');
-    expect(html).not.toContain("show Diffs");
     expect(html).toContain('data-testid="ticket-repository-branch"');
     expect(html).toContain('aria-label="Branch main to volli/VC-6-calm-stack"');
+    // Two targets: the branch opens the identity popover, the caret the fold.
+    expect(html).toContain('data-testid="ticket-repository-fold"');
+    expect(html).toContain('aria-expanded="false"');
   });
 
-  it("holds no Git-state block until a status read has landed", () => {
-    // The strip is a row of this card now rather than a floating mini-table in
-    // the changes header — and a row about counts nobody has read yet would be
-    // three dashes pretending to be a measurement.
-    expect(renderCard()).not.toContain('data-testid="ticket-changes-git-state"');
+  it("says nothing at its right edge until a status read has landed", () => {
+    // The glance is one fact about the branch, in the body's own words; before
+    // the status is read there is no honest fact to print, so the row shows
+    // the branch alone rather than a placeholder (`worktree-glance-model.ts`).
+    const html = renderCard();
+
+    expect(html).not.toContain('data-testid="ticket-repository-glance"');
+    expect(html).not.toContain('data-testid="ticket-changes-git-state"');
   });
 
-  it("still names the worktree identity before one exists", () => {
+  it("keeps its body folded by default, and the body is where the controls are", () => {
+    const html = renderCard();
+
+    expect(html).not.toContain('aria-label="More repository actions"');
+    expect(html).not.toContain('aria-label="Publish repository changes"');
+  });
+
+  it("still names the worktree identity before one exists, and offers no fold", () => {
     // VC-16: the scoping chosen in the composer stays readable — and
-    // changeable — until the worktree is a fact on disk, and this card's
-    // identity popover is where that control lives. The Diffs page therefore
-    // draws the card even with no worktree, instead of replacing the whole
-    // page with an empty state that would take the control off screen.
+    // changeable — until the worktree is a fact on disk, and this row's
+    // identity popover is where that control lives. A ticket with no
+    // worktree has nothing to unfold, so the row is the branch alone.
     const html = renderCard(ticketWithoutWorktree);
 
     expect(html).toContain('data-testid="ticket-repository-branch"');
     expect(html).toContain('aria-label="Worktree identity"');
-  });
-
-  it("offers no publish controls until the ticket has a worktree", () => {
-    expect(renderCard(ticketWithoutWorktree)).not.toContain('aria-label="More repository actions"');
+    expect(html).not.toContain('data-testid="ticket-repository-fold"');
+    expect(html).not.toContain('aria-label="More repository actions"');
   });
 });
 

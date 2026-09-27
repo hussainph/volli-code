@@ -2,12 +2,13 @@
  * Ticket detail right rail — the Calm Stack (decision #46; designed in the
  * ticket-right-sidebar lab scratch, since retired — this file reproduces its
  * `SidebarPanel` + `ActiveLabelTabs` + `NowPanel` and is now the design of
- * record).
+ * record; the Now page's second shape was settled in
+ * `lab/scratches/rail-now-compare.tsx`).
  *
  * The panel owns its own header: one centred pill of four pages — Now, Diffs,
  * Files, Search — floating above whichever page is showing. The icon strip
  * that used to run down the rail's outer edge is gone, and so is Properties as
- * a page of its own: it folds inline into Now, under the repository card.
+ * a page of its own: it folds inline into Now.
  *
  * WHAT THE RAIL IS FOR, AND WHAT IT IS NOT (VC-406). The rail is the Ticket's
  * hub: everything on it is true of the whole Ticket or its worktree, and
@@ -20,33 +21,39 @@
  * holding", the rail answers "what is happening on this Ticket". A block that
  * would be true of only the front chat is a block in the wrong place.
  *
- * Now is the resting page, and it reads in three tiers — what this Ticket IS,
- * what can be RUN on it, what is HAPPENING on it — with the money last:
+ * NOW IS ORDERED BY WHERE ATTENTION GOES, most often first (VC-406, second
+ * pass). The first pass ordered it by kind — what the Ticket IS, what can be
+ * RUN, what is HAPPENING — and that put a rarely-pressed list of Automations
+ * above the roster of live Sessions, which is the one block on the page a
+ * person consults every few minutes and the most direct way to the right
+ * chat. Taxonomy beat frequency, and the comparison scratch drew the cost.
+ * Three sections, and every one of them the same object (an eyebrow over
+ * `ListRow`s):
  *
- *   1. Properties — what the ticket is; three editable facts as pills, and
- *      the smallest block on the page. It opens because it is the header of
- *      the thing everything below is about, and because status is the field
- *      that decides what the block under it offers.
- *   2. Automations — what can be started here, as a height-capped list.
- *      Between the facts and the roster because a Run is how a row appears in
- *      that roster.
- *   3. Sessions — the working set, and the door to the right chat.
- *   4. History — the record. It only grows, so it closes the scroller.
- *   5. Usage — what it cost, PINNED under the scroller as a footer rather
- *      than stacked in it. Cost is glanced at, never worked in: a block that
- *      scrolls away is one you hunt for, and one that costs a row of the
- *      resting view is one you never have to.
+ *   1. Properties — status, priority, labels, as rows. The header of the thing
+ *      everything below is about, and the smallest block on the page.
+ *   2. Sessions — the working set, and the door to the right chat, with the
+ *      record of ended Sessions FOLDED under it behind the eyebrow's own label.
+ *      One roster read at two ages is one section; the fold is what lets the
+ *      live rows sit at the top without the record standing between them and
+ *      the rest of the page.
+ *   3. Automations — what can be started here, height-capped. Below the roster
+ *      because it is pressed far less often than the roster is read; still on
+ *      the page because a Run is how a row appears in that roster.
  *
- * The worktree is NOT here (VC-406). The repository card moved to the Diffs
- * page, where the changes it commits are on screen underneath it — see
- * `ticket-repository-summary.tsx` for why the act belongs beside its subject.
+ * UNDER THE SCROLLER, TWO ROWS. The worktree (`TicketRepositorySummary`) and
+ * the cost (`TicketUsageRailFooter`) are the two things on the rail that are
+ * glanced at rather than worked in, and each is one pinned row whose body
+ * folds open ABOVE it — the row never moves under the pointer. The worktree
+ * row stands under EVERY page: it is true of the whole Ticket, and the first
+ * pass, which moved the repository card to Diffs, left the resting page with
+ * no git signal at all. Cost is Now's alone.
  *
  * The page stacks with ONE `gap` and no block pays its own top padding: an
- * absent block (History on a new Ticket) then leaves no hole behind it, and a
- * block cannot drift from its neighbours by carrying a different inset than
- * theirs. Two object kinds carry the page — a section (an eyebrow row over
- * list rows) and the framed card — and every act on it wears one control
- * recipe (`RAIL_CONTROL`), so "is this a button" is answered by the drawing.
+ * absent block then leaves no hole behind it, and a block cannot drift from
+ * its neighbours by carrying a different inset than theirs. Nothing on Now is
+ * a button any more — every act is a row that opens or runs the thing it
+ * names, and the two footer rows fold.
  *
  * Nothing in here collapses the rail. That is deliberate, not an omission — a
  * panel cannot reopen itself, so the collapse control lives outside it, in the
@@ -71,6 +78,7 @@ import type { Ticket } from "@volli/shared";
 import { TicketAutomationsPanel } from "@renderer/components/automations/ticket-rail-automations";
 import { RailModeTabs, type RailModeTab } from "@renderer/components/ticket/rail-mode-tabs";
 import { TicketProperties } from "@renderer/components/ticket/ticket-properties";
+import { TicketRepositorySummary } from "@renderer/components/ticket/ticket-repository-summary";
 import { TicketUsageRailFooter } from "@renderer/components/usage/usage-rail";
 import { TicketSessionsPanel } from "@renderer/components/ticket/ticket-sessions-panel";
 import {
@@ -198,18 +206,10 @@ export function TicketRail({
                 off its session list, but that list is the one block this file
                 does not own, so the page keeps its own floor. */}
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-8 [scroll-padding-bottom:2rem]">
-              {/* What this Ticket IS: status, priority, labels. First because
-                  the block under it offers what THIS column arms. */}
+              {/* What this Ticket IS: status, priority, labels — as rows. */}
               <TicketProperties projectId={projectId} ticket={ticket} />
-              {/* What can be STARTED on this Ticket (VC-129), height-capped so
-                  a project with thirty Automations cannot push the roster off
-                  the page. Its Runs are Sessions, and they are listed where
-                  Sessions are — in the roster below, wearing the bolt — not
-                  under this block. The rail never authors: it runs, and links
-                  to the page. */}
-              <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
-              {/* The working set and, under it, the record. One component owns
-                  both — see its comment for why. */}
+              {/* The working set, with the record folded under it. The block
+                  a person reads most often, so it sits nearest the top. */}
               <TicketSessionsPanel
                 projectId={projectId}
                 ticketId={ticket.id}
@@ -220,10 +220,17 @@ export function TicketRail({
                 onActivateSession={onActivateSession}
                 onActivateChat={onActivateChat}
               />
+              {/* What can be STARTED on this Ticket (VC-129), height-capped so
+                  a project with thirty Automations costs the same vertical
+                  space as one with three. Its Runs are Sessions, and they are
+                  listed where Sessions are — in the roster above, wearing the
+                  bolt — not under this block. The rail never authors: it runs,
+                  and links to the page. */}
+              <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
             </div>
-            {/* What this Ticket cost (VC-87), pinned under the scroller.
-                Absent — not empty — when cost is turned off or nothing was
-                metered, and then the page simply ends at its scroller. */}
+            {/* What this Ticket cost (VC-87), pinned under the scroller and
+                folding open above its row. Absent — not empty — when cost is
+                turned off or nothing was metered. */}
             <TicketUsageRailFooter ticketId={ticket.id} />
           </>
         ) : null}
@@ -231,6 +238,15 @@ export function TicketRail({
         {mode === "files" ? filesContent : null}
         {mode === "search" ? searchContent : null}
       </section>
+      {/* The worktree, under EVERY page (VC-406): one pinned row — the branch
+          and the one fact about it that the reader would act on next — with
+          the repository card's body folded above it. Outside the tabpanel
+          because it is not a page's content: it is true of the Ticket
+          whichever page is up. Drawn on a ticket with no worktree too — that
+          is the only window in which the worktree/main-checkout scoping is
+          still changeable, and its control lives in this row's identity
+          popover (VC-16). */}
+      <TicketRepositorySummary projectId={projectId} ticket={ticket} />
     </div>
   );
 }

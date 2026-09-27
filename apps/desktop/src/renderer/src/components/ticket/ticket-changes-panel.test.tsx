@@ -20,8 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { ChangeSetFile } from "@volli/shared";
 
 import { TicketChangesList, toChangeListRow, type ChangeListRow } from "./ticket-changes-panel";
-// The strip is a row of the repository card now (VC-406), not a block this
-// page floats above its list — so it is asserted where it is drawn.
+// The strip is a row of the rail's worktree footer now (VC-406), not a block
+// this page floats above its list — so it is asserted where it is drawn.
 import { WorktreeStateStrip } from "./ticket-repository-summary";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { sortChangeSetFiles } from "./ticket-changes-model";

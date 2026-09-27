@@ -2,36 +2,41 @@
  * The repository card — the Calm Stack's one worktree surface
  * (the retired ticket-right-sidebar lab scratch's `EnvironmentSummary`).
  *
- * IT LIVES ON THE DIFFS PAGE (VC-406), not on Now. The card answers one
- * question — "what state is this worktree in, and what do I do about it" — and
- * the page that answers the first half in detail is the one listing the
- * changes. On Now it was a second, coarser drawing of the Diffs header (a file
- * count and a ± pair over a list that prints both), and it put the commit
- * button on a page where the changes it would commit are not on screen. Here
- * the reading order is the work: the branch it lands on, where that branch
- * stands, whether CI is happy with it (VC-182 — a row that draws itself only
- * when the PR has a rollup, and lives in `pr-checks-row.tsx`), the done-flow
- * split button (decision #45) balanced against the outward-facing PR link,
- * and under all of it the files themselves.
+ * IT IS THE RAIL'S WORKTREE FOOTER (VC-406, second pass): one pinned row under
+ * every rail page, with the card's body folded above it. The row is the
+ * branch and ONE fact about it — what the reader would have to act on next,
+ * in the body's own words (`worktree-glance-model.ts`) — and pressing the
+ * fact unfolds the body: where the branch stands, whether CI is happy with it
+ * (VC-182, `pr-checks-row.tsx`), the done-flow split button (decision #45)
+ * balanced against the outward-facing PR link. The branch itself still opens
+ * the identity popover — base → branch, the worktree path, the destination
+ * control while it is still changeable (VC-16) — exactly as the card's first
+ * row did.
  *
- * Its changes row went with the move: a row whose whole job was to route into
- * the Diffs page is furniture once the card is ON that page, and the header
- * two lines above already carries the count and the ± pair. The Git-state
- * strip came the other way, out of the changes header and into the card as a
- * row, so the page holds ONE framed worktree object rather than a card beside
- * a `bg-muted` mini-table with its own radius and its own inset.
+ * WHY THE FOOTER, AND WHY EVERY PAGE. The card lived on Now first, then on the
+ * Diffs page over the files it commits (VC-406's first pass), and each home
+ * was right about something: the worktree is true of the whole Ticket, and
+ * the commit belongs beside its subject. A row pinned under the rail is both
+ * — it is on screen whichever page is up and at whatever scroll position, and
+ * on Diffs the body still unfolds over the list it acts on. The resting page
+ * regains the one worktree fact it had lost (the first pass left Now with no
+ * git signal at all) without regaining the card. Diffs is the change set
+ * alone. ONE worktree object, in one place, reachable from every page.
  *
- * It replaces the pinned Environment/Sources inspector the icon-mode rail used
- * to stack above every navigator: the Sources half was always a subset of the
- * Files page's own "Referenced" section, and the Environment half's rows all
- * routed into pages this card either shows inline or links to directly.
+ * THE BODY OPENS UPWARD, and that is the owner's rule for every fold in the
+ * rail: the thing the pointer is on does not move. The row is pinned at the
+ * bottom; the body takes the room the scroller gives back above it. The
+ * fold is `railFolds.worktree`, a global preference — a reader who commits
+ * often leaves it open and it stays open on the next Ticket too.
  *
  * It owns ONE live read of `worktree.status` + the composed Change Set: the
- * state strip and the publish row are projections of the same snapshot, so the
- * two halves of the card cannot disagree (#108). It shares a page with the
- * changes list's own read now, which costs nothing extra — main keeps the last
- * good answer per ticket while a watcher covers the worktree (VC-372,
- * `main/worktree/snapshot.ts`), so the second asker is served from it.
+ * glance, the state strip and the publish row are projections of the same
+ * snapshot, so the three cannot disagree (#108). On Diffs it shares a page
+ * with the changes list's own read, which costs nothing extra — main keeps
+ * the last good answer per ticket while a watcher covers the worktree
+ * (VC-372, `main/worktree/snapshot.ts`), so the second asker is served from
+ * it — and the main-side watch is keyed per window, so two subscribers here
+ * are one watcher there.
  *
  * ONE FAULT, ONE SENTENCE, ONE RECOVERY. The status read and the change watch
  * fail for the same reasons and usually with the same string — a worktree
@@ -40,9 +45,9 @@
  * third time in a different register, over a retention prompt that had nothing
  * to do with it. So a fault REPLACES the action block rather than being bolted
  * above it, its diagnostic text goes to `title` (rail-panel-parts.tsx: at this
- * width the raw text pushes Retry off the row), and the changes row falls back
- * to its noun. Retention returns the moment a read lands; a ticket can still be
- * archived from the board while it does not.
+ * width the raw text pushes Retry off the row), and the row's one fact says the
+ * fault while the body is folded. Retention returns the moment a read lands; a
+ * ticket can still be archived from the board while it does not.
  *
  * Two deliberate departures from the scratch, both recorded because every other
  * one in this file is:
@@ -63,7 +68,6 @@
  */
 import * as React from "react";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
-import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BellSlashIcon } from "@phosphor-icons/react/dist/csr/BellSlash";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
@@ -106,15 +110,20 @@ import {
   type RetentionNotice,
 } from "@renderer/components/ticket/worktree-retention-model";
 import { PrChecksRow } from "@renderer/components/ticket/pr-checks-row";
+import { resolvePrChecks } from "@renderer/components/ticket/pr-checks-model";
 import {
   DiffTotals,
   RailFaultBanner,
-  RAIL_CARD_FRAME,
-  RAIL_CARD_ROW,
+  RailFold,
+  RailFoldBody,
+  RailFoldCaret,
+  RailFoldTrigger,
   RAIL_CARD_SEAM,
   RAIL_CONTROL,
+  RAIL_FOOTER,
   RAIL_PANEL_INSET,
 } from "@renderer/components/ticket/rail-panel-parts";
+import { worktreeGlance } from "@renderer/components/ticket/worktree-glance-model";
 import { Button } from "@renderer/components/ui/button";
 import { ButtonGroup } from "@renderer/components/ui/button-group";
 import {
@@ -139,6 +148,7 @@ import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { StatusDot } from "@renderer/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { useTicketRetention } from "@renderer/hooks/use-ticket-retention";
 import { toastError } from "@renderer/lib/toast";
@@ -147,6 +157,7 @@ import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 import { ticketScope } from "@renderer/stores/sessions";
+import { useUiStore } from "@renderer/stores/ui";
 import { phaseFor, useWorktreeStore } from "@renderer/stores/worktree";
 
 /**
@@ -1139,241 +1150,288 @@ export function TicketRepositorySummary({
       </Tooltip>
     ) : null;
 
-  return (
-    // No elevation: the scratch asks for one in light mode, but writes it as
-    // `hsl(var(--foreground)/…)` against a `--foreground` that is a hex — an
-    // invalid value the browser drops, so the card that was reviewed and
-    // approved is flat in BOTH appearances (verified in the lab, computed
-    // `box-shadow: none` under `.light`). Border plus surface is the whole
-    // frame. The lift the scratch intended is `shadow-raised` —
-    // one of the three solved tiers, tinted to the canvas in both appearances —
-    // and adding it is a visual call, not a revival of the broken string.
-    // No margin: the Diffs header this sits in is already inset to the
-    // column's edge, and a card that carried its own would inset twice
-    // (`RAIL_CARD_FRAME`'s own rule).
-    <section data-testid="ticket-repository-summary" className={RAIL_CARD_FRAME}>
-      {/* The card opens on its identity now that the changes row is gone, so it
-          pays the frame's own top inset rather than a seam it has nothing to be
-          separated from. */}
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-testid="ticket-repository-branch"
-            aria-label={
-              ticket.branch === null
-                ? "Worktree identity"
-                : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
-            }
-            className={cn(RAIL_CARD_ROW, "min-h-8 pt-3 pb-2 hover:bg-accent/50")}
-          >
-            <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
-            {ticket.baseBranch !== null && ticket.branch !== null ? (
-              <>
-                <span className="shrink-0 font-mono text-ui text-muted-foreground">
-                  {ticket.baseBranch}
-                </span>
-                <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground" />
-              </>
-            ) : null}
-            <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
-              {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
-            </span>
-            <CaretDownIcon className="size-3 shrink-0 text-muted-foreground" />
-          </button>
-        </PopoverTrigger>
-        <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
-      </Popover>
+  // The fold, and the row's one fact. Both are read off the same snapshot the
+  // body is drawn from, so the folded row can never claim a state the body
+  // would contradict. An override of `open` while there is no worktree: a
+  // ticket with nothing to unfold gets no fold.
+  const open = useUiStore((state) => state.railFolds.worktree) && hasWorktree;
+  const glance = worktreeGlance({
+    status,
+    checks: resolvePrChecks(retention),
+    fault: fault === null ? null : worktreeMissing ? "missing" : "unreadable",
+    archiveReady: retentionView.archiveReady,
+  });
 
-      {/* Where the branch stands — uncommitted work, local commits, what is
+  return (
+    <RailFold
+      asChild
+      open={open}
+      onOpenChange={(next) => useUiStore.getState().setRailFold("worktree", next)}
+    >
+      <section data-testid="ticket-repository-summary" className={RAIL_FOOTER}>
+        {/* THE BODY COMES FIRST: it unfolds ABOVE the row, so the row the
+            pointer is on stays put. Nothing to unfold without a worktree — the
+            identity popover on the row below is then the whole surface, which
+            is where a ticket with no worktree yet still reaches its scoping
+            choice (VC-16). */}
+        {hasWorktree ? (
+          <RailFoldBody>
+            {/* The body's rows keep the card's seams between them; the first
+                one drops its seam because the footer's own top rule is already
+                there, and the body closes with a seam above the row. */}
+            <div className="border-b border-sidebar-border/70 [&>*:first-child]:border-t-0">
+              {/* Where the branch stands — uncommitted work, local commits, what is
           still unpushed. Under the identity because it is a fact ABOUT that
           branch, and above CI because CI only has an opinion once something has
           been pushed. */}
-      {status === null ? null : <WorktreeStateStrip status={status} />}
+              {status === null ? null : <WorktreeStateStrip status={status} />}
 
-      {/* Between the state and the buttons, which is where the question sits:
+              {/* Between the state and the buttons, which is where the question sits:
           the rows above say what is being published and where it stands, this
           one says whether it builds, and the block below is what publishes it.
           Draws nothing until there is a PR with a rollup — see
           `pr-checks-row.tsx`. */}
-      <PrChecksRow retention={retention} />
+              <PrChecksRow retention={retention} />
 
-      {hasWorktree ? (
-        <div className={cn("flex flex-col gap-2 px-4 py-2", RAIL_CARD_SEAM)}>
-          {fault !== null && worktreeMissing ? (
-            // A gone directory is not a failed read, so it does not get the
-            // fault banner's Retry — it gets the one action that can actually
-            // end the state (VC-113).
-            <WorktreeMissingNotice ticketId={ticket.id} onRecreated={() => void refresh()} />
-          ) : fault !== null ? (
-            // The whole block, not a line above it: with no readable worktree
-            // there is no honest publish state to offer, and the retention
-            // prompt below is a different subject that was only ever stacked
-            // here because both happened to be true at once.
-            <RailFaultBanner
-              inset={false}
-              testId="ticket-repository-fault"
-              // A noun, and short enough to stay on one line inside the card's
-              // own padding at the rail's narrowest — a label that wraps puts
-              // Retry on a second line and the banner becomes a paragraph.
-              label="Worktree unreadable"
-              error={fault}
-              onRetry={retryWorktreeRead}
-            />
-          ) : (
-            <>
-              {/* The archive-reason context line — why the wrap-up is being offered. */}
-              {retentionView.archiveReady && retentionView.reasonLine ? (
-                <span className="flex items-center gap-1 text-ui text-foreground">
-                  <ArchiveIcon className="text-primary" />
-                  {retentionView.reasonLine}
-                </span>
-              ) : null}
-              {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
-              {retentionView.notices.map((notice) => (
-                <RetentionNoticeLine key={notice.text} notice={notice} />
-              ))}
-              <div className="flex w-full items-center justify-between gap-2">
-                <ButtonGroup aria-label="Publish repository changes" className="min-w-0">
-                  {retentionView.archiveReady ? (
-                    archivePrimaryButton
-                  ) : view.primary.reason ? (
-                    <Tooltip>
-                      {/* A disabled button emits no pointer events; the span keeps the
-                      tooltip trigger hoverable so the reason still shows. */}
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex min-w-0">{doneFlowPrimaryButton}</span>
-                      </TooltipTrigger>
-                      <TooltipContent>{view.primary.reason}</TooltipContent>
-                    </Tooltip>
+              {hasWorktree ? (
+                <div className={cn("flex flex-col gap-2 px-4 py-2", RAIL_CARD_SEAM)}>
+                  {fault !== null && worktreeMissing ? (
+                    // A gone directory is not a failed read, so it does not get the
+                    // fault banner's Retry — it gets the one action that can actually
+                    // end the state (VC-113).
+                    <WorktreeMissingNotice
+                      ticketId={ticket.id}
+                      onRecreated={() => void refresh()}
+                    />
+                  ) : fault !== null ? (
+                    // The whole block, not a line above it: with no readable worktree
+                    // there is no honest publish state to offer, and the retention
+                    // prompt below is a different subject that was only ever stacked
+                    // here because both happened to be true at once.
+                    <RailFaultBanner
+                      inset={false}
+                      testId="ticket-repository-fault"
+                      // A noun, and short enough to stay on one line inside the card's
+                      // own padding at the rail's narrowest — a label that wraps puts
+                      // Retry on a second line and the banner becomes a paragraph.
+                      label="Worktree unreadable"
+                      error={fault}
+                      onRetry={retryWorktreeRead}
+                    />
                   ) : (
-                    doneFlowPrimaryButton
-                  )}
-                  <DropdownMenu>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            aria-label="More repository actions"
-                            className={RAIL_CONTROL}
-                          >
-                            <DotsThreeIcon weight="bold" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">More repository actions</TooltipContent>
-                    </Tooltip>
-                    <DropdownMenuContent align="start">
-                      {/* Archive-ready: the demoted done-flow primary leads, then the
-                      unbundled verbs, then the Keep/Dismiss retention escape hatches. */}
-                      {retentionView.archiveReady ? (
-                        <>
-                          <DropdownMenuItem
-                            disabled={view.primary.disabled}
-                            onSelect={runPrimary}
-                            className="justify-between gap-6"
-                          >
-                            <span className="flex items-center gap-2">
-                              <PrimaryActionIcon kind={view.primary.kind} filled />
-                              {view.primary.label}
-                            </span>
-                            {view.primary.disabled && view.primary.reason ? (
-                              <span className="text-ui text-muted-foreground">
-                                {view.primary.reason}
-                              </span>
-                            ) : null}
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                        </>
+                    <>
+                      {/* The archive-reason context line — why the wrap-up is being offered. */}
+                      {retentionView.archiveReady && retentionView.reasonLine ? (
+                        <span className="flex items-center gap-1 text-ui text-foreground">
+                          <ArchiveIcon className="text-primary" />
+                          {retentionView.reasonLine}
+                        </span>
                       ) : null}
-                      {/* Straight into the gate, exactly as the context menu's
+                      {/* Non-gating surfacing: conflicts / failing checks (decision #44). */}
+                      {retentionView.notices.map((notice) => (
+                        <RetentionNoticeLine key={notice.text} notice={notice} />
+                      ))}
+                      <div className="flex w-full items-center justify-between gap-2">
+                        <ButtonGroup aria-label="Publish repository changes" className="min-w-0">
+                          {retentionView.archiveReady ? (
+                            archivePrimaryButton
+                          ) : view.primary.reason ? (
+                            <Tooltip>
+                              {/* A disabled button emits no pointer events; the span keeps the
+                      tooltip trigger hoverable so the reason still shows. */}
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex min-w-0">{doneFlowPrimaryButton}</span>
+                              </TooltipTrigger>
+                              <TooltipContent>{view.primary.reason}</TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            doneFlowPrimaryButton
+                          )}
+                          <DropdownMenu>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="outline"
+                                    size="icon-sm"
+                                    aria-label="More repository actions"
+                                    className={RAIL_CONTROL}
+                                  >
+                                    <DotsThreeIcon weight="bold" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                              </TooltipTrigger>
+                              <TooltipContent side="top">More repository actions</TooltipContent>
+                            </Tooltip>
+                            <DropdownMenuContent align="start">
+                              {/* Archive-ready: the demoted done-flow primary leads, then the
+                      unbundled verbs, then the Keep/Dismiss retention escape hatches. */}
+                              {retentionView.archiveReady ? (
+                                <>
+                                  <DropdownMenuItem
+                                    disabled={view.primary.disabled}
+                                    onSelect={runPrimary}
+                                    className="justify-between gap-6"
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      <PrimaryActionIcon kind={view.primary.kind} filled />
+                                      {view.primary.label}
+                                    </span>
+                                    {view.primary.disabled && view.primary.reason ? (
+                                      <span className="text-ui text-muted-foreground">
+                                        {view.primary.reason}
+                                      </span>
+                                    ) : null}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              ) : null}
+                              {/* Straight into the gate, exactly as the context menu's
                           own "Remove worktree…" does (ticket-context-menu.tsx):
                           a plain state set in `onSelect`, no deferral. The menu
                           unmounts on select and the dialog it opened is not
                           inside it, so there is no focus to hand back. */}
-                      <DoneFlowMenuItem
-                        action={view.menu.commit}
-                        icon={<GitCommitIcon />}
-                        onRun={() => askToCommit({ kind: "commit-only" }, view.menu.commit.label)}
-                      />
-                      <DoneFlowMenuItem
-                        action={view.menu.push}
-                        icon={<GitPullRequestIcon />}
-                        onRun={() => void runPushOnly(view.menu.push.kind === "push-updates")}
-                      />
-                      <DoneFlowMenuItem
-                        action={view.menu.openPr}
-                        icon={<ArrowSquareOutIcon />}
-                        onRun={openPr}
-                      />
-                      {retentionView.archiveReady ? (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
+                              <DoneFlowMenuItem
+                                action={view.menu.commit}
+                                icon={<GitCommitIcon />}
+                                onRun={() =>
+                                  askToCommit({ kind: "commit-only" }, view.menu.commit.label)
+                                }
+                              />
+                              <DoneFlowMenuItem
+                                action={view.menu.push}
+                                icon={<GitPullRequestIcon />}
+                                onRun={() =>
+                                  void runPushOnly(view.menu.push.kind === "push-updates")
+                                }
+                              />
+                              <DoneFlowMenuItem
+                                action={view.menu.openPr}
+                                icon={<ArrowSquareOutIcon />}
+                                onRun={openPr}
+                              />
+                              {retentionView.archiveReady ? (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    disabled={retentionBusy}
+                                    onSelect={() => void runSetKeep(true)}
+                                  >
+                                    <PushPinIcon />
+                                    {KEEP_WORKTREE_LABEL}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={retentionBusy}
+                                    onSelect={() => void runDismiss()}
+                                  >
+                                    <BellSlashIcon />
+                                    {DISMISS_LABEL}
+                                  </DropdownMenuItem>
+                                </>
+                              ) : null}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </ButtonGroup>
+                        {prLink}
+                      </div>
+                      {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
+                      {retentionView.kept ? (
+                        <span className="flex items-center gap-1 text-ui text-muted-foreground">
+                          <PushPinIcon />
+                          Worktree kept
+                          <button
+                            type="button"
                             disabled={retentionBusy}
-                            onSelect={() => void runSetKeep(true)}
+                            onClick={() => void runSetKeep(false)}
+                            className="text-primary-text hover:underline disabled:opacity-50"
                           >
-                            <PushPinIcon />
-                            {KEEP_WORKTREE_LABEL}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={retentionBusy}
-                            onSelect={() => void runDismiss()}
-                          >
-                            <BellSlashIcon />
-                            {DISMISS_LABEL}
-                          </DropdownMenuItem>
-                        </>
+                            {UNKEEP_LABEL}
+                          </button>
+                        </span>
                       ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </ButtonGroup>
-                {prLink}
-              </div>
-              {/* The quiet "kept" state (Keep exempts the ticket from both paths) with its un-keep path. */}
-              {retentionView.kept ? (
-                <span className="flex items-center gap-1 text-ui text-muted-foreground">
-                  <PushPinIcon />
-                  Worktree kept
-                  <button
-                    type="button"
-                    disabled={retentionBusy}
-                    onClick={() => void runSetKeep(false)}
-                    className="text-primary-text hover:underline disabled:opacity-50"
-                  >
-                    {UNKEEP_LABEL}
-                  </button>
-                </span>
+                    </>
+                  )}
+                </div>
               ) : null}
-            </>
-          )}
+            </div>
+          </RailFoldBody>
+        ) : null}
+
+        {/* THE ROW: two targets, because it answers two questions. The branch
+            opens the identity popover — base → branch, the path, the
+            destination control — as the card's first row always did. The fact
+            at the right, with its caret, is the fold's trigger. Each is its own
+            button with its own hover so the pointer can tell which it is on;
+            the dot is quiet for local state and lit only where CI has an
+            opinion (`worktree-glance-model.ts`). */}
+        <div className="flex min-h-8 items-stretch">
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-testid="ticket-repository-branch"
+                aria-label={
+                  ticket.branch === null
+                    ? "Worktree identity"
+                    : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
+                }
+                className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 pl-4 text-left outline-none group-data-[narrow=true]/rail:pl-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45"
+              >
+                <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
+                  {ticket.branch ?? ticket.baseBranch ?? "No branch yet"}
+                </span>
+              </button>
+            </PopoverTrigger>
+            <RepositoryPopoverContent projectId={projectId} ticket={ticket} />
+          </Popover>
+          {hasWorktree ? (
+            <RailFoldTrigger asChild>
+              <button
+                type="button"
+                data-testid="ticket-repository-fold"
+                aria-label={`${glance === null ? "Worktree" : `Worktree: ${glance.phrase}`}. ${open ? "Hide" : "Show"} details`}
+                className="flex shrink-0 items-center gap-2 py-2 pr-4 pl-2 text-left outline-none group-data-[narrow=true]/rail:pr-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45"
+              >
+                {glance === null ? null : (
+                  <span
+                    data-testid="ticket-repository-glance"
+                    className="flex shrink-0 items-center gap-1 text-label text-muted-foreground"
+                  >
+                    <StatusDot state={glance.tone} />
+                    {glance.phrase}
+                  </span>
+                )}
+                <RailFoldCaret open={open} placement="footer" />
+              </button>
+            </RailFoldTrigger>
+          ) : null}
         </div>
-      ) : null}
-      {/* Rendered at the card's root — a sibling of the chevron menu, never
+
+        {/* Rendered at the section's root — a sibling of the chevron menu, never
           inside it. A Radix menu unmounts the instant an item is selected, so a
           confirm it owned would die with it (ticket-dialog-host.tsx's rule,
           learned on the board). Narrowing here is also what keeps the confirm
           free of an unreachable null branch. */}
-      {pendingCommit === null ? null : (
-        <CommitGateDialog
-          open={pendingCommit.open}
-          onOpenChange={(next) => {
-            if (!next) setPendingCommit({ ...pendingCommit, open: false });
-          }}
-          branch={ticket.branch ?? ticket.baseBranch ?? "this branch"}
-          changesLabel={changesLabel}
-          diff={diff}
-          confirmLabel={pendingCommit.label}
-          onConfirm={(choices) => {
-            const { flow } = pendingCommit;
-            setPendingCommit({ ...pendingCommit, open: false });
-            if (flow.kind === "commit-only") void runCommitOnly(choices);
-            else void runCommitThenPush(flow.isUpdate, choices);
-          }}
-        />
-      )}
-    </section>
+        {pendingCommit === null ? null : (
+          <CommitGateDialog
+            open={pendingCommit.open}
+            onOpenChange={(next) => {
+              if (!next) setPendingCommit({ ...pendingCommit, open: false });
+            }}
+            branch={ticket.branch ?? ticket.baseBranch ?? "this branch"}
+            changesLabel={changesLabel}
+            diff={diff}
+            confirmLabel={pendingCommit.label}
+            onConfirm={(choices) => {
+              const { flow } = pendingCommit;
+              setPendingCommit({ ...pendingCommit, open: false });
+              if (flow.kind === "commit-only") void runCommitOnly(choices);
+              else void runCommitThenPush(flow.isUpdate, choices);
+            }}
+          />
+        )}
+      </section>
+    </RailFold>
   );
 }
