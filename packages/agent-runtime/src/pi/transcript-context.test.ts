@@ -47,6 +47,12 @@ describe("systemHead", () => {
     expect(JSON.stringify(systemHead("You are the runtime.", []))).toBe(
       JSON.stringify(createInitialSystemMessage("You are the runtime.", [])),
     );
+    // Declarations under an empty prompt — the head compaction composes for a
+    // caller with tools and no prompt — is a head to Pi too, with `""` inside.
+    expect(JSON.stringify(systemHead("", tools))).toBe(
+      JSON.stringify(createInitialSystemMessage("", declarations)),
+    );
+    expect(createInitialSystemMessage("", [])).toBeUndefined();
   });
 
   it("declares what the model sees and nothing it cannot", () => {

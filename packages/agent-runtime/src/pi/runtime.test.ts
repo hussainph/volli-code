@@ -10367,25 +10367,28 @@ describe("transcript context (pi 0.87)", () => {
 
   it("prices the head into the context budget, once", async () => {
     // The output ceiling and the compaction preflight both read the projector,
-    // and both now hand it the transcript with the head inside rather than the
-    // prompt and tools beside it. The two spellings must cost the same, and the
+    // and both hand it the transcript with the head inside — the one spelling
+    // it accepts. What that transcript costs must be what Pi's own fold of the
+    // replayed prompt and tools around the bare conversation costs, and the
     // head must not be counted twice.
     const attachment = fixture();
     let ceiling = 0;
     let transcriptTokens = 0;
     let conversationTokens = 0;
-    let pairTokens = 0;
+    let refoldedTokens = 0;
     const script = scriptedStream([settles("answer")]);
     const stream: StreamFn = (model, context, options) => {
       ceiling = options?.maxTokens ?? 0;
       transcriptTokens = projectedContextTokens(context.messages, model);
       const conversation = withoutSystemMessages(context.messages);
       conversationTokens = projectedContextTokens(conversation, model);
-      pairTokens = projectedContextTokens(
-        conversation,
+      refoldedTokens = projectedContextTokens(
+        normalizeContext({
+          systemPrompt: getCurrentSystemPrompt(context.messages),
+          tools: getCurrentTools(context.messages),
+          messages: conversation,
+        }).messages,
         model,
-        getCurrentSystemPrompt(context.messages),
-        getCurrentTools(context.messages),
       );
       return script(model, context, options);
     };
@@ -10397,7 +10400,7 @@ describe("transcript context (pi 0.87)", () => {
     await handle.submitUserMessage("dense input ".repeat(8_000));
     await handle.close();
 
-    expect(transcriptTokens).toBe(pairTokens);
+    expect(transcriptTokens).toBe(refoldedTokens);
     expect(transcriptTokens).toBeGreaterThan(conversationTokens);
     // The ceiling is what the window has left after the whole transcript, prefix
     // included, less the reply's headroom — so the head is inside the budget.

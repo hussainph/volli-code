@@ -238,38 +238,9 @@ function toolsTokens(tools: readonly Tool[] | undefined, count: TokenCounter): n
 }
 
 /**
- * The tools a request built from this transcript actually declares.
- *
- * Pi's own `getCurrentTools`, which is what every provider adapter is sent —
- * one that folds the system messages into a leading prompt sends exactly this
- * list, and one that anchors additions in place still declares each name
- * once. Later declarations win and removed tools are gone, so a tool the
- * head declares and a persisted delta declares again costs one declaration,
- * not two, and a tool a later delta removed costs nothing but its name.
- *
- * The explicit `tools` stand as the leading declaration, ahead of whatever
- * the messages declare: a caller holding a sidecar conversation and the
- * attachment's own tools hands over the same request a transcript with its
- * head would, and is priced the same.
- */
-function declaredTools(
-  messages: readonly AgentMessage[],
-  tools: readonly Tool[] | undefined,
-): Tool[] {
-  if (tools === undefined || tools.length === 0) return getCurrentTools(messages);
-  const leading: SystemMessage = {
-    role: "system",
-    content: "",
-    toolsAdded: [...tools],
-    timestamp: 0,
-  };
-  return getCurrentTools([leading, ...messages]);
-}
-
-/**
  * The things a projection must estimate because no provider usage covers
  * them: one settled message as sent in place, a system message's text alone,
- * the prompt handed over beside the messages, and one tool declaration.
+ * and one tool declaration.
  *
  * Named as one type because they always travel together and are always chosen
  * together — a caller either wants every estimate fresh or every one reused.
@@ -279,7 +250,6 @@ function declaredTools(
 interface ContextEstimator {
   message(message: AgentMessage, model: Model<Api>): number;
   systemText(message: SystemMessage, model: Model<Api>): number;
-  prompt(model: Model<Api>, systemPrompt: string | undefined): number;
   tool(tool: Tool, model: Model<Api>): number;
 }
 
@@ -287,30 +257,29 @@ interface ContextEstimator {
 const DIRECT_ESTIMATOR: ContextEstimator = {
   message: estimateMessageTokens,
   systemText: (message, model) => systemTextTokens(message, counterFor(model)),
-  prompt: (model, systemPrompt) =>
-    systemPrompt ? counterFor(model)(systemPrompt) + SYSTEM_PROMPT_FRAMING : 0,
   tool: (tool, model) => toolTokens(tool, counterFor(model)),
 };
 
 /**
- * The whole request, unmeasured: the prompt, every declaration the request
- * carries, and every message.
+ * The whole request, unmeasured: every declaration the request carries, and
+ * every message.
  *
- * Declarations are priced over the transcript rather than per message — see
- * {@link declaredTools} — so a system message contributes its text here and
- * not its `toolsAdded`. Pricing it whole would count a tool twice wherever two
- * messages declare it, which the pair-plus-persisted-delta shape a compaction
- * reads off the sidecar does, and which no provider sends.
+ * Declarations are priced over the transcript rather than per message, through
+ * Pi's own `getCurrentTools` — which is what every provider adapter is sent:
+ * one that folds the system messages into a leading prompt sends exactly this
+ * list, and one that anchors additions in place still declares each name
+ * once. Later declarations win and removed tools are gone, so a tool the head
+ * declares and a persisted delta declares again costs one declaration, not
+ * two, and a tool a later delta removed costs nothing but its name. A system
+ * message therefore contributes its text here and not its `toolsAdded`.
  */
 function wholeContextTokens(
   messages: readonly AgentMessage[],
   model: Model<Api>,
-  systemPrompt: string | undefined,
-  tools: readonly Tool[] | undefined,
   estimator: ContextEstimator,
 ): number {
-  let tokens = estimator.prompt(model, systemPrompt);
-  for (const tool of declaredTools(messages, tools)) tokens += estimator.tool(tool, model);
+  let tokens = 0;
+  for (const tool of getCurrentTools(messages)) tokens += estimator.tool(tool, model);
   for (const message of messages) {
     tokens +=
       message.role === "system"
@@ -321,27 +290,24 @@ function wholeContextTokens(
 }
 
 /**
- * Model-aware estimate of the whole request: system prompt, tool definitions
- * and every message. No provider usage is consulted — this is the pure
- * estimate, for contexts the model has not measured yet.
+ * Model-aware estimate of the whole request. No provider usage is consulted —
+ * this is the pure estimate, for contexts the model has not measured yet.
  *
- * The prompt and tools may arrive either way: as the separate pair, for a
- * caller holding a sidecar conversation and the attachment's own prompt, or
- * already inside `messages` as the leading system message of a normalized
- * transcript. The PROMPT must arrive one way only — a head inside `messages`
- * beside a `systemPrompt` is the same text counted twice. The tools may
- * arrive both ways: the explicit list stands as the leading declaration and
- * every name is priced once, exactly as {@link declaredTools} resolves what a
- * provider is sent, so a sidecar conversation carrying a tool-change message
- * beside the attachment's own tools is priced as the one request it is.
+ * The request is the transcript, and nothing beside it: since pi-ai 0.86 the
+ * system prompt and the tool declarations are system messages inside
+ * `messages`, and that is the only spelling this module prices. There is no
+ * `systemPrompt` or `tools` parameter to hand the same tokens over a second
+ * time. A caller holding a sidecar conversation and the attachment's own
+ * prompt and tools composes the head with `systemHead` and prices
+ * `withSystemHead(head, conversation)` — the same array the runtime sends —
+ * and a transcript that declares a tool in more than one system message
+ * still pays for it once (see {@link wholeContextTokens}).
  */
 export function estimateContextTokens(
   messages: readonly AgentMessage[],
   model: Model<Api>,
-  systemPrompt?: string,
-  tools?: readonly Tool[],
 ): number {
-  return wholeContextTokens(messages, model, systemPrompt, tools, DIRECT_ESTIMATOR);
+  return wholeContextTokens(messages, model, DIRECT_ESTIMATOR);
 }
 
 /**
@@ -352,17 +318,13 @@ export function estimateContextTokens(
 export function projectedContextTokens(
   messages: readonly AgentMessage[],
   model: Model<Api>,
-  systemPrompt?: string,
-  tools?: readonly Tool[],
 ): number {
-  return projectContextTokens(messages, model, systemPrompt, tools, DIRECT_ESTIMATOR);
+  return projectContextTokens(messages, model, DIRECT_ESTIMATOR);
 }
 
 function projectContextTokens(
   messages: readonly AgentMessage[],
   model: Model<Api>,
-  systemPrompt: string | undefined,
-  tools: readonly Tool[] | undefined,
   estimator: ContextEstimator,
 ): number {
   let measured: number | undefined;
@@ -382,7 +344,7 @@ function projectContextTokens(
     }
   }
   if (measured === undefined) {
-    return wholeContextTokens(messages, model, systemPrompt, tools, estimator);
+    return wholeContextTokens(messages, model, estimator);
   }
   // Whole messages here, a system message's declarations included: a tool
   // delta after the measured reply declares what that request did not carry,
@@ -402,8 +364,6 @@ function projectContextTokens(
 export type ContextTokenProjector = (
   messages: readonly AgentMessage[],
   model: Model<Api>,
-  systemPrompt?: string,
-  tools?: readonly Tool[],
 ) => number;
 
 /**
@@ -413,11 +373,10 @@ export type ContextTokenProjector = (
  * on the model only through {@link counterFor}: two models of one family
  * necessarily agree, and two models of different families necessarily may not.
  *
- * The system prompt is a single slot rather than a map. Context Assembly makes
- * it a pure function of Role, bundle, product version and resource set, all
- * frozen for an attachment, so there is one value to hold; a map would keep
- * every multi-kilobyte prompt it ever saw alive as its own key to cache an
- * entry nothing asks for twice.
+ * The system prompt needs no slot of its own: it is the text of the head, one
+ * system message the runtime builds once per attachment and puts back at the
+ * front of every array it rebuilds, so the per-message memo holds it exactly
+ * as it holds any other settled message.
  */
 interface FamilyEstimateCache {
   readonly count: TokenCounter;
@@ -427,12 +386,11 @@ interface FamilyEstimateCache {
   readonly systemText: WeakMap<object, number>;
   /**
    * One declaration each, keyed by the tool object: the head's declarations
-   * and the attachment's executable tools are both stable objects for the
-   * life of an attachment, and `getCurrentTools` hands back those same
-   * objects, so the list it builds afresh per projection still hits.
+   * are stable objects for the life of an attachment, and `getCurrentTools`
+   * hands back those same objects, so the list it builds afresh per
+   * projection still hits.
    */
   readonly tools: WeakMap<Tool, number>;
-  prompt: { readonly text: string; readonly tokens: number } | null;
 }
 
 /** One memo slot: the estimate already held for `key`, or the one made now and kept. */
@@ -465,7 +423,6 @@ export function createContextTokenProjector(): ContextTokenProjector {
       messages: new WeakMap<object, number>(),
       systemText: new WeakMap<object, number>(),
       tools: new WeakMap<Tool, number>(),
-      prompt: null,
     };
     families.set(family, created);
     return created;
@@ -476,19 +433,8 @@ export function createContextTokenProjector(): ContextTokenProjector {
       remembered(cache.messages, message as object, () => estimateMessageTokens(message, model)),
     systemText: (message) =>
       remembered(cache.systemText, message, () => systemTextTokens(message, cache.count)),
-    prompt: (_model, systemPrompt) => {
-      if (!systemPrompt) return 0;
-      if (cache.prompt?.text !== systemPrompt) {
-        cache.prompt = {
-          text: systemPrompt,
-          tokens: cache.count(systemPrompt) + SYSTEM_PROMPT_FRAMING,
-        };
-      }
-      return cache.prompt.tokens;
-    },
     tool: (tool) => remembered(cache.tools, tool, () => toolTokens(tool, cache.count)),
   });
 
-  return (messages, model, systemPrompt, tools) =>
-    projectContextTokens(messages, model, systemPrompt, tools, memoizing(cacheFor(model)));
+  return (messages, model) => projectContextTokens(messages, model, memoizing(cacheFor(model)));
 }

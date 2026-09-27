@@ -21,14 +21,17 @@ import { toToolDeclaration, type SystemMessage, type Tool } from "@earendil-work
 /**
  * The leading system message one attachment's prompt and tools become.
  *
- * PI-RESTATED(0.87.1): pi-ai's `createInitialSystemMessage`, for a prompt that
- * is never empty. The shape is Pi's exactly — `timestamp: 0`, declarations
- * stripped to what the model sees, `toolsAdded` absent rather than empty — so
- * the head this runtime prepends is byte-identical to the one the `Agent`
- * would have seeded, and a resume reproduces the prefix the previous
- * attachment sent. Restated rather than called because Pi's returns
- * `undefined` for an empty prompt with no tools, an arm Volli's composed
- * prompt makes unreachable; a test pins the two against each other.
+ * PI-RESTATED(0.87.1): pi-ai's `createInitialSystemMessage`, for a request
+ * that has a prompt, tools, or both. The shape is Pi's exactly —
+ * `timestamp: 0`, declarations stripped to what the model sees, `toolsAdded`
+ * absent rather than empty, an empty prompt carried as `""` under its
+ * declarations — so the head this runtime prepends is byte-identical to the
+ * one the `Agent` would have seeded, and a resume reproduces the prefix the
+ * previous attachment sent. Restated rather than called because Pi's returns
+ * `undefined` for an empty prompt with no tools: Volli's composed prompt makes
+ * that arm unreachable at attach, and the one caller that can hold neither
+ * (compaction pricing a bare path) sends no head at all. A test pins the two
+ * against each other.
  */
 export function systemHead(systemPrompt: string, tools: readonly Tool[]): SystemMessage {
   return {

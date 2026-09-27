@@ -1,5 +1,13 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, SystemMessage, Tool, Usage } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type AssistantMessage,
+  type Model,
+  type SystemMessage,
+  type Tool,
+  type Usage,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vite-plus/test";
 import {
   createContextTokenProjector,
@@ -7,6 +15,7 @@ import {
   estimateMessageTokens,
   projectedContextTokens,
 } from "./token-counting";
+import { systemHead, withSystemHead } from "./transcript-context";
 
 function model(overrides: Partial<Model<"anthropic-messages" | "openai-completions">> = {}) {
   return {
@@ -53,7 +62,7 @@ function assistant(
   };
 }
 
-function user(text: string): AgentMessage {
+function user(text: string): UserMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
@@ -176,29 +185,41 @@ describe("estimateMessageTokens", () => {
   });
 
   // Pi 0.86 carries the prompt and the tool declarations as system messages
-  // inside the transcript. The estimator prices them there so a normalized
-  // request costs exactly what the separate `(systemPrompt, tools)` pair cost.
-  it("prices a system head exactly as the prompt-and-tools pair it replaces", () => {
+  // inside the transcript. The estimator prices them there, and only there:
+  // the transcript is the one spelling of a request it accepts, so the same
+  // tokens cannot be handed over beside it a second time (VC-421 review, B).
+  it("prices the head as the prompt plus each declaration, once, on top of the conversation", () => {
     const systemPrompt = "You are concise.";
-    const head = {
-      role: "system" as const,
-      content: systemPrompt,
-      toolsAdded: [tool],
-      timestamp: 0,
-    };
-    const conversation = [user("hello")];
-    const withHead = [head, ...conversation];
-    expect(estimateContextTokens(withHead, model())).toBe(
-      estimateContextTokens(conversation, model(), systemPrompt, [tool]),
+    const head = systemHead(systemPrompt, [tool]);
+    const conversation: UserMessage[] = [user("hello")];
+    const transcript = withSystemHead(head, conversation);
+    // The head is the prompt with its framing and one declaration per tool —
+    // what the separate `(systemPrompt, tools)` pair cost before 0.86.
+    expect(estimateContextTokens(transcript, model())).toBe(
+      estimateMessageTokens(head, model()) + estimateContextTokens(conversation, model()),
     );
-    expect(projectedContextTokens(withHead, model())).toBe(
-      projectedContextTokens(conversation, model(), systemPrompt, [tool]),
+    expect(estimateMessageTokens(head, model())).toBe(
+      estimateMessageTokens({ role: "system", content: systemPrompt, timestamp: 0 }, model()) +
+        estimateMessageTokens(
+          { role: "system", content: "", toolsAdded: [tool], timestamp: 0 },
+          model(),
+        ),
+    );
+    // Pi's own fold of the pair is the same transcript, and costs the same.
+    expect(
+      estimateContextTokens(
+        normalizeContext({ systemPrompt, tools: [tool], messages: conversation }).messages,
+        model(),
+      ),
+    ).toBe(estimateContextTokens(transcript, model()));
+    expect(projectedContextTokens(transcript, model())).toBe(
+      estimateContextTokens(transcript, model()),
     );
     const projector = createContextTokenProjector();
-    const first = projector(withHead, model());
-    // Memoized by the head's identity, and the same answer as the pair.
-    expect(projector(withHead, model())).toBe(first);
-    expect(first).toBe(projector(conversation, model(), systemPrompt, [tool]));
+    const first = projector(transcript, model());
+    // Memoized by the head's identity, and the same answer as the direct one.
+    expect(projector(transcript, model())).toBe(first);
+    expect(first).toBe(estimateContextTokens(transcript, model()));
   });
 
   it("prices sections as rendered and a removed section as nothing", () => {
@@ -221,7 +242,11 @@ describe("estimateMessageTokens", () => {
         { role: "system", content: "", toolsRemoved: [{ name: "phantom_tool" }], timestamp: 0 },
         model(),
       ),
-    ).toBe(estimateMessageTokens(user("phantom_tool"), model()) - 8);
+    ).toBe(
+      estimateMessageTokens(user("phantom_tool"), model()) -
+        // A user message's framing alone: the name without the wrapper.
+        estimateMessageTokens(user(""), model()),
+    );
     expect(estimateMessageTokens({ role: "system", content: "", timestamp: 0 }, model())).toBe(0);
   });
 
@@ -260,17 +285,47 @@ describe("estimateMessageTokens", () => {
       expect(projector(twice, model())).toBe(estimateContextTokens(twice, model()));
     });
 
-    it("prices the pair beside a persisted delta as the one request it is", () => {
+    it("prices a sidecar conversation behind the head as the one request it is", () => {
       // The compaction shape: a sidecar conversation, which never holds the
-      // head but can hold a tool-change message Pi persisted, priced with the
-      // attachment's own prompt and tools beside it. Previously the tool in
-      // both was counted twice and `tokensBefore` read too high.
+      // head but can hold a tool-change message Pi persisted, put back behind
+      // the attachment's own head exactly as the runtime sends it. Previously
+      // the tool in both was counted twice and `tokensBefore` read too high.
       const conversation: AgentMessage[] = [user("hello"), redeclared];
-      expect(estimateContextTokens(conversation, model(), "You are concise.", [tool])).toBe(
-        estimateContextTokens([user("hello")], model(), "You are concise.", [tool]),
+      expect(estimateContextTokens(withSystemHead(head, conversation), model())).toBe(
+        estimateContextTokens(withSystemHead(head, [user("hello")]), model()),
       );
-      expect(projectedContextTokens(conversation, model(), "You are concise.", [tool])).toBe(
+      expect(projectedContextTokens(withSystemHead(head, conversation), model())).toBe(
         estimateContextTokens([head, user("hello")], model()),
+      );
+    });
+
+    it("prices consecutive deltas as their net effect, not their sum", () => {
+      // Pi reconciles once per request, but a sidecar can replay several
+      // tool-change messages in a row: an addition, then its removal, then
+      // the same tool again. The provider is sent one declaration per name
+      // that survives, and the names removed along the way.
+      const added: SystemMessage = {
+        role: "system",
+        content: "",
+        toolsAdded: [otherTool],
+        timestamp: 2,
+      };
+      const removed: SystemMessage = {
+        role: "system",
+        content: "",
+        toolsRemoved: [{ name: otherTool.name }],
+        timestamp: 3,
+      };
+      const addedAgain: SystemMessage = { ...added, timestamp: 4 };
+      expect(estimateContextTokens([head, user("hello"), added, removed], model())).toBe(
+        estimateContextTokens([head, user("hello")], model()) +
+          estimateMessageTokens(removed, model()),
+      );
+      expect(
+        estimateContextTokens([head, user("hello"), added, removed, addedAgain], model()),
+      ).toBe(
+        estimateContextTokens([head, user("hello"), added], model()) +
+          estimateMessageTokens(removed, model()),
       );
     });
 
@@ -338,16 +393,40 @@ describe("estimateMessageTokens", () => {
 });
 
 describe("estimateContextTokens", () => {
-  it("includes the system prompt and tool definitions", () => {
-    const base = estimateContextTokens([user("hello")], model());
+  it("includes the system prompt and tool definitions the head carries", () => {
+    const conversation = [user("hello")];
+    const base = estimateContextTokens(conversation, model());
     const withSystem = estimateContextTokens(
-      [user("hello")],
+      withSystemHead(systemHead("You are terse. ".repeat(50), []), conversation),
       model(),
-      "You are terse. ".repeat(50),
     );
-    const withTools = estimateContextTokens([user("hello")], model(), undefined, [tool]);
+    const withTools = estimateContextTokens(
+      withSystemHead(systemHead("", [tool]), conversation),
+      model(),
+    );
     expect(withSystem).toBeGreaterThan(base);
     expect(withTools).toBeGreaterThan(base);
+  });
+
+  it("prices a transcript with an empty prompt at its declarations alone", () => {
+    // Pi seeds no head for an empty prompt with no tools, and one with only
+    // declarations for an empty prompt with tools; neither carries prompt
+    // framing. Volli's composed prompt is never empty, so this is the shape
+    // only a bare `Agent` or a test reaches — pinned so the estimator does not
+    // invent framing for text that is not sent.
+    const conversation: UserMessage[] = [user("hello")];
+    expect(normalizeContext({ systemPrompt: "", messages: conversation }).messages).toEqual(
+      conversation,
+    );
+    expect(
+      estimateContextTokens(withSystemHead(systemHead("", [tool]), conversation), model()),
+    ).toBe(
+      estimateContextTokens(conversation, model()) +
+        estimateMessageTokens(
+          { role: "system", content: "", toolsAdded: [tool], timestamp: 0 },
+          model(),
+        ),
+    );
   });
 
   it("scales with message count", () => {
@@ -452,23 +531,22 @@ describe("projectedContextTokens", () => {
     const projector = createContextTokenProjector();
     const anthropic = model();
     const openai = model({ id: "gpt-4o", api: "openai-completions", provider: "openai" });
-    const messages: AgentMessage[] = [user("first ".repeat(100)), user("second ".repeat(100))];
-    const systemPrompt = "system instructions ".repeat(100);
-    const tools = [tool];
+    const messages: AgentMessage[] = withSystemHead(
+      systemHead("system instructions ".repeat(100), [tool]),
+      [user("first ".repeat(100)), user("second ".repeat(100))],
+    );
 
     for (const currentModel of [anthropic, openai]) {
-      expect(projector(messages, currentModel, systemPrompt, tools)).toBe(
-        projectedContextTokens(messages, currentModel, systemPrompt, tools),
+      expect(projector(messages, currentModel)).toBe(
+        projectedContextTokens(messages, currentModel),
       );
     }
 
     messages.push(user("appended tail ".repeat(100)));
-    expect(projector(messages, anthropic, systemPrompt, tools)).toBe(
-      projectedContextTokens(messages, anthropic, systemPrompt, tools),
-    );
+    expect(projector(messages, anthropic)).toBe(projectedContextTokens(messages, anthropic));
   });
 
-  it("matches the direct projection when no system prompt or tools are provided", () => {
+  it("matches the direct projection when the transcript has no head", () => {
     const messages = [user("plain context")];
     const currentModel = model();
     expect(createContextTokenProjector()(messages, currentModel)).toBe(
@@ -499,11 +577,10 @@ describe("projectedContextTokens", () => {
   it("agrees with the direct projection on the cl100k family", () => {
     const projector = createContextTokenProjector();
     const gpt4 = model({ id: "gpt-4", api: "openai-completions", provider: "openai" });
-    const messages = [user("cl100k context ".repeat(30))];
-    const systemPrompt = "cl100k system ".repeat(30);
-    expect(projector(messages, gpt4, systemPrompt, [tool])).toBe(
-      projectedContextTokens(messages, gpt4, systemPrompt, [tool]),
-    );
+    const messages = withSystemHead(systemHead("cl100k system ".repeat(30), [tool]), [
+      user("cl100k context ".repeat(30)),
+    ]);
+    expect(projector(messages, gpt4)).toBe(projectedContextTokens(messages, gpt4));
   });
 
   it("takes the measured-usage shortcut and estimates only the suffix after it", () => {
@@ -513,28 +590,22 @@ describe("projectedContextTokens", () => {
     // only honest check is against the uncached function on the same input.
     const projector = createContextTokenProjector();
     const currentModel = model();
-    const systemPrompt = "system instructions ".repeat(50);
     const measured = assistant([{ type: "text", text: "settled reply" }], {
       usage: usage({ input: 9_000, output: 120, totalTokens: 9_120 }),
     });
-    const messages: AgentMessage[] = [
-      user("early ".repeat(50)),
-      measured,
-      user("tail ".repeat(50)),
-    ];
-
-    const projected = projector(messages, currentModel, systemPrompt, [tool]);
-    expect(projected).toBe(projectedContextTokens(messages, currentModel, systemPrompt, [tool]));
-    // Cheaper than the pure estimate, which is the point of the shortcut.
-    expect(projected).toBeLessThan(
-      estimateContextTokens(messages, currentModel, systemPrompt, [tool]) + 9_120,
+    const messages: AgentMessage[] = withSystemHead(
+      systemHead("system instructions ".repeat(50), [tool]),
+      [user("early ".repeat(50)), measured, user("tail ".repeat(50))],
     );
+
+    const projected = projector(messages, currentModel);
+    expect(projected).toBe(projectedContextTokens(messages, currentModel));
+    // Cheaper than the pure estimate, which is the point of the shortcut.
+    expect(projected).toBeLessThan(estimateContextTokens(messages, currentModel) + 9_120);
 
     // Appending after the measurement extends only the suffix, and the cached
     // and uncached answers must still agree.
     messages.push(user("appended after the measurement ".repeat(50)));
-    expect(projector(messages, currentModel, systemPrompt, [tool])).toBe(
-      projectedContextTokens(messages, currentModel, systemPrompt, [tool]),
-    );
+    expect(projector(messages, currentModel)).toBe(projectedContextTokens(messages, currentModel));
   });
 });

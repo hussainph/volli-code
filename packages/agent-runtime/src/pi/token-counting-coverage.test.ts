@@ -351,10 +351,12 @@ describe("usage validation", () => {
 });
 
 describe("estimateContextTokens edges", () => {
-  it("adds nothing for an empty or missing tool list", () => {
+  it("adds nothing for a system message that declares no tools and carries no text", () => {
     const messages = [user("hello")];
     const bare = estimateContextTokens(messages, model());
-    expect(estimateContextTokens(messages, model(), undefined, [])).toBe(bare);
+    const empty: AgentMessage = { role: "system", content: "", timestamp: 0 };
+    expect(estimateContextTokens([empty, ...messages], model())).toBe(bare);
+    expect(estimateContextTokens([{ ...empty, toolsAdded: [] }, ...messages], model())).toBe(bare);
     const tools: Tool[] = [
       {
         name: "read_file",
@@ -365,7 +367,9 @@ describe("estimateContextTokens edges", () => {
         } as Tool["parameters"],
       },
     ];
-    expect(estimateContextTokens(messages, model(), undefined, tools)).toBeGreaterThan(bare);
+    expect(
+      estimateContextTokens([{ ...empty, toolsAdded: tools }, ...messages], model()),
+    ).toBeGreaterThan(bare);
   });
 
   it("adds no system-prompt framing when there is no system prompt", () => {
