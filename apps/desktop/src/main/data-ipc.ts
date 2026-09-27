@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
@@ -180,7 +180,7 @@ import {
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "./ticket-commands";
-import { detectProjectBaseBranch } from "./project-base-branch";
+import { detectProjectBaseBranchAsync } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
@@ -398,7 +398,7 @@ async function materializeSwitchedOnWorktree(
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
-    detectBaseBranch?: (projectPath: string) => string | null;
+    detectBaseBranch?: (projectPath: string) => Promise<string | null>;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -627,30 +627,39 @@ export function registerDataIpcHandlers(
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": (input: ProjectCreateInput): ProjectCreateResult => {
+    "volli:project-create": async (input: ProjectCreateInput): Promise<ProjectCreateResult> => {
       const existing = findProjectByPath(db, input.path);
       if (existing) {
         return { ok: true, project: existing, created: false };
       }
       let stats;
       try {
-        stats = statSync(input.path);
+        stats = await stat(input.path);
       } catch {
         return { ok: false, error: "Project path does not exist" };
       }
       if (!stats.isDirectory()) {
         return { ok: false, error: "Project path is not a directory" };
       }
-      const now = Date.now();
+      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
+        input.path,
+      );
+      // Detection yields to other IPC requests. Re-read mutable project state only
+      // after it returns, then validate and insert without another await.
+      const createdWhileDetecting = findProjectByPath(db, input.path);
+      if (createdWhileDetecting) {
+        return { ok: true, project: createdWhileDetecting, created: false };
+      }
       const ticketPrefix = derivePrefix(input.name);
       const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
       if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
+      const now = Date.now();
       const project: Project = {
         id: randomUUID(),
         name: input.name,
         path: input.path,
         ticketPrefix,
-        baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
+        baseBranch,
         colorIndex: countProjects(db) % PROJECT_COLORS.length,
         sortOrder: nextSortOrder(db),
         createdAt: now,

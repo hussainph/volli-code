@@ -284,6 +284,7 @@ export function sourceRows(facts) {
  */
 export function renderSourceOffer(facts) {
   const { rows, recipe } = sourceRows(facts);
+  // App releases can bump on Linux without changing this Darwin-only library or its source.
   const lines = [];
 
   lines.push(
@@ -297,7 +298,7 @@ export function renderSourceOffer(facts) {
     "",
     "# libvips and the GNU Lesser General Public License",
     "",
-    `Volli Code ${facts.appVersion} includes **libvips**, bundled together with its own`,
+    "Volli Code includes **libvips**, bundled together with its own",
     "dependencies as a single prebuilt shared library:",
     "",
     `    ${facts.binary}`,
@@ -412,10 +413,8 @@ function gatherFacts(libvipsRoot) {
   const manifest = JSON.parse(readFileSync(resolve(libvipsRoot, "package.json"), "utf8"));
   const readme = readFileSync(resolve(libvipsRoot, "README.md"), "utf8");
   const versions = JSON.parse(readFileSync(resolve(libvipsRoot, "versions.json"), "utf8"));
-  const appManifest = JSON.parse(readFileSync(resolve(DESKTOP_ROOT, "package.json"), "utf8"));
 
   return {
-    appVersion: appManifest.version,
     packageVersion: manifest.version,
     license: manifest.license,
     repository: manifest.repository?.url?.replace(/^git\+/, "").replace(/\.git$/, "") ?? "",
@@ -830,6 +829,21 @@ async function selfTest() {
     },
   };
   const rendered = renderSourceOffer(offerFixture);
+  expect(
+    "a version-only app bump leaves the notice unchanged",
+    renderSourceOffer({ ...offerFixture, appVersion: "0.1.3" }) === rendered,
+  );
+  expect(
+    "a bundled component version change still changes the notice",
+    renderSourceOffer({
+      ...offerFixture,
+      versions: { ...offerFixture.versions, vips: "8.18.7" },
+    }) !== rendered,
+  );
+  expect(
+    "a native package version change still changes the notice",
+    renderSourceOffer({ ...offerFixture, packageVersion: "1.3.4" }) !== rendered,
+  );
   expect("states the license", rendered.includes("LGPL-3.0-or-later"));
   expect("names the shipped binary", rendered.includes("lib/libvips-cpp.8.18.6.dylib"));
   expect(

@@ -338,6 +338,7 @@ import {
 import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
 import { BrowserPictureStore } from "./browser/picture-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -3002,6 +3003,19 @@ app.whenReady().then(async () => {
       if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
     });
     window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    // A committed page reset strands any Browser plane the old page had put on
+    // screen (VC-424): a native view is the window's child, not the page's, so
+    // it goes on compositing over a fresh app UI that cannot hide a tab it has
+    // never heard of. Its own events, not the two above — a plane must not come
+    // off for a navigation that never commits. Parking is per window, and the
+    // tabs, their holds and their engines all survive it: a pane in the new
+    // page shows them again.
+    parkBrowserPlanesOnRendererReset({
+      host: browserTabs,
+      window,
+      contents: window.webContents,
+      log: (message) => console.error(message),
+    });
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps

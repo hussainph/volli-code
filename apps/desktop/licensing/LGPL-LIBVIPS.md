@@ -8,7 +8,7 @@
 
 # libvips and the GNU Lesser General Public License
 
-Volli Code 0.2.0-canary.11 includes **libvips**, bundled together with its own
+Volli Code includes **libvips**, bundled together with its own
 dependencies as a single prebuilt shared library:
 
     lib/libvips-cpp.8.18.6.dylib
