@@ -16,6 +16,7 @@ import {
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   readAutomationRunAttendance,
   recordAutomationRun,
@@ -745,6 +746,315 @@ describe("column Trigger and arming (migration 031)", () => {
     });
     expect(getSkippedOccurrence(ctx.db, skip.id)).toMatchObject({ missedCount: 3 });
     expect(getSkippedOccurrence(ctx.db, "nope")).toBeUndefined();
+  });
+
+  /**
+   * The editor's own history, scoped by main (VC-297).
+   *
+   * These are the rules that decide whose work appears under a record on
+   * screen. They live here because main answers the question: a client asks
+   * for one Automation's history and draws what it is handed, so a client that
+   * got this wrong could not be caught by a client test.
+   */
+  describe("one Automation's history inside one project", () => {
+    /** Two records in one project whose work interleaves in time. */
+    function twoRecords() {
+      const { project, ticket, session } = seeded();
+      const review = createAutomation(
+        ctx.db,
+        {
+          projectId: project.id,
+          name: "Review sweep",
+          instructions: "/review",
+          trigger: NO_AUTOMATION_TRIGGER,
+          runtime: null,
+        },
+        1000,
+      );
+      const nightly = createAutomation(
+        ctx.db,
+        {
+          projectId: project.id,
+          name: "Nightly sweep",
+          instructions: "/sweep",
+          trigger: NIGHTLY,
+          runtime: null,
+        },
+        1000,
+      );
+      const runFor = (automation: { id: string; name: string }, at: number) =>
+        recordAutomationRun(
+          ctx.db,
+          {
+            automationId: automation.id,
+            automationName: automation.name,
+            ticketId: ticket.id,
+            sessionId: session.id,
+            model: PIN,
+          },
+          at,
+        );
+      const skipFor = (automation: { id: string; name: string }, id: string, dueAt: number) => {
+        const record = {
+          id,
+          automationId: automation.id,
+          automationName: automation.name,
+          projectId: project.id,
+          dueAt,
+          missedCount: 1,
+          reason: { kind: "app-closed" as const },
+          recordedAt: dueAt + 1,
+        };
+        insertSkippedOccurrence(ctx.db, record);
+        return record;
+      };
+      return { project, ticket, session, review, nightly, runFor, skipFor };
+    }
+
+    it("answers each record with its OWN Runs and skips, newest first", () => {
+      const { project, review, nightly, runFor, skipFor } = twoRecords();
+      // Interleaved on purpose: a read that merely truncated the project's
+      // list, or sorted it wrongly, could not pass.
+      const reviewEarly = runFor(review, 2000);
+      const nightlyRun = runFor(nightly, 3000);
+      const reviewLate = runFor(review, 4000);
+      const reviewSkip = skipFor(review, "11111111-1111-4111-8111-111111111111", 2500);
+      const nightlySkip = skipFor(nightly, "22222222-2222-4222-8222-222222222222", 3500);
+
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([reviewLate, reviewEarly]);
+      expect(
+        listSkippedOccurrencesForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([reviewSkip]);
+
+      // The neighbour's editor asks the same question and gets its own rows.
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: nightly.id,
+          projectId: project.id,
+        }),
+      ).toEqual([nightlyRun]);
+      expect(
+        listSkippedOccurrencesForAutomation(ctx.db, {
+          automationId: nightly.id,
+          projectId: project.id,
+        }),
+      ).toEqual([nightlySkip]);
+
+      // And the project's own activity still carries every one of them.
+      expect(listRunsForProject(ctx.db, project.id)).toEqual([reviewLate, nightlyRun, reviewEarly]);
+      expect(listSkippedOccurrencesForProject(ctx.db, project.id).map((row) => row.id)).toEqual([
+        nightlySkip.id,
+        reviewSkip.id,
+      ]);
+    });
+
+    it("scopes by the id, so a RENAME never moves history between records", () => {
+      // The Run keeps the name it was made under; the record's name moves on.
+      // History follows the id, which is why the name is only ever provenance.
+      const { project, review, runFor } = twoRecords();
+      const before = runFor(review, 2000);
+      expect(before.automationName).toBe("Review sweep");
+
+      updateAutomation(
+        ctx.db,
+        review.id,
+        {
+          name: "Weekly sweep",
+          instructions: "/review",
+          trigger: NO_AUTOMATION_TRIGGER,
+          runtime: null,
+        },
+        5000,
+      );
+
+      expect(getAutomation(ctx.db, review.id)?.name).toBe("Weekly sweep");
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([before]);
+    });
+
+    it("scopes by the id, not the snapshotted name, when two records share one", () => {
+      const { project, ticket, session } = seeded();
+      const write = {
+        projectId: project.id,
+        name: "Sweep",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      };
+      const first = createAutomation(ctx.db, write, 1000);
+      const second = createAutomation(ctx.db, write, 1000);
+      expect(first.name).toBe(second.name);
+
+      const secondRun = recordAutomationRun(
+        ctx.db,
+        {
+          automationId: second.id,
+          automationName: second.name,
+          ticketId: ticket.id,
+          sessionId: session.id,
+          model: PIN,
+        },
+        2000,
+      );
+
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: first.id,
+          projectId: project.id,
+        }),
+      ).toEqual([]);
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: second.id,
+          projectId: project.id,
+        }),
+      ).toEqual([secondRun]);
+    });
+
+    it("leaves an Unbound Run to the project's activity, since no record owns it", () => {
+      const { project, review, runFor } = twoRecords();
+      const mine = runFor(review, 2000);
+      // VC-129: a Run of instructions typed by hand, bound to no record.
+      const unbound = recordAutomationRun(
+        ctx.db,
+        {
+          automationId: null,
+          automationName: null,
+          ticketId: null,
+          sessionId: (() => {
+            const loose = testSession(project.id, null, { id: "session-unbound" });
+            insertSession(ctx.db, loose);
+            return loose.id;
+          })(),
+          model: PIN,
+        },
+        3000,
+      );
+
+      expect(unbound.automationId).toBeNull();
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([mine]);
+      // Visible where it belongs, and only there.
+      expect(listRunsForProject(ctx.db, project.id)).toEqual([unbound, mine]);
+    });
+
+    it("keeps a DELETED record's Runs readable, still under its own id", () => {
+      // The record goes; the history of what it did is not the record. Skips
+      // do cascade (they are claims about a schedule that no longer exists),
+      // so only the Runs survive — and they survive addressably.
+      const { project, review, runFor, skipFor } = twoRecords();
+      const ran = runFor(review, 2000);
+      skipFor(review, "11111111-1111-4111-8111-111111111111", 2500);
+
+      deleteAutomation(ctx.db, review.id);
+
+      expect(getAutomation(ctx.db, review.id)).toBeUndefined();
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([ran]);
+      expect(ran.automationName).toBe("Review sweep");
+      expect(
+        listSkippedOccurrencesForAutomation(ctx.db, {
+          automationId: review.id,
+          projectId: project.id,
+        }),
+      ).toEqual([]);
+    });
+
+    it("never lets one project answer for a global record's work in another", () => {
+      // A global Automation is one record listable everywhere, but each Run it
+      // produced happened in ONE project. This is the same fault VC-297 fixed
+      // one scope up, and it is why the read takes BOTH ids.
+      const { project, ticket, session } = seeded();
+      const elsewhere = testProject({ id: "project-two" });
+      insertProject(ctx.db, elsewhere);
+      const farSession = testSession(elsewhere.id, null, { id: "session-far" });
+      insertSession(ctx.db, farSession);
+
+      const global = createAutomation(
+        ctx.db,
+        {
+          projectId: null,
+          name: "Everywhere",
+          instructions: "/sweep",
+          trigger: NO_AUTOMATION_TRIGGER,
+          runtime: null,
+        },
+        1000,
+      );
+      const here = recordAutomationRun(
+        ctx.db,
+        {
+          automationId: global.id,
+          automationName: global.name,
+          ticketId: ticket.id,
+          sessionId: session.id,
+          model: PIN,
+        },
+        2000,
+      );
+      const there = recordAutomationRun(
+        ctx.db,
+        {
+          automationId: global.id,
+          automationName: global.name,
+          ticketId: null,
+          sessionId: farSession.id,
+          model: PIN,
+        },
+        3000,
+      );
+
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: global.id,
+          projectId: project.id,
+        }),
+      ).toEqual([here]);
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: global.id,
+          projectId: elsewhere.id,
+        }),
+      ).toEqual([there]);
+    });
+
+    it("is empty for a record that has never run", () => {
+      const { project, nightly, runFor, review } = twoRecords();
+      runFor(review, 2000);
+
+      expect(
+        listProjectRunsForAutomation(ctx.db, {
+          automationId: nightly.id,
+          projectId: project.id,
+        }),
+      ).toEqual([]);
+      expect(
+        listSkippedOccurrencesForAutomation(ctx.db, {
+          automationId: nightly.id,
+          projectId: project.id,
+        }),
+      ).toEqual([]);
+    });
   });
 
   it("still reads as a skip when the stored reason is unreadable", () => {

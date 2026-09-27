@@ -104,6 +104,7 @@ import {
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
 import {
@@ -1569,6 +1570,8 @@ app.whenReady().then(async () => {
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
+          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
+          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
