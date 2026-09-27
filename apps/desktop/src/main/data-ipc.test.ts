@@ -54,6 +54,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+// Keep the production detector entrypoints observable. Project-create tests
+// usually inject a detector; this seam also verifies the uninjected default.
+const { detectAsync, detectSync } = vi.hoisted(() => ({
+  detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
+  detectSync: vi.fn<(path: string) => string | null>(),
+}));
+
+vi.mock("./project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-base-branch")>()),
+  detectProjectBaseBranchAsync: detectAsync,
+  detectProjectBaseBranch: detectSync,
+}));
+
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
@@ -544,6 +557,33 @@ function deferredBranch(): {
 }
 
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
+  it("uses the async detector by default without a test override", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    detectAsync.mockReturnValue(branch.promise);
+    detectSync.mockReturnValue("sync-default");
+    registerDataIpcHandlers({ ok: true, db: ctx.db });
+
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
+    expect(detectSync).not.toHaveBeenCalled();
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+
+    branch.resolve("trunk");
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { baseBranch: "trunk" },
+    });
+  });
+
   it("pins the repository's detected base branch when a project is added", async () => {
     handlers.clear();
     const volliPath = freshProjectDir();
