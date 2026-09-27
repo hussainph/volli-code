@@ -300,6 +300,8 @@ export interface RuntimeToolBundle {
   todoWrite?: boolean;
   /** Sanitized dynamic MCP definitions, frozen in provider order. */
   mcp?: readonly McpToolDefinition[];
+  /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
+  mcpManagementNames?: "server";
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
