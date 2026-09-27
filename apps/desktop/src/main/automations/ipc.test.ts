@@ -51,8 +51,10 @@ import {
   deleteAutomation,
   getAutomation,
   listAutomationsForProject,
+  listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   recordAutomationRun,
 } from "../db/automations-repo";
@@ -132,6 +134,8 @@ function setup(
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
     runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
+    runsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
+    skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(ctx.db, input),
     skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
     inspectModelAccess: overrides.inspectModelAccess ?? (async () => ACCESS),
     onMutation: (change) => mutations.push(change),
@@ -177,6 +181,8 @@ describe("automation IPC", () => {
       "volli:automation-cancel-pending-armed-run",
       "volli:automation-retry-pending-armed-run",
       "volli:automation-skips-for-project",
+      "volli:automation-runs-for-automation",
+      "volli:automation-skips-for-automation",
       "volli:automation-run-for-project",
     ]) {
       expect(await call<Result>(channel, {})).toEqual({
@@ -973,6 +979,100 @@ describe("automation IPC", () => {
         projectId: "no-such-project",
       }),
     ).toEqual({ ok: false, error: "Unknown project" });
+  });
+
+  it("answers ONE Automation's history, guarded by its project (VC-297)", async () => {
+    // The editor's read. It exists so a client draws the list it asked for
+    // rather than downloading a project's whole history and sieving it — the
+    // scoping rules themselves are proven in `automations-repo.test.ts`.
+    const { project, ticket } = setup();
+    const session = testSession(project.id, ticket.id);
+    insertSession(ctx.db, session);
+    const review = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Review",
+        instructions: "/review",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1_000,
+    );
+    const nightly = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Nightly",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1_000,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: review.id,
+        automationName: review.name,
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: PIN,
+      },
+      8_000,
+    );
+    recordAutomationRun(
+      ctx.db,
+      {
+        automationId: nightly.id,
+        automationName: nightly.name,
+        ticketId: ticket.id,
+        sessionId: session.id,
+        model: PIN,
+      },
+      9_000,
+    );
+
+    expect(
+      await call<AutomationRunsResult>("volli:automation-runs-for-automation", {
+        projectId: project.id,
+        automationId: review.id,
+      }),
+    ).toMatchObject({ ok: true, runs: [{ automationName: "Review" }] });
+    // A record that has never run is an empty list, never a refusal.
+    expect(
+      await call<AutomationSkipsResult>("volli:automation-skips-for-automation", {
+        projectId: project.id,
+        automationId: review.id,
+      }),
+    ).toEqual({ ok: true, skips: [] });
+
+    // Project-guarded like every other history read.
+    expect(
+      await call<Result>("volli:automation-runs-for-automation", {
+        projectId: "no-such-project",
+        automationId: review.id,
+      }),
+    ).toEqual({ ok: false, error: "Unknown project" });
+
+    // The AUTOMATION id is NOT guarded: a Run keeps its id after the record is
+    // deleted, so this stays the only way to read what a deleted one did.
+    deleteAutomation(ctx.db, review.id);
+    expect(
+      await call<AutomationRunsResult>("volli:automation-runs-for-automation", {
+        projectId: project.id,
+        automationId: review.id,
+      }),
+    ).toMatchObject({ ok: true, runs: [{ automationName: "Review" }] });
+
+    // Both ids or nothing — half the question is not a narrower question.
+    expect(await call<Result>("volli:automation-runs-for-automation", {})).toEqual({
+      ok: false,
+      error: "Invalid automation runs request",
+    });
+    expect(
+      await call<Result>("volli:automation-skips-for-automation", { projectId: project.id }),
+    ).toEqual({ ok: false, error: "Invalid automation skips request" });
   });
 
   it("switches an Automation on for this machine through a durable command", async () => {

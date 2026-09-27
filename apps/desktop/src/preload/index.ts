@@ -90,6 +90,7 @@ import type {
   AutomationsResult,
   AutomationSetEnabledInput,
   AutomationSetEnabledResult,
+  AutomationHistoryScopeInput,
   AutomationSkipsResult,
   AutomationUpdateInput,
   PendingArmedRunCancelInput,
@@ -941,6 +942,15 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
+    /**
+     * ONE Automation's Runs in one project, newest first (VC-297) — the
+     * editor's own history, asked for rather than sieved out of the project's.
+     */
+    runsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-automation", input),
+    /** That Automation's Skipped occurrences, read beside its Runs (VC-297). */
+    skipsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-automation", input),
     /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),
