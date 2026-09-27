@@ -393,8 +393,8 @@ function verbFieldSchema(field: VerbToolField, reword: (text: string) => string)
 /** A run of fields as one object schema, with the optional ones marked. */
 function verbObjectSchema(
   fields: readonly VerbToolField[],
-  description?: string,
-  reword: (text: string) => string = (text) => text,
+  description: string | undefined,
+  reword: (text: string) => string,
 ): ReturnType<typeof Type.Object> {
   const properties: Record<string, TSchema> = {};
   for (const field of fields) {
