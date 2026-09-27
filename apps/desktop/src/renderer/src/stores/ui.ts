@@ -62,6 +62,14 @@
  * key, onto the page that absorbed them, and only the resolved page is written
  * back.
  *
+ * `railFolds` — which of the ticket rail's three folds are open (VC-406): the
+ * roster's record under the Sessions eyebrow, the worktree body under its
+ * footer row, the cost breakdown under its. Persisted app-wide like `railMode`,
+ * and deliberately NOT per ticket: a fold is how a person reads the rail, not
+ * a fact about one Ticket, and a reader who wants the record open wants it
+ * open on the next Ticket too. All three default CLOSED — the folded face is
+ * the resting page, and every body is one press away.
+ *
  * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
@@ -238,6 +246,37 @@ function sanitizeRailWidth(width: unknown): number {
   return clampRailWidth(width);
 }
 
+/**
+ * The ticket rail's three folds (VC-406). A key per fold rather than three
+ * booleans so the toggle is one action and the persisted shape is one key.
+ */
+export type RailFold = "sessionsRecord" | "worktree" | "usage";
+export type RailFolds = Readonly<Record<RailFold, boolean>>;
+
+export const RAIL_FOLDS: readonly RailFold[] = ["sessionsRecord", "worktree", "usage"];
+export const DEFAULT_RAIL_FOLDS: RailFolds = {
+  sessionsRecord: false,
+  worktree: false,
+  usage: false,
+};
+
+/**
+ * Persisted folds, sanitized: only an explicit `true` opens a fold, so a
+ * missing key or corrupt JSON lands on the resting page (every fold closed)
+ * rather than on a rail with three bodies unfolded that nobody opened.
+ */
+function sanitizeRailFolds(value: unknown): RailFolds {
+  const stored =
+    typeof value === "object" && value !== null
+      ? (value as Partial<Record<RailFold, unknown>>)
+      : {};
+  return {
+    sessionsRecord: stored.sessionsRecord === true,
+    worktree: stored.worktree === true,
+    usage: stored.usage === true,
+  };
+}
+
 /** A persisted Monaco diff layout; unknown/missing values fall back to inline. */
 function sanitizeDiffPresentation(presentation: unknown): DiffPresentation {
   return presentation === "inline" || presentation === "side-by-side"
@@ -348,6 +387,8 @@ interface UiState {
    * copy says so out loud.
    */
   costVisible: boolean;
+  /** Which of the ticket rail's folds are open. Persisted app-wide (see module doc). */
+  railFolds: RailFolds;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
   /** Wrap long lines in the source editor and the diff. Persisted app-wide. */
@@ -413,6 +454,9 @@ interface UiState {
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setCostVisible(visible: boolean): void;
+  /** Open or close one of the rail's folds — the eyebrow's and the footer rows' one gesture. */
+  toggleRailFold(fold: RailFold): void;
+  setRailFold(fold: RailFold, open: boolean): void;
   setDiffPresentation(presentation: DiffPresentation): void;
   setWordWrap(wordWrap: boolean): void;
   /** The one gesture every word-wrap control makes — a band button, a menu item. */
@@ -467,6 +511,7 @@ type PersistedUiState = Pick<
   | "homeRailMode"
   | "homeEmptyVisual"
   | "costVisible"
+  | "railFolds"
   | "diffPresentation"
   | "wordWrap"
   | "defaultExternalAppId"
@@ -504,6 +549,7 @@ export function createUiStore(storage?: StateStorage) {
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         costVisible: true,
+        railFolds: DEFAULT_RAIL_FOLDS,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         wordWrap: DEFAULT_WORD_WRAP,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
@@ -535,6 +581,15 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setCostVisible: (visible) => set({ costVisible: visible }),
+        toggleRailFold: (fold) =>
+          set((state) => ({ railFolds: { ...state.railFolds, [fold]: !state.railFolds[fold] } })),
+        // Same discipline as the fault dismissals: a fold already in the asked
+        // state writes nothing, so a mount that asserts "closed" on an already
+        // closed fold costs no persist round trip.
+        setRailFold: (fold, open) => {
+          if (get().railFolds[fold] === open) return;
+          set((state) => ({ railFolds: { ...state.railFolds, [fold]: open } }));
+        },
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setWordWrap: (wordWrap) => set({ wordWrap }),
         toggleWordWrap: () => set((state) => ({ wordWrap: !state.wordWrap })),
@@ -592,6 +647,7 @@ export function createUiStore(storage?: StateStorage) {
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
           costVisible: state.costVisible,
+          railFolds: state.railFolds,
           diffPresentation: state.diffPresentation,
           wordWrap: state.wordWrap,
           defaultExternalAppId: state.defaultExternalAppId,
@@ -635,6 +691,8 @@ export function createUiStore(storage?: StateStorage) {
             // silently hiding a feature the reader never turned off — the same
             // discipline `sidebarPinned` above follows.
             costVisible: stored.costVisible !== false,
+            // Only an explicit `true` opens a fold (see `sanitizeRailFolds`).
+            railFolds: sanitizeRailFolds(stored.railFolds),
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),

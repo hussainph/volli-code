@@ -13,6 +13,8 @@ import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
@@ -22,9 +24,14 @@ import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import { errorMessage, type DiffStat } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@renderer/components/ui/collapsible";
 import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { SECTION_HEADING, SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
@@ -74,6 +81,154 @@ export function RailSectionHeadingRow({
     </div>
   );
 }
+
+/**
+ * The rail's ONE fold: what opens and closes in place on a rail page, and how
+ * it moves (VC-406). Three things fold — the roster's record under the
+ * Sessions eyebrow, the worktree body under its footer row, the cost breakdown
+ * under its — and they are one object drawn three times, so the motion is
+ * spelled once here.
+ *
+ * THE TRIGGER NEVER MOVES. A body that opens BELOW its trigger (the eyebrow's
+ * record) grows downward into the scroller; a body that opens ABOVE its
+ * trigger (a footer row's) grows upward into the space the scroller gives
+ * back. Either way the thing the pointer is on stays under the pointer, and a
+ * second press lands where the first did. The alternative for a footer —
+ * header above body, the row rising by the body's height — was drawn and
+ * rejected in the comparison scratch: it reads correctly and it moves the
+ * target out from under the hand, which is worse.
+ *
+ * THE MOTION is Radix's measured height against the `collapsible-down/up`
+ * keyframes `tw-animate-css` already ships (the same pair `ui/accordion.tsx`
+ * runs on), at 200ms on the strong `--ease-out`. `height` is a layout
+ * property and normally the wrong thing to animate, but a fold's whole effect
+ * is that the surface around it resizes; the layout pass is the purpose, not
+ * the cost, and 200ms bounds it. Nothing else animates: the rows inside do
+ * not fade or slide, because they are data the reader came to read, and
+ * `motion-reduce` drops the height animation outright (the `!` for the
+ * reason `ui/accordion.tsx` gives — the gate loses to `data-[state]` without
+ * it). The caret beside the trigger turns on `transform` alone, 150ms, the
+ * same curve.
+ *
+ * `Collapsible` rather than a boolean and a conditional: Radix keeps the body
+ * mounted through the close so it can animate out, and hands the trigger its
+ * `aria-expanded` and `aria-controls` pair for free.
+ */
+export const RailFold = Collapsible;
+export const RailFoldTrigger = CollapsibleTrigger;
+
+/** The fold's body: measured, animated, clipped while it moves. */
+export function RailFoldBody({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof CollapsibleContent>) {
+  return (
+    <CollapsibleContent
+      className={cn(
+        "overflow-hidden ease-out data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down motion-reduce:animate-none!",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </CollapsibleContent>
+  );
+}
+
+/**
+ * The caret that says which way a fold opens, and whether it is open.
+ *
+ * An eyebrow's fold opens DOWN, under the label, so its caret points right
+ * while closed and turns to point down: the file-browser idiom, read by
+ * everyone. A footer row's fold opens UP, over the row, so its caret points
+ * up while closed and turns to point down once the body is standing above
+ * it — pointing at where the body went, and at what pressing again does.
+ */
+export function RailFoldCaret({
+  open,
+  placement,
+}: {
+  open: boolean;
+  placement: "eyebrow" | "footer";
+}) {
+  const Caret = placement === "eyebrow" ? CaretRightIcon : CaretUpIcon;
+  return (
+    <Caret
+      aria-hidden
+      weight={placement === "eyebrow" ? "bold" : undefined}
+      className={cn(
+        "shrink-0 text-muted-foreground transition-transform duration-150 ease-out motion-reduce:transition-none",
+        placement === "eyebrow" ? "size-2.5" : "size-3",
+        open && (placement === "eyebrow" ? "rotate-90" : "rotate-180"),
+      )}
+    />
+  );
+}
+
+/**
+ * A section eyebrow whose LABEL is a fold's trigger (the Sessions block, whose
+ * record folds under its live rows). Same geometry as {@link RailSectionHeadingRow}
+ * — the label at the left, at most one control at the right — with the label
+ * drawn as a button carrying the caret. The caret follows the word rather
+ * than leading it so the eyebrow column stays one straight line down the
+ * page. Must sit inside a {@link RailFold}.
+ *
+ * `foldable` OFF draws a plain eyebrow: a roster with no record has nothing
+ * to fold, and a caret that opens onto nothing is a lie about the block.
+ */
+export function RailFoldHeadingRow({
+  label,
+  open,
+  foldable,
+  triggerLabel,
+  testId,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  foldable: boolean;
+  /** The trigger's accessible name — what pressing it does, in the reader's terms. */
+  triggerLabel: string;
+  testId?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+      {foldable ? (
+        // Still a heading in the document — the button is INSIDE it, so the
+        // outline keeps its section and the trigger keeps its name.
+        <h2 className={SECTION_HEADING}>
+          <RailFoldTrigger asChild>
+            <button
+              type="button"
+              aria-label={triggerLabel}
+              data-testid={testId}
+              className="flex items-center gap-1 rounded-sm uppercase outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 motion-reduce:transition-none"
+            >
+              {label}
+              <RailFoldCaret open={open} placement="eyebrow" />
+            </button>
+          </RailFoldTrigger>
+        </h2>
+      ) : (
+        <SectionHeading>{label}</SectionHeading>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A rail footer's shell and its row: the top rule the pinned rows wear
+ * (VC-406), and the row geometry every footer face shares — the mark at the
+ * left where every rail row's mark sits, then the face, then the caret.
+ */
+export const RAIL_FOOTER = "shrink-0 border-t border-sidebar-border/70 bg-background/30";
+export const RAIL_FOOTER_ROW = cn(
+  "flex min-h-8 w-full items-center gap-2 py-2 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45",
+  RAIL_PANEL_INSET,
+);
 
 /**
  * One repository-card row's shared frame: full-width, quiet hover, seam above

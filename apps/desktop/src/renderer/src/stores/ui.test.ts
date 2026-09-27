@@ -467,6 +467,7 @@ describe("persistence", () => {
     store.getState().setDiffPresentation("side-by-side");
     store.getState().setWordWrap(false);
     store.getState().setCostVisible(false);
+    store.getState().toggleRailFold("worktree");
     store.getState().dismissEnvironmentFault("login-path-unreadable");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
@@ -483,6 +484,7 @@ describe("persistence", () => {
       homeRailMode: "sessions",
       homeEmptyVisual: "board",
       costVisible: false,
+      railFolds: { sessionsRecord: false, worktree: true, usage: false },
       diffPresentation: "side-by-side",
       wordWrap: false,
       defaultExternalAppId: null,
@@ -493,6 +495,40 @@ describe("persistence", () => {
     // it chose for (VC-15/VC-56); nothing reads a last-harness preference now,
     // so nothing writes one either.
     expect(persisted.state).not.toHaveProperty("lastHarnessId");
+  });
+
+  it("rehydrates the rail's folds; only an explicit true opens one", async () => {
+    const storage = createMemoryStorage();
+    const store = createUiStore(storage);
+    store.getState().toggleRailFold("sessionsRecord");
+    store.getState().setRailFold("usage", true);
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().railFolds).toEqual({
+      sessionsRecord: true,
+      worktree: false,
+      usage: true,
+    });
+
+    // A fold already in the asked state writes nothing (VC-406): asserting
+    // "closed" on a closed fold must not cost a persist round trip.
+    const before = storage.getItem("volli:ui");
+    reloaded.getState().setRailFold("worktree", false);
+    expect(storage.getItem("volli:ui")).toBe(before);
+
+    // Corrupt or partial state lands every fold closed — the resting page.
+    const stale = createMemoryStorage();
+    stale.setItem(
+      "volli:ui",
+      JSON.stringify({ state: { railFolds: { worktree: "yes", usage: 1 } }, version: 1 }),
+    );
+    const sanitized = createUiStore(stale);
+    await sanitized.persist.rehydrate();
+    expect(sanitized.getState().railFolds).toEqual({
+      sessionsRecord: false,
+      worktree: false,
+      usage: false,
+    });
   });
 
   it("rehydrates Home's rail page and empty-chat visual; unknown values fall back", async () => {
