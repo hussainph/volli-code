@@ -23,7 +23,6 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { InlineRename } from "@renderer/components/ui/inline-rename";
 import { Input } from "@renderer/components/ui/input";
@@ -35,7 +34,9 @@ import { StatusDot, type StatusDotState } from "@renderer/components/ui/status-d
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
   RAIL_PANEL_INSET,
-  RailSectionHeadingRow,
+  RailFold,
+  RailFoldBody,
+  RailFoldHeadingRow,
 } from "@renderer/components/ticket/rail-panel-parts";
 import {
   buildTicketChatSessionRows,
@@ -76,9 +77,10 @@ function sessionStatusLabel(status: TicketSessionStatus): string {
 }
 
 /**
- * Sessions and History are the same block twice — one shape, one inset, no
- * seam. No top padding of their own: the Now page stacks its blocks with one
- * `gap`, so a block that is absent leaves no gap behind it (VC-406).
+ * The one block: the live rows, and the record folded under them. One shape,
+ * one inset, no seam. No top padding of its own: the Now page stacks its
+ * blocks with one `gap`, so a block that is absent leaves no gap behind it
+ * (VC-406).
  */
 const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
 
@@ -426,37 +428,45 @@ function SessionList({
 }
 
 /**
- * The Now page's session content: a "Sessions" working set (one flat row per
- * live session from the unified store) and a "History" set of the
- * ended/closed durable records — searchable past 4 entries.
+ * The Now page's roster: ONE "Sessions" section — the working set (one flat
+ * row per live session from the unified store) with the record of the
+ * ended/closed durable Sessions FOLDED under it, searchable past 4 entries
+ * (VC-406).
  *
- * The two are SIBLING SECTIONS of one shape, not a list plus a drawer. History
- * used to be a `RailDrawer`: a full-bleed `border-t` across the whole column, an
- * uppercase trigger with a rotating caret, and a collapse animation. That
- * primitive existed so History and a Details drawer could stack as siblings;
- * Details folded into the repository card and the properties fold, and one
- * caller was left dragging the old icon-mode rail's chrome — a seam the Calm
- * Stack draws nowhere (the retired ticket-right-sidebar scratch had no drawer,
- * no collapsible and no full-bleed rule in the rail at all). Both sections
- * inset with the column (`RAIL_PANEL_INSET`) instead of a hardcoded `px-4`, so
- * the rail's edge is one straight line at every width.
+ * The record used to be a sibling section, "History", with its own eyebrow and
+ * a count badge. Two sections for one roster read at two ages put the block a
+ * reader consults most — the live rows — and the block they consult least
+ * twenty rows apart, and the page's other blocks had to choose which of the
+ * two to sit beside. Here the eyebrow's own LABEL is the fold
+ * (`RailFoldHeadingRow`): `SESSIONS ›` with the record away, `SESSIONS ⌄` with
+ * it under the live rows, and `+ Chat ▾` still the row's one control at the
+ * right. The count of what is folded is in the trigger's accessible name and
+ * nowhere on the face — the caret alone says there is more, and an eyebrow
+ * holds a label and at most one control (docs/DESIGN.md).
  *
- * They are ADJACENT, and one component owns both: they are two views of ONE
- * read of the durable roster and one pair of clocks, and splitting them would
- * either read the roster twice or hoist its whole state into the page.
+ * THIS IS NOT THE RETIRED DRAWER. History was once a `RailDrawer`: a
+ * full-bleed `border-t` across the whole column, an uppercase trigger with a
+ * rotating caret, a collapse animation, and the WHOLE block behind it. Nothing
+ * here bleeds past the section's inset, the closed state still shows the rows
+ * that matter, only the record folds, and the trigger never moves — the
+ * record opens under it, so a second press lands where the first did. The
+ * motion is the rail's one fold (`rail-panel-parts.tsx`), not this file's.
  *
- * They were briefly split apart, with the rest of the Now page threaded
- * between them as `children` (VC-406's first pass), to put the working set at
- * the very top. The page is ordered by tier now — facts, acts, then the
- * roster — so the two halves of one roster sit together again and the slot is
- * gone. A live Session and the record of a dead one are the same list read at
- * two ages; a block about labels standing between them was the page borrowing
- * a component's insides to lay itself out.
+ * The fold is a GLOBAL preference (`railFolds.sessionsRecord`), not
+ * per-ticket: it is how a person reads the rail, and a reader who wants the
+ * record open wants it open on the next Ticket too. A roster with no record
+ * offers no fold at all — a caret opening onto nothing is a lie about the
+ * block.
  *
- * Both sit IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
+ * One component still owns both halves: they are two views of ONE read of the
+ * durable roster and one pair of clocks. The `children` slot that briefly let
+ * the page thread a block between them (VC-406's first pass) is gone — there
+ * is nothing between them any more.
+ *
+ * It sits IN FLOW: the Now page is one scrolling column (ticket-rail.tsx), so
  * this owns no scroller of its own. The durable list
  * (`api.sessions.listForTicket`) is re-read whenever the live set changes so
- * new sessions appear and closed ones fold into History. Rows rename inline
+ * new sessions appear and closed ones fold into the record. Rows rename inline
  * (double-click) or via the right-click menu.
  */
 export function TicketSessionsPanel({
@@ -468,7 +478,6 @@ export function TicketSessionsPanel({
   onNewBrowser,
   onActivateSession,
   onActivateChat,
-  children,
 }: {
   /** Whose project this ticket is — half of a row's drag payload (VC-202 §4). */
   projectId: string;
@@ -480,14 +489,8 @@ export function TicketSessionsPanel({
   onNewBrowser?(): void;
   onActivateSession(sessionId: string): void;
   onActivateChat(sessionId: string): void;
-  /**
-   * What the page stacks BETWEEN the working set and the record, if anything.
-   * One read of the roster still feeds both sections; this only lets a page put
-   * a rarely-read block under the rows that are read constantly and above the
-   * rows that are read rarely (VC-406 comparison — see `lab/scratches/rail-now-compare.tsx`).
-   */
-  children?: React.ReactNode;
 }) {
+  const open = useUiStore((state) => state.railFolds.sessionsRecord);
   const liveTabs = useSessionsStore((state) => state.byOwner[ticketId]?.tabs);
   const parkState = useSessionsStore((state) => state.parkState);
   // The sidebar's session bands read this exact map for their own attention
@@ -679,17 +682,33 @@ export function TicketSessionsPanel({
     onResumeSession: handleResume,
   };
 
+  const foldable = history.length > 0;
+
   return (
-    <>
-      <section className={SECTION}>
+    <RailFold
+      asChild
+      open={open && foldable}
+      onOpenChange={() => useUiStore.getState().toggleRailFold("sessionsRecord")}
+    >
+      <section className={SECTION} aria-label="Sessions" data-testid="ticket-sessions">
         {/* The heading is inset by the rows' own `px-2`, not by the section's
             edge: a label that hangs left of the list it names reads as a
             divider between blocks rather than as that list's title. The row is
             `justify-between` and carries the reviewed design's always-present
             "+" at its right (the scratch's `SessionRows` header) — the height
             comes from the control, so there is no reserved dead space when the
-            roster is full. */}
-        <RailSectionHeadingRow label="Sessions">
+            roster is full. The label is the record's fold. */}
+        <RailFoldHeadingRow
+          label="Sessions"
+          open={open}
+          foldable={foldable}
+          triggerLabel={
+            open
+              ? "Hide past sessions"
+              : `Show ${history.length} past session${history.length === 1 ? "" : "s"}`
+          }
+          testId="ticket-sessions-fold"
+        >
           <NewSessionControl
             disabled={effectiveCreating}
             placement="rail"
@@ -699,7 +718,7 @@ export function TicketSessionsPanel({
             onNewBrowser={onNewBrowser}
             onNewTerminal={onNewSession}
           />
-        </RailSectionHeadingRow>
+        </RailFoldHeadingRow>
         {pending ? (
           // The baseline read is in flight. The heading and its "+" stay live
           // above — a pending list blocks nothing about starting a Session —
@@ -719,38 +738,39 @@ export function TicketSessionsPanel({
         ) : (
           <SessionList rows={current} variant="current" now={ageNow} {...listProps} />
         )}
-      </section>
-      {children}
-      {history.length > 0 ? (
-        <section className={SECTION} data-testid="session-history">
-          <RailSectionHeadingRow label="History">
-            <Badge variant="count-pill">{history.length}</Badge>
-          </RailSectionHeadingRow>
-          {/* Past four rows the column stops being scannable, so the filter
-              appears — in flow, like everything else in the stack. */}
-          {history.length > 4 ? (
-            <div className="relative mb-1">
-              <MagnifyingGlassIcon
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                type="search"
-                value={historyQuery}
-                onChange={(event) => setHistoryQuery(event.target.value)}
-                aria-label="Search session history"
-                placeholder="Search history…"
-                className="h-8 pl-8 text-ui md:text-ui"
-              />
+        {/* The record, under the live rows. Radix mounts it only while open
+            (and through the close animation), so a folded record costs no
+            rows, no filter and no age clock re-derivation. */}
+        {foldable ? (
+          <RailFoldBody>
+            <div className="flex flex-col gap-1 pt-1" data-testid="session-history">
+              {/* Past four rows the column stops being scannable, so the filter
+                  appears — in flow, like everything else in the stack. */}
+              {history.length > 4 ? (
+                <div className="relative mb-1">
+                  <MagnifyingGlassIcon
+                    aria-hidden
+                    className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    type="search"
+                    value={historyQuery}
+                    onChange={(event) => setHistoryQuery(event.target.value)}
+                    aria-label="Search session history"
+                    placeholder="Search history…"
+                    className="h-8 pl-8 text-ui md:text-ui"
+                  />
+                </div>
+              ) : null}
+              {filteredHistory.length > 0 ? (
+                <SessionList rows={filteredHistory} variant="history" now={ageNow} {...listProps} />
+              ) : (
+                <p className={SESSION_SECTION_EMPTY}>No matching sessions</p>
+              )}
             </div>
-          ) : null}
-          {filteredHistory.length > 0 ? (
-            <SessionList rows={filteredHistory} variant="history" now={ageNow} {...listProps} />
-          ) : (
-            <p className={SESSION_SECTION_EMPTY}>No matching sessions</p>
-          )}
-        </section>
-      ) : null}
-    </>
+          </RailFoldBody>
+        ) : null}
+      </section>
+    </RailFold>
   );
 }

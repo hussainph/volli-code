@@ -4,24 +4,32 @@
  * makes that landing universal: success toasts with an "Open session" action
  * and never navigates.
  *
- * **ONE LIST, CAPPED** (VC-406). The block has been three shapes. It began as
+ * **ONE LIST, CAPPED** (VC-406). The block has been four shapes. It began as
  * a split button under an eyebrow, with a second visible list of every
  * column's Automations under THAT (each a ghost button with a play glyph) and
  * this Ticket's Runs under that again — three stacked drawings, every name
  * printed twice, and nothing in the geometry saying which of them was a
  * button. The correction deleted both lists and left the split button alone,
- * which fixed the clutter by making the block say almost nothing: one name,
- * and everything else behind a caret a reader has no reason to open.
+ * which fixed the clutter by making the block say almost nothing. The third
+ * shape made the offer a LIST with a Run once button under it.
  *
- * What it is now is the middle answer. The offer is a LIST, because a list is
+ * What it is now is that list, alone. The offer is a list because a list is
  * what the offer IS — several named things, one of which is this column's
  * default. It is bounded by HEIGHT rather than by hiding rows: `max-h` and a
  * scroller, so a project with thirty Automations costs the same vertical space
  * as a project with three, and the roster underneath never moves. The rows are
  * `ListRow`s, the same object the Sessions roster is built from, so "a row
  * opens the thing it names" is one rule on this page rather than a convention
- * per block. Run once is the one BUTTON here, wearing the rail's one control
- * recipe — which is what makes it read as an act rather than as one more row.
+ * per block. There is no button: the block ends where its last row does.
+ *
+ * **RUN ONCE IS GONE** (VC-406, reversing VC-112's "One-time work" for this
+ * surface). Stripped to what it did, it minted a chat Session with a typed
+ * first message, in the background, wearing the bolt — which is `+ Chat ▾` in
+ * the Sessions eyebrow one block up, with a worse text box (a dialog rather
+ * than the composer) and a Runs-history row named "Run once". The rail was
+ * its only host. The block's question is "what SAVED things can this Ticket
+ * be made to run", and the rows answer it alone; a one-off is a chat and
+ * typing. Main still starts an Unbound Run for the CLI; nothing here asks it to.
  *
  * A Run's Session is listed once, in the roster below, wearing the bolt that
  * says a Run started it (`session-provenance-mark.tsx`). This block never
@@ -31,12 +39,8 @@
  * Automation, and that is a ruling rather than an omission (VC-112): an
  * authoring form in a 300px rail would be a worse copy of the Automations page,
  * and the page is the one surface that owns the record's lifecycle. What the
- * empty rail offers instead is ONE door to that page, in the header row beside
- * the eyebrow — where the Sessions block keeps its own control. It used to be a
- * text link under the empty state's sentence, which put the word "Automations"
- * two lines under the heading AUTOMATIONS (VC-257): the same noun twice in one
- * glance. Moving that existing door fixes the layout without expanding
- * navigation into populated or unread states.
+ * rail offers instead is ONE door to that page, in the header row beside the
+ * eyebrow — where the Sessions block keeps its own control (VC-257).
  *
  * Four rules the drawing carries:
  *
@@ -44,58 +48,44 @@
  *    column has ARMED leads the list and says so: pressing it is the same act
  *    the board performs on a Deliberate move into that column. Every other
  *    offered row is a hand-run of the same kind, and says which column offers
- *    it. With nothing armed there is no marked row and nothing is lost — Run
- *    once needs no record at all.
- *  - **It never presses what it has not read.** The rail re-reads on arrival,
- *    and until that read lands the control says so and starts nothing bound
- *    (`automation-run-menu.tsx` owns the rule, `armed-run.ts` makes the same
- *    refusal for a dropped card). A cold cache would offer Run once on an
- *    armed Ticket; a stale one — including one whose re-read FAILED — would
- *    press the Automation the column used to arm. All of it is wrong for one
- *    reason: the cache cannot tell "nothing armed" from "not asked yet", nor a
- *    value that was just confirmed from one that merely survived.
+ *    it. With nothing armed there is no marked row, and no stand-in for one.
+ *  - **It never presses what it has not read.** The rail re-reads on arrival
+ *    and on every planning change, and until that read lands the block holds
+ *    its shape and starts nothing (`automation-run-menu.tsx` owns the rule,
+ *    `armed-run.ts` makes the same refusal for a dropped card). A stale cache
+ *    — including one whose re-read FAILED — would press the Automation the
+ *    column used to arm, and the cache cannot tell "nothing armed" from "not
+ *    asked yet", nor a value that was just confirmed from one that merely
+ *    survived.
  *  - **Never hidden when empty.** A project with no Automations still draws
- *    the block, its Run once button and its page door, and says the absence in
- *    one line. Hidden-when-empty is how a feature never gets discovered.
+ *    the block and its page door, and says the absence in one line.
+ *    Hidden-when-empty is how a feature never gets discovered.
  *  - **By hand is universal.** Running from here is unaffected by the
  *    machine-local switch (VC-112) — the switch governs what starts an
- *    Automation BESIDES a person. A switched-off Automation is offered with the
- *    page's own words beside it rather than dimmed or withheld.
+ *    Automation BESIDES a person. A switched-off Automation is offered, never
+ *    dimmed or withheld; its bolt wears a slash, and the words are in its
+ *    hover title.
  */
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
+import { LightningSlashIcon } from "@phosphor-icons/react/dist/csr/LightningSlash";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 
-import {
-  displayTicketId,
-  unboundRunProblem,
-  UNBOUND_RUN_LABEL,
-  type ModelSelection,
-  type Ticket,
-} from "@volli/shared";
+import { displayTicketId, type ModelSelection, type Ticket } from "@volli/shared";
 
-import { OffNote, useAutomationRunOffer, useOfferableModels } from "./automation-run-menu";
-import { InstructionsTextarea } from "./automation-editor";
+import { useAutomationRunOffer, useOfferableModels } from "./automation-run-menu";
+import { SWITCHED_OFF_NOTE } from "./automations-page-model";
 import { runAutomationOnTicket } from "./run-automation";
 import {
   modelOverrideRows,
   railAutomationRows,
-  RAIL_UNREAD_LABEL,
   type RailAutomationRow,
   type RailRunAction,
 } from "./ticket-rail-automations-model";
-import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
-import { EffortPill } from "@renderer/components/chat/composer-effort-ui";
+import type { ComposerModel } from "@renderer/components/chat/composer-ui";
 import {
-  ComposerPickerStack,
-  ModelPill,
-  type ComposerModel,
-} from "@renderer/components/chat/composer-ui";
-import {
-  RAIL_CONTROL,
   RAIL_PANEL_INSET,
   RailSectionHeadingRow,
 } from "@renderer/components/ticket/rail-panel-parts";
@@ -110,42 +100,16 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@renderer/components/ui/dialog";
-import { ListRow } from "@renderer/components/ui/list-row";
-import { Segmented } from "@renderer/components/ui/segmented";
+import { ListRow, ListRowSkeleton, type LoadingBarWidth } from "@renderer/components/ui/list-row";
+import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
-import { useFileIndex } from "@renderer/hooks/use-file-index";
-import { usePromptTemplates } from "@renderer/hooks/use-prompt-templates";
 import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
-/** The blank the pill reads as its resting "Model" label — the composer's own. */
-const NO_PIN = { providerId: "", modelId: "", reasoningLevel: "" };
-
 /** The same block shape the rail's other sections use, at the rail's own inset. */
 const SECTION = cn("flex flex-col gap-1", RAIL_PANEL_INSET);
-
-/** Which Runtime a single invocation runs on: the resolved default, or this one pick. */
-type OverrideChoice = "inherit" | "pin";
-
-/**
- * Whether the Run once form is open.
- *
- * It used to be an object carrying a per-invocation override, because the
- * caret menu could pick a model on the WAY to the form — a menu that answered
- * the Runtime question and then opened a dialog asking it again (VC-406). The
- * offer is a list now and Run once is a plain button, so there is one place
- * that question is answered: the form's own Runtime control.
- */
-type RunOnceRequest = boolean;
 
 export function TicketAutomationsPanel({
   projectId,
@@ -160,7 +124,6 @@ export function TicketAutomationsPanel({
   );
   const ticketDisplayId =
     ticketPrefix === undefined ? "this ticket" : displayTicketId(ticketPrefix, ticket.ticketNumber);
-  const [runOnce, setRunOnce] = React.useState<RunOnceRequest>(false);
   const models = useOfferableModels();
 
   // What this column offers, read on arrival and inert until that read lands
@@ -169,15 +132,15 @@ export function TicketAutomationsPanel({
   const rail = useAutomationRunOffer(projectId, ticket.status);
   const empty = rail.ready && !rail.listsAny;
   const rows = railAutomationRows(rail);
+  // How many rows the block held the last time it was read, so the wait
+  // between reads is drawn at the list's own height (see `UnreadRows`).
+  const lastRowCount = React.useRef<number | null>(null);
+  if (rail.ready) lastRowCount.current = rows.length;
 
   const run = (action: RailRunAction, modelOverride: ModelSelection | null): void => {
-    // Nothing bound starts from an unread rail: the press that reached here
-    // named no record, because the rail knew of none to name.
-    if (action.kind === "unread") return;
-    if (action.kind === "run-once") {
-      setRunOnce(true);
-      return;
-    }
+    // Nothing starts from an unread rail or an unarmed column: a press that
+    // reached here named no record, because the rail knew of none to name.
+    if (action.kind !== "automation") return;
     // Where the Run lands is the roster's business: its Session arrives there
     // through the same push every Session does, so nothing here re-reads.
     void runAutomationOnTicket({
@@ -199,35 +162,53 @@ export function TicketAutomationsPanel({
         <AutomationsPageDoor projectId={projectId} />
       </RailSectionHeadingRow>
       {!rail.ready ? (
-        // Named, and pressing nothing. The rail has not read yet, so it knows
-        // of no Automation — and of no absence either, which is why this is not
-        // the empty sentence (`ticket-rail-automations-model.ts`).
-        <p
-          className="px-2 text-label text-muted-foreground"
-          data-testid="ticket-rail-automations-unread"
-        >
-          {RAIL_UNREAD_LABEL}
-        </p>
+        <UnreadRows count={lastRowCount.current} />
       ) : empty ? (
         // Visible and plain: one line, a report and never an action — the
         // header's own door is 20px above it, and a second copy of the same
         // door inside the empty state would be the same offer twice in one
-        // glance. Run once below still presses: it names no record, so an
-        // empty project is not an empty block.
+        // glance.
         <p className="px-2 text-label text-muted-foreground">No automations in this project yet.</p>
       ) : (
         <AutomationOfferList rows={rows} models={models} enabledIds={enabledIds} onRun={run} />
       )}
-      <RunOnceControl onRunOnce={() => setRunOnce(true)} />
-      <RunOnceDialog
-        open={runOnce}
-        onClose={() => setRunOnce(false)}
-        projectId={projectId}
-        ticketId={ticket.id}
-        ticketDisplayId={ticketDisplayId}
-        models={models}
-      />
     </section>
+  );
+}
+
+/**
+ * The wait, at the list's own height.
+ *
+ * The rail re-reads on EVERY planning change — any board move, any label
+ * edit, this Ticket's own status pill — and it used to draw that wait as one
+ * line, "Reading automations…". A block that is three rows tall collapsing to
+ * one line and re-expanding a moment later moves everything under it by a
+ * hundred pixels, twice, for a read that almost always lands the same rows it
+ * left. So the wait is drawn as the rows it is waiting for: as many skeleton
+ * rows as the LAST ready render held, and two before anything has been read,
+ * so a re-read moves nothing and a first read moves as little as it can.
+ * `ListRowSkeleton` is the roster's own placeholder, at the row's own inset
+ * and height.
+ */
+const UNREAD_WIDTHS: readonly LoadingBarWidth[] = ["w-2/5", "w-3/4", "w-1/2"];
+
+function UnreadRows({ count }: { count: number | null }) {
+  const rows = Math.max(count ?? 2, 1);
+  return (
+    <div
+      className="flex flex-col"
+      data-testid="ticket-rail-automations-unread"
+      {...loadingRegionProps("automations")}
+    >
+      {Array.from({ length: rows }, (_, index) => (
+        <ListRowSkeleton
+          key={index}
+          mark
+          primaryWidth={UNREAD_WIDTHS[index % UNREAD_WIDTHS.length] ?? "w-1/2"}
+          trailingWidth="w-12"
+        />
+      ))}
+    </div>
   );
 }
 
@@ -323,9 +304,21 @@ function AutomationOfferList({
 /**
  * One offered Automation.
  *
- * The bolt is `fill` on the armed row and outline on the rest — the weight
- * pair the app already uses to mark one item among its peers, and the reason
- * the armed row needs no second badge beside its trailing word.
+ * THE BOLT SAYS THREE THINGS and the right edge says one (VC-406). The bolt
+ * is `fill` on the armed row and outline on the rest — the weight pair the
+ * app already uses to mark one item among its peers — and it wears a SLASH
+ * (`LightningSlash`) on a record whose automatic triggers are off: nothing
+ * fires this one by itself. The right edge then says only which column offers
+ * the row, or `Armed`. It used to say `Manual only · Doing`, and at 300px that
+ * phrase cost the name half its width (`Review every b…`); the name is what a
+ * reader presses, the qualifier is what they check, so the check moved into
+ * the glyph and the words moved into the row's hover title and accessible
+ * name, where a reader who wants them can still ask. The switch's rule holds
+ * (VC-112): the row is offered, never dimmed, never withheld.
+ *
+ * The name keeps a floor (`min-w-24`) so no width can reduce it to four
+ * letters while the qualifier stays whole — a qualifier must not outlive the
+ * thing it qualifies (docs/DESIGN.md).
  *
  * Right-click carries the per-invocation override (VC-112). It is PER ROW
  * here, which is strictly more than the old caret offered: that menu could
@@ -346,9 +339,9 @@ function AutomationOfferRow({
 }) {
   const action: RailRunAction = { kind: "automation", automation: row.automation };
   const overrides = modelOverrideRows(models);
-  // Read here as well as inside `OffNote`, because the separator between the
-  // note and the column belongs to the pair rather than to either one.
   const switchedOff = !enabledIds.includes(row.automation.id);
+  const column = row.armed ? "Armed" : row.columnLabel;
+  const Bolt = switchedOff ? LightningSlashIcon : LightningIcon;
   return (
     <li>
       <ContextMenu>
@@ -356,10 +349,12 @@ function AutomationOfferRow({
           <ListRow
             data-testid="ticket-rail-automation-row"
             data-armed={row.armed ? "true" : undefined}
-            aria-label={`Run ${row.automation.name} on this ticket`}
+            data-triggers={switchedOff ? "off" : "on"}
+            aria-label={`Run ${row.automation.name} on this ticket${switchedOff ? " (manual only)" : ""}`}
+            title={`${row.automation.name} — ${switchedOff ? `${SWITCHED_OFF_NOTE} · ` : ""}${column}`}
             onActivate={() => onRun(action, null)}
             leading={
-              <LightningIcon
+              <Bolt
                 weight={row.armed ? "fill" : undefined}
                 className={cn(
                   "size-4 shrink-0",
@@ -368,24 +363,16 @@ function AutomationOfferRow({
               />
             }
             primary={
-              <span className="min-w-0 flex-1 truncate text-ui" title={row.automation.name}>
-                {row.automation.name}
-              </span>
+              <span className="min-w-24 flex-1 truncate text-ui">{row.automation.name}</span>
             }
-            // ONE PHRASE, not two words that happen to be adjacent. Where the
-            // record is switched off the row says "Manual only · Doing", which
-            // reads as one qualifier; the two set side by side with a plain
-            // gap read as two competing labels, and at the 240px floor as one
-            // run-on string. The note itself stays — running BY HAND is
-            // unaffected by the machine-local switch (VC-112), so it qualifies
-            // the row rather than dimming or withholding it.
             trailing={
-              <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-                <OffNote automation={row.automation} enabledIds={enabledIds} />
-                {switchedOff ? <span aria-hidden>·</span> : null}
-                <span className={row.armed ? "text-primary-text" : undefined}>
-                  {row.armed ? "Armed" : row.columnLabel}
-                </span>
+              <span
+                className={cn(
+                  "shrink-0 text-label",
+                  row.armed ? "text-primary-text" : "text-muted-foreground",
+                )}
+              >
+                {column}
               </span>
             }
           />
@@ -436,207 +423,5 @@ function AutomationOfferRow({
         </ContextMenuContent>
       </ContextMenu>
     </li>
-  );
-}
-
-/**
- * Run once — the block's one button, and the only act here that is not a row.
- *
- * It wears `RAIL_CONTROL`, the recipe every act on a rail page wears, sized to
- * its label and parked at the left under the list at the same `px-2` the
- * eyebrow and the rows share. That is the whole reason it is a button and the
- * offers are rows: a reader must be able to tell an act from an item without
- * reading either, and on this page the answer is the costume.
- *
- * It takes no pre-chosen model. It opens a FORM, and the form has a Runtime
- * control in it — a menu that set the model on the way to a dialog that asks
- * for the model again was two places to answer one question.
- *
- * Never hidden, never disabled, and unaffected by an unread rail: an Unbound
- * Run names no record, so there is nothing here a stale cache could get wrong.
- */
-function RunOnceControl({ onRunOnce }: { onRunOnce(): void }) {
-  return (
-    <div className="px-2 pt-1">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        data-testid="ticket-rail-run-once"
-        className={cn(RAIL_CONTROL, "min-w-0 shrink px-2 [&>span]:truncate")}
-        onClick={onRunOnce}
-      >
-        <PlayIcon />
-        <span>{UNBOUND_RUN_LABEL}…</span>
-      </Button>
-    </div>
-  );
-}
-
-/**
- * Run once: Instructions, an optional Runtime for this one invocation, and a
- * Run that saves nothing.
- *
- * It writes no file and mints no record beyond the Run itself, so there is
- * nothing afterwards to name, disable or delete (VC-112, "One-time work"). That
- * is why the form has no Name and no Trigger: this is not a small authoring
- * surface, it is the absence of one.
- *
- * The Instructions box is the editor's, imported rather than re-drawn — same
- * `/` templates and Skills, same `@` files, same expansion at launch. A second
- * box wired slightly differently would be a second grammar wearing one name.
- *
- * It opens on the resolved default every time. The Runtime is chosen HERE, in
- * the form, and nowhere on the way to it — a control that pre-answered the
- * question this form asks would be two places to answer one question, and the
- * loser would be whichever the reader looked at second.
- */
-function RunOnceDialog({
-  open,
-  onClose,
-  projectId,
-  ticketId,
-  ticketDisplayId,
-  models,
-}: {
-  open: RunOnceRequest;
-  onClose(): void;
-  projectId: string;
-  ticketId: string;
-  ticketDisplayId: string;
-  models: readonly ComposerModel[];
-}) {
-  // Unmounted when closed, which is also what remounts it per opening: a
-  // second Run once starts from a blank form rather than from the last one's
-  // words.
-  if (!open) return null;
-  return (
-    <RunOnceForm
-      projectId={projectId}
-      ticketId={ticketId}
-      ticketDisplayId={ticketDisplayId}
-      models={models}
-      onClose={onClose}
-    />
-  );
-}
-
-function RunOnceForm({
-  projectId,
-  ticketId,
-  ticketDisplayId,
-  models,
-  onClose,
-}: {
-  projectId: string;
-  ticketId: string;
-  ticketDisplayId: string;
-  models: readonly ComposerModel[];
-  onClose(): void;
-}) {
-  const [instructions, setInstructions] = React.useState("");
-  const [choice, setChoice] = React.useState<OverrideChoice>("inherit");
-  const [pin, setPin] = React.useState<ModelSelection | null>(null);
-  const { templates, skills } = usePromptTemplates(projectId);
-  const fileIndex = useFileIndex(projectId);
-
-  const pinStops =
-    pin === null
-      ? []
-      : (models.find(
-          (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
-        )?.reasoningLevels ?? []);
-  const changePinEffort = (reasoningLevel: string): void => {
-    if (pin === null) return;
-    const picked = composerModelSelection({ ...pin, reasoningLevel });
-    if (picked !== null) setPin(picked);
-  };
-  const compactEffort =
-    pin !== null && pinStops.length > 1
-      ? { levels: pinStops, value: pin.reasoningLevel, onChange: changePinEffort }
-      : undefined;
-  // The shared rule, so this button and main's refusal are one policy.
-  const incomplete = unboundRunProblem(instructions) !== null || (choice === "pin" && pin === null);
-
-  const submit = (): void => {
-    if (incomplete) return;
-    onClose();
-    void runAutomationOnTicket({
-      target: { kind: "unbound", instructions },
-      automationName: UNBOUND_RUN_LABEL,
-      ticketId,
-      ticketDisplayId,
-      modelOverride: choice === "pin" ? pin : null,
-    });
-  };
-
-  return (
-    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{UNBOUND_RUN_LABEL}</DialogTitle>
-        </DialogHeader>
-        {/* DialogContent is a grid. This zero minimum lets the shared picker
-            truncate inside the dialog instead of widening the grid track. */}
-        <div data-composer-container="" className="@container/composer flex min-w-0 flex-col gap-2">
-          <ComposerPickerStack
-            value={instructions}
-            onValueChange={setInstructions}
-            ready
-            interactionOpen={false}
-            promptTemplates={templates}
-            skills={skills}
-            // Verbs are chat operations (/compact); a Run's Instructions can
-            // invoke none of them — the editor's own rule.
-            verbs={[]}
-            files={fileIndex.getIndex()}
-            onFilePickerOpen={fileIndex.refresh}
-          >
-            <InstructionsTextarea value={instructions} onValueChange={setInstructions} />
-          </ComposerPickerStack>
-          <div className="flex flex-wrap items-center gap-2">
-            <Segmented<OverrideChoice>
-              ariaLabel="Runtime"
-              value={choice}
-              options={[
-                { key: "inherit", label: "Default model" },
-                { key: "pin", label: "This run" },
-              ]}
-              onChange={setChoice}
-            />
-            {choice === "pin" ? (
-              <>
-                <ModelPill
-                  models={models}
-                  selection={pin ?? NO_PIN}
-                  disabled={false}
-                  compactEffort={compactEffort}
-                  onChange={(next) => {
-                    const picked = composerModelSelection(next);
-                    if (picked !== null) setPin(picked);
-                  }}
-                />
-                {pin !== null && pinStops.length > 1 ? (
-                  <EffortPill
-                    levels={pinStops}
-                    value={pin.reasoningLevel}
-                    onChange={changePinEffort}
-                    className="composer-separate-effort"
-                  />
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button size="sm" disabled={incomplete} onClick={submit}>
-            Run
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

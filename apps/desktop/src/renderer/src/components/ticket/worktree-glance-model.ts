@@ -8,12 +8,16 @@
  * NEXT, in the words the body's own rows already use, so unfolding the body
  * never contradicts the row above it:
  *
- *   checks failing  >  uncommitted  >  N to push / not pushed  >
- *   checks running  >  checks passed / skipped  >  up to date  >  no commits
+ *   fault  >  ready to archive  >  checks failing  >  uncommitted  >
+ *   N to push / not pushed  >  checks running  >  checks passed / skipped  >
+ *   up to date  >  no commits
  *
- * A red suite outranks local state because it is the one thing here that
- * somebody else is waiting on; uncommitted work outranks unpushed commits
- * because a commit is the act that turns one into the other.
+ * A fault leads because every other fact is unreadable while it stands, and
+ * the body under the row is where its Retry lives. Archive-ready leads the
+ * rest because it is the one state where the next act is not on the branch
+ * at all. A red suite outranks local state because it is the one thing here
+ * that somebody else is waiting on; uncommitted work outranks unpushed
+ * commits because a commit is the act that turns one into the other.
  *
  * THE DOT IS QUIET FOR LOCAL STATE. Uncommitted work and unpushed commits are
  * the resting condition of a worktree an agent is working in — a tone lit for
@@ -37,15 +41,33 @@ export interface WorktreeGlance {
   tone: StatusDotState;
 }
 
+/** The two faults the card distinguishes — a gone directory has a way out, a failed read has a Retry. */
+export type WorktreeFault = "missing" | "unreadable";
+
+export interface WorktreeGlanceInput {
+  status: WorktreeStatusSnapshot | null;
+  checks: PrChecksView | null;
+  fault?: WorktreeFault | null;
+  /** The retention watch's verdict: merged, past the TTL, nothing left to do here but archive. */
+  archiveReady?: boolean;
+}
+
 /**
  * `null` until the status has been read — the row then shows the branch alone,
- * which is true, rather than a placeholder fact, which would not be.
+ * which is true, rather than a placeholder fact, which would not be. A fault
+ * is the exception: it is known before any status is, and it is the fact.
  */
-export function worktreeGlance(
-  status: WorktreeStatusSnapshot | null,
-  checks: PrChecksView | null,
-): WorktreeGlance | null {
+export function worktreeGlance({
+  status,
+  checks,
+  fault = null,
+  archiveReady = false,
+}: WorktreeGlanceInput): WorktreeGlance | null {
+  if (fault !== null) {
+    return { phrase: fault === "missing" ? "Missing on disk" : "Unreadable", tone: "error" };
+  }
   if (status === null) return null;
+  if (archiveReady) return { phrase: "Ready to archive", tone: "ready" };
   if (checks !== null && checks.verdict === "failing") {
     return { phrase: checks.label, tone: "error" };
   }

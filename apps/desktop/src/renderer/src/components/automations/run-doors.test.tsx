@@ -230,9 +230,9 @@ const MODEL_ACCESS = {
 
 /**
  * The rest of `window.api` a started Run touches on its way to a landing —
- * adopting the fresh Session, refreshing the rail, the composer's supply for
- * the Run once form. Stubbed rather than avoided: a door whose glue threw on
- * the way back would not be a door that reached the seam.
+ * adopting the fresh Session, refreshing the rail. Stubbed rather than
+ * avoided: a door whose glue threw on the way back would not be a door that
+ * reached the seam.
  */
 function installApi(automations: Partial<typeof doors> = {}): void {
   Object.defineProperty(window, "api", {
@@ -302,19 +302,6 @@ function buttonContaining(label: string): HTMLElement {
   return found;
 }
 
-/** Type into a controlled textarea the way React's own event system sees it. */
-async function typeInstructions(value: string): Promise<void> {
-  const box = document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement;
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    "value",
-  )?.set;
-  await act(async () => {
-    setter?.call(box, value);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 /**
  * What a door is expected to have asked for.
  *
@@ -380,12 +367,13 @@ afterEach(async () => {
 });
 
 describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () => {
-  it("the Ticket rail's split button toasts in place with the Session door", async () => {
+  it("the Ticket rail's Armed row toasts in place with the Session door", async () => {
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
     await act(async () => {
-      control("Run Review sweep on this ticket").click();
+      // Switched off in this fixture, so the row's name carries the note (VC-406).
+      control("Run Review sweep on this ticket (manual only)").click();
     });
 
     expect(run).toHaveBeenCalledTimes(1);
@@ -429,34 +417,6 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         target: { kind: "automation", automationId: "a1" },
         ticketId: "t1",
         modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
-      }),
-    );
-  });
-
-  it("the rail's Run once, whose Instructions no record supplies", async () => {
-    await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
-
-    await act(async () => {
-      (document.querySelector('[data-testid="ticket-rail-run-once"]') as HTMLElement).click();
-    });
-    await typeInstructions("/review the diff once");
-    await act(async () => {
-      // EXACTLY "Run" — the form's submit. The block behind the dialog now
-      // draws a "Run once…" button of its own (VC-406), so a substring match
-      // finds the trigger again instead of the control that starts the Run.
-      const submit = [...document.querySelectorAll("button")].find(
-        (candidate) => candidate.textContent === "Run",
-      );
-      submit?.click();
-    });
-
-    // The Unbound Run's own words are the payload — this is the door where the
-    // Instructions exist nowhere else, so losing them here loses them entirely.
-    expect(run).toHaveBeenCalledWith(
-      askedFor({
-        target: { kind: "unbound", instructions: "/review the diff once" },
-        ticketId: "t1",
-        modelOverride: null,
       }),
     );
   });

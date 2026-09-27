@@ -252,7 +252,7 @@ describe("the board card's Automations submenu", () => {
     });
   });
 
-  it("offers no Run once, because a card has nowhere to type one", async () => {
+  it("offers no Run once — no surface does any more (VC-406)", async () => {
     await open();
 
     expect(text()).not.toContain("Run once");

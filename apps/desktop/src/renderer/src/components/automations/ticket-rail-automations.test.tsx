@@ -6,9 +6,8 @@
  *
  * A real jsdom ENVIRONMENT rather than a static render, for the reason the
  * Automations page's own test states: the promises here are CLICKS — a row
- * that runs, a Run once that starts an unbound Run, an override chosen from a
- * row's own menu — and a static render would prove the markup and none of
- * them. It is also why the Run glue is mocked: where a Run LANDS is that
+ * that runs, an override chosen from a row's own menu — and a static render
+ * would prove the markup and none of them. It is also why the Run glue is mocked: where a Run LANDS is that
  * module's decision and is tested there; what this file owns is whether the
  * rail asks for the right one.
  */
@@ -203,35 +202,6 @@ async function openSubmenu(label: string): Promise<void> {
   });
 }
 
-/** The block's one button. */
-function runOnceControl(): HTMLElement {
-  const found = document.querySelector('[data-testid="ticket-rail-run-once"]');
-  if (found === null) throw new Error("no Run once control");
-  return found as HTMLElement;
-}
-
-/** Type into the Run once form's controlled textarea the way React sees it. */
-function typeInstructions(value: string): Promise<void> {
-  const box = document.querySelector('[aria-label="Instructions"]') as HTMLTextAreaElement;
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    "value",
-  )?.set;
-  return act(async () => {
-    setter?.call(box, value);
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-/** The Run once form's own submit — the only control in the app labelled exactly "Run". */
-function runButton(): HTMLButtonElement {
-  const found = [...document.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent === "Run",
-  );
-  if (found === undefined) throw new Error("no Run button");
-  return found;
-}
-
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   for (const door of Object.values(doors)) door.mockReset();
@@ -274,7 +244,10 @@ describe("the offer list", () => {
     // button naming this column's armed record, with every other column's work
     // reachable only by opening a caret a reader had no reason to suspect.
     expect(rows()).toHaveLength(1);
-    expect(row("Review sweep").getAttribute("aria-label")).toBe("Run Review sweep on this ticket");
+    // Switched off in this mount (no `enabled`), so the name carries the note.
+    expect(row("Review sweep").getAttribute("aria-label")).toBe(
+      "Run Review sweep on this ticket (manual only)",
+    );
     // Each row names the column that offers it, so a hand-run across lanes is
     // readable without a heading per column.
     expect(text()).toContain("Needs Review");
@@ -369,37 +342,57 @@ describe("the offer list", () => {
     expect(list?.className).toContain("overflow-y-auto");
   });
 
-  it("offers a switched-off Automation and says so, rather than withholding it", async () => {
+  it("offers a switched-off Automation with a slashed bolt, rather than withholding it", async () => {
     // VC-112: running by hand is universal; the switch governs what starts an
-    // Automation BESIDES a person.
+    // Automation BESIDES a person. VC-406 moved the note off the row's face —
+    // `Manual only · Doing` cost the name half its width — and into the bolt,
+    // the hover title and the accessible name.
     await mount({ automations: [automation()], armings: [ARMING] });
 
-    expect(text()).toContain("Manual only");
+    const offered = row("Review sweep");
+    expect(offered.dataset.triggers).toBe("off");
+    expect(offered.getAttribute("aria-label")).toBe(
+      "Run Review sweep on this ticket (manual only)",
+    );
+    expect(offered.getAttribute("title")).toBe("Review sweep — Manual only · Armed");
+    // The right edge says ONE thing.
+    expect(offered.textContent).toBe("Review sweepArmed");
     await act(async () => {
-      row("Review sweep").click();
+      offered.click();
     });
     expect(runAutomationOnTicket).toHaveBeenCalled();
   });
 
-  it("drops that note once the Automation is switched on here", async () => {
+  it("wears a plain bolt once the Automation is switched on here", async () => {
     await mount({ automations: [automation()], armings: [ARMING], enabled: ["a1"] });
 
-    expect(text()).not.toContain("Manual only");
+    const offered = row("Review sweep");
+    expect(offered.dataset.triggers).toBe("on");
+    expect(offered.getAttribute("aria-label")).toBe("Run Review sweep on this ticket");
+    expect(offered.getAttribute("title")).toBe("Review sweep — Armed");
   });
 
-  it("offers Run once where the column arms nothing", async () => {
+  it("keeps the name a floor so the qualifier cannot outlive it", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+
+    const name = row("Review sweep").querySelector("span.truncate");
+    expect(name?.className).toContain("min-w-24");
+  });
+
+  it("offers no Run once, and no stand-in press, where the column arms nothing (VC-406)", async () => {
     await mount({ automations: [automation()] });
 
-    // Nothing is marked Armed, and the block's one button is still there.
+    // Nothing is marked Armed, and there is no button under the list: the
+    // block ends where its last row does. A one-off is `+ Chat` and typing.
     expect(rows()[0]?.dataset.armed).toBeUndefined();
-    await act(async () => {
-      runOnceControl().click();
-    });
-
-    // The press opens the form rather than starting anything: an Unbound Run
-    // has to be typed before it can run.
-    expect(runAutomationOnTicket).not.toHaveBeenCalled();
-    expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-run-once"]')).toBeNull();
+    expect(text()).not.toContain("Run once");
+    expect(
+      document.querySelectorAll('[data-testid="ticket-rail-automations"] button'),
+    ).toHaveLength(
+      // The page door, and one activation target per row.
+      1 + rows().length,
+    );
   });
 
   it("keeps its page door in the heading row, at every state", async () => {
@@ -446,7 +439,14 @@ describe("the offer list", () => {
     await render();
 
     expect(text()).not.toContain("No automations in this project yet.");
-    expect(text()).toContain("Reading automations…");
+    // The wait is drawn as rows, not as a sentence (VC-406): two skeleton rows
+    // before anything has been read, so the first read moves as little as it
+    // can and a re-read moves nothing.
+    expect(text()).not.toContain("Reading automations…");
+    const unread = document.querySelector('[data-testid="ticket-rail-automations-unread"]');
+    expect(unread).not.toBeNull();
+    expect(unread?.getAttribute("aria-busy")).toBe("true");
+    expect(unread?.children).toHaveLength(2);
   });
 
   it("lists nothing, and claims nothing, until its own reads have landed", async () => {
@@ -464,13 +464,6 @@ describe("the offer list", () => {
     expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
     // And no claim about the project, which it has not read.
     expect(text()).not.toContain("No automations in this project yet.");
-
-    // Run once is unaffected: it names no record, so there is nothing a stale
-    // cache could get wrong about it.
-    await act(async () => {
-      runOnceControl().click();
-    });
-    expect(document.querySelector('[aria-label="Instructions"]')).not.toBeNull();
 
     await act(async () => {
       list.resolve({ ok: true, automations: [automation()] });
@@ -496,7 +489,7 @@ describe("the offer list", () => {
     await render();
 
     expect(rows()).toHaveLength(0);
-    expect(text()).toContain("Reading automations…");
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
 
     // The read lands on the truth: nothing arms this column any more.
     await act(async () => {
@@ -525,7 +518,7 @@ describe("the offer list", () => {
     // Landed caches, and still nothing listed: the rail says what it knows.
     expect(useAutomationsStore.getState().armingByProject.p1).toEqual([ARMING]);
     expect(rows()).toHaveLength(0);
-    expect(text()).toContain("Reading automations…");
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
     expect(runAutomationOnTicket).not.toHaveBeenCalled();
   });
 
@@ -538,67 +531,6 @@ describe("the offer list", () => {
     expect(text()).not.toContain("Duplicate");
     expect(text()).not.toContain("Delete");
     expect(useAutomationsStore.getState().editor).toBeNull();
-  });
-});
-
-describe("Run once", () => {
-  async function openRunOnce(): Promise<void> {
-    await mount({ automations: [automation()], armings: [ARMING] });
-    await act(async () => {
-      runOnceControl().click();
-    });
-  }
-
-  it("uses the dialog-footer size for both actions", async () => {
-    await openRunOnce();
-
-    const cancel = [...document.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent === "Cancel",
-    );
-    expect(cancel?.dataset.size).toBe("sm");
-    expect(runButton().dataset.size).toBe("sm");
-  });
-
-  it("refuses to start with nothing to say", async () => {
-    await openRunOnce();
-
-    expect(runButton().disabled).toBe(true);
-    await typeInstructions("   ");
-    expect(runButton().disabled).toBe(true);
-  });
-
-  it("starts an unbound Run that names no Automation", async () => {
-    await openRunOnce();
-    await typeInstructions("/review the diff once");
-
-    await act(async () => {
-      runButton().click();
-    });
-
-    expect(runAutomationOnTicket).toHaveBeenCalledWith({
-      target: { kind: "unbound", instructions: "/review the diff once" },
-      automationName: "Run once",
-      ticketId: "t1",
-      ticketDisplayId: "VC-6",
-      modelOverride: null,
-    });
-    // Nothing was saved on the way: no record write door was touched, so there
-    // is nothing afterwards to name, disable or delete (VC-112).
-    expect(useAutomationsStore.getState().editor).toBeNull();
-  });
-
-  it("asks the Runtime question once, in the form, and rests on the default", async () => {
-    // The caret menu used to be able to pick a model on the WAY here, so the
-    // dialog opened already pinned and then asked again with its own control
-    // (VC-406). One place asks now, and it opens on the resolved default.
-    await openRunOnce();
-
-    expect(text()).toContain("Default model");
-    expect(text()).toContain("This run");
-    expect(document.querySelector('[data-testid="model-pill"]')).toBeNull();
-    expect(document.querySelector("[data-composer-container]")?.className).toContain(
-      "@container/composer",
-    );
   });
 });
 

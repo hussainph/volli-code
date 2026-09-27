@@ -6,26 +6,25 @@
  *
  * Four of them earn the module:
  *
- *  - **The default press follows the COLUMN.** A split button whose press is
- *    whatever this Ticket's current column has armed is a rule about two
- *    records neither of which is the button (VC-112, "Board interaction"), and
+ *  - **The default press follows the COLUMN.** The row marked Armed is
+ *    whatever this Ticket's current column has armed — a rule about two
+ *    records neither of which is the row (VC-112, "Board interaction") — and
  *    an arming row naming a deleted or no-longer-offered Automation is inert.
  *    Both facts live in `@volli/shared`; this module is where the rail asks.
- *  - **The button is never dead and never hidden.** A column with nothing
- *    armed, and a project with no Automations at all, both still press: the
- *    press becomes **Run once**, which needs no record to exist. Hidden-when-
- *    empty is how a feature never gets discovered, so the empty case is a
- *    sentence and a door to the page rather than an absent control.
+ *  - **The block is never hidden.** A column with nothing armed still lists
+ *    what it offers, and a project with no Automations at all still draws the
+ *    block: a sentence and a door to the page rather than an absent block.
+ *    Hidden-when-empty is how a feature never gets discovered. What an
+ *    unarmed column does NOT get is a stand-in press (VC-406 retired the
+ *    rail's Run once — see `RailRunAction`); it has no default, and says so.
  *  - **An UNREAD rail presses nothing.** "Nothing armed here" and "nobody has
  *    asked yet" are one value in the caches this reads (VC-112 makes arming
  *    machine-local, and every slice rests empty), and the difference decides
- *    what a click does: a Ticket whose column IS armed would otherwise offer a
- *    clickable **Run once** for the frame before its reads land, and a cache
- *    left over from before someone re-armed the column elsewhere would run the
- *    Automation it USED to arm. So an unread rail says so and starts nothing
- *    bound — the same refusal to decide from an empty cache the board's own
- *    arrival makes (`armed-run.ts`), spent here on a press rather than on a
- *    drop. Only **Run once** survives it, because it names no record at all.
+ *    what a click does: a cache left over from before someone re-armed the
+ *    column elsewhere would run the Automation it USED to arm. So an unread
+ *    rail says so and starts nothing — the same refusal to decide from an
+ *    empty cache the board's own arrival makes (`armed-run.ts`), spent here
+ *    on a press rather than on a drop.
  *  - **An override names a whole pair.** Model and reasoning travel together
  *    (VC-112), so a one-click override cannot offer a model and leave the
  *    level to a default nobody chose — a model that offers several levels
@@ -36,7 +35,6 @@ import {
   offeredAutomationsForColumn,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
-  UNBOUND_RUN_LABEL,
   type Automation,
   type ColumnArming,
   type ColumnAutomationOrder,
@@ -48,21 +46,25 @@ import { composerModelSelection } from "@renderer/components/chat/chat-plane-mod
 import type { ComposerModel } from "@renderer/components/chat/composer-ui";
 
 /**
- * What one press of the rail's control starts.
+ * What this column's DEFAULT press is — the record a Deliberate move into the
+ * column would start — or why there is none.
  *
- * `run-once` carries no Instructions: it is the ANSWER "open the Run once
- * form", not the Run itself. An Unbound Run has to be typed before it can
- * start, and a shape that could hold half-typed Instructions here would be a
- * second draft of the dialog's own state.
+ * There is no `run-once` any more (VC-406). The rail used to answer an
+ * unarmed column with "open the Run once form"; that form minted a chat
+ * Session with a typed first message, which is `+ Chat ▾` one block up with a
+ * worse text box, and the rail was its only host. An unarmed column now
+ * simply has no default press, and says so with `none` rather than with an
+ * offer to type.
  */
 export type RailRunAction =
   | { kind: "automation"; automation: Automation }
-  | { kind: "run-once" }
   /** Nothing has been read yet, so nothing may be pressed yet. */
-  | { kind: "unread" };
+  | { kind: "unread" }
+  /** Read, and this column arms nothing. */
+  | { kind: "none" };
 
 export interface TicketRailAutomations {
-  /** The split button's default press. */
+  /** This column's default press — the row the list marks Armed. */
   primary: RailRunAction;
   /**
    * Every column's Offered list, grouped and labelled (VC-329 item 5): the
@@ -123,7 +125,7 @@ export function ticketRailAutomations(input: {
     };
   const armed = armedAutomationFor(input.automations, input.armings, input.status);
   return {
-    primary: armed === null ? { kind: "run-once" } : { kind: "automation", automation: armed },
+    primary: armed === null ? { kind: "none" } : { kind: "automation", automation: armed },
     groups: automationGroupsFor({
       automations: input.automations,
       orders: input.orders,
@@ -250,10 +252,13 @@ export function railAutomationRows(rail: TicketRailAutomations): readonly RailAu
   return rows;
 }
 
-/** What the control's default half is labelled — the Automation's name, "Run once", or the wait. */
+/**
+ * What a surface that names the default press labels it — the Automation's
+ * name, the wait, or the plain fact that nothing is armed.
+ */
 export function railRunLabel(action: RailRunAction): string {
   if (action.kind === "automation") return action.automation.name;
-  return action.kind === "unread" ? RAIL_UNREAD_LABEL : UNBOUND_RUN_LABEL;
+  return action.kind === "unread" ? RAIL_UNREAD_LABEL : RAIL_UNARMED_LABEL;
 }
 
 /**
@@ -263,19 +268,19 @@ export function railRunLabel(action: RailRunAction): string {
  */
 export const RAIL_UNREAD_LABEL = "Reading automations…";
 
+/** What an unarmed column's default press is called where one is named at all. */
+export const RAIL_UNARMED_LABEL = "Nothing armed";
+
 /**
  * Whether a per-invocation override has a Run to spend itself ON.
  *
- * The override picks a Runtime for THIS menu's default press, so it is offered
- * exactly where that press exists: an Automation to run, or a Run once form to
- * open holding the pick. An unread rail has neither yet, and a surface with no
- * Run once form (the board card) has none where the column arms nothing — a
- * "Run on model" that opened onto nothing would be a control that reads as
- * broken rather than as absent.
+ * The override picks a Runtime for a menu's DEFAULT press, so it is offered
+ * exactly where that press names a record. An unread rail names none yet and
+ * an unarmed column names none at all — a "Run on model" that opened onto
+ * nothing would be a control that reads as broken rather than as absent.
  */
-export function overridePressable(primary: RailRunAction, canRunOnce: boolean): boolean {
-  if (primary.kind === "automation") return true;
-  return primary.kind === "run-once" && canRunOnce;
+export function overridePressable(primary: RailRunAction): boolean {
+  return primary.kind === "automation";
 }
 
 /**

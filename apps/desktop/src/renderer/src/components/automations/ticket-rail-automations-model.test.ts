@@ -8,6 +8,7 @@ import {
   overridePressable,
   railAutomationRows,
   railRunLabel,
+  RAIL_UNARMED_LABEL,
   RAIL_UNREAD_LABEL,
   ticketRailAutomations,
 } from "./ticket-rail-automations-model";
@@ -60,7 +61,7 @@ describe("ticketRailAutomations", () => {
     expect(railRunLabel(rail.primary)).toBe("Review sweep");
   });
 
-  it("presses Run once where the column arms nothing, so the button is never dead", () => {
+  it("has no default press where the column arms nothing — and no stand-in for one (VC-406)", () => {
     const rail = ticketRailAutomations({
       automations: [automation()],
       armings: [],
@@ -70,8 +71,8 @@ describe("ticketRailAutomations", () => {
       ready: true,
     });
 
-    expect(rail.primary).toEqual({ kind: "run-once" });
-    expect(railRunLabel(rail.primary)).toBe("Run once");
+    expect(rail.primary).toEqual({ kind: "none" });
+    expect(railRunLabel(rail.primary)).toBe(RAIL_UNARMED_LABEL);
     // Still offered here, even with nothing armed: the Offered list is the
     // record's Trigger, and arming is the column's separate choice.
     expect(rail.offered.map((entry) => entry.id)).toEqual(["a1"]);
@@ -87,7 +88,7 @@ describe("ticketRailAutomations", () => {
       ready: true,
     });
 
-    expect(rail.primary).toEqual({ kind: "run-once" });
+    expect(rail.primary).toEqual({ kind: "none" });
   });
 
   it("offers this column's list in the rank its lane arranged (VC-132)", () => {
@@ -132,7 +133,7 @@ describe("ticketRailAutomations", () => {
     });
 
     expect(rail.offered).toEqual([]);
-    expect(rail.primary).toEqual({ kind: "run-once" });
+    expect(rail.primary).toEqual({ kind: "none" });
     // The project DOES list one, so this is not the empty state — the rail's
     // sentence about an empty project must not appear here.
     expect(rail.listsAny).toBe(true);
@@ -150,8 +151,8 @@ describe("ticketRailAutomations", () => {
 
     expect(rail.listsAny).toBe(false);
     expect(rail.offered).toEqual([]);
-    // Run once needs no record, so an empty project still has a working press.
-    expect(rail.primary).toEqual({ kind: "run-once" });
+    // Nothing to arm, so nothing is armed; the block draws its sentence and door.
+    expect(rail.primary).toEqual({ kind: "none" });
     expect(rail.ready).toBe(true);
   });
 
@@ -274,28 +275,21 @@ describe("automationGroupsFor (VC-329 item 5)", () => {
     // The ticket sits in Todo; the Doing automation is still offered, in its
     // own labelled group — the whole point of item 5.
     expect(rail.groups.map((group) => group.status)).toEqual(["doing"]);
-    expect(rail.primary).toEqual({ kind: "run-once" });
+    expect(rail.primary).toEqual({ kind: "none" });
   });
 });
 
 describe("overridePressable", () => {
   it("offers the override wherever the default press is a Run", () => {
-    const primary = { kind: "automation", automation: automation() } as const;
-
-    expect(overridePressable(primary, true)).toBe(true);
-    expect(overridePressable(primary, false)).toBe(true);
+    expect(overridePressable({ kind: "automation", automation: automation() })).toBe(true);
   });
 
-  it("offers it for Run once only where there is a form to carry it into", () => {
-    expect(overridePressable({ kind: "run-once" }, true)).toBe(true);
-    // The board card has nowhere to type an Unbound Run, so an override there
-    // would name a model for a Run that cannot be described.
-    expect(overridePressable({ kind: "run-once" }, false)).toBe(false);
+  it("offers nothing where the column arms nothing — there is no Run to pick a model for", () => {
+    expect(overridePressable({ kind: "none" })).toBe(false);
   });
 
   it("never offers it before the rail has read what it would run", () => {
-    expect(overridePressable({ kind: "unread" }, true)).toBe(false);
-    expect(overridePressable({ kind: "unread" }, false)).toBe(false);
+    expect(overridePressable({ kind: "unread" })).toBe(false);
   });
 });
 

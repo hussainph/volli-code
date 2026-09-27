@@ -3,12 +3,13 @@
  * survive — redrawn for VC-406.
  *
  * The question this scratch answers: does the block read as ONE object under
- * its eyebrow, beside the Sessions block it now sits ABOVE on the Now page —
- * and do its rows read as rows while its Run once reads as a button? The
- * offer is a height-capped list now: every column's Offered work as a
- * `ListRow`, this Ticket's own column first, the armed record marked, and one
- * `RAIL_CONTROL` button under it. What it replaces is a split button naming
- * one Automation with every other one behind a caret.
+ * its eyebrow, beside the Sessions block on the Now page — and do its rows
+ * read as rows? The offer is a height-capped list: every column's Offered
+ * work as a `ListRow`, this Ticket's own column first, the armed record
+ * marked, a switched-off record wearing a slashed bolt, and nothing under the
+ * rows (the rail's Run once was retired in VC-406's second pass — a one-off is
+ * `+ Chat` and typing). What it replaces is a split button naming one
+ * Automation with every other one behind a caret.
  *
  * Read it in this order:
  *   1. The three states — empty, armed, still reading — each with the Sessions
@@ -216,13 +217,15 @@ export default function TicketRailAutomationsScratch() {
           </div>
           <Caption>
             The armed column is the one to read first: rows for every column&rsquo;s Offered work,
-            this Ticket&rsquo;s own column at the top with its armed record marked, and one button
-            under them. A row runs what it names; the button opens the Run once form. That pair is
-            the whole answer to &ldquo;is this an act or an item&rdquo; &mdash; and the Sessions
-            roster under each block is built from the same{" "}
+            this Ticket&rsquo;s own column at the top with its armed record marked, and nothing
+            under them. A row runs what it names, and every row is a row &mdash; the Sessions roster
+            under each block is built from the same{" "}
             <code className="font-mono text-ui">ListRow</code>, which is what makes the rule one
-            rule. The empty column keeps its one quiet report; the page door sits beside the eyebrow
-            at every state now. Press it: that project&rsquo;s workspace nav flips to{" "}
+            rule. A record whose triggers are off wears a slashed bolt and says only its column at
+            the right; the words are in its title. The still-reading column holds the list&rsquo;s
+            own height as skeleton rows, so a re-read moves nothing under it. The empty column keeps
+            its one quiet report; the page door sits beside the eyebrow at every state. Press it:
+            that project&rsquo;s workspace nav flips to{" "}
             <code className="font-mono text-ui">automations</code>.
           </Caption>
           <Where />
@@ -234,10 +237,10 @@ export default function TicketRailAutomationsScratch() {
             <Rail label="Doing arms Implement" owner={ARMED} width={RAIL_FLOOR} narrow />
           </div>
           <Caption>
-            A row truncates its name rather than widening the column, and Run once truncates its own
-            label rather than stretching. The sentence wraps rather than truncating &mdash; it is a
-            report, and a report cut short says less than nothing. The header row does not move: the
-            door stays level with the eyebrow at both insets.
+            A row truncates its name rather than widening the column, and the name keeps a floor so
+            the column word can never outlive it. The sentence wraps rather than truncating &mdash;
+            it is a report, and a report cut short says less than nothing. The header row does not
+            move: the door stays level with the eyebrow at both insets.
           </Caption>
         </Group>
 

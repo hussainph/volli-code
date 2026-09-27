@@ -1,15 +1,24 @@
 /**
- * The Now page's Properties fold — status, priority and labels as one wrapping
- * run of pills (the retired ticket-right-sidebar lab scratch's `PropertiesSection`).
+ * The Now page's Properties block — status, priority and labels — as a SECTION
+ * (VC-406, second pass): a `PROPERTIES` eyebrow over three `ListRow`s, the
+ * same object the Sessions and Automations blocks under it are.
  *
- * Properties used to be a page of its own behind a fourth icon mode, with each
- * field under an uppercase caption. It is three editable values; a page was
- * more room than they need, and a caption over a control that already names
- * itself is a caption twice. The pills carry their own glyph and value, so the
- * fold reads at a glance and still edits in place.
+ * It was a wrapping run of 24px pills with no eyebrow, and that run was the
+ * one block on the page that was neither of its two object kinds: unmarked,
+ * bordered at rest where every row is borderless until hovered, and two facts
+ * to a line where the page sets one thing per line. Alone it read as Linear's
+ * property strip; under the sections it was the odd block out.
+ *
+ * The rows speak the roster's grammar: a glyph, THE VALUE as the thing, and the
+ * field name as the quiet qualifier at the right — `○ Doing · Status`. The
+ * value is the thing because it is what a reader scans for; the field is what
+ * they check. Each row opens the picker its pill did. It costs ~80px more
+ * than the chips, paid deliberately at the top of the page. Labels lose their
+ * inline ×: the picker (one press away, the same picker the + opened) toggles
+ * them, because a row is one target, not three.
  *
  * Worktree identity (branch, base branch, path) and the done flow are NOT here:
- * they are repository facts, and they live in the card above this one
+ * they are repository facts, and they live in the rail's worktree footer
  * (`ticket-repository-summary.tsx`).
  *
  * RETIRED, deliberately: the old page closed with a `Created …` / `Updated …`
@@ -21,6 +30,7 @@
  * `lib/relative-time` for the Archive.
  */
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
+import { TagIcon } from "@phosphor-icons/react/dist/csr/Tag";
 import {
   TICKET_PRIORITIES,
   TICKET_PRIORITY_LABELS,
@@ -32,8 +42,11 @@ import {
 } from "@volli/shared";
 
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
-import { LabelEditorCore } from "@renderer/components/ticket/label-editor-core";
-import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
+import { LabelPickerPopover } from "@renderer/components/ticket/label-picker";
+import {
+  RAIL_PANEL_INSET,
+  RailSectionHeadingRow,
+} from "@renderer/components/ticket/rail-panel-parts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,103 +54,128 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { ListRow } from "@renderer/components/ui/list-row";
+import { resolveLabelColor } from "@renderer/lib/labels";
 import { cn } from "@renderer/lib/utils";
 import { useBoardStore } from "@renderer/stores/board";
 
-/** The fold's one control shape: a 24px chip carrying its glyph and its value. */
-const PILL =
-  "flex h-6 shrink-0 items-center gap-2 rounded-full border border-sidebar-border bg-background/30 px-2 text-ui text-foreground transition-colors duration-150 ease-out hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none motion-reduce:transition-none";
+const NOOP = () => {};
 
-/**
- * Status picker: the fold's pill wired to the board store's `moveTicket`.
- * Picking a status appends the ticket to the end of that column — the same
- * "Move to" semantics as the card's context menu.
- */
-function StatusPill({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={PILL}
-        aria-label={`Status: ${TICKET_STATUS_LABELS[ticket.status]}`}
-      >
-        <CircleIcon className="size-4 text-muted-foreground" />
-        {TICKET_STATUS_LABELS[ticket.status]}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuRadioGroup
-          value={ticket.status}
-          onValueChange={(value) =>
-            void useBoardStore
-              .getState()
-              .moveTicket(projectId, ticket.id, value as TicketStatus, Number.MAX_SAFE_INTEGER)
-          }
-        >
-          {TICKET_STATUSES.map((status) => (
-            <DropdownMenuRadioItem key={status} value={status}>
-              {TICKET_STATUS_LABELS[status]}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+function FieldWord({ children }: { children: string }) {
+  return <span className="shrink-0 text-label text-muted-foreground">{children}</span>;
 }
 
-/**
- * Priority picker: the same pill, wired to `setTicketPriority`. It keeps the
- * board's `PriorityIndicator` bars rather than the scratch's generic flag — the
- * bars are the app's priority mark on cards, in the composer and in this menu's
- * own items, and one value must not wear two glyphs on adjacent surfaces.
- */
-function PriorityPill({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+function LabelRun({ projectId, labels }: { projectId: string; labels: readonly string[] }) {
+  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
+  if (labels.length === 0)
+    return <span className="truncate text-ui text-muted-foreground">No labels</span>;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={PILL}
-        aria-label={`Priority: ${TICKET_PRIORITY_LABELS[ticket.priority]}`}
-      >
-        <PriorityIndicator priority={ticket.priority} />
-        {TICKET_PRIORITY_LABELS[ticket.priority]}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        <DropdownMenuRadioGroup
-          value={ticket.priority}
-          onValueChange={(value) =>
-            void useBoardStore
-              .getState()
-              .setTicketPriority(projectId, ticket.id, value as TicketPriority)
-          }
-        >
-          {TICKET_PRIORITIES.map((priority) => (
-            <DropdownMenuRadioItem key={priority} value={priority}>
-              <PriorityIndicator priority={priority} />
-              {TICKET_PRIORITY_LABELS[priority]}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <span className="flex min-w-0 flex-1 items-center gap-2 truncate text-ui">
+      {labels.map((label) => (
+        <span key={label} className="flex shrink-0 items-center gap-1">
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ backgroundColor: resolveLabelColor(projectLabels, label) }}
+          />
+          {label}
+        </span>
+      ))}
+    </span>
   );
 }
 
 export function TicketProperties({ projectId, ticket }: { projectId: string; ticket: Ticket }) {
+  const statusLabel = TICKET_STATUS_LABELS[ticket.status];
+  const priorityLabel = TICKET_PRIORITY_LABELS[ticket.priority];
   return (
     <section
       aria-label="Properties"
       data-testid="ticket-rail-properties"
       className={cn("flex flex-col gap-1", RAIL_PANEL_INSET)}
     >
-      <div aria-label="Status and priority" className="flex min-h-6 flex-wrap items-center gap-1">
-        <StatusPill projectId={projectId} ticket={ticket} />
-        <PriorityPill projectId={projectId} ticket={ticket} />
-      </div>
-      <div aria-label="Labels" className="flex min-h-6 flex-wrap items-center gap-1">
-        <LabelEditorCore
-          projectId={projectId}
-          value={ticket.labels}
-          onChange={(next) => void useBoardStore.getState().setLabels(ticket.id, next)}
-        />
-      </div>
+      <RailSectionHeadingRow label="Properties" />
+      <ul className="flex flex-col">
+        <li>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ListRow
+                aria-label={`Status: ${statusLabel}`}
+                onActivate={NOOP}
+                leading={<CircleIcon className="size-4 shrink-0 text-muted-foreground" />}
+                primary={statusLabel}
+                trailing={<FieldWord>Status</FieldWord>}
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={ticket.status}
+                onValueChange={(value) =>
+                  void useBoardStore
+                    .getState()
+                    .moveTicket(
+                      projectId,
+                      ticket.id,
+                      value as TicketStatus,
+                      Number.MAX_SAFE_INTEGER,
+                    )
+                }
+              >
+                {TICKET_STATUSES.map((status) => (
+                  <DropdownMenuRadioItem key={status} value={status}>
+                    {TICKET_STATUS_LABELS[status]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </li>
+        <li>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ListRow
+                aria-label={`Priority: ${priorityLabel}`}
+                onActivate={NOOP}
+                leading={<PriorityIndicator priority={ticket.priority} />}
+                primary={priorityLabel}
+                trailing={<FieldWord>Priority</FieldWord>}
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={ticket.priority}
+                onValueChange={(value) =>
+                  void useBoardStore
+                    .getState()
+                    .setTicketPriority(projectId, ticket.id, value as TicketPriority)
+                }
+              >
+                {TICKET_PRIORITIES.map((priority) => (
+                  <DropdownMenuRadioItem key={priority} value={priority}>
+                    <PriorityIndicator priority={priority} />
+                    {TICKET_PRIORITY_LABELS[priority]}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </li>
+        <li>
+          <LabelPickerPopover
+            projectId={projectId}
+            value={ticket.labels}
+            onChange={(next) => void useBoardStore.getState().setLabels(ticket.id, next)}
+          >
+            <ListRow
+              aria-label="Labels"
+              onActivate={NOOP}
+              leading={<TagIcon className="size-4 shrink-0 text-muted-foreground" />}
+              primary={<LabelRun projectId={projectId} labels={ticket.labels} />}
+              trailing={<FieldWord>Labels</FieldWord>}
+            />
+          </LabelPickerPopover>
+        </li>
+      </ul>
     </section>
   );
 }

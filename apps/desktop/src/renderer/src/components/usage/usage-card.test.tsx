@@ -17,7 +17,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { summarizeSessionUsage, type SessionUsage } from "@volli/shared";
 
-import { RAIL_CARD_FRAME, RAIL_CARD_ROW } from "@renderer/components/ticket/rail-panel-parts";
+import { RAIL_CARD_FRAME, RAIL_FOOTER_ROW } from "@renderer/components/ticket/rail-panel-parts";
 import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
 import type { UsageGroupRow } from "@renderer/usage/usage-format";
@@ -110,7 +110,7 @@ describe("the usage card's face", () => {
     expect(markup).not.toContain("rounded-xl");
     // Still the card's own row inside, so the figure sits where every other
     // rail row's mark does.
-    expect(markup).toContain(RAIL_CARD_ROW);
+    expect(markup).toContain(RAIL_FOOTER_ROW);
   });
 
   it("names no model until asked", () => {
@@ -194,26 +194,33 @@ describe("the Ticket card", () => {
     expect(markup).toBe("");
   });
 
-  it("is one row: the figure and the token count on the face, everything else behind it (VC-406)", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps the closed row pinned and reveals the trimmed breakdown above it (VC-406)", () => {
+    const closed = renderToStaticMarkup(
       <TicketUsageBlock
         summary={METERED}
         sessions={TICKET_SESSIONS}
         topModelLabel="Claude Opus 4.1"
       />,
     );
-    expect(markup).toContain("$0.19");
-    expect(markup).toContain("tokens");
-    // One trigger, not a hero plus a Sessions row: the ranking closes the same
-    // popover the figure opens.
-    expect(markup.match(/aria-haspopup="dialog"/g)).toHaveLength(1);
-    expect(markup).not.toContain("text-heading");
-    expect(markup).not.toContain("2 sessions");
-    // The bar, the cached share, the ranking and the top model are all answers
-    // to a question, and the face asks none of them.
-    expect(markup).not.toContain('role="img"');
-    expect(markup).not.toContain("cached");
-    expect(markup).not.toContain("Wire the projection");
-    expect(markup).not.toContain("Claude Opus 4.1");
+    expect(closed).toContain('aria-label="Ticket usage $0.19 est. — show breakdown"');
+    expect(closed).not.toContain('role="img"');
+    expect(closed).not.toContain("Cached input share");
+
+    const open = renderToStaticMarkup(
+      <TicketUsageBlock
+        summary={METERED}
+        sessions={TICKET_SESSIONS}
+        topModelLabel="Claude Opus 4.1"
+        open
+      />,
+    );
+    expect(open).toContain('aria-label="Ticket usage $0.19 est. — hide breakdown"');
+    expect(open).toContain('role="img"');
+    expect(open).toContain("Cached input share");
+    expect(open).toContain("Top model");
+    expect(open).toContain("By session");
+    expect(open).toContain("Wire the projection");
+    expect(open).not.toContain("Total tokens");
+    expect(open.indexOf('role="img"')).toBeLessThan(open.indexOf('data-testid="ticket-usage"'));
   });
 });

@@ -196,6 +196,7 @@ export function HomeUsageRailCard({
  */
 export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const costVisible = useCostVisible();
+  const usageOpen = useUiStore((state) => state.railFolds.usage);
   const scope = React.useMemo<SessionUsageScope>(() => ({ kind: "ticket", ticketId }), [ticketId]);
   const bySession = useUsageReport({ scope, groupBy: "session" });
   const byModel = useUsageReport({ scope, groupBy: "model" });
@@ -212,6 +213,8 @@ export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
       summary={bySession.total}
       sessions={sessions}
       topModelLabel={topModel === undefined ? null : modelLabel(topModel.key)}
+      open={usageOpen}
+      onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />
   );
 }

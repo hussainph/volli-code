@@ -3,14 +3,16 @@
  * VC-112 names, drawn once and hosted twice.
  *
  * Two surfaces mount it, and both obey VC-234's universal landing rule: a Run
- * stays in place and toasts with an "Open session" action. Their only
- * difference is whether they can collect Instructions:
+ * stays in place and toasts with an "Open session" action:
  *
- *  - **The ticket rail's split button** right-clicks onto it (VC-129) and
- *    offers **Run once…** because the rail owns that dialog.
+ *  - **The ticket rail's Automations rows** right-click onto it (VC-129).
  *  - **The board card's context menu** — VC-112's "run one without opening the
- *    Ticket" — hosts it under one `Automations ▸` row and offers no Run once,
- *    because an Unbound Run has to be TYPED and a card has nowhere to type it.
+ *    Ticket" — hosts it under one `Automations ▸` row.
+ *
+ * Neither offers Run once any more (VC-406). The rail was its only host, and
+ * stripped to what it did it minted a chat Session with a typed first
+ * message, in the background, wearing the bolt — `+ Chat ▾` with a worse text
+ * box. Only SAVED records are run from here; a one-off is a chat and typing.
  *
  * Both carry the nested **Run on model ▸**: the per-invocation override on the
  * deliberate surfaces, never on the drag path (VC-112). Model and reasoning
@@ -24,11 +26,9 @@
 import * as React from "react";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import {
   displayTicketId,
-  UNBOUND_RUN_LABEL,
   type Automation,
   type ModelSelection,
   type Ticket,
@@ -49,7 +49,6 @@ import { offerableModels, type ComposerModel } from "@renderer/components/chat/c
 import {
   ContextMenuItem,
   ContextMenuLabel,
-  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -191,40 +190,25 @@ export function useAutomationRunOffer(
 }
 
 /**
- * The nested rows themselves: this column's Offered list, optionally Run once…,
- * and the per-invocation override.
- *
- * `onRunOnce` is omitted by hosts that have no dialog to open. That is not a
- * quieter version of the same menu — an Unbound Run is typed, and a surface
- * that cannot take the typing must not pretend to offer one.
+ * The nested rows themselves: every column's Offered list, and the
+ * per-invocation override.
  */
 export function AutomationRunMenuItems({
   rail,
   enabledIds,
   models,
   onRun,
-  onRunOnce,
 }: {
   rail: TicketRailAutomations;
   enabledIds: readonly string[];
   models: readonly ComposerModel[];
   onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
-  onRunOnce?: (() => void) | undefined;
 }) {
   const overrides = modelOverrideRows(models);
   // An unread rail offers no record, because it knows of none: what it knows is
   // that it has not looked yet, and it says so instead of listing a guess.
   if (!rail.ready) {
-    return (
-      <>
-        <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div>
-        {onRunOnce === undefined ? null : (
-          <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
-            {UNBOUND_RUN_LABEL}…
-          </ContextMenuItem>
-        )}
-      </>
-    );
+    return <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div>;
   }
   return (
     <>
@@ -251,28 +235,20 @@ export function AutomationRunMenuItems({
           ))}
         </React.Fragment>
       ))}
-      {rail.offered.length === 0 && onRunOnce === undefined ? (
-        // Nothing offered and nothing to type: say which of the two it is
-        // rather than leaving an empty popover (the Labels submenu's own idiom).
+      {rail.offered.length === 0 ? (
+        // Nothing offered: say so rather than leaving an empty popover (the
+        // Labels submenu's own idiom).
         <div className={EMPTY_INLINE}>No automations offered in this column</div>
       ) : null}
-      {rail.groups.length > 0 && onRunOnce !== undefined ? <ContextMenuSeparator /> : null}
-      {onRunOnce === undefined ? null : (
-        <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
-          {UNBOUND_RUN_LABEL}…
-        </ContextMenuItem>
-      )}
       {/* The nested override item VC-112 names. It spends the pick on THIS
-          menu's default press — the column's Armed automation, or the Run once
-          form, which opens already holding it.
+          menu's default press — the column's Armed automation.
 
           Two things can remove the row, and they are not the same: a profile
-          whose catalog offers no model a Run could name, and a default press
-          this host does not have (`overridePressable`). Either way there is no
-          Run for a model to be chosen FOR, and an item opening onto nothing
-          would be worse than one that is not there. */}
-      {overrides.length === 0 ||
-      !overridePressable(rail.primary, onRunOnce !== undefined) ? null : (
+          whose catalog offers no model a Run could name, and a column that
+          arms nothing (`overridePressable`). Either way there is no Run for a
+          model to be chosen FOR, and an item opening onto nothing would be
+          worse than one that is not there. */}
+      {overrides.length === 0 || !overridePressable(rail.primary) ? null : (
         <ContextMenuSub>
           <ContextMenuSubTrigger icon={CpuIcon}>Run on model</ContextMenuSubTrigger>
           <ContextMenuSubContent>
