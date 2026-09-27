@@ -999,7 +999,7 @@ function PlanCard({ plan, reduce }: { plan: IslandPlan; reduce: boolean }) {
               primary={
                 <span
                   className={cn(
-                    "min-w-0 truncate text-ui",
+                    "min-w-0 flex-1 whitespace-normal break-words text-ui",
                     state === "done" && "text-muted-foreground line-through",
                     // Struck through like a done step, but dimmed further and
                     // never emphasised: the strike says "not on the list any
