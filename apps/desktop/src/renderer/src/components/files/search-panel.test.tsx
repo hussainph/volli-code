@@ -170,7 +170,15 @@ describe("what the page draws", () => {
     expect(hit?.textContent).toBe("MIN_PANE_PX");
     expect(after?.textContent).toBe(" = 240;");
     // Unlike an inline mark inside a single truncating span, the context can
-    // shrink while the hit stays fixed. jsdom cannot verify pixel clipping.
+    // shrink while the hit stays fixed. Pin the parent structure too: an outer
+    // `truncate` could clip the mark despite its own shrink-0. jsdom cannot
+    // verify pixel clipping.
+    const snippet = hit?.parentElement;
+    expect(snippet?.classList.contains("flex")).toBe(true);
+    expect(snippet?.classList.contains("min-w-0")).toBe(true);
+    expect(snippet?.classList.contains("overflow-hidden")).toBe(true);
+    expect(snippet?.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(snippet?.classList.contains("truncate")).toBe(false);
     expect(hit?.classList.contains("shrink-0")).toBe(true);
     expect(before?.classList.contains("min-w-0")).toBe(true);
     expect(after?.classList.contains("min-w-0")).toBe(true);
@@ -184,6 +192,22 @@ describe("what the page draws", () => {
       column: 101,
       length: 11,
     });
+  });
+
+  it("does not re-segment an unchanged match when the search input rerenders", async () => {
+    const { search } = await mount({ kind: "home", projectId: "p1" });
+    await type("needle");
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+    try {
+      // A subsequent search returns the same match object. Until it finishes,
+      // the previous result also stays mounted through input updates.
+      await type("need");
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+      expect(segment).not.toHaveBeenCalled();
+    } finally {
+      segment.mockRestore();
+    }
   });
 
   it("says out loud that a capped search is not the whole answer", async () => {

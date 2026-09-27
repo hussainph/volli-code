@@ -324,7 +324,7 @@ function SearchResults({
  * line number is the fact that makes a result a place rather than a string.
  */
 function MatchRow({ match, onActivate }: { match: FileSearchMatch; onActivate(): void }) {
-  const { before, hit, after } = searchHighlight(match);
+  const { before, hit, after } = React.useMemo(() => searchHighlight(match), [match]);
   return (
     <ListRow
       data-testid="file-search-match"
