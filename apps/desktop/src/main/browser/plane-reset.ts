@@ -54,10 +54,16 @@ export interface RendererResetEvents {
  * tearing down. (An accepted quit still ends in `app.exit(0)`, so this guards
  * the state rather than the exit.)
  *
- * Failures are logged, not raised: nothing is waiting on this cleanup, the one
- * surface that could show a toast is the page that just went away, and the
- * planes have already left the window by the time the host can fail (VC-278).
- * Raising instead would put the throw inside an Electron event handler.
+ * Failures are logged, not raised: raising would put the throw inside an
+ * Electron event handler, and by the time the host can fail the planes have
+ * already left the window (VC-278) — what failed is the parking that keeps a
+ * page capturable, not the detachment this call exists for.
+ *
+ * That the rare failure then reaches nobody but the log is a DEFERRAL, not a
+ * claim that this class of fault needs no surface: at this instant the only
+ * page that could carry a toast is the one that just went away, and holding the
+ * notice for the next page to mount is a queue this fix deliberately does not
+ * build. If that gap matters, it is its own change.
  */
 export function parkBrowserPlanesOnRendererReset(input: {
   host: BrowserPlaneResetHost;

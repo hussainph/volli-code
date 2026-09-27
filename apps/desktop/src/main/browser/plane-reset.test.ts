@@ -29,6 +29,20 @@ function fakeWindow(destroyed = false): BrowserWindow {
   return { isDestroyed: () => destroyed } as unknown as BrowserWindow;
 }
 
+/**
+ * A window that is alive when it is wired and destroyed later, which is the
+ * order teardown actually happens in: the wiring is built with the window.
+ */
+function closableWindow(): { window: BrowserWindow; destroy: () => void } {
+  let destroyed = false;
+  return {
+    window: { isDestroyed: () => destroyed } as unknown as BrowserWindow,
+    destroy: () => {
+      destroyed = true;
+    },
+  };
+}
+
 /** The windows the host was asked to park, in order, and what was logged. */
 let parked: BrowserWindow[];
 let logged: string[];
@@ -117,6 +131,25 @@ describe("parkBrowserPlanesOnRendererReset", () => {
     contents.emit("did-navigate");
 
     expect(parked).toEqual([]);
+    expect(logged).toEqual([]);
+  });
+
+  it("stops parking once a window it was wired to alive has been destroyed", () => {
+    const { window, destroy } = closableWindow();
+    const contents = wire(window);
+
+    // Wired while the window was alive and parking normally, which is every
+    // ordinary reload.
+    contents.emit("did-navigate");
+    expect(parked).toEqual([window]);
+
+    // Then the window goes away with the app. The guard is read per event, not
+    // once at wiring, so a late reset asks the host for nothing at all.
+    destroy();
+    contents.emit("render-process-gone");
+    contents.emit("did-navigate");
+
+    expect(parked).toEqual([window]);
     expect(logged).toEqual([]);
   });
 

@@ -212,9 +212,15 @@ class FakeStage {
 /** How the next stage is built, so a test can model Electron failing to give one. */
 let stageBuilds: "ok" | "throws" | "born-destroyed";
 let stages: FakeStage[];
+/**
+ * Every stage build attempted, so two failures in one sweep can be told apart:
+ * the numbered cause is how a test knows WHICH fault was kept (VC-424).
+ */
+let stageBuildAttempts: number;
 
 function newStage(): BaseWindow {
-  if (stageBuilds === "throws") throw new Error("no window server");
+  stageBuildAttempts += 1;
+  if (stageBuilds === "throws") throw new Error(`no window server ${stageBuildAttempts}`);
   const stage = new FakeStage();
   if (stageBuilds === "born-destroyed") stage.destroyed = true;
   stages.push(stage);
@@ -251,6 +257,7 @@ beforeEach(() => {
   persisted = new Map();
   stages = [];
   stageBuilds = "ok";
+  stageBuildAttempts = 0;
   nativeOrder = [];
   clock = 1_000;
   appWindow = fakeWindow;
@@ -1640,17 +1647,22 @@ describe("BrowserTabHost plane reset (VC-424)", () => {
     expect(fakeWindow.contentView.removeChildView).not.toHaveBeenCalled();
   });
 
-  it("takes every plane off the window even when one cannot be parked, and says so afterwards", () => {
+  it("takes every plane off the window even when none can be parked, and raises the first fault", () => {
     shownTab("https://one.example.com");
     shownTab("https://two.example.com");
     // The stage died while the tabs were on screen and no replacement can be
-    // built, so parking fails for both.
+    // built, so parking fails for both — with a numbered cause each time, so
+    // the two failures are distinguishable.
     stage().destroy();
     stageBuilds = "throws";
+    const firstAttempt = stageBuildAttempts + 1;
 
-    expect(() => host.parkPlanesOn(fakeWindow as unknown as BrowserWindow)).toThrow(
-      BrowserStageUnavailableError,
-    );
+    let raised: unknown = null;
+    try {
+      host.parkPlanesOn(fakeWindow as unknown as BrowserWindow);
+    } catch (error) {
+      raised = error;
+    }
 
     // The sweep finished first: a stage this app cannot build is a fault worth
     // raising, never a reason to leave the second page composited over a fresh
@@ -1658,6 +1670,36 @@ describe("BrowserTabHost plane reset (VC-424)", () => {
     expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[views[0]], [views[1]]]);
     expect(host.attachedTabIds()).toEqual([]);
     expect(host.list({ projectId: "project-1" })).toHaveLength(2);
+
+    // Both planes asked for a stage, and the fault raised is the FIRST one's:
+    // the sweep keeps the earliest evidence rather than overwriting it with
+    // whichever plane happened to fail last.
+    expect(stageBuildAttempts).toBe(firstAttempt + 1);
+    expect(raised).toBeInstanceOf(BrowserStageUnavailableError);
+    const cause = raised instanceof Error ? raised.cause : null;
+    expect(cause instanceof Error ? cause.message : null).toBe(`no window server ${firstAttempt}`);
+  });
+
+  it("takes a docked DevTools off with its page, and docks it again on re-show", () => {
+    const tab = shownTab("https://one.example.com");
+    host.toggleDevTools(tab);
+    const tools = views[1]!;
+    expect(fakeWindow.contentView.addChildView).toHaveBeenCalledWith(tools);
+    fakeWindow.contentView.addChildView.mockClear();
+
+    host.parkPlanesOn(fakeWindow as unknown as BrowserWindow);
+
+    // The page's inspector is part of its plane: leaving it attached would keep
+    // the visible half of the tab over the fresh app UI. Tools first, as every
+    // other detach does it.
+    expect(fakeWindow.contentView.removeChildView.mock.calls).toEqual([[tools], [views[0]]]);
+
+    host.show(tab);
+
+    // Still open, so re-showing brings both back and the page keeps its share
+    // of the split — parking is not a DevTools toggle.
+    expect(fakeWindow.contentView.addChildView.mock.calls).toEqual([[views[0]], [tools]]);
+    expect(host.pageBoundsOf(tab)?.height).toBeLessThan(600);
   });
 });
 

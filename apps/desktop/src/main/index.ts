@@ -3003,11 +3003,13 @@ app.whenReady().then(async () => {
       if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
     });
     window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
-    // The same reset strands any Browser plane the old page had put on screen
-    // (VC-424): a native view is the window's child, not the page's, so it goes
-    // on compositing over a fresh app UI that cannot hide a tab it has never
-    // heard of. Parking is per window, and the tabs, their holds and their
-    // engines all survive it — a pane in the new page shows them again.
+    // A committed page reset strands any Browser plane the old page had put on
+    // screen (VC-424): a native view is the window's child, not the page's, so
+    // it goes on compositing over a fresh app UI that cannot hide a tab it has
+    // never heard of. Its own events, not the two above — a plane must not come
+    // off for a navigation that never commits. Parking is per window, and the
+    // tabs, their holds and their engines all survive it: a pane in the new
+    // page shows them again.
     parkBrowserPlanesOnRendererReset({
       host: browserTabs,
       window,
