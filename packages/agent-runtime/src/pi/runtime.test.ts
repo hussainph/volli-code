@@ -7984,6 +7984,56 @@ describe("the verb half of the Agent Tool Surface", () => {
     expect(JSON.stringify(answered?.messages)).toContain("Started Session ab12cd34 on VC-12.");
   });
 
+  it("keeps each MCP management wire spelling through a model switch and recovery", async () => {
+    for (const [names, wireName] of [
+      [undefined, "mcp_list"],
+      ["server", "server_list"],
+    ] as const) {
+      const calls: ProviderCall[] = [];
+      const attachment = fixture({
+        tools: {
+          tools: ["read"],
+          verbs: ["mcp.list"],
+          ...(names === undefined ? {} : { mcpManagementNames: names }),
+        },
+        callVerb: async () => ({ text: "listed" }),
+        authority: undefined,
+      });
+      const catalog = [{ id: MODEL_ID, reasoning: true }, { id: CHAT_MODEL_ID }];
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([recording(calls, settles("first")), recording(calls, settles("second"))]),
+          catalog,
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      await handle.submitUserMessage("list");
+      await handle.selectModel({
+        providerId: PROVIDER_ID,
+        modelId: CHAT_MODEL_ID,
+        reasoningLevel: "off",
+      });
+      await handle.submitUserMessage("again");
+      const recovery = handle.recovery;
+      await handle.close();
+
+      const resumed = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream([recording(calls, settles("third"))]), catalog),
+      });
+      const reattached = await resumed.startSession({ ...attachment.spec, recovery });
+      await reattached.submitUserMessage("after reattach");
+      await reattached.close();
+      expect(calls.map((call) => call.toolNames)).toEqual([
+        ["read", wireName],
+        ["read", wireName],
+        ["read", wireName],
+      ]);
+      expect(calls[0]?.tools).toEqual(calls[2]?.tools);
+    }
+  });
+
   it("offers a Session with no verbs nothing to call", async () => {
     // Role-scoped availability, end to end: the array a Ticket Session is sent
     // simply does not contain the tool, so there is no call for any injected

@@ -55,6 +55,7 @@ import {
   sessionToolBindings,
   todoListMarkdown,
   verbEntry,
+  verbToolWireName,
 } from "@volli/shared";
 import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createShellTool } from "./shell-tools";
@@ -248,7 +249,11 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         // enumerate here. Exhaustiveness is kept by the assignment below —
         // `binding` narrows to the verb arm, and a name added to
         // `SessionToolBinding` with no case above would not satisfy it.
-        return createVerbTool(binding satisfies { verb: VerbToolKey }, spec.signal);
+        return createVerbTool(
+          binding satisfies { verb: VerbToolKey },
+          spec.signal,
+          spec.tools.mcpManagementNames,
+        );
     }
   });
 }
@@ -364,35 +369,36 @@ export function createMcpTool(
  * neutral data in `@volli/shared` instead of a TypeBox value: the registry stays
  * free of a schema library, and exactly one module knows how a field becomes one.
  */
-function verbFieldSchema(field: VerbToolField): TSchema {
+function verbFieldSchema(field: VerbToolField, reword: (text: string) => string): TSchema {
   switch (field.type) {
     case "string":
-      return Type.String({ description: field.description });
+      return Type.String({ description: reword(field.description) });
     case "number":
-      return Type.Number({ description: field.description });
+      return Type.Number({ description: reword(field.description) });
     // A list of strings and nothing else (VC-380). The registry has no shape
     // for an array of anything richer, deliberately: a field that needed one
     // would be a field that wanted to be an `object`.
     case "array":
-      return Type.Array(Type.String(), { description: field.description });
+      return Type.Array(Type.String(), { description: reword(field.description) });
     case "enum":
       return Type.Union(
         field.values.map((value) => Type.Literal(value)),
-        { description: field.description },
+        { description: reword(field.description) },
       );
     case "object":
-      return verbObjectSchema(field.fields, field.description);
+      return verbObjectSchema(field.fields, reword(field.description), reword);
   }
 }
 
 /** A run of fields as one object schema, with the optional ones marked. */
 function verbObjectSchema(
   fields: readonly VerbToolField[],
-  description?: string,
+  description: string | undefined,
+  reword: (text: string) => string,
 ): ReturnType<typeof Type.Object> {
   const properties: Record<string, TSchema> = {};
   for (const field of fields) {
-    const schema = verbFieldSchema(field);
+    const schema = verbFieldSchema(field, reword);
     properties[field.name] = field.required === true ? schema : Type.Optional(schema);
   }
   return Type.Object(properties, description === undefined ? {} : { description });
@@ -415,9 +421,21 @@ function verbObjectSchema(
  * said so, and the model is the party who can act on that. A host that could
  * not answer at all fails the call.
  */
+const SERVER_MANAGEMENT_NAMES =
+  /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g;
+const LEGACY_MANAGEMENT_NAMES =
+  /\bmcp_(list|preview|install|refresh|enable|disable|tools|remove)\b/g;
+
+function managementNamesIn(text: string, prefix: "mcp" | "server"): string {
+  return prefix === "mcp"
+    ? text.replace(SERVER_MANAGEMENT_NAMES, "mcp_$1")
+    : text.replace(LEGACY_MANAGEMENT_NAMES, "server_$1");
+}
+
 export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
+  mcpManagementNames?: "server",
 ): AgentTool<TSchema, RuntimeVerbResult["details"]> {
   const entry = verbEntry(binding.verb);
   if (entry?.tool === undefined) {
@@ -426,11 +444,16 @@ export function createVerbTool(
     // the alternative is a nameless tool reaching a provider.
     throw new Error(`${binding.verb} has no tool projection in this build`);
   }
-  const parameters = verbObjectSchema(entry.tool.input);
+  const legacyManagementName = binding.verb.startsWith("mcp.") && mcpManagementNames === undefined;
+  const reword = legacyManagementName
+    ? (text: string) => managementNamesIn(text, "mcp")
+    : (text: string) => text;
+  const name = verbToolWireName(binding.verb, mcpManagementNames)!;
+  const parameters = verbObjectSchema(entry.tool.input, undefined, reword);
   return {
-    name: entry.tool.name,
-    label: entry.tool.name,
-    description: entry.tool.description,
+    name,
+    label: name,
+    description: reword(entry.tool.description),
     parameters,
     async execute(
       toolCallId,
@@ -458,7 +481,14 @@ export function createVerbTool(
         );
         // `details` is the host's structured aside for the transcript row; the
         // model reads `content` and nothing else.
-        return { content: [{ type: "text", text: result.text }], details: result.details };
+        // The host's canonical verb and legacy result copy remain unchanged.
+        // New Sessions see the name they can actually call; old frozen Sessions
+        // still see exactly the response they were offered before this release.
+        const text =
+          binding.verb.startsWith("mcp.") && mcpManagementNames === "server"
+            ? managementNamesIn(result.text, "server")
+            : result.text;
+        return { content: [{ type: "text", text }], details: result.details };
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }

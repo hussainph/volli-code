@@ -167,6 +167,12 @@ const payloads = samples(
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
     },
   },
+  // Old surfaces keep the historical mcp_* wire projection; the new marker is
+  // durable so reattachment and a model switch never change the tool names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "server" },
+  },
   { kind: "session.signaled", signal: "done", reason: null },
   { kind: "session.signaled", signal: "blocked", reason: "stuck" },
   // The stop fact (VC-86): each actor arm crosses whole.
@@ -813,6 +819,15 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.tools[1] has an unsupported value");
+    expect(() =>
+      decodeSessionEventPayload(
+        {
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools: ["mcp.list"], mcpManagementNames: "unknown" },
+        },
+        "payload",
+      ),
+    ).toThrow("payload.input.mcpManagementNames has an unsupported value");
     expect(() =>
       decodeSessionEventPayload(
         { kind: "session.input.recorded", input: { kind: "not-a-kind", text: "x" } },

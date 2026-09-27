@@ -496,6 +496,19 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
   return null;
 }
 
+/** The MCP-management wire spelling frozen beside the canonical verb keys. */
+function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
+}
+
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
 function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
   for (const event of events) {
@@ -1106,6 +1119,9 @@ app.whenReady().then(async () => {
               input: {
                 kind: "tool-surface",
                 tools,
+                // At birth, freeze the wire spelling too. The old mcp_* names
+                // remain available only to Sessions whose record predates this marker.
+                mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
               },
               provenance: {
@@ -1397,7 +1413,9 @@ app.whenReady().then(async () => {
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
             let mcpTools = recordedMcpTools(events);
+            let mcpManagementNames = recordedMcpManagementNames(events);
             if (toolSurface === null) {
+              mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
@@ -1412,6 +1430,7 @@ app.whenReady().then(async () => {
                   input: {
                     kind: "tool-surface",
                     tools: sessionToolSurface.resolve(attaching.role, []),
+                    mcpManagementNames: "server",
                   },
                   provenance,
                 }),
@@ -1425,6 +1444,7 @@ app.whenReady().then(async () => {
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
