@@ -201,6 +201,40 @@ describe("compactProviderNative — OpenAI", () => {
     expect(JSON.stringify(outcome.state.items)).toBe(JSON.stringify(canonicalWindow));
   });
 
+  it("sends the prompt as `instructions` and no system message as input", async () => {
+    // `/compact` has an `instructions` field and no tool field, and pi-ai 0.86
+    // carries both prompt and tools as system messages in the conversation.
+    // Left in, the leading one would land in `input` as a developer item beside
+    // the instructions, and a tool delta would declare what the endpoint has
+    // no schema for.
+    const fetch = fetchReturning({ output: canonicalWindow });
+    const systemPrompt = "instructions stay here";
+    await compactProviderNative({
+      model: OPENAI_MODEL,
+      models: modelsReturningAuth({ apiKey: "sk-test" }),
+      messages: [
+        { role: "system", content: "SHOULD-NOT-APPEAR-IN-INPUT", timestamp: 0 },
+        user("hello"),
+        {
+          role: "system",
+          content: "",
+          toolsAdded: [{ name: "ls", description: "list", parameters: { type: "object" } }],
+          timestamp: 2,
+        },
+      ],
+      systemPrompt,
+      enabled: true,
+      fetch,
+    });
+    const request = JSON.parse(fetch.mock.calls[0]![1].body as string) as {
+      instructions: string;
+      input: Record<string, unknown>[];
+    };
+    expect(request.instructions).toBe(systemPrompt);
+    expect(request.input.map((item) => item["role"])).toEqual(["user"]);
+    expect(JSON.stringify(request.input)).not.toContain("SHOULD-NOT-APPEAR-IN-INPUT");
+  });
+
   it("prices measured tokens in per-million units and does not double-count cached input", async () => {
     const outcome = await compactProviderNative({
       model: OPENAI_MODEL,
@@ -449,6 +483,27 @@ describe("compactProviderNative — Anthropic", () => {
     });
     expect(outcome).toMatchObject({ kind: "unsupported" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("drops transcript system messages rather than reading them as tool results", () => {
+    // The role switch has arms for user and assistant and takes everything
+    // else for a tool result; a tool-change system message from the sidecar
+    // would otherwise become a `tool_result` with no `tool_use_id`.
+    const base = [user("run it"), assistant("done")];
+    const withSystem = [
+      base[0]!,
+      {
+        role: "system" as const,
+        content: "",
+        toolsAdded: [{ name: "ls", description: "list", parameters: { type: "object" } }],
+        timestamp: 2,
+      },
+      base[1]!,
+      { role: "system" as const, content: "", toolsRemoved: [{ name: "ls" }], timestamp: 3 },
+    ];
+    const wire = toAnthropicMessages(withSystem, ANTHROPIC_MODEL);
+    expect(wire).toEqual(toAnthropicMessages(base, ANTHROPIC_MODEL));
+    expect(JSON.stringify(wire)).not.toContain('"tool_result"');
   });
 
   it("projects tool use and results to the wire", () => {
