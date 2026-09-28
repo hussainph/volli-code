@@ -102,6 +102,13 @@ const FABLE_MODEL_ID = "claude-fable-5-1";
  */
 const UNFLAGGED_FABLE_ID = "claude-fable-5";
 const SESSION_MODEL = `${PROVIDER_ID}/${MODEL_ID}`;
+/**
+ * A real 1×1 PNG. Every request passes the send-time image guard, which
+ * decodes what it sends, so an image a test expects the model to see must be
+ * one a decoder can read; undecodable bytes reach the model as a placeholder.
+ */
+const TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 // --- scripted model stream -------------------------------------------------
 //
@@ -1998,7 +2005,7 @@ describe("asking the driver", () => {
     const handle = await runtime.startSession({ ...spec, authority: undefined });
 
     await handle.submitUserMessage("what is this?", "queue", undefined, [
-      { data: "aGVsbG8=", mimeType: "image/png" },
+      { data: TINY_PNG, mimeType: "image/png" },
     ]);
     await handle.close();
 
@@ -2008,7 +2015,7 @@ describe("asking the driver", () => {
     expect(sent?.role).toBe("user");
     expect(sent?.content).toEqual([
       { type: "text", text: expect.stringContaining("what is this?") },
-      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      { type: "image", data: TINY_PNG, mimeType: "image/png" },
     ]);
   });
 
@@ -3383,7 +3390,7 @@ describe("startSession", () => {
       },
     };
     const received: RuntimeMcpCall[] = [];
-    const pixels = "Q".repeat(1_000);
+    const pixels = TINY_PNG;
     const { spec, observations, sessionDataDir } = fixture({
       tools: { tools: ["read"], mcp: [mcpTool] },
       mcp: {
@@ -6243,7 +6250,7 @@ describe("compacting a context that reached its reserve", () => {
     const handle = await runtime.startSession(attachment.spec);
 
     await handle.submitUserMessage("what is this?", "queue", "command-1", [
-      { data: "aGVsbG8=", mimeType: "image/png" },
+      { data: TINY_PNG, mimeType: "image/png" },
     ]);
     await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
       kind: "delivered",
@@ -6266,7 +6273,7 @@ describe("compacting a context that reached its reserve", () => {
     const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
     await secondHandle.submitUserMessage("still here?");
     // The recovered context still holds the image message, blocks and all.
-    expect(calls[0]?.messages).toContain("aGVsbG8=");
+    expect(calls[0]?.messages).toContain(TINY_PNG);
     const replayed = await secondHandle.reconcile(null);
     expect(replayed.receipts).toEqual([
       expect.objectContaining({ commandId: "command-1" }),

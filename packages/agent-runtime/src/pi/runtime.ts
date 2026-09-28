@@ -116,6 +116,7 @@ import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { piContext, type Context } from "./pi-context";
+import { providerImageGuard, withProviderSafeImages } from "./provider-images";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
@@ -1999,8 +2000,10 @@ async function attachSession(
           throw new Error("Native compaction checkpoint is missing from the request.");
         return projected;
       },
+      // Every image made legal for the request's model before it is sent
+      // (`provider-images.ts`); the attempt clock starts after, on the stream.
       streamFn: withOpenCodeGoSessionHeader(
-        instrumentStreamFn(streamWithCompaction, {
+        instrumentStreamFn(withProviderSafeImages(streamWithCompaction, providerImageGuard), {
           sink: host.observability,
           runId,
           now: host.now,

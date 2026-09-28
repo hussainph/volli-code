@@ -731,9 +731,12 @@ export interface RuntimeBrowserActRequest {
   waitMs?: number;
 }
 
-/** A captured Browser Tab image, bounded by the host before it reaches anyone. */
+/** A captured Browser Tab image. */
 export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
-  /** PNG bytes, base64. The host owns scale and size bounds. */
+  /**
+   * PNG bytes, base64, at the capture's own resolution. The runtime bounds the
+   * copy it hands a model; this one is what the host keeps for the person.
+   */
   base64Png: string;
   /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
   picture: string | null;
