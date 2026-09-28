@@ -7,6 +7,7 @@ import {
   ipcMain,
   nativeTheme,
   net,
+  powerMonitor,
   protocol,
   session,
   shell,
@@ -142,6 +143,7 @@ import {
   chatSessionRecord,
   createDesktopSessionEngine,
   createSessionWatchdog,
+  createSuspendClock,
   watchSessionActivity,
 } from "./session-control";
 import {
@@ -2125,11 +2127,13 @@ app.whenReady().then(async () => {
   // and the silence, one notification for the person. Observe posture:
   // self-termination exists behind the watchdog's optional port and is
   // deliberately unwired here, so a false positive costs a notification,
-  // never the work.
+  // never the work. The suspend clock is what keeps a laptop opened after a
+  // night asleep from reporting the night as silence.
   const sessionWatchdog =
     sessionRuntime !== null && sessionEngine !== null
       ? createSessionWatchdog({
           listBindings: () => sessionRuntime.openNativeBindings(),
+          suspendedMsWithin: createSuspendClock(powerMonitor).suspendedMsWithin,
           projection: async (sessionId) =>
             (await sessionRuntime.projection({ sessionId })).projection,
           submit: (request) => sessionEngine.submit(request),

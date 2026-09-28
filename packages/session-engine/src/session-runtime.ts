@@ -2,6 +2,7 @@ import {
   advanceSessionProjection,
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
+  nextInFlightTools,
 } from "@volli/shared";
 import type {
   CommandReceipt,
@@ -19,6 +20,7 @@ import type {
   RuntimeMessageSettle,
   RuntimeObservation,
   SessionExecutionVenue,
+  SessionInFlightTool,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
   SessionNativeDetail,
@@ -444,6 +446,12 @@ export interface OpenNativeBinding {
    * runtime progress.
    */
   lastProgressAt: number;
+  /**
+   * Tool calls this binding has seen start live and not yet finish — what the
+   * watchdog reads to tell a slow tool from a wedged turn. Process-local for
+   * the same reason as {@link lastProgressAt}: a `started` is never durable.
+   */
+  inFlightTools: readonly SessionInFlightTool[];
 }
 
 /** The host-owned runtime plus the live local bindings only its process can know about. */
@@ -502,6 +510,8 @@ interface BindingRecord {
   cursor: SessionNativeDetail | null;
   /** Latest token/tool observation this live binding received, never a durable fact. */
   lastProgressAt: number;
+  /** Tool calls seen starting live and not yet finished; folded by `nextInFlightTools`. */
+  inFlightTools: readonly SessionInFlightTool[];
   reconcileInFlight: Promise<void> | null;
   /**
    * The same translator the attachment's sink holds, for the replay path.
@@ -589,6 +599,8 @@ class BufferedObservationSink implements ObservationSink {
   constructor(
     private readonly translator: RuntimeObservationTranslator,
     private readonly record: TranslatedObservationSink,
+    /** Sees each live observation in delivery order, before it is translated. */
+    private readonly observe: (observation: RuntimeObservation) => void,
   ) {}
 
   emit(observation: RuntimeObservation): Promise<void> {
@@ -634,6 +646,7 @@ class BufferedObservationSink implements ObservationSink {
 
   #translate(observation: RuntimeObservation): Promise<void> {
     if (this.stopped) return Promise.resolve();
+    this.observe(observation);
     return this.translator.translate(observation, (fact) =>
       this.stopped ? Promise.resolve() : this.record(fact),
     );
@@ -727,11 +740,12 @@ class DefaultSessionRuntime implements SessionRuntime {
   constructor(private readonly ports: SessionRuntimePorts) {}
 
   openNativeBindings(): readonly OpenNativeBinding[] {
-    return [...this.#bindings.values()].map(({ spec, lastProgressAt }) => ({
+    return [...this.#bindings.values()].map(({ spec, lastProgressAt, inFlightTools }) => ({
       sessionId: spec.sessionId,
       directory: spec.directory,
       attachmentId: spec.attachmentId,
       lastProgressAt,
+      inFlightTools,
     }));
   }
 
@@ -1121,6 +1135,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         venue: location.venue,
         cursor: null,
         lastProgressAt: this.ports.clock.now(),
+        inFlightTools: [],
         reconcileInFlight: null,
         translator,
         sink,
@@ -2120,6 +2135,26 @@ class DefaultSessionRuntime implements SessionRuntime {
   }
 
   /**
+   * Fold one live observation into the tool calls its binding has in flight.
+   *
+   * Raw, before translation, because a tool's `started` never becomes a durable
+   * fact — it is only a transient overlay — and the watchdog needs to know it
+   * happened. Live only: the replay path never comes through a sink.
+   */
+  #recordInFlightTools(
+    spec: Pick<NativeAttachmentSpec, "sessionId" | "attachmentId">,
+    observation: RuntimeObservation,
+  ): void {
+    const binding = this.#bindings.get(spec.attachmentId);
+    // A sink's buffered startup observations drain only after its binding is
+    // recorded. The window this guards is shutdown: it clears the map first and
+    // discards each sink only once that executor's release settles, so an
+    // executor still speaking inside its own release lands here with no binding.
+    if (binding?.spec.sessionId !== spec.sessionId) return;
+    binding.inFlightTools = nextInFlightTools(binding.inFlightTools, observation);
+  }
+
+  /**
    * One attachment's observation pipeline, and the translator it runs on.
    *
    * Both are returned because the binding record borrows the translator for the
@@ -2136,8 +2171,10 @@ class DefaultSessionRuntime implements SessionRuntime {
       attachmentId: spec.attachmentId,
       now: () => this.ports.clock.now(),
     });
-    const sink: BufferedObservationSink = new BufferedObservationSink(translator, (fact) =>
-      this.#recordFact(adapter, spec, venue, fact, sink, "live"),
+    const sink: BufferedObservationSink = new BufferedObservationSink(
+      translator,
+      (fact) => this.#recordFact(adapter, spec, venue, fact, sink, "live"),
+      (observation) => this.#recordInFlightTools(spec, observation),
     );
     return { translator, sink };
   }
@@ -2568,6 +2605,7 @@ class DefaultSessionRuntime implements SessionRuntime {
       venue: attachment.venue,
       cursor: null,
       lastProgressAt: this.ports.clock.now(),
+      inFlightTools: [],
       reconcileInFlight: null,
       translator,
       sink,

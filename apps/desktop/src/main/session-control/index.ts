@@ -64,3 +64,5 @@ export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
 export { createSessionWatchdog } from "./session-watchdog";
 export type { SessionWatchdog, SessionWatchdogPorts } from "./session-watchdog";
+export { createSuspendClock } from "./suspend-clock";
+export type { PowerEvents, SuspendClock } from "./suspend-clock";
