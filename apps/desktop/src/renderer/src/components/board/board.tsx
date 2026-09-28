@@ -4,6 +4,8 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
+  MeasuringFrequency,
+  MeasuringStrategy,
   PointerSensor,
   pointerWithin,
   useSensor,
@@ -12,6 +14,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type MeasuringConfiguration,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
@@ -24,6 +27,8 @@ import {
   type Automation,
   type Label,
   type Ticket,
+  type TicketFilter,
+  type TicketSort,
   type TicketStatus,
 } from "@volli/shared";
 
@@ -90,6 +95,11 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
  * column topology stay frozen for single- and multi-card drags alike. Only
  * the intended slot changes; transforms and the detached overlay preview it.
  * The store is written exactly once on drop, and cancel discards the state.
+ *
+ * The snapshot is taken at the SUBSCRIPTION (see {@link FrozenReads}), not
+ * only here: freezing the ticket array while the board still read a live
+ * filter, sort, view or label slice left four doors a store write could
+ * re-render the drag machinery through.
  */
 interface DragState {
   activeTicket: Ticket;
@@ -97,9 +107,85 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /** Frozen with the gesture, not read live — see {@link FrozenReads}. The
+   * arrays this render derived its columns from, so every child memoizing on
+   * them keeps its identity for the whole gesture. */
+  filter: TicketFilter;
+  sort: TicketSort;
+  labels: readonly Label[];
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
+
+/**
+ * Every store read the board holds ABOVE `DndContext`, snapshotted for one
+ * gesture (VC-329, extended to the reads VC-329 left live).
+ *
+ * ── WHY A GESTURE FREEZES ITS READS RATHER THAN ITS OUTPUT ────────────────
+ * `Board` renders `<DndContext>`, and dnd-kit recomputes its collisions during
+ * that render and hands them to its own context — so a `Board` render is a
+ * re-render of EVERY droppable and every sortable shell on the board, memo or
+ * no memo, and `children` being rebuilt each time means `DndContext`'s own
+ * `React.memo` can never bail out of it. That is the churn that took this
+ * board out twice (error #185, `Maximum update depth exceeded`), and it is why
+ * the sessions-store read was pushed below this component in the first place
+ * — see session-activity-context.tsx, which documents the same mechanism from
+ * the other end.
+ *
+ * ── WHAT AN AUTOMATION DOES TO THOSE READS ────────────────────────────────
+ * A Run started by a drop is a live agent Session, and its `data:changed`
+ * broadcasts reach this renderer as `hydrateProjectRoster` — a WHOLESALE
+ * replacement of both the ticket slice and the label slice, in which every
+ * object is a new identity even when nothing a person can see has moved. Land
+ * one while a card is in the air and the board re-rendered `DndContext` from
+ * outside the drag, which is precisely the interleaving the crash reports
+ * name. Frozen, the selector hands back the same array, `useSyncExternalStore`
+ * compares identity, and React never re-renders the board at all.
+ *
+ * `view` is frozen for a different failure with the same cure: switching the
+ * board/list toggle mid-gesture unmounts the active sortable underneath
+ * dnd-kit. A keyboard drag (dnd-kit's `KeyboardSensor`) leaves the pointer free
+ * to press it, so this is reachable rather than theoretical.
+ *
+ * Nothing is LOST by freezing: every one of these is re-read on the render
+ * that ends the gesture, because clearing the snapshot and clearing `drag`
+ * happen in the same handler.
+ */
+interface FrozenReads {
+  tickets: Ticket[];
+  labels: readonly Label[];
+  filter: TicketFilter;
+  sort: TicketSort;
+  view: string;
+  countdownOpen: boolean;
+}
+
+/**
+ * When dnd-kit is allowed to measure, stated rather than inherited.
+ *
+ * `WhileDragging` + `Optimized` is what dnd-kit defaults to today, and pinning
+ * it is the point: this board has been taken out twice by measurement churn,
+ * and an upstream default change would move exactly that. Under it, droppables
+ * are measured ONCE when a gesture activates and then only when the set of
+ * registered droppables changes — which is the measurement model the
+ * freeze-and-commit-on-release gesture is built on. Nothing re-measures at
+ * rest, which matters on a board whose columns re-render on ordinary session
+ * activity.
+ *
+ * `MeasuringStrategy.Always` is the one setting this must never take: it
+ * re-measures every droppable on every commit, so any mid-gesture re-render —
+ * an Automation's roster replacement, a card growing an activity row — feeds
+ * new rects straight back into the collision/translate cycle. That is the
+ * crash, configured on. `BeforeDragging` is wrong for the opposite reason: it
+ * measures the whole board on every IDLE commit and stops during the gesture,
+ * paying the cost where there is no drag to spend it on.
+ */
+const BOARD_MEASURING: MeasuringConfiguration = {
+  droppable: {
+    strategy: MeasuringStrategy.WhileDragging,
+    frequency: MeasuringFrequency.Optimized,
+  },
+};
 
 // Precise pointer hits first (narrow collapsed pills, tall columns), corner
 // proximity as the fallback for fast flicks where the pointer sits between
@@ -283,20 +369,39 @@ export const Board = React.memo(function Board({
   projectId: string;
   ticketPrefix: string;
 }) {
-  const storeTickets = useBoardStore((state) => state.ticketsByProject[projectId]) ?? EMPTY_TICKETS;
-  const filter = useBoardStore((state) => state.filterByProject[projectId]) ?? EMPTY_TICKET_FILTER;
+  // The gesture's snapshot of everything below, or `null` at rest. Read INSIDE
+  // each selector so a store write during a gesture hands the same reference
+  // straight back and `useSyncExternalStore` never re-renders the board — see
+  // `FrozenReads` for why a re-render here is a re-measure of the whole drag.
+  // A ref rather than state: it is written from a drag handler and read during
+  // the render that handler schedules, and it must never schedule one itself.
+  const frozen = React.useRef<FrozenReads | null>(null);
+  const storeTickets = useBoardStore(
+    (state) => frozen.current?.tickets ?? state.ticketsByProject[projectId] ?? EMPTY_TICKETS,
+  );
+  const filter = useBoardStore(
+    (state) => frozen.current?.filter ?? state.filterByProject[projectId] ?? EMPTY_TICKET_FILTER,
+  );
   // One store subscription for the whole board rather than one per visible card
   // — the same reasoning that already made `ticketPrefix` a prop: a board only
   // ever shows one project, so its label rows are constant for the whole tree
   // and every card was subscribing to the identical slice.
-  const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]) ?? EMPTY_LABELS;
+  const projectLabels = useBoardStore(
+    (state) => frozen.current?.labels ?? state.labelsByProject[projectId] ?? EMPTY_LABELS,
+  );
   // View mode and sort are per-workspace, session-only (same pattern as
   // use-active-nav.ts): fall back to the shared default for never-visited projects.
   const boardView = useWorkspaceStore(
-    (state) => state.byProject[projectId]?.boardView ?? DEFAULT_WORKSPACE_UI.boardView,
+    (state) =>
+      frozen.current?.view ??
+      state.byProject[projectId]?.boardView ??
+      DEFAULT_WORKSPACE_UI.boardView,
   );
   const boardSort = useWorkspaceStore(
-    (state) => state.byProject[projectId]?.boardSort ?? DEFAULT_WORKSPACE_UI.boardSort,
+    (state) =>
+      frozen.current?.sort ??
+      state.byProject[projectId]?.boardSort ??
+      DEFAULT_WORKSPACE_UI.boardSort,
   );
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const pendingSlotAnimation = React.useRef<Map<string, DOMRect> | null>(null);
@@ -474,7 +579,9 @@ export const Board = React.memo(function Board({
   // The countdown owns bottom-centre while it is open: it has a deadline and
   // the one control, and the hint is advice. Two ephemeral surfaces on one edge
   // is a collision; this is which of them wins it.
-  const countdownOpen = useArmedRunStore((state) => Object.keys(state.pending).length > 0);
+  const countdownOpen = useArmedRunStore(
+    (state) => frozen.current?.countdownOpen ?? Object.keys(state.pending).length > 0,
+  );
 
   // Which tickets have an agent running on them (VC-100) — the ids the one
   // board-wide derivation walks. The derivation itself hangs off
@@ -540,14 +647,21 @@ export const Board = React.memo(function Board({
   );
 
   const tickets = drag?.preview ?? storeTickets;
+  // …and the three other live reads the frozen topology is derived from. A
+  // gesture that froze the tickets but kept reading a live filter, a live sort
+  // or a live label slice would still re-render (and so re-measure) the whole
+  // DnD subtree the moment any of them moved — see `DragState`.
+  const activeFilter = drag?.filter ?? filter;
+  const activeSort = drag?.sort ?? boardSort;
+  const activeLabels = drag?.labels ?? projectLabels;
   // `tickets` may be the drag preview snapshot — filtering it is correct and
   // expected here; `filterTickets` returns the same reference when inactive.
   // The whole derived pipeline is memoized: the board re-renders on every
   // drag-over event and on selection changes, and none of those should re-run
   // a filter pass plus five column sorts.
   const visible = React.useMemo(
-    () => filterTickets(tickets, filter, ticketPrefix),
-    [tickets, filter, ticketPrefix],
+    () => filterTickets(tickets, activeFilter, ticketPrefix),
+    [tickets, activeFilter, ticketPrefix],
   );
   const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
   // One sort pass shared by BOTH views (the columns and the list sections
@@ -581,13 +695,13 @@ export const Board = React.memo(function Board({
     const previous = previousSorted.current;
     const sorted = {} as Record<TicketStatus, Ticket[]>;
     for (const status of TICKET_STATUSES) {
-      const next = sortTickets(groups[status], boardSort);
+      const next = sortTickets(groups[status], activeSort);
       const before = previous?.[status];
       sorted[status] = before !== undefined && sameColumn(before, next) ? before : next;
     }
     previousSorted.current = sorted;
     return sorted;
-  }, [groups, boardSort]);
+  }, [groups, activeSort]);
   const selectionOrder = React.useMemo(
     () => TICKET_STATUSES.flatMap((status) => sortedGroups[status].map((ticket) => ticket.id)),
     [sortedGroups],
@@ -638,18 +752,34 @@ export const Board = React.memo(function Board({
   // Keyed on the columns actually shown, neither can happen.
   const boardBare = boardEmpty && shown.length === 0;
 
+  // What a click needs to know, read AT CLICK TIME rather than closed over.
+  //
+  // `handleSelect` is a prop on every column and, through them, on every card,
+  // so a closure whose identity moved with the ticket slice re-rendered the
+  // whole DnD subtree for a mutation that changed nothing on screen — which is
+  // precisely what an Automation's roster replacement is (see `DragState`), and
+  // it did it while a card was in the air. The ref is safe for the same reason
+  // `pickerColumnsRef` above is: this callback only ever runs from an event
+  // handler, which is always after the commit that wrote it.
+  const selectionInputs = React.useRef({ storeTickets, selectedIds, sortedGroups });
+  selectionInputs.current = { storeTickets, selectedIds, sortedGroups };
   const handleSelect = React.useCallback(
     (ticketId: string, gesture: TicketSelectionGesture) => {
-      const clicked = storeTickets.find((ticket) => ticket.id === ticketId);
+      const {
+        storeTickets: all,
+        selectedIds: selected,
+        sortedGroups: shownGroups,
+      } = selectionInputs.current;
+      const clicked = all.find((ticket) => ticket.id === ticketId);
       if (!clicked) return;
       const next = ticketSelectionAfterClick(
-        selectedIds,
+        selected,
         ticketId,
         {
-          allIds: storeTickets
+          allIds: all
             .filter((ticket) => ticket.status === clicked.status)
             .map((ticket) => ticket.id),
-          visibleIds: sortedGroups[clicked.status].map((ticket) => ticket.id),
+          visibleIds: shownGroups[clicked.status].map((ticket) => ticket.id),
         },
         selectionAnchor.current,
         gesture,
@@ -657,7 +787,7 @@ export const Board = React.memo(function Board({
       selectionAnchor.current = next.anchorId;
       selectTickets(projectId, next.selectedIds);
     },
-    [projectId, selectedIds, selectTickets, sortedGroups, storeTickets],
+    [projectId, selectTickets],
   );
   // Click empty canvas to clear selection — pan-aware (a drag past slop is not
   // a click). Lives next to handleSelect so the deselect closure stays stable.
@@ -731,12 +861,32 @@ export const Board = React.memo(function Board({
       selectTickets(projectId, ticketIds);
     }
     setExpandedEmptyStatus(null);
+    // The gesture's snapshot of every store read above `DndContext`, taken at
+    // this instant. Until the gesture clears it, a store write — an
+    // Automation's `hydrateProjectRoster` replacement above all — hands these
+    // same references back through the selectors, so the board never
+    // re-renders (and never re-measures) from outside the drag. Cleared at
+    // every site that clears `drag`.
+    frozen.current = {
+      tickets: storeTickets,
+      labels: projectLabels,
+      filter,
+      sort: boardSort,
+      view: boardView,
+      countdownOpen,
+    };
     setDrag({
       activeTicket,
       selectedTickets,
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
+      // Frozen with the preview, not read live — see `DragState`. These are the
+      // arrays the current render already derived its columns from, so freezing
+      // them keeps every identity the children memoize on exactly as it is.
+      filter: activeFilter,
+      sort: activeSort,
+      labels: activeLabels,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
@@ -788,6 +938,7 @@ export const Board = React.memo(function Board({
     applyPicker({ kind: "drag-end" });
 
     if (completed === null || release === null) {
+      frozen.current = null;
       setDrag(null);
       return;
     }
@@ -822,6 +973,7 @@ export const Board = React.memo(function Board({
             }),
           )
         : null;
+    frozen.current = null;
     setDrag(null);
     if (drop === null) return;
 
@@ -871,6 +1023,7 @@ export const Board = React.memo(function Board({
 
   function handleDragCancel() {
     applyPicker({ kind: "drag-end" });
+    frozen.current = null;
     setDrag(null);
   }
 
@@ -900,6 +1053,8 @@ export const Board = React.memo(function Board({
           <DndContext
             sensors={sensors}
             collisionDetection={boardCollision}
+            // Stated rather than inherited — see `BOARD_MEASURING`.
+            measuring={BOARD_MEASURING}
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
@@ -913,7 +1068,7 @@ export const Board = React.memo(function Board({
               <BoardListView
                 projectId={projectId}
                 ticketPrefix={ticketPrefix}
-                projectLabels={projectLabels}
+                projectLabels={activeLabels}
                 groups={sortedGroups}
                 shownStatuses={shown}
                 emptyDropStatuses={emptyDropStatuses}
@@ -970,7 +1125,7 @@ export const Board = React.memo(function Board({
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}
-                    projectLabels={projectLabels}
+                    projectLabels={activeLabels}
                     selectedIds={selectedIds}
                     draggingIds={draggingIds}
                     groupDragIds={groupDragIds}
@@ -1035,7 +1190,7 @@ export const Board = React.memo(function Board({
                     activeTicket={drag.activeTicket}
                     tickets={drag.selectedTickets}
                     ticketPrefix={ticketPrefix}
-                    projectLabels={projectLabels}
+                    projectLabels={activeLabels}
                     listView={boardView === "list"}
                     reducedMotion={reducedMotion}
                   />
