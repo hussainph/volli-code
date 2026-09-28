@@ -29,7 +29,7 @@ const externalizeDeclaredPackages = {
   },
 };
 
-const temporaryDirectory = await mkdtemp(join(packageRoot, ".vc441-runner-"));
+const temporaryDirectory = await mkdtemp(join(packageRoot, "node_modules", ".vc441-runner-"));
 const bundlePath = join(temporaryDirectory, "runner.mjs");
 try {
   await build({
