@@ -6,7 +6,9 @@ import type {
   DatabaseResult,
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectMutationResult,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectUpdateResult,
   Result,
@@ -46,12 +48,14 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Keep the production detector entrypoints observable. Project-create tests
@@ -754,6 +758,185 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
     });
+  });
+});
+
+describe("volli:project-relink — a folder that was renamed or moved", () => {
+  /**
+   * Renames `from` to a fresh sibling, and tracks the result for cleanup.
+   *
+   * The target name is MADE rather than fixed: the temp root is shared with
+   * every other test process on the machine, and a `rename` onto a name a
+   * previous run left behind fails with ENOTEMPTY rather than saying so.
+   */
+  function renameProjectDir(from: string, hint: string): string {
+    const to = `${mkdtempSync(join(tmpdir(), `volli-${hint}-`))}/moved`;
+    createdProjectDirs.push(dirname(to));
+    renameSync(from, to);
+    return to;
+  }
+
+  it("reports the registered folder as missing once it has been renamed", async () => {
+    const project = createProjectWithPath();
+    renameProjectDir(project.path, "renamed");
+
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: project.path, state: "missing" });
+  });
+
+  // The ticket's headline: the SAME project, its tickets still on it, now
+  // pointing at where the folder actually is. Nothing here creates a project.
+  it("reconnects the existing project, keeping its id and its tickets", async () => {
+    const project = createProjectWithPath();
+    const ticket = createTicket(project.id);
+    const moved = renameProjectDir(project.path, "moved");
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    expect(result.ok && result.project.id).toBe(project.id);
+    expect(result.ok && result.project.path).toBe(moved);
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(1);
+    expect(bootstrap.ok && bootstrap.data.projects[0]?.path).toBe(moved);
+    expect(
+      invoke<TicketsResult>("volli:data-project-roster", { projectId: project.id }),
+    ).toMatchObject({ ok: true, tickets: [{ id: ticket.id }] });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: moved, state: "present" });
+  });
+
+  // Every surface that reads a project path has to re-read: the rail, the file
+  // browsers, Configure, and the renderer's own root allowlist mirror. Without
+  // the invalidation the relink is committed and invisible.
+  it("announces the change so every surface re-reads the path", async () => {
+    const project = createProjectWithPath();
+    const moved = renameProjectDir(project.path, "announced");
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    // UNTARGETED on purpose (no `ticketId`): the path this relink rewrote is
+    // read by the rail, both file browsers, Configure and the renderer's root
+    // allowlist mirror, and the container move rewrote ticket rows as well. The
+    // conservative arm of the contract is the correct one here.
+    await expectDataChanged({ entity: "tickets", projectId: project.id });
+  });
+
+  it("announces nothing when the relink was refused", async () => {
+    const project = createProjectWithPath();
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: join(project.path, "nowhere-at-all"),
+    });
+
+    expectNoDataChange();
+  });
+
+  it("refuses a folder another project already tracks rather than duplicating it", async () => {
+    const project = createProjectWithPath();
+    // AWAITED: `volli:project-create` detects the base branch off the main
+    // thread, so the handler is async and a synchronous read of it would test a
+    // Promise's absent `ok` field rather than the answer.
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: other.project.path,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(2);
+  });
+
+  // Against the REAL disk, and through a symlink rather than a case difference,
+  // because the two platforms this suite runs on disagree about case and agree
+  // about links. A path that reaches a folder another project tracks is that
+  // folder, however it is spelled — and taking it would leave two rows on one
+  // checkout, which is the duplicate this channel exists to refuse.
+  it("refuses a path that reaches a tracked folder by another route", async () => {
+    const project = createProjectWithPath();
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+    const link = join(mkdtempSync(join(tmpdir(), "volli-link-")), "atlas");
+    createdProjectDirs.push(dirname(link));
+    symlinkSync(other.project.path, link);
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: link,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+  });
+
+  it("refuses a replacement folder that is not on disk", async () => {
+    const project = createProjectWithPath();
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: join(project.path, "nowhere-at-all"),
+      }),
+    ).resolves.toEqual({ ok: false, refusal: "missing", error: "That folder doesn't exist." });
+  });
+
+  // A project can be any folder, so a path that turns out to be a file is a
+  // refusal with its own sentence rather than a crash.
+  it("refuses a replacement that is a file rather than a folder", async () => {
+    const project = createProjectWithPath();
+    const file = join(freshProjectDir(), "not-a-folder.txt");
+    writeFileSync(file, "");
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: file,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "not-a-directory",
+      error: "That's a file, not a folder.",
+    });
+  });
+
+  it("refuses an unknown project", async () => {
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: "ghost",
+        path: freshProjectDir(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", { projectId: "ghost" }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
   });
 });
 
