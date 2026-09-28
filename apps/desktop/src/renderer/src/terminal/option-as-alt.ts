@@ -4,18 +4,21 @@
  * instead of macOS composed characters (Option+b → "∫").
  *
  * Two facts force this to live in front of the renderer's own key handling:
- *  1. restty 0.2.0 encodes Alt chords as ESC + event.key — but on macOS
- *     `event.key` is already the COMPOSED character, so it emits ESC+∫ where
- *     ghostty emits ESC+b. The base character must be re-derived from
- *     `event.code`.
+ *  1. xterm.js encodes an Alt chord as ESC + `event.key` (its `macOptionIsMeta`
+ *     option) — but on macOS `event.key` is already the COMPOSED character, so
+ *     it emits ESC+∫ where ghostty emits ESC+b. The base character has to be
+ *     re-derived from `event.code`. The engine therefore runs this encoder from
+ *     xterm's `attachCustomKeyEventHandler` and declines the event whenever it
+ *     produces a sequence.
  *  2. `KeyboardEvent.location` distinguishes left/right ONLY on the Alt
  *     keydown itself, never on the chorded key — so sided config ("left" /
  *     "right") needs a tracker that remembers which Option keys are held.
  *     (cmux shipped a sided-modifier bug on exactly this key.)
  *
  * The `event.code` → character table is the US physical layout. Non-US
- * layouts fall through (return null) for punctuation that moved, which
- * leaves restty's default behavior — imperfect but never worse than today.
+ * layouts fall through (return null) for punctuation that moved, which leaves
+ * xterm's own `macOptionIsMeta` encoding in charge — ESC + the composed
+ * character rather than the base one, imperfect but never worse than no ESC.
  */
 
 export type MacosOptionAsAlt = "left" | "right" | boolean;

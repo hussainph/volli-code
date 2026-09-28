@@ -238,6 +238,7 @@ function harness(options: { failStops?: boolean } = {}) {
             route: null,
           },
           throughSequence: 0,
+          refusal: null,
         };
         return receiptStatus === "rejected"
           ? {

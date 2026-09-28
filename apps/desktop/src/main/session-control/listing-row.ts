@@ -27,8 +27,8 @@ const NO_LIVE_ATTACHMENTS: ReadonlySet<string> = new Set();
  * projection can see (it lives in the Automation records and the planner log,
  * not in the Session ledger), so the host reads it and hands it over. It
  * defaults to {@link PERSON_STARTED} only for callers that have no reader —
- * every caller in the app supplies one, and a caller that did not would mark
- * nothing, which is the quiet failure rather than a wrong bolt.
+ * both app callers supply one, and a caller that did not would mark nothing,
+ * which is the quiet failure rather than a wrong bolt.
  *
  * `liveAttachmentIds` is the process-local half of the projection. Structured
  * attachments deliberately remain durably open across relaunch so Pi can lazily
@@ -62,9 +62,12 @@ export function sessionListingRow(
 /**
  * {@link sessionListingRow} over a whole listing.
  *
- * `provenanceOf` is asked per Session rather than handed a prebuilt map: the
- * reader behind it is two indexed point queries against SQLite, and a map would
- * have to be built from the same reads plus a second pass to key them.
+ * `provenanceOf` stays a function of one Session so this file keeps having no
+ * opinion about where the answers come from. A caller with a whole roster in
+ * hand reads them in one batch and closes over the result
+ * (`sessionListingRowsForRoster`, VC-392); a caller with one Session asks for
+ * one (`activity-watch.ts`). Either way the row is built from an answer handed
+ * in, which is what keeps the fetch and the push identical.
  */
 export function sessionListingRows(
   sessions: readonly SessionProjection[],

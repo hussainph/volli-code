@@ -10,6 +10,7 @@ import {
   CURRENT_DB_SCHEMA_VERSION,
   DEFAULT_SEED,
   FIXTURE_SCHEMA_VERSION,
+  PRESET_NAMES,
   presetNamed,
 } from "./presets.mjs";
 import {
@@ -62,7 +63,7 @@ function usage() {
   return [
     "Usage: node apps/desktop/e2e/bench/performance/fixture.mjs [options]",
     "",
-    "  --preset small|real|2x  fixture scale (default: real)",
+    `  --preset NAME           fixture scale: ${PRESET_NAMES.join("|")} (default: real)`,
     "  --seed N                deterministic seed",
     "  --output DIR            profile directory to create",
     "  --force                 replace an existing output directory",

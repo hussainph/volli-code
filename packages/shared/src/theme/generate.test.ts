@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { APCAcontrast, sRGBtoY } from "apca-w3";
 
-import { apcaLc, hexToOklch, hexToRgb, oklchToHex } from "./color";
+import { apcaLc, hexToOklch, oklchToHex } from "./color";
 import { DEFAULT_THEME, type ThemeDefinition } from "./definition";
 import {
   generateThemeTokens,
@@ -232,22 +231,22 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
   });
 });
 
-/** 8-bit channel triple, the form apca-w3 takes. */
-function toBytes(hex: string): [number, number, number] {
-  const { r, g, b } = hexToRgb(hex);
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-}
-
 /**
- * Lc computed by `apca-w3` itself — the independent oracle. The design doc is
- * explicit that APCA must never be verified against the math under test, and
- * `--primary-text` exists *only* because of an APCA number, so the oracle
- * matters more for it than anywhere else in this file.
+ * WHERE THE Lc NUMBERS IN THIS FILE COME FROM (VC-412). They used to be read
+ * from `apca-w3`, a second implementation imported purely as an oracle. That
+ * package is gone — its `colorparsley` dependency declares AGPL v3, and this
+ * project ships as commercial OSS — so these assertions measure with the same
+ * {@link apcaLc} the generator solves against, as the contrast-floor tests
+ * above this block already did.
+ *
+ * That is not circular, and the two assertions on each solved token are what
+ * make it so. The solver works in continuous OKLCH; what is asserted here is
+ * the EMITTED HEX, after gamut mapping and 8-bit quantisation have had their
+ * say — a solve that aimed correctly and then quantised below the floor fails
+ * the lower bound, and a solve that gave up and reached for white fails the
+ * upper one. The metric itself is pinned in `color.test.ts`, against frozen
+ * vectors and a second transcription of the published formula.
  */
-function referenceLc(text: string, background: string): number {
-  return Math.abs(Number(APCAcontrast(sRGBtoY(toBytes(text)), sRGBtoY(toBytes(background)))));
-}
-
 describe("--primary-text, the accent at body-copy contrast", () => {
   it("clears Lc 60 on --background, for every seed", () => {
     // The contract. Measured minimum over the sweep is 60.0001 at seed
@@ -255,9 +254,38 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     // no headroom here to lose and any regression shows up immediately.
     for (const { seed, tokens } of sweep) {
       expect(
-        referenceLc(tokens["--primary-text"], tokens["--background"]),
+        apcaLc(tokens["--primary-text"], tokens["--background"]),
         `--primary-text for seed ${seed}`,
       ).toBeGreaterThanOrEqual(60);
+    }
+  });
+
+  it("lands ON the floor rather than over-brightening past it", () => {
+    // The other half of the floor, and the half a self-measured check needs:
+    // "≥ 60" alone is satisfied by a token that abandoned the accent and went
+    // for white at Lc 100. Measured maximum over the sweep is 60.4537 at seed
+    // #009954 — the whole family sits inside half an Lc of the target, so 61
+    // is a bound on overshoot, not a target.
+    for (const { seed, tokens } of sweep) {
+      expect(
+        apcaLc(tokens["--primary-text"], tokens["--background"]),
+        `--primary-text for seed ${seed}`,
+      ).toBeLessThan(61);
+    }
+  });
+
+  it("is the dimmest rung that clears the floor", () => {
+    // Tightness stated as a property rather than as a measured bound: take the
+    // emitted token, step its lightness down by 0.01 — about two 8-bit rungs —
+    // and the result must FAIL the floor. A solver that overshot, or one whose
+    // bisection stopped early, would leave slack that this finds. Measured
+    // worst case over the sweep is 58.7, comfortably under 60.
+    for (const { seed, tokens } of sweep) {
+      const { L, C, h } = hexToOklch(tokens["--primary-text"]);
+      expect(
+        apcaLc(oklchToHex(L - 0.01, C, h), tokens["--background"]),
+        `--primary-text for seed ${seed}`,
+      ).toBeLessThan(60);
     }
   });
 
@@ -272,7 +300,7 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     for (const { seed, tokens } of sweep) {
       for (const surface of ["--card", "--popover", "--muted"] as const) {
         expect(
-          referenceLc(tokens["--primary-text"], tokens[surface]),
+          apcaLc(tokens["--primary-text"], tokens[surface]),
           `--primary-text on ${surface} for seed ${seed}`,
         ).toBeGreaterThan(58.5);
       }
@@ -324,9 +352,7 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     // floor — a monochrome theme's links are links.
     const tokens = generateThemeTokens(themeFor("#808080"));
     expect(tokens["--primary-text"]).toBe("#b2b2b2");
-    expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(
-      60,
-    );
+    expect(apcaLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(60);
   });
 
   it("fixes the Lc 41 finding that motivated it", () => {
@@ -334,10 +360,8 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     // gap cannot silently close from the wrong end — --primary must stay the
     // fill it is.
     const tokens = generateThemeTokens(DEFAULT_THEME);
-    expect(referenceLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
-    expect(referenceLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(
-      60,
-    );
+    expect(apcaLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
+    expect(apcaLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(60);
   });
 
   it("follows an unlocked accent rather than the seed", () => {

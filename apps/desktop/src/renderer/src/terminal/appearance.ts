@@ -3,24 +3,25 @@
  * main over IPC, live-reloaded on file edits — issue #18) resolved against
  * the app's design-token fallback theme.
  *
- * Font strategy: restty's text-shaper rasterizes glyphs itself, so CSS
- * `font-family` does nothing for its canvas. Families resolve through the
- * Local Font Access API (main grants the `local-fonts` permission), exactly
- * like ghostty resolves them against installed system fonts — no bundled
- * font bytes, and the same config renders the same face in both apps.
+ * Font strategy: the families are handed to xterm.js as a CSS `font-family`
+ * chain, so Chromium resolves them against the fonts actually installed —
+ * exactly like ghostty does. No bundled font bytes, and the same config
+ * renders the same face in both apps. The Local Font Access API (main grants
+ * the `local-fonts` permission) is what lets the settings picker LIST those
+ * families; it is not how a terminal loads one.
  */
-import type { GhosttyTheme } from "restty";
-import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
+import type {
+  GhosttyAppearancePayload,
+  GhosttyTheme,
+  ResolvedAppearance,
+  ThemeColor,
+} from "@volli/shared";
 
 import { resolvedAppearance } from "@renderer/lib/resolved-appearance";
 
 import { resolveAppearance } from "./appearance-model";
 import { parseHexColor } from "./css-color";
 import type { TerminalAppearance } from "./engine";
-
-// `ThemeColor` is not re-exported from restty's entry; it is structurally just
-// an 0-255 RGBA record, so a local alias stays assignable to the palette type.
-type ThemeColor = { r: number; g: number; b: number; a?: number };
 
 const rgb = (r: number, g: number, b: number): ThemeColor => ({ r, g, b });
 
@@ -93,8 +94,8 @@ const SELECTION_BACKGROUND: Record<ResolvedAppearance, ThemeColor> = {
  * `dark` is the original restrained set, tuned to sit on the near-black
  * background.
  *
- * `light` is **GitHub Light Default**, taken verbatim from ghostty's bundled
- * theme catalog (which restty ships, so this is a set the app can already
+ * `light` is **GitHub Light Default**, taken verbatim from Ghostty's own theme
+ * catalog (vendored in `ghostty-theme.ts`, so this is a set the app can already
  * render). A reference set rather than a derivation because how the dark one
  * was picked is recorded nowhere, so there is no rule here to mirror — and a
  * light ANSI palette is not a lightened dark one anyway: every hue has to be

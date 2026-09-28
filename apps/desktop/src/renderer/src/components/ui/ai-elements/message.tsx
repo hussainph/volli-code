@@ -1,5 +1,24 @@
 "use client";
 
+/**
+ * Descended from AI Elements, and MODIFIED.
+ *
+ *   upstream  https://github.com/vercel/ai-elements
+ *   file      packages/elements/src/message.tsx
+ *   revision  9310a1d3a8ddc881244e7c48ec0f5d215df92e70 (2026-03-06)
+ *   license   Apache-2.0 — Copyright 2023 Vercel, Inc.
+ *
+ * What survives from upstream is small but load-bearing: `Message` /
+ * `MessageContent`, the `"group flex w-full max-w-[95%] flex-col gap-2"` shell,
+ * and the `is-user` / `is-assistant` convention the chat stylesheet still keys
+ * off. Copied expression, so it carries the notice. Changed: the actions and
+ * toolbar slots and the whole `MessageBranch*` family deleted as unused, and
+ * `MessageResponse` rewired from a bare Streamdown onto this repo's own
+ * `chatMarkdownComponents` / `chatRehypePlugins` pair.
+ *
+ * Apache-2.0 §4(b) requires a modified file to say so. See `./PROVENANCE.md`.
+ */
+
 import { cn } from "@renderer/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";

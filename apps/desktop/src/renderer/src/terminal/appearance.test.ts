@@ -8,12 +8,12 @@ import {
   it,
   vi,
 } from "vite-plus/test";
-import { getBuiltinTheme } from "restty";
 import {
   DEFAULT_CANVAS,
   DEFAULT_THEME,
   deriveCanvasTokens,
   generateThemeTokens,
+  getGhosttyTheme,
   type ResolvedAppearance,
   type ThemeDefinition,
 } from "@volli/shared";
@@ -128,7 +128,7 @@ const CHROMATIC = [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14];
 
 /**
  * The background and full ANSI set the config-less terminal is painting with
- * right now. Both are optional on restty's theme type and neither is ever
+ * right now. Both are optional on `GhosttyTheme` and neither is ever
  * absent here, so a missing one is a bug in the module rather than a case to
  * branch on — it fails loudly instead of quietly skipping the assertions.
  */
@@ -223,7 +223,7 @@ describe("the token-derived terminal fallback", () => {
   });
 
   it("swaps the palette for a preview and puts it back, notifying both ways", () => {
-    const preview = getBuiltinTheme("Nord");
+    const preview = getGhosttyTheme("Nord");
     expect(preview).not.toBeNull();
     const before = getCurrentAppearance().theme;
     let notified = 0;
@@ -246,7 +246,7 @@ describe("the token-derived terminal fallback", () => {
   // re-asserts the same theme constantly; re-notifying would repaint every live
   // terminal for a no-op.
   it("ignores a repeated preview of the theme already showing", () => {
-    const preview = getBuiltinTheme("Nord");
+    const preview = getGhosttyTheme("Nord");
     let notified = 0;
     const unsubscribe = onTerminalAppearanceChanged(() => {
       notified += 1;

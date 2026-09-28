@@ -33,7 +33,7 @@
  *      invents NO harness name (since the Calm Stack neither the roster nor
  *      History prints one — check 6 carries the positive half).
  *   6. Resident keep-alive — navigating ticket → board → ticket keeps the SAME
- *      terminal canvas DOM node mounted (marked node survives) and the shell
+ *      terminal DOM node mounted (marked node survives) and the shell
  *      alive (the overlay hosts terminals, the detail is only a view over it);
  *      the ACTIVE band row's hover `title` carries the truthful source
  *      ("Shell", never the default Claude harness) — the one surface that
@@ -81,10 +81,11 @@
  * exact-body assertions checks 3 and 11 make. It needs no session, so it stands
  * on its own.
  *
- * The terminal is a WebGPU/WebGL2 canvas — its text is NOT in the DOM — so shell
- * behaviour is asserted through SIDE EFFECTS (keystrokes → a file the shell
- * writes, then polled). Every assertion polls (expect-style waits); there are no
- * bare sleeps standing in for a condition.
+ * Shell behaviour is asserted through SIDE EFFECTS (keystrokes → a file the
+ * shell writes, then polled) rather than through what the terminal draws: a
+ * file the shell wrote is evidence the bytes reached the PTY, which rendered
+ * text is not. Every assertion polls (expect-style waits); there are no bare
+ * sleeps standing in for a condition.
  *
  * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
  * wired into `vp test`.
@@ -339,29 +340,29 @@ async function escapeToBoard(page) {
   await waitUntil("board after Escape", () => boardOpen(page));
 }
 
-// ---- terminal (canvas — side-effect assertions only) -----------------------
+// ---- terminal (side-effect assertions only) --------------------------------
 
-/** Focus the single VISIBLE terminal canvas by clicking its centre. */
+/** Focus the single VISIBLE terminal by clicking its centre. */
 async function focusTerminal(page) {
   const box = await page.evaluate(() => {
-    const canvases = Array.from(document.querySelectorAll("canvas"));
-    const visible = canvases.find(
+    const terminals = Array.from(document.querySelectorAll(".xterm"));
+    const visible = terminals.find(
       (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
     );
     if (!visible) return null;
     const r = visible.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
-  if (!box) throw new Error("no visible terminal canvas to focus");
+  if (!box) throw new Error("no visible terminal to focus");
   await page.mouse.click(box.x, box.y);
   await sleep(200);
 }
 
-/** Wait for a live terminal canvas with a real (non-zero) size, then let restty boot the shell + paint the prompt. */
-async function waitForLiveCanvas(page, timeoutMs = 20000) {
+/** Wait for a live terminal with a real (non-zero) size, then let the shell boot and paint its prompt. */
+async function waitForLiveTerminal(page, timeoutMs = 20000) {
   await page.waitForFunction(
     () => {
-      const c = Array.from(document.querySelectorAll("canvas")).find(
+      const c = Array.from(document.querySelectorAll(".xterm")).find(
         (el) => el.offsetParent !== null,
       );
       return c && c.clientWidth > 0 && c.clientHeight > 0;
@@ -828,7 +829,7 @@ async function main() {
 
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await waitUntil("session tab to appear", async () => (await sessionTab.count()) === 1);
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
         // A cold shell on a slow CI runner can still be sourcing rc files when
         // the first line is typed and silently drop it; a second identical line
@@ -907,20 +908,20 @@ async function main() {
     // ===================================================================
     await attempt(
       6,
-      "the ACTIVE band opens the exact live tab; its terminal canvas node + shell stay resident across ticket → board → session",
+      "the ACTIVE band opens the exact live tab; its terminal node + shell stay resident across ticket → board → session",
       async () => {
         await fs.rm(PROBE_NAV, { force: true });
         const sessionTab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
         await sessionTab.click();
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
-        // Tag the live terminal canvas so we can prove the SAME node survives.
+        // Tag the live terminal so we can prove the SAME node survives.
         const marked = await page.evaluate(() => {
-          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+          const terminal = Array.from(document.querySelectorAll(".xterm")).find(
             (c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0,
           );
-          if (!canvas) return false;
-          canvas.dataset.e2eKeepalive = "kept-1";
+          if (!terminal) return false;
+          terminal.dataset.e2eKeepalive = "kept-1";
           return true;
         });
 
@@ -993,12 +994,12 @@ async function main() {
           const tab = page.getByRole("tab", { name: SESSION_INITIAL, exact: true });
           return (await tab.count()) === 1 && (await tab.getAttribute("aria-selected")) === "true";
         });
-        await waitForLiveCanvas(page);
+        await waitForLiveTerminal(page);
 
-        // The tagged canvas is still in the DOM (never unmounted/remounted).
-        const nodeSurvived = await waitUntil("marked canvas survives nav", async () =>
+        // The tagged terminal node is still in the DOM (never unmounted/remounted).
+        const nodeSurvived = await waitUntil("marked terminal survives nav", async () =>
           page.evaluate(() =>
-            Array.from(document.querySelectorAll("canvas")).some(
+            Array.from(document.querySelectorAll(".xterm")).some(
               (c) => c.dataset.e2eKeepalive === "kept-1",
             ),
           ),
@@ -1122,11 +1123,11 @@ async function main() {
     );
 
     // ===================================================================
-    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident canvas
+    // 6b. TERMINAL FOCUS — thin chrome, no sidebars, same resident terminal
     // ===================================================================
     await attempt(
       "6b",
-      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live canvas, and exits from the band",
+      "Terminal focus is offered on the terminal pane only, reclaims sidebars/tab rail, keeps one thin chrome row, preserves the live terminal, and exits from the band",
       async () => {
         // The enter control lives ON the pane now (session-split-layout.tsx's
         // PaneFocusControl), not on the chrome band — it acts on one terminal, so
@@ -1165,14 +1166,14 @@ async function main() {
         });
 
         const marked = await page.evaluate(() => {
-          const canvas = Array.from(document.querySelectorAll("canvas")).find(
+          const terminal = Array.from(document.querySelectorAll(".xterm")).find(
             (candidate) =>
               candidate.offsetParent !== null &&
               candidate.clientWidth > 0 &&
               candidate.clientHeight > 0,
           );
-          if (!canvas) return false;
-          canvas.dataset.e2eFocus = "focus-1";
+          if (!terminal) return false;
+          terminal.dataset.e2eFocus = "focus-1";
           return true;
         });
         await page.getByRole("button", { name: "Enter terminal focus" }).click();
@@ -1181,7 +1182,7 @@ async function main() {
             const sidebar = document.querySelector('[data-sidebar="sidebar"]');
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
             const chrome = document.querySelector(".app-region-drag");
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const markedTerminal = document.querySelector('.xterm[data-e2e-focus="focus-1"]');
             const state = {
               sidebarHidden: sidebar?.closest('[aria-hidden="true"]') !== null,
               insetLeft: inset?.getBoundingClientRect().left ?? -1,
@@ -1193,10 +1194,10 @@ async function main() {
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              terminalVisible:
+                markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
-            return state.sidebarHidden && state.insetLeft === 0 && state.canvasVisible
+            return state.sidebarHidden && state.insetLeft === 0 && state.terminalVisible
               ? state
               : false;
           }),
@@ -1207,7 +1208,7 @@ async function main() {
           focused.chromeHeight === 36 &&
           focused.tablists === 0 &&
           focused.asides === 0 &&
-          focused.canvasVisible;
+          focused.terminalVisible;
 
         // Exit is the BAND's persistent control, and it is deliberately not the
         // same button as the one that entered: in zen mode the band is the only
@@ -1221,7 +1222,7 @@ async function main() {
         const restored = await waitUntil("workspace geometry restored", async () =>
           page.evaluate(() => {
             const inset = document.querySelector('[data-slot="sidebar-inset"]');
-            const markedCanvas = document.querySelector('canvas[data-e2e-focus="focus-1"]');
+            const markedTerminal = document.querySelector('.xterm[data-e2e-focus="focus-1"]');
             const state = {
               insetLeft: inset?.getBoundingClientRect().left ?? 0,
               tablists: Array.from(document.querySelectorAll('[role="tablist"]')).filter(
@@ -1231,10 +1232,10 @@ async function main() {
                   element.getBoundingClientRect().height > 0,
               ).length,
               asides: document.querySelectorAll("aside").length,
-              canvasVisible:
-                markedCanvas instanceof HTMLCanvasElement && markedCanvas.offsetParent !== null,
+              terminalVisible:
+                markedTerminal instanceof HTMLElement && markedTerminal.offsetParent !== null,
             };
-            return state.insetLeft > 0 && state.canvasVisible ? state : false;
+            return state.insetLeft > 0 && state.terminalVisible ? state : false;
           }),
         );
         const restoredGeometry =
@@ -1242,7 +1243,7 @@ async function main() {
           // Two: the ticket's tab strip and the rail's own page tablist.
           restored.tablists === 2 &&
           restored.asides === 1 &&
-          restored.canvasVisible;
+          restored.terminalVisible;
 
         // ⌥⌘Return is the same toggle on the keyboard, and it has to work in
         // both directions — the exit direction fires while a live PTY holds

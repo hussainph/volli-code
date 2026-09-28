@@ -649,6 +649,9 @@ export function ActiveSessions({
           ticket,
           title: named === undefined || named.length === 0 ? "Draft" : `Draft · ${named}`,
           source: "Draft",
+          // Nothing is running, so nothing to name: the same refusal `source`
+          // makes one line up (VC-402).
+          harnessId: null,
           activity: "idle",
           activitySource: "reported",
           attention: null,

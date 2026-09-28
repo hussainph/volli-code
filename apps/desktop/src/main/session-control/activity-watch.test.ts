@@ -79,6 +79,7 @@ function stubEngine(current: () => SessionProjection | null) {
     getBaseSession: unused("getBaseSession"),
     listSessions: unused("listSessions"),
     countSessions: unused("countSessions"),
+    listAttachedSessions: unused("listAttachedSessions"),
     listSessionStarts: unused("listSessionStarts"),
     listLatestTicketSignals: unused("listLatestTicketSignals"),
     listEvents: unused("listEvents"),
@@ -328,6 +329,9 @@ describe("watchSessionActivity", () => {
       getBaseSession: vi.fn(async () => null),
       listSessions: vi.fn(async () => []),
       countSessions: vi.fn(async () => 0),
+      // The concurrency budget's read (VC-403). A read like any other: it
+      // must pass straight through, and must never mark a Session dirty.
+      listAttachedSessions: vi.fn(async () => []),
       listSessionStarts: vi.fn(async () => []),
       listLatestTicketSignals: vi.fn(async () => []),
       listEvents: vi.fn(async () => []),
@@ -349,6 +353,7 @@ describe("watchSessionActivity", () => {
     await watch.engine.getBaseSession({ sessionId: "session-1" });
     await watch.engine.listSessions({ projectId: "project-1", scope: "all" });
     await watch.engine.countSessions({ projectId: "project-1", scope: "all" });
+    await watch.engine.listAttachedSessions();
     await watch.engine.listSessionStarts({ sinceMs: 0 });
     await watch.engine.listLatestTicketSignals({ projectId: "project-1" });
     await watch.engine.listEvents({ sessionId: "session-1" });

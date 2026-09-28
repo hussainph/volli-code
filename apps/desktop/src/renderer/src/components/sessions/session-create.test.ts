@@ -17,8 +17,8 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { bootChatSession, startTicketChat, terminalCreateRequest } from "./session-create";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
-// The engine registry reaches for restty/WebGPU on import and no chat boot
-// touches it; the terminal arm is exercised in the live smokes.
+// The engine registry pulls in xterm.js and its stylesheet on import and no
+// chat boot touches it; the terminal arm is exercised in the live smokes.
 vi.mock("@renderer/terminal/registry", () => ({
   disposeEngine: vi.fn(),
   getOrCreateEngine: vi.fn(),

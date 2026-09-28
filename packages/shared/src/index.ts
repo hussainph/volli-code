@@ -69,6 +69,7 @@ export * from "./walk-prune";
 export * from "./errors";
 export * from "./terminal";
 export * from "./ghostty-config";
+export * from "./ghostty-theme";
 export * from "./session";
 export * from "./session-provenance";
 export * from "./session-need";

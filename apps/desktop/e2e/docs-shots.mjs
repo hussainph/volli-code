@@ -7,16 +7,14 @@
  *
  *   board.png            — Home's permanent Board tab, with all five columns populated.
  *   ticket-workspace.png — a ticket's Body and its review rail, with Chat as the
- *                          explicit next action.
+ *                          explicit next action and Automations visible.
+ *   automations.png      — the Automations page with one saved project Automation.
+ *   canvas-editor.png    — Settings → Appearance's canvas editor, with the pad,
+ *                          colour stops, swatches, and vibrancy/grain faders.
  *
  * `theme-picker.png` used to be the third. Its surface — Settings → Appearance's
  * app-theme picker — went with the seed-based theming system, and the file is
  * deleted.
- *
- * TODO: re-add the step as `canvas-editor.png`, shooting Settings → Appearance
- * with the canvas editor open — the pad and its orbs, the stop chips, the swatch
- * row, the vibrancy and grain sliders, and the contrast readout. The Theming
- * guide carries a matching TODO and embeds no image until that shot exists.
  *
  * Capture goes through `webContents.capturePage()`, not Playwright's
  * `page.screenshot()`. It records the built app window at the display's device
@@ -171,12 +169,52 @@ try {
         ticketId: hero.id,
         labels: ["composer", "renderer"],
       });
-      return { prefix: project.ticketPrefix, heroNumber: hero.number };
+
+      const automationName = "Review sweep";
+      let trigger = { kind: "columns", columns: ["doing"] };
+      let automation = await window.api.automations.create({
+        commandId: crypto.randomUUID(),
+        projectId: project.id,
+        name: automationName,
+        instructions: "Review the change set and summarize the risks.",
+        trigger,
+        runtime: null,
+      });
+      let automationCreateRefusal = null;
+      if (!automation.ok) {
+        automationCreateRefusal = automation.error;
+        trigger = { kind: "none" };
+        automation = await window.api.automations.create({
+          commandId: crypto.randomUUID(),
+          projectId: project.id,
+          name: automationName,
+          instructions: "Review the change set and summarize the risks.",
+          trigger,
+          runtime: null,
+        });
+      }
+      return {
+        prefix: project.ticketPrefix,
+        heroNumber: hero.number,
+        automationName: automation.ok ? automation.automation.name : null,
+        automationTrigger: trigger.kind,
+        automationCreateRefusal,
+        automationError: automation.ok ? null : automation.error,
+      };
     },
     { tickets: TICKETS, heroIndex: HERO_INDEX, body: HERO_BODY },
   );
   const heroId = `${seeded.prefix}-${seeded.heroNumber}`;
   check(1, "hero ticket is VLT-14", heroId === "VLT-14", `hero is ${heroId}`);
+  check(
+    2,
+    "fixture Automation is seeded",
+    seeded.automationName === "Review sweep" && seeded.automationError === null,
+    `name=${seeded.automationName ?? "none"} trigger=${seeded.automationTrigger} refusal=${JSON.stringify(seeded.automationCreateRefusal)}${seeded.automationError === null ? "" : ` error=${seeded.automationError}`}`,
+  );
+  if (seeded.automationName === null) {
+    throw new Error(`fixture Automation could not be created: ${seeded.automationError}`);
+  }
 
   await page.reload();
   await page.waitForLoadState("domcontentloaded");
@@ -185,7 +223,7 @@ try {
   const readiness = await fixtureReadiness(page, projectDir);
   const fixtureReady = readiness.dependencies === "installed" && !readiness.alertVisible;
   check(
-    2,
+    3,
     "fixture project is ready for Sessions",
     fixtureReady,
     `dependencies=${readiness.dependencies ?? "none"} alert=${readiness.alertVisible}`,
@@ -193,7 +231,7 @@ try {
   if (!fixtureReady) throw new Error(`fixture is not capture-ready: ${JSON.stringify(readiness)}`);
 
   // ---- 1. the board -------------------------------------------------------
-  await attempt(3, "board.png", async () => {
+  await attempt(4, "board.png", async () => {
     await goToBoard(page);
     const fit = await fitBoardColumns(page);
     await parkPointer(page);
@@ -203,7 +241,7 @@ try {
   });
 
   // ---- 2. the ticket workspace -------------------------------------------
-  await attempt(4, "ticket-workspace.png", async () => {
+  await attempt(5, "ticket-workspace.png", async () => {
     // The board shot may have zoomed out / hidden the sidebar to fit five
     // columns; the workspace shot wants the released, chat-first default back
     // at native scale. Do not open a terminal to make a screenshot: it is an
@@ -218,9 +256,48 @@ try {
     await waitUntil("ticket body", () =>
       page.getByText(HERO_BODY[0], { exact: false }).isVisible(),
     );
+    const automationsRail = page.getByTestId("ticket-rail-automations");
+    await automationsRail.waitFor({ timeout: 15000 });
+    await automationsRail
+      .getByRole("heading", { name: "Automations", exact: true })
+      .waitFor({ timeout: 15000 });
     await parkPointer(page);
     await sleep(600);
     return capture("ticket-workspace.png");
+  });
+
+  // ---- 3. the Automations page -------------------------------------------
+  await attempt(6, "automations.png", async () => {
+    const nav = page.getByRole("button", { name: "Automations", exact: true }).first();
+    await nav.waitFor({ timeout: 15000 });
+    await nav.click();
+    await page
+      .getByRole("heading", { name: "Automations", exact: true })
+      .waitFor({ timeout: 15000 });
+    const seededAutomation = page
+      .locator("[data-automation-rail-row]")
+      .filter({ hasText: seeded.automationName });
+    await seededAutomation.waitFor({ timeout: 15000 });
+    await parkPointer(page);
+    await sleep(600);
+    return capture("automations.png");
+  });
+
+  // ---- 4. the canvas editor ----------------------------------------------
+  await attempt(7, "canvas-editor.png", async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).first().click();
+    const settings = page.getByRole("navigation", { name: "Settings categories" });
+    await settings.getByRole("button", { name: "Appearance", exact: true }).click();
+    await page.getByTestId("appearance-mode").waitFor({ timeout: 15000 });
+    const pad = page.getByTestId("canvas-pad");
+    await pad.waitFor({ timeout: 15000 });
+    await pad.scrollIntoViewIfNeeded();
+    await page.getByTestId("canvas-stop-orb-0").waitFor({ timeout: 15000 });
+    await page.getByRole("slider", { name: "Vibrancy", exact: true }).waitFor({ timeout: 15000 });
+    await page.getByRole("slider", { name: "Grain", exact: true }).waitFor({ timeout: 15000 });
+    await parkPointer(page);
+    await sleep(600);
+    return capture("canvas-editor.png");
   });
 } catch (error) {
   check("!", "docs shots crashed", false, String(error?.stack ?? error));
@@ -316,15 +393,15 @@ async function restoreChrome(page) {
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].webContents.send("volli:ui-zoom-command", "reset");
   });
-  // `data-state` on the sidebar root is the only honest signal: the toggle
-  // button's label never changes with its state, the collapsed icon rail still
-  // carries a "Board" button by accessible name, and an offcanvas sidebar is
-  // moved out of view rather than removed — so it still reports as "visible".
+  // The app's panel is a custom collapsible root rather than the sidebar
+  // primitive's data-state root. Its conditional aria-hidden is the honest
+  // signal: the trigger's label never changes with its state, and a closed
+  // offcanvas panel remains mounted but hidden from both the window and AT.
   const sidebarState = () =>
-    page.evaluate(
-      () =>
-        document.querySelector('[data-slot="sidebar"][data-side="left"]')?.dataset.state ?? null,
-    );
+    page.evaluate(() => {
+      const panel = document.querySelector('[data-slot="sidebar"][aria-hidden]');
+      return panel?.getAttribute("aria-hidden") === "true" ? "collapsed" : "expanded";
+    });
   if ((await sidebarState()) === "collapsed") {
     await page.getByRole("button", { name: "Toggle navigation sidebar" }).click();
     await waitUntil("sidebar expanded", async () => (await sidebarState()) === "expanded");

@@ -19,7 +19,7 @@
  *
  * MANUALLY RUN (needs a display + the built app); not wired into CI:
  *
- *   pnpm -C apps/desktop run build
+ *   pnpm run build
  *   node apps/desktop/e2e/editor-theme-smoke.mjs
  */
 import { execFile } from "node:child_process";

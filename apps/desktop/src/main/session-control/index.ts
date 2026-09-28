@@ -59,6 +59,7 @@ export {
 export type { TerminalAttachmentDetail } from "./terminal-attachment";
 export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
 export { sessionListingRow, sessionListingRows } from "./listing-row";
+export { sessionListingRowsForRoster } from "./listing-roster";
 export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
 export { createSessionWatchdog } from "./session-watchdog";

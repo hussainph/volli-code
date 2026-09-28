@@ -21,12 +21,14 @@ import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 Volli Code is a local-first macOS workspace for parallel coding agents. Turn a
 rough idea into focused tasks yourself, or ask an agent to help break it down.
-Run independent tasks in parallel, then inspect their changes before you merge.
+Run independent tasks in parallel, reuse saved Automations when work starts, and
+inspect every change before you merge.
 
 In Volli, a task is a **ticket**. Each ticket keeps its brief, chat history,
 Git branch, and changes together. Projects, tickets, chat history, and
 worktrees stay on your machine. Volli itself needs no account. You sign in to a
-model provider through Model Access, and model requests go there.
+model provider through **Settings → Models** (the Model Access policy), and model
+requests go there.
 
 <Aside type="caution" title="Alpha">
   Volli Code is in early alpha, for Apple silicon Macs. Features move between
@@ -54,6 +56,11 @@ model provider through Model Access, and model requests go there.
     description="Translate tasks, chats, branches, and review into Volli's UI terms."
   />
   <LinkCard
+    title="What's new in 0.2"
+    href="/releases/whats-new-0-2/"
+    description="See how Automations add repeatable ways to start work."
+  />
+  <LinkCard
     title="CLI reference"
     href="/reference/cli/"
     description="The local `volli` command, and what a terminal Volli opened is attached to."
@@ -69,6 +76,11 @@ model provider through Model Access, and model requests go there.
     description="Organize tasks before and while agents work."
   />
   <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Save repeatable starts, run them by hand, or trigger them from a column or schedule."
+  />
+  <LinkCard
     title="Ticket workspace"
     href="/guides/ticket-workspace/"
     description="A task's brief, chats, files, branch, and changes."
@@ -81,7 +93,7 @@ model provider through Model Access, and model requests go there.
   <LinkCard
     title="Settings"
     href="/guides/settings/"
-    description="Model Access, web search, worktrees, terminal harnesses, and the CLI."
+    description="Models, web search, worktrees, terminal companions, and the CLI."
   />
 </CardGrid>
 

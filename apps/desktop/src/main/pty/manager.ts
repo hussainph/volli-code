@@ -34,9 +34,8 @@ import type {
 import type { VolliIpcEvent } from "../../ipc/contract";
 import { broadcastDataChanged } from "../broadcast";
 import { ensureHarnessWorkspaceFiles } from "../harness-workspace";
-import { listProjects } from "../db/projects-repo";
 import { createProcessInspector, parkConfigFromEnv } from "../park";
-import { readSessionConcurrencyEnv } from "../session-concurrency";
+import type { SessionConcurrencyEnvReader } from "../session-concurrency";
 import type { ParkConfig, ProcessInspector } from "../park";
 import { NO_SPAWN_LEDGER } from "../process/spawn-ledger";
 import { isPathWithinRoots } from "../project-roots";
@@ -228,6 +227,18 @@ export class PtyManager {
    * side effects that touch node-pty/webContents and hands them in as deps.
    */
   private readonly parkController: ParkController;
+  /**
+   * The process's reader of who is working, behind
+   * {@link sessionConcurrencyEnv} (VC-403).
+   *
+   * Injected rather than built here, and deliberately: a terminal start and a
+   * structured attachment ask the same question about the same machine, so
+   * `index.ts` builds ONE reader and hands it to both doors. A manager that
+   * built its own would give the same machine two answers for as long as their
+   * windows disagreed. `null` when the caller has no Session Engine to ask,
+   * which leaves every toolchain on its own default.
+   */
+  private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
   /**
    * @param db         the app database, or `null` when it failed to open. Every
@@ -249,6 +260,10 @@ export class PtyManager {
    *                   crash can still say whose process it is (VC-341).
    *                   Defaults to the ledger that remembers nothing, which is
    *                   what every test that is not about the ledger wants.
+   * @param concurrencyEnvReader the process's one reader of who is working
+   *                   (VC-339, VC-403), shared with the structured door rather
+   *                   than built here. Defaults to `null`, which budgets
+   *                   nothing — what a test that is not about the budget wants.
    */
   constructor(
     private readonly db: Database.Database | null,
@@ -259,8 +274,10 @@ export class PtyManager {
     private readonly blobsRootPath: string = "",
     sessionEngine: SessionEngine | null = null,
     private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
+    concurrencyEnvReader: SessionConcurrencyEnvReader | null = null,
   ) {
     this.sessionEngine = sessionEngine ?? (db === null ? null : createDesktopSessionEngine(db));
+    this.concurrencyEnvReader = concurrencyEnvReader;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and webContents — and every current
@@ -349,23 +366,17 @@ export class PtyManager {
    * against a stated environment.
    *
    * Every project's Sessions, because load is a fact about the machine: a
-   * build in another project's Session competes for the same cores. This is
-   * the same read `volli session list` makes.
+   * build in another project's Session competes for the same cores. Counted
+   * in the same terminal/chat precedence `volli session list` shows a person,
+   * off the narrow attached-Sessions read rather than a fold of the fleet
+   * (VC-403), and shared with every other door through one reader.
    */
   private async sessionConcurrencyEnv(
     sessionId: string,
     inheritedEnv: Readonly<Record<string, string | undefined>>,
   ): Promise<Record<string, string>> {
-    const db = this.db;
-    const sessionEngine = this.sessionEngine;
-    if (db === null || sessionEngine === null) return {};
-    return readSessionConcurrencyEnv(
-      {
-        listProjectIds: () => listProjects(db).map((project) => project.id),
-        listSessions: (projectId) => sessionEngine.listSessions({ projectId, scope: "all" }),
-      },
-      { excludeSessionId: sessionId, environment: inheritedEnv },
-    );
+    if (this.concurrencyEnvReader === null) return {};
+    return this.concurrencyEnvReader({ excludeSessionId: sessionId, environment: inheritedEnv });
   }
 
   async create(

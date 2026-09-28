@@ -212,7 +212,7 @@ describe("readGhosttyAppearance", () => {
       expect(result.themeSource).toBe("bundled theme text");
     });
 
-    it("returns null when no probe location has the named theme (restty's builtin catalog)", () => {
+    it("returns null when no probe location has the named theme (the vendored catalog)", () => {
       const result = readGhosttyAppearance(makeDeps({ [XDG_ENTRY]: "theme = Some Builtin" }));
       expect(result.themeSource).toBeNull();
     });

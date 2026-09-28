@@ -92,6 +92,7 @@ import {
   type AgentRuntime,
   type AuthorityPolicy,
   type AuthoritySnapshot,
+  type CommandRefusalSeverity,
   type CompactionRequestOutcome,
   type DeliveryOutcome,
   type McpToolDefinition,
@@ -574,6 +575,33 @@ const COMPACTION_REJECTION_CODES = {
 } as const satisfies Record<
   Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
   string
+>;
+
+/**
+ * Which of those four a person's own `/compact` is owed an apology for, and
+ * which two it merely ran into (VC-141).
+ *
+ * Decided here because this is where the runtime's reason is still readable.
+ * A client given only `PI_BUSY` could not tell a live turn from a compaction
+ * already running, and the runtime writes a different sentence for each; a
+ * client given the severity renders whichever sentence arrived and never has
+ * to know either code.
+ *
+ * `busy-unsupported` and `nothing-to-compact` are benign: the context was not
+ * free, or there was nothing left to summarize. Neither is a failure of the
+ * Session's plumbing, and CLAUDE.md draws exactly that line — "Errors are for
+ * operations that failed, not for outcomes the user chose." `closed` and
+ * `summary-failed` are failures: an attachment that has gone away, and a
+ * provider that would not produce the summary.
+ */
+const COMPACTION_REFUSAL_SEVERITY = {
+  "busy-unsupported": "benign",
+  closed: "failure",
+  "nothing-to-compact": "benign",
+  "summary-failed": "failure",
+} as const satisfies Record<
+  Extract<CompactionRequestOutcome, { kind: "rejected" }>["reason"],
+  CommandRefusalSeverity
 >;
 
 function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefined {
@@ -1167,7 +1195,12 @@ class PiBinding implements BindingHandle {
             : this.#rejected(
                 command.commandId,
                 COMPACTION_REJECTION_CODES[outcome.reason],
+                // The runtime's own sentence, carried whole. It is the one
+                // place that knows whether the context is busy with a turn or
+                // with another compaction, and it writes a different sentence
+                // for each.
                 outcome.message,
+                COMPACTION_REFUSAL_SEVERITY[outcome.reason],
               );
         } catch (error) {
           return this.#unknown(command.commandId, error);
@@ -1607,8 +1640,22 @@ class PiBinding implements BindingHandle {
     };
   }
 
-  #rejected(commandId: string, code: string, detail: string): DeliveryReceipt {
-    return { commandId, status: "rejected", code, detail, native: this.#native };
+  #rejected(
+    commandId: string,
+    code: string,
+    detail: string,
+    severity?: CommandRefusalSeverity,
+  ): DeliveryReceipt {
+    return {
+      commandId,
+      status: "rejected",
+      code,
+      detail,
+      native: this.#native,
+      // Absent, never explicitly `undefined`: a key JSON would drop is a key
+      // structured clone would have carried across as a present `undefined`.
+      ...(severity === undefined ? {} : { severity }),
+    };
   }
 
   #unknown(commandId: string, error: unknown): DeliveryReceipt {

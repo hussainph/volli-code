@@ -50,6 +50,16 @@ The generator is `apps/desktop/e2e/bench/performance/fixture.mjs`. It creates a 
 | `small` | 120 | 26,040 | 40 | 547 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
 | `real` | 1,198 | 259,855 | 392 | 5,361 | 8,541 | 50 | 17 | 1,668 | 1,600 | 373 MB | 173 MB |
 | `2x` | 2,396 | 519,710 | 784 | 10,722 | 17,082 | 100 | 34 | 3,336 | 3,200 | 746 MB | 346 MB |
+| `tickets-300` | 120 | 26,040 | 300 | 600 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
+| `tickets-3k` | 120 | 26,040 | 3,000 | 6,000 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
+| `tickets-10k` | 120 | 26,040 | 10,000 | 20,000 | 856 | 8 | 3 | 1,200 | 220 | 37.3 MB | 17.3 MB |
+
+The three `tickets-*` presets (VC-316) answer ONE question — what a board costs
+per card — so they vary the ticket count and hold everything else at `small`'s
+Session mass. Ticket Events scale with the tickets at two each. They are **not**
+owner-profile fixtures and their absolute numbers are not comparable with
+`real`'s: `real` stays the arm for anything about the whole app, and these three
+are the arm for the board's own per-card slope.
 
 The default seed is `353259855`. A capped deterministic long-tail allocator preserves exact totals and puts the maximum on `perf-session-0001` (`PERF-1`). The `real` preset has 21 Sessions at or above 1,000 events (p50 149, p95 592, p99 1,164), while retaining exactly one 1,668-event maximum. Event and transcript payloads contain generated prose, fenced code, and tool results only.
 
@@ -78,10 +88,12 @@ Each full-app repetition uses a fresh APFS clone of the verified fixture and a f
 3. **Streaming while scrolling** — the existing Electron `ChatPlane` bench seeds the preset’s long-transcript message count. One stable assistant message grows under the production `turnActive` lifecycle at 30 tokens/s while the transcript scroll position moves inside the live row on two paint frames per stream step. Staying near the live tail is load-bearing: Streamdown defers offscreen code work with `content-visibility`, so an absolute scroll offset would let the growing fence leave the viewport and make the probe vacuous. The second paint lets Streamdown commit and run its lazy highlighter before the next snapshot can supersede that work. The deterministic stream traverses prose, opens a roughly 4 KB TypeScript fence, grows it across 96 more snapshots, closes it, and continues with prose. The earlier 107-character fence reported zero dropped frames before VC-357 and could not measure that bug. Each raw sample records whether it streamed while a Turn was active, whether it reached both fence phases, live and settled code/highlight counts, and how many `ResizeObserver` callbacks ran. The concurrent frame and long-task window ends before the final settle-time Shiki pass; that pass has its own latency and long-task fields. The stream renderer is isolated from SQLite intentionally: this interaction prices the production rendering path after the fixture-backed app measurement prices migration, replay, IPC, and artifact hydration. RSS is sampled directly after every stream.
 4. **New chat** — `+ Chat` until the newly visible composer is enabled and accepts focus.
 5. **New terminal** — terminal menu action until a visible real terminal canvas answers `stty size` through its PTY.
-6. **Sidebar** — close and open separately, retaining rAF frame deltas through each complete transition.
+6. **Sidebar** — close and open separately, retaining rAF frame deltas through each complete transition. Each sample also records how many rows the two Session bands actually held (`sidebarRows_active`, `sidebarRows_previous`). Read those before reading the latency: a band bounded by age and a band that is genuinely short read the same on the clock, and the generated fixtures currently stamp every Session from a frozen `BASE_TIME`, so the Previous band's own age bound empties it (VC-415). A sidebar latency taken against an empty band is measuring shell animation, not the cost of listing Sessions.
 7. **Ticket workspace switch** — both workspaces are opened to a usable state first and the first is returned to, so the timed step is a switch between two existing Ticket workspaces rather than a first open. It runs until the target tab is selected, its heading and description editor are visible, and that content accepts focus.
-8. **Board render** — navigate back to Board until every fixture ticket slot is present.
-9. **RPC round trip** — one native preload/session-RPC `session.projection` call timed wholly in the renderer.
+8. **Board render** — navigate back to Board until the board publishes that it holds every fixture ticket (`data-board-ticket-count`) and every non-empty column has painted at least one card. It was "until every ticket slot is present" until VC-316 bounded what a column mounts; counting `[data-board-ticket-slot]` nodes now measures the WINDOW, so a windowed board would never satisfy it and an unwindowed one would satisfy it for the wrong reason. Each sample also carries `boardTickets` and `mountedCards` — what the columns hold against what they put in the DOM — taken from the columns' own published attributes after the capture closes.
+9. **Board column scroll** — the fullest column driven end to end over a fixed 60 steps, one animation frame apart. A fixed step count rather than a fixed pixel stride, so the gesture is comparable across 300 and 10,000 cards. The frame times are the metric here, not the latency; the arm fails loudly if no column has anything to scroll.
+10. **Board filter apply** — the Priority facet toggled on an already-drawn board, until the board publishes a smaller held count. Filtering re-derives every column's list, count badge and window from the whole ticket set, so this cost tracks what the board HOLDS rather than what it mounts. The unfiltered board is restored before the arm returns.
+11. **RPC round trip** — one native preload/session-RPC `session.projection` call timed wholly in the renderer.
 
 Latency summaries report nearest-rank p50 and p95 plus population variance. Renderer memory is Electron’s renderer working-set reading from `app.getAppMetrics()`. Long-task counts are summarized per sample so runs with different repetition counts are not compared by a misleading raw sum.
 

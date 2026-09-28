@@ -19,7 +19,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
-import type { AgentResponse, TicketEventActor } from "@volli/shared";
+import type {
+  AgentResponse,
+  SessionProjection,
+  SessionRecord,
+  TicketEventActor,
+} from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal } from "./agent-dispatch/admission";
@@ -115,27 +120,42 @@ export function createAgentCommandService(
       // for the identity resolution its table entry deliberately skips.
       const door = doorActor(request, verifyToken);
       const projects = listProjects(options.db);
-      // Every Session of every project, folded once — unless this verb's entry
-      // declares it takes no snapshot. `sessions` narrows it to the terminal
-      // rows: the verbs that need a PTY (resume, rename, the terminal half of
-      // list) have nothing a structured-only Session can answer, and dropping
-      // it there is correct, not a compatibility gap. Identity questions — who
-      // is `VOLLI_SESSION` — are answered by `envSession` below instead.
-      const projections =
-        binding.projections === "skip"
-          ? []
-          : (
-              await Promise.all(
-                projects.map((project) =>
-                  sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
-                ),
-              )
-            ).flat();
-      const sessions = projections.flatMap((projection) => terminalSessionRecord(projection) ?? []);
+      // Every Session of every project — lazy and memoized (VC-403). Nothing
+      // is folded until a handler calls `context.loadProjections()` or
+      // `context.loadSessions()`, and calling either twice (or calling both —
+      // `loadSessions` is built ON `loadProjections`) still folds it exactly
+      // once. This replaced an eager fold gated by a per-verb table policy:
+      // laziness now makes the opt-out automatic for any verb that never
+      // calls either loader, which is most of them. Identity questions — who
+      // is `VOLLI_SESSION` — are answered by `envSession` below instead, off
+      // its own single-Session lookup rather than this fold.
+      let projectionsPromise: Promise<readonly SessionProjection[]> | null = null;
+      const loadProjections = (): Promise<readonly SessionProjection[]> => {
+        projectionsPromise ??= (async () =>
+          (
+            await Promise.all(
+              projects.map((project) =>
+                sessionEngine.listSessions({ projectId: project.id, scope: "all" }),
+              ),
+            )
+          ).flat())();
+        return projectionsPromise;
+      };
+      let sessionsPromise: Promise<readonly SessionRecord[]> | null = null;
+      // The terminal half of `loadProjections`'s answer: the verbs that need a
+      // PTY (resume, rename, the terminal half of list) have nothing a
+      // structured-only Session can answer, and dropping it there is correct,
+      // not a compatibility gap.
+      const loadSessions = (): Promise<readonly SessionRecord[]> => {
+        sessionsPromise ??= loadProjections().then((projections) =>
+          projections.flatMap((projection) => terminalSessionRecord(projection) ?? []),
+        );
+        return sessionsPromise;
+      };
       // The `VOLLI_SESSION` identity rung, resolved against the Session Engine
-      // rather than the terminal-only snapshot above: a structured (chat)
-      // Session exports `VOLLI_SESSION` too (VC-51), and it has no terminal
-      // attachment for `terminalSessionRecord` to answer with.
+      // rather than the fleet fold above: a structured (chat) Session exports
+      // `VOLLI_SESSION` too (VC-51), and it has no terminal attachment for
+      // `terminalSessionRecord` to answer with.
       // The token's own Session when the caller sent one, falling back to the
       // bare `VOLLI_SESSION` claim otherwise (VC-163). Token first because it
       // is the stronger statement: it NAMES the Session rather than asserting
@@ -143,6 +163,10 @@ export function createAgentCommandService(
       // rather than left half-authenticated.
       const envSessionId = door.kind === "session" ? door.sessionId : request.ctx.env.session;
       let envSession: EnvSessionIdentity | null = null;
+      // `identify` needs only this one Session's terminal facts (VC-403): its
+      // `cwd`, resolved from the SAME `getSession` call below rather than a
+      // fold of the whole fleet just to find one row in it.
+      let envSessionTerminal: SessionRecord | null = null;
       if (envSessionId !== undefined && binding.envSession === "resolve") {
         const projection = await sessionEngine.getSession({ sessionId: envSessionId });
         if (projection !== null) {
@@ -152,6 +176,7 @@ export function createAgentCommandService(
             ticketId: projection.session.ticketId,
             role: projection.session.role,
           };
+          envSessionTerminal = terminalSessionRecord(projection);
         }
       }
       // Admission, before any handler runs (VC-163). This used to live inside
@@ -189,9 +214,10 @@ export function createAgentCommandService(
         watermarks,
         terminalUpdateLocks,
         projects,
-        projections,
-        sessions,
+        loadProjections,
+        loadSessions,
         envSession,
+        envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
       };

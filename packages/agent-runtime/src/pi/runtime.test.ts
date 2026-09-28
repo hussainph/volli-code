@@ -78,7 +78,7 @@ const PROVIDER_ID = "anthropic";
 /** A second catalog entry, so a chat-model change has a visible summary answer. */
 const CHAT_MODEL_ID = "claude-chat-model";
 /**
- * A managed-effort model, spelled as pi 0.85.0 spells the real one.
+ * A managed-effort model, spelled as pi 0.85.1 spells the real one.
  *
  * Only `claude-fable-5-1` and `claude-opus-5` carry `supportsMidConvoEffort` in
  * pi's static Anthropic catalog, and `claude-fable-5` — one character away —
@@ -88,7 +88,7 @@ const FABLE_MODEL_ID = "claude-fable-5-1";
 /**
  * Its sibling one character away, which carries no managed effort.
  *
- * The pairing is the point: in pi 0.85.0 `claude-fable-5` has
+ * The pairing is the point: in pi 0.85.1 `claude-fable-5` has
  * `forceAdaptiveThinking` but NOT `supportsMidConvoEffort`, so it gets no
  * `drop_block` and a broken prefix still comes back as a 400 (VC-254).
  */
@@ -298,7 +298,7 @@ function scriptedStream(steps: ScriptStep[]): StreamFn {
  * `FauxModelDefinition` covers ids, costs and windows and stops there — it
  * cannot say a model is a managed-effort one, because `compat` and
  * `thinkingLevelMap` are protocol rather than description. Both are what a real
- * catalog entry carries (pi 0.85.0 gives `claude-fable-5-1` exactly
+ * catalog entry carries (pi 0.85.1 gives `claude-fable-5-1` exactly
  * `{ supportsMidConvoEffort: true, forceAdaptiveThinking: true }` and a
  * `thinkingLevelMap` of `{off: null, xhigh, max}`), so a test about managed
  * effort has to put them back.

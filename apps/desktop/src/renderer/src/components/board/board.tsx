@@ -921,6 +921,13 @@ export const Board = React.memo(function Board({
                 // which cannot start reading a panel before dnd-kit has
                 // actually activated (`automations-picker-smoke.mjs`).
                 data-board-drag={drag === null ? undefined : drag.activeTicket.id}
+                // How many cards the board is HOLDING, as against how many its
+                // columns currently mount (VC-316). Published because the two
+                // stopped being the same number when columns gained a window,
+                // and "the board has finished drawing" is asked from outside
+                // React — by the performance harness and the board smokes —
+                // where counting card nodes would now answer the window's size.
+                data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
                   // grab-able under them (Trello-style mouse pan). Scrollbar is
@@ -958,6 +965,9 @@ export const Board = React.memo(function Board({
                     composerInitiallyOpen={expandedEmptyStatus === status}
                     onComposerClose={handleComposerClose}
                     animateEnter={boardMounted.current}
+                    // A column's window may only GROW while a card is in the
+                    // air: see `column-window.ts`.
+                    dragActive={drag !== null}
                   />
                 ))}
                 {boardBare ? null : (

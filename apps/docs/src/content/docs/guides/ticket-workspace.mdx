@@ -12,24 +12,42 @@ its chats, inspect files and diffs, and edit its properties. The main tab strip
 keeps the documents and chats you open. **Now**, **Diffs**, and **Files** group
 the task's workspace views.
 
-![A ticket workspace for VLT-14. Its Ticket Body holds the task brief, and the workspace shows the worktree, review state, and Chat control.](../../../assets/screenshots/ticket-workspace.png)
+![The ticket workspace for VLT-14 with its body, expanded navigation sidebar, worktree and ticket properties, and the Automations rail showing Run once beside the Chat control.](../../../assets/screenshots/ticket-workspace.png)
 
 ## Now
 
-**Now** shows the repository summary, ticket properties, and **Sessions**
-together. Use **Properties** here to edit status, priority, and labels. The
-repository summary shows the branch, base branch, worktree, changes, and
-pull-request state. Changing status updates the board. Starting a chat is a
-separate action.
+**Now** shows the repository summary, ticket properties, **Automations**, and
+**Sessions** together. Use **Properties** here to edit status, priority, and
+labels. The repository summary shows the branch, base branch, worktree,
+changes, and pull-request state. Changing status updates the board. Starting a
+chat or an Automation Run is a separate action.
 
 The **Sessions** section lists the ticket's chats and terminal sessions. Open
 one to return to its history. A ticket chat carries the task's context and
 works from that ticket's worktree. Reconnecting it does not create a second
 chat history.
 
+### Run an Automation on this ticket
+
+The **Automations** section has a split Run control and this ticket's Run
+history. Its main action uses the Automation armed for the ticket's current
+column, when one is ready. Open the menu to choose another offered Automation,
+choose **Run on model**, or select **Run once…**.
+
+**Run once…** opens a form for one-time **Instructions**. It creates an
+**Unbound Run** and saves no Automation record. The form can use the **Default
+model** or a model selected for **This run**. A manual Run is available even
+when an Automation's **Enabled** switch is off.
+
+Each history row opens the fresh Session created by that Run and keeps the
+resolved model and reasoning used at launch. If this project has no saved
+Automations, the section still offers **Run once…**. Select **Open
+Automations** in the section heading to create or edit records; authoring lives
+only on that page.
+
 Use the **Sessions** heading to start a chat after configuring **Settings →
-Model Access**. Open a terminal companion explicitly when you need a shell or
-an external TUI harness.
+Models**. Open a terminal companion explicitly when you need a shell or an
+external TUI harness.
 
 ## Files and references
 
@@ -38,9 +56,9 @@ and the ticket worktree's directory tree. Use `@` in the Ticket Body to add a
 file reference. Selecting a file opens a preview tab; keeping it open pins the
 tab.
 
-Ticket files read from the worktree. The project-level **Files** page reads from
-the main checkout, so the same path can contain different content in each
-place. Editing one does not edit the other.
+Ticket files read from the worktree. The project-level **Files** navigator in
+**Home** reads from the main checkout, so the same path can contain different
+content in each place. Editing one does not edit the other.
 
 ## Diffs
 
@@ -65,7 +83,12 @@ work, so it reflects the branch as it is on disk.
   <LinkCard
     title="The board"
     href="/guides/board/"
-    description="Understand the ticket states that organize your work."
+    description="Understand the ticket states and column Automations."
+  />
+  <LinkCard
+    title="Automations"
+    href="/guides/automations/"
+    description="Create a saved start and read the Runs it opens."
   />
   <LinkCard
     title="Concepts"

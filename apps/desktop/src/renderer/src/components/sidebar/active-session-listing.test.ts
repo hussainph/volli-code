@@ -1154,6 +1154,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      harnessId: null,
       provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-2", paneId: "proj-2" },
     } satisfies ActiveSessionRow;
@@ -1200,6 +1201,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      harnessId: null,
       provenance: PERSON_STARTED,
       target: { kind: "chat", tabId: "chat:chat-1", sessionId: "chat-1" },
     } satisfies ActiveSessionRow;
@@ -1231,6 +1233,7 @@ describe("buildActiveSessionListing — the project container", () => {
       attention: null,
       waitingOn: null,
       lastActivityAt: null,
+      harnessId: null,
       provenance: PERSON_STARTED,
       target: { kind: "terminal", tabId: "proj-1", paneId: "proj-1" },
     } satisfies ActiveSessionRow;
@@ -2788,6 +2791,7 @@ function previousRow(
     ticket: null,
     title: "Chat",
     kind: "chat",
+    harnessId: null,
     endedOrQuietAt: 1_000,
     activity: "idle",
     provenance: PERSON_STARTED,
@@ -2884,5 +2888,97 @@ describe("groupPreviousByTicket", () => {
     expect(groupPreviousByTicket([row])).toEqual([
       { kind: "ticket", id: "t1", ticket: t1, rows: [row], newestAt: 2_000 },
     ]);
+  });
+});
+
+/**
+ * VC-402: WHICH CLI each row is running, carried so the bands can draw it.
+ *
+ * A pure read of the record's launch metadata, through
+ * `sessionSourceHarness` — the same rule `source` is built from, so a row
+ * cannot name one harness in its glyph and another in its hover title. Every
+ * case here is a case where the answer is NOT a harness, because those are the
+ * ones a glyph could get wrong out loud: a shell, a pane with no record yet,
+ * and a structured Session.
+ */
+describe("buildActiveSessionListing — the harness a row is running", () => {
+  const listing = (input: Partial<Parameters<typeof buildActiveSessionListing>[0]> = {}) =>
+    buildActiveSessionListing({
+      tickets: [ticket({ id: "t1", status: "doing" })],
+      containers: {},
+      signalsByTicket: {},
+      records: [],
+      lastOutputAt: {},
+      parkState: {},
+      harness: {},
+      now: 100_000,
+      ...input,
+    });
+
+  it("names the harness on a live companion, and none on a shell", () => {
+    const result = listing({
+      containers: { t1: container("s1", [paneTab("s1", "Agent"), paneTab("s2", "Shell")]) },
+      records: [
+        record({ id: "s1", ticketId: "t1", harnessId: "codex" }),
+        record({ id: "s2", ticketId: "t1", launchKind: "shell" }),
+      ],
+      lastOutputAt: { s1: 100_000, s2: 100_000 },
+    });
+
+    expect(result.active.map((row) => [row.title, row.harnessId])).toEqual([
+      ["Agent", "codex"],
+      ["Shell", null],
+    ]);
+  });
+
+  // A pane whose durable record has not landed says nothing, rather than
+  // drawing the default harness's glyph over a Session nobody has described.
+  it("names none for a pane with no record yet", () => {
+    const result = listing({
+      containers: { t1: container("s1", [paneTab("s1", "Fresh")]) },
+      lastOutputAt: { s1: 100_000 },
+    });
+
+    expect(result.active.map((row) => row.harnessId)).toEqual([null]);
+  });
+
+  it("carries it into Previous by every route a row gets there", () => {
+    // Live, but quiet for longer than the Active window.
+    const quiet = listing({
+      containers: { t1: container("s1", [paneTab("s1", "Quiet")]) },
+      records: [record({ id: "s1", ticketId: "t1", harnessId: "cursor" })],
+      lastOutputAt: { s1: 100_000 },
+      now: 100_000 + ACTIVE_QUIET_WINDOW_MS,
+    });
+    // Taken off the Active row it was built from.
+    expect(quiet.previous.map((row) => row.harnessId)).toEqual(["cursor"]);
+
+    // An exited tab, whose subject pane is gone: read off the tab's own record.
+    const exited = listing({
+      containers: { t1: container("s1", [paneTab("s1", "Done", 0)]) },
+      records: [record({ id: "s1", ticketId: "t1", harnessId: "opencode" })],
+    });
+    expect(exited.previous.map((row) => row.harnessId)).toEqual(["opencode"]);
+
+    // A durable record the live layout no longer holds at all.
+    const ended = listing({
+      records: [record({ id: "s9", ticketId: "t1", harnessId: "codex", endedAt: 50_000 })],
+    });
+    expect(ended.previous.map((row) => row.harnessId)).toEqual(["codex"]);
+  });
+
+  // A structured Session runs the Agent Runtime, not a CLI: no harness in
+  // either band, which is what keeps its row exactly as it was.
+  it("names none for a chat Session, in either band", () => {
+    const live = listing({
+      chatSessions: [chatSession({ ticketId: "t1", lastActivityAt: 100_000, live: true })],
+    });
+    expect(live.active.map((row) => row.harnessId)).toEqual([null]);
+
+    const quiet = listing({
+      chatSessions: [chatSession({ ticketId: "t1", lastActivityAt: 100_000, live: false })],
+      now: 100_000 + ACTIVE_QUIET_WINDOW_MS,
+    });
+    expect(quiet.previous.map((row) => row.harnessId)).toEqual([null]);
   });
 });

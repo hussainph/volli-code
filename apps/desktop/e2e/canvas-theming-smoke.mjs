@@ -46,8 +46,8 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
-import { APCAcontrast, sRGBtoY } from "apca-w3";
-
+import { APCA_VECTORS } from "../../../packages/shared/src/theme/apca-reference.ts";
+import { apcaLc } from "../../../packages/shared/src/theme/color.ts";
 import {
   assertProfileIsolated,
   createRunner,
@@ -204,9 +204,43 @@ const hexToRgb = (hex) => [
   Number.parseInt(hex.slice(5, 7), 16),
 ];
 
-/** APCA Lc via apca-w3 itself — deliberately a different implementation than the generator's. */
-const lc = (textHex, bgHex) =>
-  Math.abs(Number(APCAcontrast(sRGBtoY(hexToRgb(textHex)), sRGBtoY(hexToRgb(bgHex)))));
+/**
+ * APCA Lc, from `@volli/shared` — the product's own metric (VC-412).
+ *
+ * This was `apca-w3` until that package was removed: it pulls `colorparsley`,
+ * whose manifest declares AGPL v3, and this project ships as commercial OSS
+ * downstream. What the oracle bought here was the guarantee that the number
+ * this file measures the RUNNING APP with is a real APCA score rather than
+ * whatever the generator currently believes. That guarantee is kept by `assertMetricIsPinned()` below
+ * instead — and what these checks are actually for is untouched, because the
+ * subject was never the metric: it is the whole pipeline from a stored canvas,
+ * through the generator, into the stylesheet, onto the live DOM. Every value
+ * fed to `lc` here is read back out of a running Chromium.
+ */
+const lc = (textHex, bgHex) => apcaLc(textHex, bgHex);
+
+/**
+ * Refuse to measure anything until the metric reproduces the frozen vectors
+ * `packages/shared/src/theme/apca-reference.ts` holds — the table captured
+ * from, and verified against, the departed oracle.
+ *
+ * Cheap, and it runs before the app is launched: a floor check that silently
+ * measured with a broken metric would report PASS on an illegible theme, which
+ * is the one failure this smoke must never produce.
+ */
+function assertMetricIsPinned() {
+  const drift = APCA_VECTORS.filter(
+    ([text, background, expected]) => Math.abs(lc(text, background) - expected) > 5e-4,
+  );
+  if (drift.length > 0) {
+    throw new Error(
+      `APCA metric does not match its frozen reference vectors — refusing to measure contrast ` +
+        `floors with it. First drift: ${drift[0][0]} on ${drift[0][1]} scored ` +
+        `${lc(drift[0][0], drift[0][1]).toFixed(4)}, table says ${drift[0][2]}.`,
+    );
+  }
+  console.log(`APCA metric pinned against ${APCA_VECTORS.length} reference vectors.\n`);
+}
 
 /** One sRGB channel, linearized. */
 const linearize = (channel) => {
@@ -776,6 +810,7 @@ const overlayPath = join(userDataDir, "volli", "ghostty", "config");
 const { check, attempt, summarize } = createRunner();
 
 console.log("scratch:", scratch, "\n");
+assertMetricIsPinned();
 
 const env = { HOME: home, XDG_CONFIG_HOME: join(home, ".config") };
 let app = await launch({ dbPath, userDataDir, extraEnv: env });
@@ -799,7 +834,7 @@ try {
     return { ok: drift.length === 0, detail: drift.slice(0, 6).join(" · ") };
   });
 
-  await attempt(2, "APCA/ΔL floors hold on the applied dark values (per apca-w3)", async () => {
+  await attempt(2, "APCA/ΔL floors hold on the applied dark values", async () => {
     const t = await readAppliedTokens(page, Object.keys(DARK));
     const failures = [];
     const floor = (label, actual, min) => {

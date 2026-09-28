@@ -4,7 +4,12 @@
  *
  * cursor.com/docs closes every page with a link to the whole tree as plain
  * text, which is the address you hand an agent. Same reasoning here, and it's
- * the only thing this override adds.
+ * the main thing this override adds.
+ *
+ * Beside it, /licenses.txt: this site self-hosts Mona Sans, and OFL-1.1 asks
+ * that the copyright notice and license travel with the font software. The
+ * route emits them (src/pages/licenses.txt.ts); this link is how a reader
+ * finds them.
  *
  * The edit link, timestamp, and pagination come from Starlight's own Footer,
  * rendered as-is. Rebuilding them here would mean importing three
@@ -16,18 +21,26 @@ import Default from "@astrojs/starlight/components/Footer.astro";
 
 <Default><slot /></Default>
 
-<a href="/llms.txt" class="llms print:hidden">All docs as plain text</a>
+<div class="volli-footer-links print:hidden">
+  <a href="/llms.txt">All docs as plain text</a>
+  <a href="/licenses.txt">Licenses</a>
+</div>
 
 <style>
-  .llms {
-    display: block;
+  .volli-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
     margin-top: 1.5rem;
+  }
+
+  .volli-footer-links a {
     font-size: var(--sl-text-xs);
     text-decoration: none;
     color: var(--sl-color-gray-4);
   }
 
-  .llms:hover {
+  .volli-footer-links a:hover {
     color: var(--sl-color-gray-1);
   }
 </style>

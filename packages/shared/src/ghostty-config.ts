@@ -167,8 +167,12 @@ function parseMacosOptionAsAlt(value: string): "left" | "right" | boolean | null
  * Splits a config line into a trimmed `[key, value]` pair, or null when the
  * line is blank, a comment (`#` first non-whitespace char), or has no `=`.
  * The value has one pair of surrounding double quotes stripped.
+ *
+ * Exported because `ghostty-theme.ts` shares this exact tokenizer for theme
+ * files, which use the same `key = value` / `#` comment / blank-line grammar
+ * as a config file — one line-splitter for both rather than a second copy.
  */
-function parseConfigLine(line: string): [key: string, value: string] | null {
+export function parseConfigLine(line: string): [key: string, value: string] | null {
   const trimmed = line.trim();
   if (trimmed.length === 0 || trimmed.startsWith("#")) return null;
 

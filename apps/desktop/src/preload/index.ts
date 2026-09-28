@@ -1448,7 +1448,7 @@ const api = {
       return () =>
         ipcRenderer.removeListener("volli:terminal-exit" satisfies VolliIpcEvent, listener);
     },
-    /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+    /** Reads the user's resolved Ghostty config as the renderer's terminal appearance. */
     ghosttyConfig: (): Promise<GhosttyConfigResult> => invoke("volli:ghostty-config-get"),
     /** Subscribes to live Ghostty config reloads; returns the unsubscribe function. */
     onGhosttyConfigChanged: (

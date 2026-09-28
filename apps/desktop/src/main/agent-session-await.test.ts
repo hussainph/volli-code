@@ -212,6 +212,7 @@ function harness(
     getSession: unusedRead,
     getBaseSession: unusedRead,
     listSessions: async () => projections,
+    listAttachedSessions: async () => projections,
     countSessions: unusedRead,
     listSessionStarts: unusedRead,
     listLatestTicketSignals: unusedRead,

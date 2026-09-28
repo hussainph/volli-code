@@ -1540,6 +1540,7 @@ function result(
               sequence: 2,
             },
     throughSequence: 2,
+    refusal: null,
   };
 }
 

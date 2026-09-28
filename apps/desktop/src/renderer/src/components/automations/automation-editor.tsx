@@ -424,6 +424,73 @@ function RuntimeFields({
   );
 }
 
+/**
+ * The draft state, stated in the editor's title row. Two things are separated
+ * here, and the separation is the whole of it.
+ *
+ * THE SLOT NEVER CHANGES WIDTH. As a bordered bar above Instructions this
+ * appeared on the first keystroke and pushed the whole form down — the layout
+ * jump VC-405 calls glitchy. Moving it into the title row ends the vertical
+ * push but not the jump: the name input is the row's only elastic member, so a
+ * `shrink-0` child arriving still takes its width out of the one field under
+ * the cursor, and `dirty` flips on the first character OF THE NAME. So the slot
+ * is always in the row and only its ink changes. `opacity`, not `hidden` or a
+ * conditional: it has to keep occupying the row to hold the width open. The
+ * label it reserves is the label it will show, because `resumed` cannot change
+ * while a draft is being typed — only a discard or a save clears it, and both
+ * end the draft — so the width reserved is the exact width that arrives.
+ *
+ * THE ANNOUNCEMENT CARRIES TEXT AND NOTHING ELSE. `role="status"` used to wrap
+ * the discard button with the sentence, which puts a control inside a live
+ * region and re-reads it on every status change; `chat/activity-island-ui.tsx`
+ * records the same lesson against the same mistake ("A GROUP, not a live
+ * region"). The region is its own sr-only span, and it is mounted whether or
+ * not a draft exists so that the text CHANGES inside a region the reader is
+ * already watching — a live region that arrives with its text already in it is
+ * the classic version of this bug, and it announces nothing.
+ */
+function DraftIndicator({
+  dirty,
+  resumed,
+  onDiscard,
+}: {
+  dirty: boolean;
+  resumed: boolean;
+  onDiscard: () => void;
+}) {
+  const label = resumed ? "Draft restored" : "Draft saved";
+  return (
+    <>
+      <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {dirty ? label : ""}
+      </span>
+      <div
+        data-slot={dirty ? (resumed ? "draft-resumed" : "draft-saved") : "draft-idle"}
+        aria-hidden={!dirty}
+        className={cn(
+          "flex shrink-0 items-center text-ui text-muted-foreground",
+          !dirty && "pointer-events-none opacity-0",
+        )}
+      >
+        <span className="whitespace-nowrap">{label}</span>
+        {/* No gap: the button's own inset is the space, so the pair reads as one
+         * label with a door rather than two peers — the row's `gap-4` is then
+         * the wider interval, and it is what separates this from the record's
+         * controls. */}
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          disabled={!dirty}
+          onClick={onDiscard}
+        >
+          Discard draft
+        </Button>
+      </div>
+    </>
+  );
+}
+
 export function AutomationEditorPanel({
   projectId,
   automation,
@@ -675,6 +742,7 @@ export function AutomationEditorPanel({
           placeholder="Name this automation"
           className="min-w-0 flex-1 bg-transparent text-heading font-semibold text-foreground outline-none placeholder:text-muted-foreground"
         />
+        <DraftIndicator dirty={dirty} resumed={resumed} onDiscard={discardDraft} />
         {actions}
         <Button size="sm" disabled={incomplete || saving} onClick={() => void submit()}>
           {automation === null ? "Create automation" : "Save changes"}
@@ -684,20 +752,6 @@ export function AutomationEditorPanel({
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-h-0 overflow-y-auto p-6">
           <div className="mx-auto flex w-full max-w-content flex-col gap-6">
-            {dirty ? (
-              <div
-                role="status"
-                data-slot={resumed ? "draft-resumed" : "draft-saved"}
-                className="flex items-center gap-2 rounded-lg border border-border bg-accent/40 px-2 py-2 text-ui text-foreground"
-              >
-                <span className="min-w-0 flex-1 text-muted-foreground">
-                  {resumed ? "Draft restored" : "Draft saved"}
-                </span>
-                <Button variant="ghost" size="sm" onClick={discardDraft}>
-                  Discard draft
-                </Button>
-              </div>
-            ) : null}
             <section className="flex min-h-0 flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
                 <SectionLabel>Instructions</SectionLabel>

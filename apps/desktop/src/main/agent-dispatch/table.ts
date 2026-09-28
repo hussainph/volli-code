@@ -60,19 +60,6 @@ import {
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
 
 /**
- * Whether the dispatch folds every project's Sessions before calling the
- * handler.
- *
- * `skip` is not an optimization someone may revisit casually. A `hook` arrives
- * on a process-per-event hot path and addresses one durable Session directly,
- * so taking a complete multi-project snapshot merely to find it is work the
- * hottest involuntary path in the app pays for nothing. The three verbs that
- * want terminal FACTS on top of identity resolve their own record, and the
- * ones that never look at a Session at all have nothing to resolve.
- */
-type ProjectionPolicy = "load" | "skip";
-
-/**
  * Whether the dispatch resolves `VOLLI_SESSION` to an identity before calling
  * the handler.
  *
@@ -80,6 +67,21 @@ type ProjectionPolicy = "load" | "skip";
  * `hook`, `session.link` and `session.harness` need the TERMINAL record rather
  * than the identity, so resolving both would make the hook path pay for two
  * lookups where one answers.
+ *
+ * There used to be a second policy here — whether the dispatch folded every
+ * project's Sessions before calling the handler — declared per verb beside
+ * this one. VC-403 retired it: `AgentCommandContext.loadProjections` /
+ * `loadSessions` fold the roster lazily and memoized, so a verb that never
+ * calls either one simply never pays for the fold, with no policy needed to
+ * say so up front. `VOLLI_SESSION` identity stays a real per-verb choice —
+ * some verbs want the identity, three want their own terminal record instead
+ * — so it keeps its declared field.
+ *
+ * The comments below still say which verbs read the roster and why, because
+ * that is the design fact a reader needs; what they no longer do is DECLARE
+ * it, so a comment that drifts costs nothing. The enforcement moved to
+ * `agent-dispatch.test.ts`, which drives every verb through the real dispatch
+ * and asserts the folding set exactly.
  */
 type EnvSessionPolicy = "resolve" | "skip";
 
@@ -96,7 +98,6 @@ type EnvSessionPolicy = "resolve" | "skip";
  */
 export interface AgentVerbBinding {
   readonly handle: AgentVerbHandler;
-  readonly projections: ProjectionPolicy;
   readonly envSession: EnvSessionPolicy;
 }
 
@@ -104,65 +105,65 @@ export interface AgentVerbBinding {
 export const AGENT_VERB_TABLE: {
   readonly [Id in AgentCommandBindingId]: AgentVerbBinding;
 } = {
-  identify: { handle: identifyVerb, projections: "load", envSession: "resolve" },
-  board: { handle: boardVerb, projections: "load", envSession: "resolve" },
-  "ticket.list": { handle: ticketListVerb, projections: "load", envSession: "resolve" },
-  "ticket.show": { handle: ticketShowVerb, projections: "load", envSession: "resolve" },
-  "ticket.events": { handle: ticketEventsVerb, projections: "load", envSession: "resolve" },
-  "ticket.create": { handle: ticketCreateVerb, projections: "load", envSession: "resolve" },
-  "ticket.update": { handle: ticketUpdateVerb, projections: "load", envSession: "resolve" },
-  "ticket.move": { handle: ticketMoveVerb, projections: "load", envSession: "resolve" },
-  "ticket.comment": { handle: ticketCommentVerb, projections: "load", envSession: "resolve" },
+  identify: { handle: identifyVerb, envSession: "resolve" },
+  board: { handle: boardVerb, envSession: "resolve" },
+  "ticket.list": { handle: ticketListVerb, envSession: "resolve" },
+  "ticket.show": { handle: ticketShowVerb, envSession: "resolve" },
+  "ticket.events": { handle: ticketEventsVerb, envSession: "resolve" },
+  "ticket.create": { handle: ticketCreateVerb, envSession: "resolve" },
+  "ticket.update": { handle: ticketUpdateVerb, envSession: "resolve" },
+  "ticket.move": { handle: ticketMoveVerb, envSession: "resolve" },
+  "ticket.comment": { handle: ticketCommentVerb, envSession: "resolve" },
   // Identity is the whole requirement, exactly as it is for the two session
   // signals below: a verdict needs a signer, not a terminal attachment, so the
-  // multi-project fold buys this verb nothing.
-  "ticket.signal": { handle: ticketSignalVerb, projections: "skip", envSession: "resolve" },
+  // roster buys this verb nothing.
+  "ticket.signal": { handle: ticketSignalVerb, envSession: "resolve" },
   // No `ticket.archive` and no `session.start` (VC-163). Neither is an omission
   // to be filled in: this table is a TOTAL mapping over the binding ids the
   // registry projects onto the socket, so a handler for either would be an
   // excess property and would not compile. Their application acts remain
   // available through the app and Agent Tool Surface respectively.
-  "ticket.brief": { handle: ticketBriefVerb, projections: "load", envSession: "resolve" },
-  "worktree.status": { handle: worktreeStatusVerb, projections: "load", envSession: "resolve" },
-  "worktree.diff": { handle: worktreeDiffVerb, projections: "load", envSession: "resolve" },
-  // The one worktree verb that writes (VC-185). It takes the fold for the same
-  // reason its two read siblings do — the context ladder that answers WHICH
-  // worktree runs off the same snapshot — and never for anything it waits on.
-  "worktree.sync": { handle: worktreeSyncVerb, projections: "load", envSession: "resolve" },
-  // The radar reads Tickets and worktree diffs, and no Session anywhere: the
-  // multi-project fold would be pure cost on a verb whose whole design claim is
-  // that it is cheap enough to run in a pipeline.
-  conflicts: { handle: conflictsVerb, projections: "skip", envSession: "resolve" },
-  "project.list": { handle: projectListVerb, projections: "load", envSession: "resolve" },
-  "label.list": { handle: labelListVerb, projections: "load", envSession: "resolve" },
-  // Reads Tickets and labels and writes both; no Session is in the answer, so
-  // the fold would be pure cost. `envSession` still resolves, because the
-  // merge is attributed history.
-  "label.merge": { handle: labelMergeVerb, projections: "skip", envSession: "resolve" },
-  // Reads the Model Access snapshot and nothing else — no Session anywhere in
-  // the answer, so folding every project's is pure cost.
-  "model.list": { handle: modelListVerb, projections: "skip", envSession: "resolve" },
-  // Loads the snapshot only because `--session <handle>` resolves a short id
+  "ticket.brief": { handle: ticketBriefVerb, envSession: "resolve" },
+  "worktree.status": { handle: worktreeStatusVerb, envSession: "resolve" },
+  "worktree.diff": { handle: worktreeDiffVerb, envSession: "resolve" },
+  // The one worktree verb that writes (VC-185). Like its two read siblings, the
+  // context ladder that answers WHICH worktree runs off Tickets rather than off
+  // any Session, so none of the three reads the roster.
+  "worktree.sync": { handle: worktreeSyncVerb, envSession: "resolve" },
+  // The radar reads Tickets and worktree diffs, and no Session anywhere — which
+  // is what keeps the one verb whose design claim is that it is cheap enough to
+  // run in a bash pipeline actually cheap.
+  conflicts: { handle: conflictsVerb, envSession: "resolve" },
+  "project.list": { handle: projectListVerb, envSession: "resolve" },
+  "label.list": { handle: labelListVerb, envSession: "resolve" },
+  // Reads Tickets and labels and writes both; no Session is in the answer.
+  // `envSession` still resolves, because the merge is attributed history.
+  "label.merge": { handle: labelMergeVerb, envSession: "resolve" },
+  // Reads the Model Access snapshot and nothing else.
+  "model.list": { handle: modelListVerb, envSession: "resolve" },
+  // Reads the roster only for `--session <handle>`, which resolves a short id
   // against it. Everything else the answer needs is one indexed read of the
   // usage projection — no Session history is folded to price a pass.
-  cost: { handle: costVerb, projections: "load", envSession: "resolve" },
-  "session.list": { handle: sessionListVerb, projections: "load", envSession: "resolve" },
-  // The one verb that reads BOTH halves of the snapshot (VC-79), from this one
-  // fold rather than by listing the world twice.
-  "session.peek": { handle: sessionPeekVerb, projections: "load", envSession: "resolve" },
+  cost: { handle: costVerb, envSession: "resolve" },
+  "session.list": { handle: sessionListVerb, envSession: "resolve" },
+  // The one verb that reads BOTH halves of the roster (VC-79), off one fold
+  // rather than by listing the world twice.
+  "session.peek": { handle: sessionPeekVerb, envSession: "resolve" },
   // The whole of a chat's last message (VC-9): resolves the handle against the
   // same fold a peek does, then reads one artifact.
-  "session.answer": { handle: sessionAnswerVerb, projections: "load", envSession: "resolve" },
+  "session.answer": { handle: sessionAnswerVerb, envSession: "resolve" },
   // Identity is the whole requirement (VC-51): the signal needs no terminal
-  // attachment, so it needs no terminal snapshot to find one in.
-  "session.done": { handle: sessionDoneVerb, projections: "skip", envSession: "resolve" },
-  "session.blocked": { handle: sessionBlockedVerb, projections: "skip", envSession: "resolve" },
+  // attachment, so it needs no roster to find one in.
+  "session.done": { handle: sessionDoneVerb, envSession: "resolve" },
+  "session.blocked": { handle: sessionBlockedVerb, envSession: "resolve" },
   // The three that resolve their own terminal record — see EnvSessionPolicy.
-  "session.link": { handle: sessionLinkVerb, projections: "skip", envSession: "skip" },
-  "session.harness": { handle: sessionHarnessVerb, projections: "skip", envSession: "skip" },
-  notify: { handle: notifyVerb, projections: "load", envSession: "resolve" },
-  // The hot path. Both skips are load-bearing here.
-  hook: { handle: hookVerb, projections: "skip", envSession: "skip" },
-  doctor: { handle: doctorVerb, projections: "load", envSession: "resolve" },
-  "prompt.baseline": { handle: promptBaselineVerb, projections: "load", envSession: "resolve" },
+  "session.link": { handle: sessionLinkVerb, envSession: "skip" },
+  "session.harness": { handle: sessionHarnessVerb, envSession: "skip" },
+  notify: { handle: notifyVerb, envSession: "resolve" },
+  // The hot path: `hook` addresses one durable Session directly and resolves
+  // its own terminal record, so it needs neither the identity lookup nor a
+  // fleet fold it never asks for.
+  hook: { handle: hookVerb, envSession: "skip" },
+  doctor: { handle: doctorVerb, envSession: "resolve" },
+  "prompt.baseline": { handle: promptBaselineVerb, envSession: "resolve" },
 };

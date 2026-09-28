@@ -90,6 +90,7 @@ function writingEngine(db: TestDb["db"]): {
     getSession: unusedRead,
     getBaseSession: unusedRead,
     listSessions: unusedRead,
+    listAttachedSessions: unusedRead,
     countSessions: unusedRead,
     listSessionStarts: unusedRead,
     listLatestTicketSignals: unusedRead,

@@ -1,7 +1,7 @@
-import { APCAcontrast, sRGBtoY } from "apca-w3";
 import { converter } from "culori";
 import { describe, expect, it } from "vite-plus/test";
 
+import { APCA_VECTORS } from "./apca-reference";
 import {
   apcaLc,
   clamp,
@@ -263,20 +263,128 @@ describe("gamutMap", () => {
   });
 });
 
-/** 8-bit channel triple, the form apca-w3 takes. */
-function toBytes(hex: string): [number, number, number] {
-  const { r, g, b } = hexToRgb(hex);
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+/**
+ * APCA-W3 0.1.9's constant set, transcribed here a SECOND time — deliberately
+ * not imported from `color.ts`, which does not export them.
+ *
+ * This is the half of the verification that replaced the `apca-w3` package
+ * (VC-412). That package was an independent implementation, and what it
+ * actually caught was a transcription slip: a constant typed wrong, a norm
+ * exponent applied to the wrong side of the polarity split. Double entry
+ * catches the same class — the constants below and the formula in `lcWith`
+ * were written from the published `sRGBcalc` formulation rather than copied
+ * from the implementation, so agreeing with `apcaLc` over the whole 8-bit
+ * grey ramp means two transcriptions agree, not that one function equals
+ * itself.
+ *
+ * What it cannot catch is the two of them being wrong the same way, which is
+ * why the frozen vectors in `apca-reference.ts` — captured while the oracle
+ * was still installed and verified against it — sit underneath both, and why
+ * the invariants below test properties rather than numbers.
+ */
+interface ApcaConstants {
+  trc: number;
+  redCoefficient: number;
+  greenCoefficient: number;
+  blueCoefficient: number;
+  blackThreshold: number;
+  blackClamp: number;
+  normBackground: number;
+  normText: number;
+  reverseText: number;
+  reverseBackground: number;
+  scale: number;
+  lowOffset: number;
+  lowClip: number;
+  deltaYMin: number;
+}
+
+const PUBLISHED_APCA: ApcaConstants = {
+  trc: 2.4,
+  redCoefficient: 0.2126729,
+  greenCoefficient: 0.7151522,
+  blueCoefficient: 0.072175,
+  blackThreshold: 0.022,
+  // APCA's own black-clamp exponent, which merely lands near √2.
+  // oxlint-disable-next-line approx-constant
+  blackClamp: 1.414,
+  normBackground: 0.56,
+  normText: 0.57,
+  reverseText: 0.62,
+  reverseBackground: 0.65,
+  scale: 1.14,
+  lowOffset: 0.027,
+  lowClip: 0.1,
+  deltaYMin: 0.0005,
+};
+
+/** Lc from an arbitrary constant set — the published one, or a perturbed one. */
+function lcWith(k: ApcaConstants, textHex: string, backgroundHex: string): number {
+  const screenY = (hex: string): number => {
+    const { r, g, b } = hexToRgb(hex);
+    return (
+      k.redCoefficient * r ** k.trc +
+      k.greenCoefficient * g ** k.trc +
+      k.blueCoefficient * b ** k.trc
+    );
+  };
+  const clampBlack = (y: number): number =>
+    y > k.blackThreshold ? y : y + (k.blackThreshold - y) ** k.blackClamp;
+
+  const textY = clampBlack(screenY(textHex));
+  const backgroundY = clampBlack(screenY(backgroundHex));
+  if (Math.abs(backgroundY - textY) < k.deltaYMin) return 0;
+
+  if (backgroundY > textY) {
+    const raw = (backgroundY ** k.normBackground - textY ** k.normText) * k.scale;
+    return raw < k.lowClip ? 0 : (raw - k.lowOffset) * 100;
+  }
+  const raw = (backgroundY ** k.reverseBackground - textY ** k.reverseText) * k.scale;
+  return raw > -k.lowClip ? 0 : -(raw + k.lowOffset) * 100;
 }
 
 /**
- * The same Lc computed by apca-w3 itself — the independent oracle. The design
- * doc is explicit that APCA must never be verified against the generator's
- * own math, so every floor in this file is checked against this.
+ * How far each constant is nudged in the pinning test below, and why it takes
+ * that much to be seen.
+ *
+ * 0.1% is the floor for eleven of the fourteen: they scale a luminance or an
+ * exponent that every vector passes through. `lowClip` only moves a
+ * threshold, and the vectors either side of it are one 8-bit step apart, so it
+ * takes 5% to push a pair across.
+ *
+ * `deltaYMin` needs 100×, and that is a fact about APCA rather than a weakness
+ * in the table: it is an early-out for pairs whose luminances differ by almost
+ * nothing, and every such pair is already clipped to 0 by `lowClip` a moment
+ * later. Under ~0.05 the guard cannot change an answer, so no table of
+ * measured outputs can pin it tighter. It is listed rather than skipped so
+ * that a future formulation where it DOES matter is covered by this test the
+ * day it lands.
  */
-function referenceLc(text: string, background: string): number {
-  return Math.abs(APCAcontrast(sRGBtoY(toBytes(text)), sRGBtoY(toBytes(background))));
-}
+const PINNING_PERTURBATION: Record<keyof ApcaConstants, number> = {
+  trc: 1.001,
+  redCoefficient: 1.001,
+  greenCoefficient: 1.001,
+  blueCoefficient: 1.001,
+  blackThreshold: 1.001,
+  blackClamp: 1.001,
+  normBackground: 1.001,
+  normText: 1.001,
+  reverseText: 1.001,
+  reverseBackground: 1.001,
+  scale: 1.001,
+  lowOffset: 1.001,
+  lowClip: 1.05,
+  deltaYMin: 100,
+};
+
+/** The tolerance the frozen vectors are asserted at: they carry four decimals. */
+const VECTOR_TOLERANCE = 5e-4;
+
+/** Every 8-bit grey, as `#rrggbb`. */
+const GREY_RAMP = Array.from(
+  { length: 256 },
+  (_, v) => `#${v.toString(16).padStart(2, "0").repeat(3)}`,
+);
 
 describe("apcaLc", () => {
   it("reproduces APCA-W3 0.1.9's black/white extremes, both polarities", () => {
@@ -296,25 +404,175 @@ describe("apcaLc", () => {
     for (const hex of SAMPLE_HEXES) expect(apcaLc(hex, hex)).toBe(0);
   });
 
-  it("matches apca-w3 across every pair in the spread", () => {
+  it("reproduces every frozen reference vector", () => {
+    // The table these are read from is the repository's own record of what
+    // this function computed when it was last measured against APCA-W3
+    // itself. Any edit to a constant moves several of them at once.
+    for (const [text, background, lc] of APCA_VECTORS) {
+      expect(apcaLc(text, background), `${text} on ${background}`).toBeCloseTo(lc, 3);
+    }
+  });
+
+  it("agrees with a second transcription of the formula across every pair in the spread", () => {
     for (const text of SAMPLE_HEXES) {
       for (const background of SAMPLE_HEXES) {
-        expect(apcaLc(text, background)).toBeCloseTo(referenceLc(text, background), 9);
+        expect(apcaLc(text, background), `${text} on ${background}`).toBeCloseTo(
+          lcWith(PUBLISHED_APCA, text, background),
+          9,
+        );
       }
     }
   });
 
-  it("matches apca-w3 over a grey ramp on the app's own surfaces", () => {
+  it("agrees with it over a grey ramp on the app's own surfaces", () => {
     for (const background of ["#111111", "#0d0d0d", "#161616", "#e8652a"]) {
-      for (let v = 0; v < 256; v += 1) {
-        const text = `#${v.toString(16).padStart(2, "0").repeat(3)}`;
-        expect(apcaLc(text, background)).toBeCloseTo(referenceLc(text, background), 9);
+      for (const text of GREY_RAMP) {
+        expect(apcaLc(text, background), `${text} on ${background}`).toBeCloseTo(
+          lcWith(PUBLISHED_APCA, text, background),
+          9,
+        );
       }
+    }
+  });
+
+  it("has a reference table that pins every published constant", () => {
+    // The test that keeps the table above honest. A frozen table is only worth
+    // the constants it can catch moving, so each one is nudged in turn and the
+    // table must reject the result — if it does not, the vectors have stopped
+    // covering that constant's region and the table needs a pair that does.
+    for (const name of Object.keys(PUBLISHED_APCA) as (keyof ApcaConstants)[]) {
+      const mutated: ApcaConstants = {
+        ...PUBLISHED_APCA,
+        [name]: PUBLISHED_APCA[name] * PINNING_PERTURBATION[name],
+      };
+      const caught = APCA_VECTORS.filter(
+        ([text, background, lc]) =>
+          Math.abs(lcWith(mutated, text, background) - lc) > VECTOR_TOLERANCE,
+      );
+      expect(
+        caught.length,
+        `no reference vector notices ${name} moving by ${PINNING_PERTURBATION[name]}×`,
+      ).toBeGreaterThan(0);
     }
   });
 
   it("scores the two shipped tokens that sit below the body-copy floor", () => {
     expect(apcaLc("#9a9a9a", "#111111")).toBeCloseTo(47, 0);
     expect(apcaLc("#e8652a", "#111111")).toBeCloseTo(41, 0);
+  });
+});
+
+/**
+ * The properties the rest of the theme engine is entitled to assume, asserted
+ * as properties rather than as numbers.
+ *
+ * Vectors catch a constant that moved; these catch a function that stopped
+ * behaving like a contrast metric at all — a WCAG ratio swapped in, a polarity
+ * dropped, a clamp that introduces a discontinuity. `generate.ts` binary-
+ * searches lightness against this function, so the shape of its output is not
+ * a nicety: a non-monotone Lc would make that search return whatever rung it
+ * happened to land on.
+ */
+describe("apcaLc's invariants", () => {
+  /** The surfaces the app actually draws on, plus the two poles. */
+  const BACKGROUNDS = [
+    "#000000",
+    "#0d0d0d",
+    "#111111",
+    "#1c1310",
+    "#808080",
+    "#e8652a",
+    "#fdded2",
+    "#ffffff",
+  ];
+
+  it("is finite, non-negative and never exceeds APCA's own ceiling", () => {
+    for (const background of BACKGROUNDS) {
+      for (const text of GREY_RAMP) {
+        const lc = apcaLc(text, background);
+        expect(Number.isFinite(lc), `${text} on ${background}`).toBe(true);
+        expect(lc, `${text} on ${background}`).toBeGreaterThanOrEqual(0);
+        // 107.8847 is white on black, the most any 8-bit pair can score.
+        expect(lc, `${text} on ${background}`).toBeLessThanOrEqual(108);
+      }
+    }
+  });
+
+  it("falls to its vertex at the background and rises away from it on both sides", () => {
+    // The V that `solveLightnessForContrast` bisects over. Asserted on the
+    // real ramp rather than on the two bounds, because a solver only needs one
+    // interior inversion to walk off in the wrong direction.
+    for (const background of BACKGROUNDS) {
+      const ramp = GREY_RAMP.map((text) => apcaLc(text, background));
+      const vertex = ramp.indexOf(Math.min(...ramp));
+      for (let i = 1; i < ramp.length; i += 1) {
+        const where = `${GREY_RAMP[i]} on ${background}`;
+        if (i <= vertex) expect(ramp[i]!, where).toBeLessThanOrEqual(ramp[i - 1]!);
+        else expect(ramp[i]!, where).toBeGreaterThanOrEqual(ramp[i - 1]!);
+      }
+    }
+  });
+
+  it("reports small contrasts as none at all, never as a small number", () => {
+    // APCA's low clip, and the reason every border floor in this codebase is
+    // stated in ΔL instead: around each background sits a dead band that scores
+    // a flat 0, and the first score outside it is ~7.5. A metric that started
+    // returning 0.4 there would let a solver believe it was making progress.
+    let smallestNonZero = Infinity;
+    for (const background of BACKGROUNDS) {
+      for (const text of GREY_RAMP) {
+        const lc = apcaLc(text, background);
+        if (lc > 0) smallestNonZero = Math.min(smallestNonZero, lc);
+      }
+    }
+    expect(smallestNonZero).toBeGreaterThan(7);
+  });
+
+  it("moves smoothly: one 8-bit step never jumps the score", () => {
+    // Continuity everywhere except across the dead band's edge, which is a
+    // genuine cliff (0 → ~7.5) and is asserted as one above. Measured maximum
+    // step between two adjacent greys that both score is 0.66.
+    for (const background of BACKGROUNDS) {
+      const ramp = GREY_RAMP.map((text) => apcaLc(text, background));
+      for (let i = 1; i < ramp.length; i += 1) {
+        if (ramp[i] === 0 || ramp[i - 1] === 0) continue;
+        expect(Math.abs(ramp[i]! - ramp[i - 1]!), `${GREY_RAMP[i]} on ${background}`).toBeLessThan(
+          1,
+        );
+      }
+    }
+  });
+
+  it("weighs the channels the way a display does: green, then red, then blue", () => {
+    // Not an APCA fact but a luminance one — the same ordering any correct
+    // screen-luminance model has to produce. It is what rules out a metric
+    // that lost its coefficients and started treating the channels alike.
+    for (const background of ["#000000", "#ffffff"]) {
+      const green = apcaLc("#00ff00", background);
+      const red = apcaLc("#ff0000", background);
+      const blue = apcaLc("#0000ff", background);
+      if (background === "#000000") {
+        // On black, more luminance means more contrast.
+        expect(green).toBeGreaterThan(red);
+        expect(red).toBeGreaterThan(blue);
+      } else {
+        // On white the order inverts, which is the same fact seen from above.
+        expect(green).toBeLessThan(red);
+        expect(red).toBeLessThan(blue);
+      }
+    }
+  });
+
+  it("stays asymmetric under polarity, unlike a WCAG ratio", () => {
+    // Swapping text and background must NOT return the same number. This is
+    // the single property that separates APCA from the contrast ratio it
+    // replaced, and the reason a dark theme can be measured honestly.
+    for (const [text, background] of [
+      ["#ffffff", "#000000"],
+      ["#e8e4e2", "#1c1310"],
+      ["#9a9a9a", "#111111"],
+    ]) {
+      expect(apcaLc(text!, background!)).not.toBeCloseTo(apcaLc(background!, text!), 1);
+    }
   });
 });

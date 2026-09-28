@@ -5,6 +5,7 @@ import {
 } from "@volli/shared";
 import type {
   CommandReceipt,
+  CommandRefusalSeverity,
   CompactionWorkReason,
   ModelSelection,
   ModelTier,
@@ -270,6 +271,17 @@ export interface SessionRuntimeCommandResult {
   command: SessionCommand;
   receipt: CommandReceipt | null;
   throughSequence: number;
+  /**
+   * How much a refusal on this result weighs, as the adapter judged it
+   * (VC-141). `null` on everything that was not refused, and on every refusal
+   * whose adapter did not answer the question — which reads as `"failure"`,
+   * the answer a client must assume when nobody vouched for the refusal.
+   *
+   * In memory only, like {@link SessionRuntimeCommandResult.delivery}: the
+   * durable Receipt records the code and the runtime's own sentence, and a
+   * later reader derives severity from those the same way this did.
+   */
+  refusal: CommandRefusalSeverity | null;
   /**
    * How the adapter delivered a `message.submit`, in memory only. This is the
    * authoritative distinction between a prompt that began a turn and a steer
@@ -858,6 +870,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         command: result.command,
         receipt: result.receipt,
         throughSequence: result.receiptEvent.sequence,
+        // A session that was just created refused nothing.
+        refusal: null,
       };
     }
 
@@ -1487,7 +1501,16 @@ class DefaultSessionRuntime implements SessionRuntime {
       receipt,
       input.resultKind,
     );
-    return this.#result(request.sessionId, submitted.command, durable);
+    // The adapter's judgement rides out beside the durable receipt (VC-141):
+    // `/compact` is the one command whose refusal a person is waiting on, and
+    // whether that refusal is a failure is a question only the runtime that
+    // raised it can answer.
+    return this.#result(
+      request.sessionId,
+      submitted.command,
+      durable,
+      this.#refusalSeverity(receipt),
+    );
   }
 
   async #retry(
@@ -2993,12 +3016,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     return frames;
   }
 
+  /**
+   * The one place a command result is built, which is why `refusal` can be a
+   * required field without asking twenty-seven call sites about it: only the
+   * paths that carry an adapter's judgement pass one, and every other path
+   * gets the `null` that means "nobody vouched for this".
+   */
   async #result(
     sessionId: string,
     command: SessionCommand,
     receipt: CommandReceipt | null,
+    refusal: CommandRefusalSeverity | null = null,
   ): Promise<SessionRuntimeCommandResult> {
-    return { sessionId, command, receipt, throughSequence: await this.#latestSequence(sessionId) };
+    return {
+      sessionId,
+      command,
+      receipt,
+      throughSequence: await this.#latestSequence(sessionId),
+      refusal,
+    };
+  }
+
+  /** The adapter's judgement on a receipt it refused, or `null` if it gave none. */
+  #refusalSeverity(receipt: DeliveryReceipt): CommandRefusalSeverity | null {
+    return receipt.status === "rejected" ? (receipt.severity ?? null) : null;
   }
 
   async #latestSequence(sessionId: string): Promise<number> {

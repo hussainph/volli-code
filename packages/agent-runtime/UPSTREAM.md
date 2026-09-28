@@ -6,19 +6,18 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned releases: `pi-agent-core` at tag `v0.84.1`, commit
-  `53fa77ccd8a279eb87e92294ef3687b03ff80112`; `pi-ai` at `0.84.2`. The split is
-  temporary — VC-117 tracks aligning both on `0.84.2`.
+- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.85.1`. The 0.84.x
+  split VC-117 tracked is gone; keep the two aligned on every bump.
 - Node floor: `>=22.19.0`. ESM only.
 
 ## Packages consumed
 
 Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` `0.84.1` — `Agent`, JSONL Session
+- `@earendil-works/pi-agent-core` `0.85.1` — `Agent`, JSONL Session
   persistence, context-injected coding tools, and the Node execution
   environment
-- `@earendil-works/pi-ai` `0.84.2` — model catalog, provider streams, and
+- `@earendil-works/pi-ai` `0.85.1` — model catalog, provider streams, and
   message types
 
 `@earendil-works/pi-telemetry` arrives transitively and is not imported here.
@@ -52,7 +51,31 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-None.
+One, declared in `pnpm-workspace.yaml` under `patchedDependencies` and stored
+in `patches/` at the repo root.
+
+- `@earendil-works/pi-agent-core@0.85.1` — adds an optional `estimateMessage`
+  parameter to `prepareCompaction` and `findCutPoint` in
+  `dist/harness/compaction/compaction.{js,d.ts}`. Upstream hardcodes pi's own
+  `estimateTokens` at both the cut-point scan and the `tokensBefore` total, so
+  the cut point is chosen on a different estimate than the one the runtime
+  budgets against. `prepareModelCompaction` passes the model-aware counter
+  (`estimateMessageTokens` ∘ `withoutReasoning`); a caller that passes nothing
+  gets upstream behavior unchanged, which is what keeps the patch small and the
+  seam additive. Upstream ships no equivalent hook as of 0.85.1.
+
+Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
+(`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale
+`2.1.75` and Anthropic's version gate rejected newer models such as Fable 5.1.
+Upstream now ships `2.1.251` in `dist/api/anthropic-messages.js` and we ride it
+rather than pinning our own number. If a model starts failing with "You need a
+newer version than …", that gate is the first place to look.
+
+When bumping the pin, audit each patch against the new tarball before
+regenerating it: diff the release against the previous one and check whether
+the patched hunk moved or landed upstream. Regenerate through
+`pnpm patch <pkg>@<version>` and `pnpm patch-commit`; never hand-edit
+`node_modules` as the source of truth.
 
 ## Replicated Pi code
 

@@ -21,7 +21,7 @@ import {
 } from "../../lib/smoke-kit.mjs";
 import { busyLoadName, startBusyLoad } from "./background-load.mjs";
 import { generateFixture, verifyFixture } from "./fixture.mjs";
-import { DEFAULT_SEED, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
+import { DEFAULT_SEED, PRESET_NAMES, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
 import { ticketSwitchBreakdown, TICKET_SWITCH_MARKS } from "./ticket-switch-breakdown.mjs";
 
@@ -48,6 +48,8 @@ const INTERACTIONS = Object.freeze([
   ["sidebar_toggle", "Sidebar open/close frame times"],
   ["ticket_switch", "Switch between ticket workspaces"],
   ["board_render", "Board render"],
+  ["board_scroll", "Board column scroll"],
+  ["board_filter", "Board filter apply"],
   ["rpc_round_trip", "Session RPC projection round trip"],
 ]);
 /** Every interaction id, in order — what a run with no `--interactions` covers. */
@@ -141,7 +143,7 @@ export function usage() {
   return [
     "Usage: pnpm bench:desktop -- [options]",
     "",
-    "  --preset small|real|2x     fixture scale (default: real)",
+    `  --preset NAME              fixture scale: ${PRESET_NAMES.join("|")} (default: real)`,
     "  --seed N                   fixture seed; the same seed is the same database",
     "  --repetitions N            samples per interaction and load arm (default: 20)",
     "  --busy-cores N             loaded arm worker count (default: 2)",
@@ -225,6 +227,16 @@ export function aggregateInteraction(id, label, samples) {
     "descriptionEditorMs",
     "settleMs",
     "sessionsListMs",
+    // What the board was holding when the measurement ended (VC-316). Both are
+    // per-sample scalars, so they take the same percentile treatment as the
+    // latency they explain.
+    "boardTickets",
+    "mountedCards",
+    // What one facet filter cut the board down to (VC-316).
+    "filteredTickets",
+    // How long each Session band actually was (VC-316).
+    "sidebarRows_active",
+    "sidebarRows_previous",
   ]) {
     const summary = summarize(samples.map((sample) => sample[key]));
     if (summary !== null) extra[key] = summary;
@@ -472,13 +484,40 @@ async function measured(page, app, action, ready) {
   }
 }
 
+/**
+ * The board is drawn: the New ticket control is up, the board is holding every
+ * ticket the fixture has, and its columns have painted cards.
+ *
+ * It used to be "one `[data-board-ticket-slot]` per ticket", which stopped
+ * being the same statement when VC-316 bounded what a column mounts. Counting
+ * slots now measures the WINDOW, so a windowed board would never satisfy it
+ * and an unwindowed one would satisfy it for the wrong reason. The board
+ * publishes what it holds (`data-board-ticket-count`) and each column
+ * publishes both numbers, so this asks the board for the count and the columns
+ * for evidence they actually rendered — and the mounted count is reported as a
+ * measurement (`boardMountCounts`) rather than asserted as a constant.
+ */
 async function waitForBoard(page, ticketCount, timeout = 60_000) {
   await page.getByRole("button", { name: "New ticket", exact: true }).waitFor({
     state: "visible",
     timeout,
   });
   await page.waitForFunction(
-    (expected) => document.querySelectorAll("[data-board-ticket-slot]").length === expected,
+    (expected) => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      if (board === null) return false;
+      if (Number(board.getAttribute("data-board-ticket-count")) !== expected) return false;
+      const columns = [...document.querySelectorAll("[data-column-count]")];
+      if (columns.length === 0) return false;
+      // Every non-empty column has painted at least one card. Without this the
+      // count attribute alone would pass on the frame the board first renders,
+      // before a single card exists.
+      return columns.every(
+        (column) =>
+          Number(column.getAttribute("data-column-count")) === 0 ||
+          Number(column.getAttribute("data-column-mounted")) > 0,
+      );
+    },
     ticketCount,
     { timeout },
   );
@@ -647,7 +686,21 @@ async function measureSidebar(page, app) {
   };
   const close = await phase();
   const open = await phase();
+  // How many rows the two Session bands were actually holding (VC-316). The
+  // sidebar's Previous list is the other half of that ticket's question, and
+  // "is it long?" cannot be answered by a latency: a band bounded by age (see
+  // `PREVIOUS_MAX_AGE_MS`) and a band that is genuinely short read the same on
+  // the clock and want completely different work.
+  const sidebarRows = await page.evaluate(() =>
+    Object.fromEntries(
+      [...document.querySelectorAll("[data-session-band]")].map((band) => [
+        `sidebarRows_${band.getAttribute("data-session-band")}`,
+        band.querySelectorAll('[data-sidebar="menu-item"]').length,
+      ]),
+    ),
+  );
   return {
+    ...sidebarRows,
     latencyMs: close.latencyMs + open.latencyMs,
     closeMs: close.latencyMs,
     openMs: open.latencyMs,
@@ -787,8 +840,25 @@ async function measureTicketSwitch(page, app, targetTitle, targetDisplayId) {
   return { ...sample, ...phases };
 }
 
+/**
+ * What the board is actually holding in the DOM right now (VC-316).
+ *
+ * `boardTickets` is what the columns HOLD and `mountedCards` is what they have
+ * actually put in the DOM. Both come from the columns' own published numbers
+ * rather than from counting nodes, because counting nodes is exactly what
+ * stopped answering the first question when VC-316 bounded the second.
+ */
+async function boardMountCounts(page) {
+  return page.evaluate(() => {
+    const columns = [...document.querySelectorAll("[data-column-count]")];
+    const sum = (attribute) =>
+      columns.reduce((total, column) => total + Number(column.getAttribute(attribute)), 0);
+    return { boardTickets: sum("data-column-count"), mountedCards: sum("data-column-mounted") };
+  });
+}
+
 async function measureBoardRender(page, app, ticketCount) {
-  return measured(
+  const sample = await measured(
     page,
     app,
     async () => {
@@ -801,6 +871,123 @@ async function measureBoardRender(page, app, ticketCount) {
     },
     () => waitForBoard(page, ticketCount),
   );
+  // Taken AFTER the measured window closes: reading the DOM mid-capture would
+  // put this harness's own layout flush inside the frame times it reports.
+  return { ...sample, ...(await boardMountCounts(page)) };
+}
+
+/**
+ * Frame times while the fullest column is scrolled end to end.
+ *
+ * The board's own scroller, not the page's: each column carries its own
+ * overflow (`data-column-scroller`), so a board-wide scroll measures nothing.
+ * The column with the most scrollable distance is the one a windowing change
+ * has to keep smooth, so that is the one this drives.
+ */
+async function measureBoardScroll(page, app) {
+  return measured(
+    page,
+    app,
+    async () => {
+      const moved = await page.evaluate(async () => {
+        const scrollers = Array.from(document.querySelectorAll("[data-column-scroller]")).filter(
+          (node) => node instanceof HTMLElement,
+        );
+        const target = scrollers
+          .map((node) => ({ node, distance: node.scrollHeight - node.clientHeight }))
+          .toSorted((a, b) => b.distance - a.distance)
+          .at(0);
+        if (target === undefined || target.distance <= 0) return 0;
+        // A fixed number of steps rather than a fixed pixel stride: the point is
+        // one comparable gesture across 300 and 10,000 cards, and a fixed stride
+        // would make the tall board a thirty-times longer measurement.
+        const steps = 60;
+        let travelled = 0;
+        for (let step = 1; step <= steps; step += 1) {
+          const before = target.node.scrollTop;
+          target.node.scrollTop = (target.distance * step) / steps;
+          await new Promise((settle) => requestAnimationFrame(() => settle(undefined)));
+          travelled += Math.abs(target.node.scrollTop - before);
+        }
+        return travelled;
+      });
+      if (moved <= 0) {
+        // A fixture whose tallest column fits on screen cannot answer this
+        // arm's question, and reporting a clean zero for it would read as a
+        // measured result. Fail loudly and name the remedy.
+        throw new Error(
+          "no board column had anything to scroll — this fixture's columns all fit on screen; run board_scroll against a taller preset",
+        );
+      }
+      return moved;
+    },
+    async () => {},
+  ).then(async (sample) => ({ ...sample, ...(await boardMountCounts(page)) }));
+}
+
+/**
+ * Applying one facet filter to a board that is already up.
+ *
+ * VC-316 asks for filter latency beside the mount and scroll numbers, and it is
+ * a different question from either: filtering re-derives every column's list,
+ * every count badge and every window from the whole ticket set, so its cost
+ * tracks what the board HOLDS and not what it mounts. A bound on the mount is
+ * not expected to move it — recording it is how that stays a measurement
+ * rather than an assumption.
+ *
+ * The Priority facet, because the fixture assigns priorities round-robin, so
+ * one of the three always cuts a board of any size to roughly a third and the
+ * arm is comparable across presets. Readiness is the board's own published
+ * count going DOWN: the filter has landed when the board says it holds fewer
+ * tickets than it did, which is a statement about the filtered list itself
+ * rather than about any card being drawn.
+ */
+async function measureBoardFilter(page, app) {
+  const boardCount = async () =>
+    page.evaluate(() => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      return board === null ? null : Number(board.getAttribute("data-board-ticket-count"));
+    });
+  const before = await boardCount();
+  if (before === null || before === 0) {
+    throw new Error("board_filter needs a board holding tickets; none was in front");
+  }
+  const chip = page.getByRole("button", { name: "Priority", exact: true });
+  await chip.waitFor({ state: "visible", timeout: 30_000 });
+  await chip.click();
+  const option = page.getByRole("menuitemcheckbox", { name: "High", exact: true });
+  await option.waitFor({ state: "visible", timeout: 30_000 });
+
+  const sample = await measured(
+    page,
+    app,
+    async () => option.click(),
+    async () =>
+      page.waitForFunction(
+        (full) => {
+          const board = document.querySelector("[data-board-ticket-count]");
+          if (board === null) return false;
+          const now = Number(board.getAttribute("data-board-ticket-count"));
+          return now > 0 && now < full;
+        },
+        before,
+        { timeout: 60_000 },
+      ),
+  );
+  const filtered = await boardCount();
+  // Put the board back the way it was found, so a later arm in the same run
+  // does not inherit a filtered board.
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await page.waitForFunction(
+    (full) => {
+      const board = document.querySelector("[data-board-ticket-count]");
+      return board !== null && Number(board.getAttribute("data-board-ticket-count")) === full;
+    },
+    before,
+    { timeout: 60_000 },
+  );
+  await settleFrames(page);
+  return { ...sample, boardTickets: before, filteredTickets: filtered };
 }
 
 async function measureRpc(page, app, sessionId) {
@@ -931,6 +1118,28 @@ async function fullAppIteration({
     const board = await measure("board_render", "board render", () =>
       measureBoardRender(page, app, manifest.counts.tickets),
     );
+    // After the board render arm by construction: it needs the board in front,
+    // and `measureBoardRender` is what puts it there. When board render is
+    // filtered out, this puts the board in front itself.
+    const bringBoardForward = async () => {
+      await page.getByRole("button", { name: "Home", exact: true }).first().click();
+      await waitForBoard(page, manifest.counts.tickets);
+      await settleFrames(page);
+    };
+    let boardScroll = null;
+    if (wanted.has("board_scroll")) {
+      if (board === null) await bringBoardForward();
+      console.log("  measuring board scroll");
+      boardScroll = await measureBoardScroll(page, app);
+    }
+    // Same precondition, and it restores the unfiltered board before returning,
+    // so it is safe wherever it falls in the order.
+    let boardFilter = null;
+    if (wanted.has("board_filter")) {
+      if (board === null && boardScroll === null) await bringBoardForward();
+      console.log("  measuring board filter");
+      boardFilter = await measureBoardFilter(page, app);
+    }
     return {
       samples: {
         cold_launch: wanted.has("cold_launch") ? cold : null,
@@ -940,6 +1149,8 @@ async function fullAppIteration({
         sidebar_toggle: sidebar,
         ticket_switch: ticketSwitch,
         board_render: board,
+        board_scroll: boardScroll,
+        board_filter: boardFilter,
         rpc_round_trip: rpc,
       },
       rendererErrors: errors.slice(0, 20),
@@ -1450,7 +1661,7 @@ export function markdown(report) {
   const measuredIds = report.config.interactions ?? INTERACTION_IDS;
   const everyInteraction = measuredIds.length === INTERACTION_IDS.length;
   const interactionsLine = everyInteraction
-    ? `Interactions measured: all nine (no \`--interactions\` filter).`
+    ? `Interactions measured: all ${INTERACTION_IDS.length} (no \`--interactions\` filter).`
     : `Interactions measured: ${measuredIds.map((id) => `\`${id}\``).join(", ")} — a narrowed run (\`--interactions\`); every other interaction was skipped and is absent from the table below.`;
   const loadedArms = report.arms.filter((arm) => arm.busyCores > 0);
   const loadEndings = [...new Set(loadedArms.map((arm) => arm.load?.completion ?? "unknown"))];
@@ -1490,9 +1701,18 @@ export function markdown(report) {
           `| ${arm.name} | ↳ first paint | ${summary.firstPaintMs?.p50 ?? "—"} ms | ${summary.firstPaintMs?.p95 ?? "—"} ms | ${summary.firstPaintMs?.variance ?? "—"} ms² | — | — | — | — |`,
         );
       }
+      // What the board was holding, and what it had mounted, when this sample
+      // ended (VC-316). Printed for whichever board arm ran: a latency figure
+      // for a board is only readable beside the number of cards it drew.
+      if (summary.mountedCards !== undefined) {
+        lines.push(
+          `| ${arm.name} | ↳ mounted cards / held | ${summary.mountedCards?.p50 ?? "—"} / ${summary.boardTickets?.p50 ?? "—"} | ${summary.mountedCards?.p95 ?? "—"} / ${summary.boardTickets?.p95 ?? "—"} | — | — | — | — | — |`,
+        );
+      }
       if (interaction.id === "sidebar_toggle") {
         lines.push(
           `| ${arm.name} | ↳ close / open | ${summary.closeMs?.p50 ?? "—"} / ${summary.openMs?.p50 ?? "—"} ms | ${summary.closeMs?.p95 ?? "—"} / ${summary.openMs?.p95 ?? "—"} ms | — | — | — | — | — |`,
+          `| ${arm.name} | ↳ band rows, Active / Previous | ${summary.sidebarRows_active?.p50 ?? "—"} / ${summary.sidebarRows_previous?.p50 ?? "—"} | ${summary.sidebarRows_active?.p95 ?? "—"} / ${summary.sidebarRows_previous?.p95 ?? "—"} | — | — | — | — | — |`,
         );
       }
       if (interaction.id === "ticket_switch") {
@@ -1534,7 +1754,7 @@ export function markdown(report) {
     "## Method",
     "",
     "- The app measurements launch the production Vite/Electron build against a fresh APFS-cloned copy of the deterministic, file-backed migrated fixture for every repetition.",
-    `- \`interactive\` means all ${report.fixture.counts.tickets.toLocaleString()} board cards and the New ticket control are present after two animation frames. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
+    `- \`interactive\` means the board is holding all ${report.fixture.counts.tickets.toLocaleString()} tickets (\`data-board-ticket-count\`), every non-empty column has painted cards, and the New ticket control is present after two animation frames. It is NOT "every card is in the DOM": since VC-316 a column mounts a window around its scroll offset, and how many cards that was is reported per sample as \`mounted cards / slots\` rather than assumed. Long-chat first paint is the first visible transcript turn; interactive additionally requires a responsive transcript scroller.`,
     "- Frame loss uses a per-sample refresh interval (25th percentile of ordinary rAF deltas), not a hard-coded 60 Hz budget. Long tasks are Chromium `PerformanceObserver` `longtask` entries.",
     `- Streaming uses the existing real-\`ChatPlane\` Electron bench with the preset's long-transcript message count. It grows one assistant message under the production \`turnActive\` lifecycle at ${report.config.streamTokenRate} tokens/s, traverses prose → a roughly 4 KB TypeScript fence → 96 more growing snapshots → a closed fence → prose, and moves the transcript scroller inside the live row on both paint frames per stream step. This keeps the growing fence visible rather than letting Streamdown defer it as offscreen content. The concurrent window ends before the final settle-time highlight; raw samples report that cost separately.`,
     `- The loaded arm is named \`N-busy-core-for-${report.config.loadDurationSeconds}s\`: N Node worker threads run one fixed integer-mixing loop against a shared monotonic deadline. A full arm fails if measurement reaches that deadline. What happens otherwise depends on the run, and the "Loaded-arm ending" line above states which of these this one did: a full arm holds the load until the configured exposure is complete (\`fixed-duration-complete\`), a quick stream-only smoke stops early (\`quick-smoke-early-stop\`), and a run narrowed with \`--interactions\` stops as soon as its measurements are done (\`narrowed-interactions-early-stop\`) — that last exposure is sized to the measurements, so it is comparable to another narrowed run but not to a full matrix.`,

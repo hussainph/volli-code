@@ -263,6 +263,34 @@ async function osWindowCount(app) {
   );
 }
 
+/**
+ * How many entries the new tab's blank start page has COMMITTED into its own
+ * session history.
+ *
+ * The strip paints "New Tab" from product state, and that lands BEFORE
+ * Chromium commits `about:blank`. A navigation issued inside that window
+ * replaces the still-pending entry instead of pushing past it, so the blank
+ * page quietly stops being a step Back can reach.
+ *
+ * That is precisely how check 4 went red under a loaded runner: address bar,
+ * title, settle state and Forward were all correct, and Back alone came back
+ * disabled — the history it wanted to walk had never been written. Waiting on
+ * the commit makes the tab's opening history deterministic instead of a race
+ * between the renderer's chrome and Chromium's navigation.
+ */
+async function startPageHistoryDepth(app) {
+  return app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    for (const view of window?.contentView.children ?? []) {
+      const child = view;
+      if (!("webContents" in child) || child.webContents.isDestroyed()) continue;
+      if (child.webContents.getURL() !== "about:blank") continue;
+      return child.webContents.navigationHistory.length();
+    }
+    return 0;
+  });
+}
+
 async function remoteViewAttached(app, targetUrl) {
   return app.evaluate(({ BrowserWindow }, url) => {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
@@ -445,6 +473,13 @@ async function main() {
       // own focus survives, and an earlier build of this feature failed here
       // with the "+" button still focused over an empty address bar.
       const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+
+      // Only type once the blank page is a committed history entry rather than
+      // painted chrome; see startPageHistoryDepth for what racing it costs.
+      await waitUntil(
+        "the blank start page to commit its history entry",
+        async () => (await startPageHistoryDepth(app)) >= 1,
+      );
 
       await addressBar(page).fill(startUrl);
       await addressBar(page).press("Enter");
@@ -668,15 +703,46 @@ async function main() {
       if (parentTitle === undefined) throw new Error("active second-fixture tab has no title");
       const expectedParentTitle = `${parentTitle};popup:false`;
       const windowsBefore = await osWindowCount(app);
-      const click = await clickRemoteLink(app, secondUrl, "Open managed popup");
+
+      // The fixture's handler rewrites document.title on EVERY landed click,
+      // before it ever looks at what window.open returned. That makes the
+      // parent's ";popup:" receipt the one honest witness that the synthetic
+      // press reached the page at all — and CDP input can be dropped outright
+      // on a loaded runner, where the plane is mid-attach when the press
+      // dispatches. That is how this check went red in CI with NEITHER label
+      // ever changing: not a product fault, a press that never arrived.
+      //
+      // So re-press only while the receipt is missing. A press that landed is
+      // never replayed, so the product still gets exactly one popup to open and
+      // the by-title tab lookups below stay unambiguous. Each attempt gives a
+      // landed press far longer to surface its receipt than a loopback title
+      // update needs, so replaying one would take a pathological stall.
+      let click;
+      let receipted = false;
+      for (let press = 1; press <= 3 && !receipted; press += 1) {
+        click = await clickRemoteLink(app, secondUrl, "Open managed popup");
+        receipted = await waitUntil(
+          `parent null receipt after press ${press}`,
+          async () => (await browserTabLabels(page)).includes(expectedParentTitle),
+          { timeout: 8000 },
+        )
+          .then(() => true)
+          .catch(() => false);
+      }
+      if (!receipted) {
+        throw new Error(
+          `fixture never receipted the popup-link press — tabs=${JSON.stringify(
+            await browserTabLabels(page),
+          )}`,
+        );
+      }
+
+      // Only now the product's own half of the claim: the denied popup became a
+      // managed Browser Tab. Waiting for it separately is what makes a future
+      // red name which half broke, instead of one opaque compound timeout.
       await waitUntil(
-        "managed popup tab and parent null receipt",
-        async () => {
-          const labels = await browserTabLabels(page);
-          return labels.includes(expectedParentTitle) && labels.includes(POPUP_TITLE)
-            ? labels
-            : null;
-        },
+        "managed popup tab",
+        async () => (await browserTabLabels(page)).includes(POPUP_TITLE),
         { timeout: 20000 },
       );
       const windowsAfter = await osWindowCount(app);

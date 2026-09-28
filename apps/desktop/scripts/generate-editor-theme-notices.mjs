@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 /**
- * Generate apps/desktop/THIRD-PARTY-NOTICES from upstream tm-themes NOTICE.
+ * Generate apps/desktop/notices/editor-themes.NOTICE from upstream tm-themes
+ * NOTICE — the theme-DATA fragment that generate-third-party-notices.mjs folds
+ * into the shipped THIRD-PARTY-NOTICES.
  *
  * Usage:
  *   node apps/desktop/scripts/generate-editor-theme-notices.mjs <path-to-upstream-NOTICE>
  *
  * Upstream source:
  *   https://github.com/shikijs/textmate-grammars-themes/blob/main/packages/tm-themes/NOTICE
+ *
+ * WHY IT IS A FRAGMENT (VC-407). The Shiki runtime packages this used to list
+ * by hand are ordinary production dependencies, so the notice generator already
+ * reaches them through the dependency closure and reads their licence files
+ * itself. What no dependency walk can see is the theme JSON's own upstream
+ * copyrights, which live in tm-themes' NOTICE rather than in any package's
+ * LICENSE. That is all this script extracts, and the upstream NOTICE is the one
+ * input it cannot derive — hence the path argument, and hence a checked-in
+ * fragment instead of a step in the offline generator.
  *
  * Theme ids are read from `EDITOR_THEME_BY_APPEARANCE` in
  * `packages/shared/src/theme/editor-themes.ts` so this script cannot drift from
@@ -23,13 +34,6 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(root, "../..");
 const sharedEditorThemesPath = resolve(repoRoot, "packages/shared/src/theme/editor-themes.ts");
-const SHIKI_RUNTIME_PACKAGES = [
-  { name: "shiki", licenseFile: "LICENSE" },
-  { name: "@shikijs/monaco", licenseFile: "LICENSE" },
-  { name: "@shikijs/langs", licenseFile: "LICENSE" },
-  { name: "@shikijs/themes", licenseFile: "LICENSE" },
-  { name: "@shikijs/vscode-textmate", licenseFile: "LICENSE.md" },
-];
 
 /**
  * Parse `EDITOR_THEME_BY_APPEARANCE`'s values from shared source (plain Node, no
@@ -66,7 +70,7 @@ if (!noticePath) {
   process.exit(1);
 }
 
-const outPath = resolve(root, "THIRD-PARTY-NOTICES");
+const outPath = resolve(root, "notices/editor-themes.NOTICE");
 const text = readFileSync(resolve(noticePath), "utf8");
 const blocks = text
   .split(/^=+$/m)
@@ -116,12 +120,12 @@ if (
   );
 }
 
-const header = `THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+const header = `Licence notices for the TextMate theme data bundled with Volli Code's Monaco
+editor (via @shikijs/themes). Extracted from the upstream shikijs/textmate-
+grammars-themes packages/tm-themes/NOTICE for only the themes Volli ships; the
+Shiki runtime packages that load them are ordinary dependencies and are covered
+by the package index in THIRD-PARTY-NOTICES.
 
-This file lists license notices for TextMate themes bundled with Volli Code's
-Monaco editor (via @shikijs/themes), plus the Shiki runtime packages used to
-load them. Theme notices are extracted from the upstream shikijs/textmate-
-grammars-themes packages/tm-themes/NOTICE for only the themes Volli ships.
 Regenerate with:
 
   node apps/desktop/scripts/generate-editor-theme-notices.mjs <path-to-upstream-NOTICE>
@@ -130,21 +134,7 @@ Shipped theme ids:
 ${SHIPPED_THEME_IDS.map((id) => `  - ${id}`).join("\n")}
 `;
 
-const runtimeLicenseGroups = new Map();
-for (const { name, licenseFile } of SHIKI_RUNTIME_PACKAGES) {
-  const licenseText = readFileSync(resolve(root, "node_modules", name, licenseFile), "utf8").trim();
-  const packageNames = runtimeLicenseGroups.get(licenseText) ?? [];
-  packageNames.push(name);
-  runtimeLicenseGroups.set(licenseText, packageNames);
-}
-const runtimeBlocks = [...runtimeLicenseGroups].map(
-  ([licenseText, packageNames]) => `Packages: ${packageNames.join(", ")}
-SPDX: MIT
----------------------------------------------------------------------------------------------------------
-${licenseText}`,
-);
-
-const body = [...runtimeBlocks, ...selected]
+const body = selected
   .map(
     (block) =>
       `=========================================================================================================\n${block}\n`,
@@ -153,5 +143,5 @@ const body = [...runtimeBlocks, ...selected]
 
 writeFileSync(outPath, `${header}\n${body}`);
 console.log(
-  `Wrote ${outPath} (${selected.length} theme license blocks, ${SHIPPED_THEME_IDS.length} themes, ${SHIKI_RUNTIME_PACKAGES.length} runtime packages)`,
+  `Wrote ${outPath} (${selected.length} theme license blocks, ${SHIPPED_THEME_IDS.length} themes)`,
 );

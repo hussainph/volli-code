@@ -23,22 +23,14 @@ import {
   listLinkViews,
   listMaterializableLinks,
 } from "./db/blobs-repo";
-import { readSessionProvenance } from "./db/session-provenance-repo";
+
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
 import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
 import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
-import type {
-  AuthorityPolicyOverride,
-  Label,
-  Project,
-  SessionProjection,
-  SessionProvenance,
-  Ticket,
-  TicketStatus,
-} from "@volli/shared";
+import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -157,7 +149,13 @@ import {
   updateProjectSetupCommand,
   updateProjectSkillModes,
 } from "./db/projects-repo";
-import { createDesktopSessionEngine, sessionListingRows } from "./session-control";
+/**
+ * Both listing channels build their rows through one roster-shaped read
+ * (VC-131, VC-392). The provenance question lives beside the other Session read
+ * models rather than here, so this handler stays dumb transport and the
+ * performance harness can measure the same function the handler calls.
+ */
+import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
 import { prepared } from "./db/prepared";
 import {
   getTicket,
@@ -479,17 +477,6 @@ export function registerDataIpcHandlers(
 
   const db = handle.db;
   const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
-  /**
-   * Who started each Session in a listing (VC-131). Bound here rather than at
-   * each call site so both listing channels ask the same question the push
-   * channel asks (`activity-watch.ts`) — a fetch and a push that disagreed
-   * would make a Run's bolt flicker as its Session worked.
-   */
-  const provenanceOfSession = (session: SessionProjection): SessionProvenance =>
-    readSessionProvenance(db, {
-      sessionId: session.session.id,
-      ticketId: session.session.ticketId,
-    });
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
   const blobsRootPath = options.blobsRoot ?? "";
@@ -1201,7 +1188,7 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
       };
     },
 
@@ -1215,7 +1202,7 @@ export function registerDataIpcHandlers(
       });
       return {
         ok: true,
-        sessions: sessionListingRows(sessions, provenanceOfSession, liveAttachmentIds()),
+        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
       };
     },
 

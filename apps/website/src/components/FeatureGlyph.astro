@@ -1,5 +1,5 @@
 ---
-type GlyphKind = "phases" | "agents" | "context" | "parallel" | "harnesses";
+type GlyphKind = "phases" | "agents" | "context" | "parallel" | "harnesses" | "review";
 
 interface Props {
   kind: GlyphKind;
@@ -74,6 +74,23 @@ const { kind } = Astro.props;
             />
           </g>
         ))}
+      </>
+    )
+  }
+
+  {
+    /* Two versions of the same ticket side by side — base on the left, the
+       Change Set on the right — joined by the review line. The changed line
+       is the ember one. */
+    kind === "review" && (
+      <>
+        <rect class="glyph-ticket" data-glyph-core x="28" y="17" width="26" height="24" rx="5" />
+        <path class="glyph-ticket-line" d="M34 24h14M34 29h10M34 34h12" />
+        <path class="glyph-line" data-glyph-line d="M58 29h52" />
+        <circle class="glyph-destination" data-glyph-destination cx="84" cy="29" r="5" />
+        <rect class="glyph-ticket" data-glyph-core x="114" y="17" width="26" height="24" rx="5" />
+        <path class="glyph-ticket-line" d="M120 24h14M120 34h12" />
+        <path class="glyph-ticket-line is-ember" d="M120 29h8" />
       </>
     )
   }

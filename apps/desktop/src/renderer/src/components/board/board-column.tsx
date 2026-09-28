@@ -6,6 +6,17 @@ import { TICKET_STATUS_LABELS, type Label, type Ticket, type TicketStatus } from
 
 import { columnDroppableId } from "@renderer/components/board/board-dnd";
 import type { TicketSelectionGesture } from "@renderer/components/board/board-selection";
+import {
+  boundedWindow,
+  COLUMN_ROW_STRIDE_FALLBACK,
+  COLUMN_WINDOW_MINIMUM,
+  columnWindow,
+  measuredRowStride,
+  mergeColumnWindows,
+  scrollOffsetForRow,
+  shouldAdoptRowStride,
+  type ColumnWindow,
+} from "@renderer/components/board/column-window";
 import { ColumnArmingButton } from "@renderer/components/board/column-arming";
 import {
   ColumnOfferedPanel,
@@ -47,6 +58,149 @@ interface BoardColumnProps {
   dimmed?: boolean;
   /** The frozen drag snapshot currently resolves its release into this column. */
   aimed?: boolean;
+  /**
+   * A card is in the air somewhere on the board (VC-316).
+   *
+   * The window only ever GROWS while this is true — see `mergeColumnWindows`
+   * for why unmounting a droppable mid-gesture is the one thing this column is
+   * not allowed to do.
+   */
+  dragActive?: boolean;
+}
+
+/** The column list's `gap-2`, in px — the spacers have to account for it. */
+const COLUMN_ROW_GAP = 8;
+
+/**
+ * Which slice of `tickets` this column mounts, tracked against its scroller.
+ *
+ * State rather than a ref because the render depends on it, and it is written
+ * only when the answer actually CHANGES: a wheel gesture that moves the column
+ * by four pixels resolves to the same window and does not re-render anything.
+ */
+function useColumnWindow({
+  count,
+  selectedIndex,
+  dragActive,
+  scrollerRef,
+  listRef,
+}: {
+  count: number;
+  selectedIndex: number;
+  dragActive: boolean;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
+  listRef: React.RefObject<HTMLDivElement | null>;
+}): { window: ColumnWindow; rowStride: number } {
+  const [rowStride, setRowStride] = React.useState(COLUMN_ROW_STRIDE_FALLBACK);
+  const [range, setRange] = React.useState<ColumnWindow>(() => ({
+    first: 0,
+    last: Math.min(count, COLUMN_WINDOW_MINIMUM),
+  }));
+  // Read inside the scroll handler, which must not be re-bound on every one of
+  // these changing — a listener re-registered per commit is its own cost, and
+  // the handler wants the LATEST value rather than the one it closed over.
+  //
+  // Synchronised in a LAYOUT effect rather than during render. React 19 renders
+  // concurrently and may abandon a render it started; a ref written during one
+  // publishes a value that never committed, and every reader here would then be
+  // describing a column the DOM does not have. A layout effect runs only for a
+  // commit that happened — and, being declared first, runs before the effects
+  // below that read these.
+  const strideRef = React.useRef(rowStride);
+  const dragRef = React.useRef(dragActive);
+  const countRef = React.useRef(count);
+  React.useLayoutEffect(() => {
+    strideRef.current = rowStride;
+    dragRef.current = dragActive;
+    countRef.current = count;
+  }, [rowStride, dragActive, count]);
+
+  const recompute = React.useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    const next = columnWindow({
+      count: countRef.current,
+      scrollTop: scroller.scrollTop,
+      viewportHeight: scroller.clientHeight,
+      rowStride: strideRef.current,
+    });
+    setRange((previous) => {
+      const merged = dragRef.current ? mergeColumnWindows(previous, next) : next;
+      return merged.first === previous.first && merged.last === previous.last ? previous : merged;
+    });
+  }, [scrollerRef]);
+
+  // Scroll and resize are the two things that move the window, and both are
+  // the scroller's own. `passive` because nothing here ever cancels a scroll.
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    scroller.addEventListener("scroll", recompute, { passive: true });
+    const observer = new ResizeObserver(recompute);
+    observer.observe(scroller);
+    return () => {
+      scroller.removeEventListener("scroll", recompute);
+      observer.disconnect();
+    };
+  }, [scrollerRef, recompute]);
+
+  // The column's content changed under a fixed scroll offset — a filter, a
+  // drop, an agent moving a ticket. Recomputed in a LAYOUT effect so the first
+  // painted frame after the change already holds the right cards.
+  React.useLayoutEffect(() => {
+    recompute();
+  }, [count, dragActive, recompute]);
+
+  // Learn the real row height from whatever is mounted. The measurement reads
+  // the slots the previous commit painted, so it can only ever refine an
+  // estimate — it never gates the first render on a measurement.
+  //
+  // Re-run on the window or the count moving, which is exactly when the
+  // mounted SET changed and there is something new to learn. The write it can
+  // make feeds back into `range`, so the deadband in `shouldAdoptRowStride` is
+  // what stops measure → write → measure from becoming a loop.
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    if (list === null) return;
+    const heights = [...list.querySelectorAll<HTMLElement>("[data-board-ticket-slot]")].map(
+      (slot) => slot.offsetHeight,
+    );
+    const measured = measuredRowStride(heights, COLUMN_ROW_GAP);
+    if (measured === null || !shouldAdoptRowStride(strideRef.current, measured)) return;
+    strideRef.current = measured;
+    setRowStride(measured);
+    recompute();
+  }, [range, count, listRef, recompute]);
+
+  // Selected-item visibility. A selection made somewhere else — the sidebar, a
+  // nav step, a drop landing under a non-manual sort — can name a row outside
+  // the window; bring the COLUMN to it rather than widening the window to
+  // reach it (see `scrollOffsetForRow`). Keyed on the index alone, so clicking
+  // a card already on screen never moves anything: on an unwindowed column the
+  // window is the whole list and this is a permanent no-op.
+  const lastScrolledTo = React.useRef(selectedIndex);
+  React.useLayoutEffect(() => {
+    if (selectedIndex === lastScrolledTo.current) return;
+    lastScrolledTo.current = selectedIndex;
+    const scroller = scrollerRef.current;
+    if (scroller === null) return;
+    const offset = scrollOffsetForRow({
+      index: selectedIndex,
+      window: range,
+      rowStride: strideRef.current,
+      viewportHeight: scroller.clientHeight,
+      maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
+    });
+    if (offset === null) return;
+    scroller.scrollTop = offset;
+    recompute();
+  }, [selectedIndex, range, scrollerRef, recompute]);
+
+  // Reconciled against THIS render's count rather than trusted: `range` is
+  // state and state is a commit behind the props that moved it, so a drop that
+  // grew this column would otherwise render the pre-drop window and leave the
+  // cards that just landed out of the DOM. See `boundedWindow`.
+  return { window: boundedWindow(range, count), rowStride };
 }
 
 /**
@@ -78,6 +232,7 @@ export const BoardColumn = React.memo(function BoardColumn({
   offered,
   dimmed = false,
   aimed = false,
+  dragActive = false,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
   // from the board's single derivation rather than handed down as a prop: the
@@ -101,6 +256,38 @@ export const BoardColumn = React.memo(function BoardColumn({
   const sortableIds = React.useMemo(() => tickets.map((ticket) => ticket.id), [tickets]);
   const selectedSet = React.useMemo(() => new Set(selectedIds), [selectedIds]);
   const draggingSet = React.useMemo(() => new Set(draggingIds), [draggingIds]);
+  // Windowing (VC-316). The column HOLDS every ticket — `sortableIds` above is
+  // still the complete list, so dnd-kit's index arithmetic, the count badge and
+  // the filter results are all untouched — and MOUNTS the slice around the
+  // scroll offset, with a spacer standing in for each end.
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
+  // The first selected card in THIS column; the window is widened to hold it.
+  const selectedIndex = React.useMemo(
+    () => tickets.findIndex((ticket) => selectedSet.has(ticket.id)),
+    [tickets, selectedSet],
+  );
+  const attachList = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      listRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef],
+  );
+  const { window: mountedRange, rowStride } = useColumnWindow({
+    count: tickets.length,
+    selectedIndex,
+    dragActive,
+    scrollerRef,
+    listRef,
+  });
+  const mounted = tickets.slice(mountedRange.first, mountedRange.last);
+  // A spacer stands for the rows above or below the window so the scroller's
+  // range describes the whole column. `- gap` because the flex `gap-2` between
+  // the spacer and the card beside it already supplies the last row's gap.
+  const spacerHeight = (rows: number) => Math.max(0, rows * rowStride - COLUMN_ROW_GAP);
+  const leadingRows = mountedRange.first;
+  const trailingRows = tickets.length - mountedRange.last;
   const composer = useTicketComposer({
     projectId,
     status,
@@ -184,6 +371,7 @@ export const BoardColumn = React.memo(function BoardColumn({
             carries the overflow and the cap, exactly as the merged one did. */}
         <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
           <div
+            ref={scrollerRef}
             data-column-scroller={status}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto"
           >
@@ -192,10 +380,31 @@ export const BoardColumn = React.memo(function BoardColumn({
               // shape a refactor can quietly undo — the two must never be the
               // same element again. See `board-column-dropzone.test.tsx`.
               data-column-dropzone={status}
-              ref={setNodeRef}
+              // What this column HOLDS and what it currently MOUNTS (VC-316).
+              // Published because the two are no longer the same number and
+              // every reader outside React — the performance harness's mounted
+              // count, the board smokes' readiness — needs to ask for the one
+              // it means rather than counting cards and hoping.
+              data-column-count={tickets.length}
+              data-column-mounted={mounted.length}
+              // ONE stable callback, never an inline arrow. React calls a ref
+              // callback whose identity changed with `null` and then with the
+              // node, so an inline one would unregister and re-register this
+              // droppable with dnd-kit on every render of the column — and a
+              // droppable node changing underneath a live drag is the
+              // measurement churn that took this board out once already
+              // (VC-221, see the note above the scroller).
+              ref={attachList}
               className="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-2"
             >
-              {tickets.map((ticket) => (
+              {leadingRows > 0 ? (
+                <div
+                  aria-hidden
+                  data-column-spacer="leading"
+                  style={{ height: spacerHeight(leadingRows) }}
+                />
+              ) : null}
+              {mounted.map((ticket) => (
                 <TicketCard
                   key={ticket.id}
                   ticket={ticket}
@@ -210,6 +419,13 @@ export const BoardColumn = React.memo(function BoardColumn({
                   onOpen={onOpen}
                 />
               ))}
+              {trailingRows > 0 ? (
+                <div
+                  aria-hidden
+                  data-column-spacer="trailing"
+                  style={{ height: spacerHeight(trailingRows) }}
+                />
+              ) : null}
             </div>
           </div>
         </SortableContext>

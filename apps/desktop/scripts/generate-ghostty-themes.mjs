@@ -1,0 +1,194 @@
+/**
+ * Regenerates `packages/shared/src/ghostty-theme-sources.generated.ts` — the
+ * vendored copy of Ghostty's own bundled theme collection, one entry per
+ * theme file under Ghostty.app's `Contents/Resources/ghostty/themes/`, keyed
+ * by filename (the theme's name) and sorted case-insensitively so the picker
+ * order matches what restty's bundled catalog gave the app before this file
+ * existed (VC-107: the app owns this vocabulary now, restty no longer ships
+ * it to us).
+ *
+ *     node apps/desktop/scripts/generate-ghostty-themes.mjs         # rewrite in place
+ *     node apps/desktop/scripts/generate-ghostty-themes.mjs --check # fail if stale (CI-able)
+ *
+ * The themes directory defaults to Ghostty.app's bundled location and is
+ * overridable — `--themes-dir <path>` or `GHOSTTY_THEMES_DIR` — for a machine
+ * without Ghostty.app installed (this script does not run in this repo's
+ * Linux CI job for exactly that reason: there is nothing to point it at
+ * there, so regeneration and `--check` are a local, pre-commit step, same as
+ * a person running it after installing/updating Ghostty.app).
+ *
+ * Modeled on `generate-theme-css.mjs`: same `--check` convention (diff
+ * in-memory, restore the file exactly, never leave `--check` with a dirty
+ * tree), and the same "run `vp fmt` over what was written" step so the
+ * generated file and the repo formatter cannot disagree about what "up to
+ * date" looks like.
+ */
+
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUTPUT = resolvePath(HERE, "../../../packages/shared/src/ghostty-theme-sources.generated.ts");
+
+const DEFAULT_THEMES_DIR = "/Applications/Ghostty.app/Contents/Resources/ghostty/themes";
+
+/** `--themes-dir <path>` from argv, or null when the flag is absent. */
+function themesDirFlag(argv) {
+  const index = argv.indexOf("--themes-dir");
+  if (index === -1) return null;
+  const value = argv[index + 1];
+  if (value === undefined) throw new Error("--themes-dir needs a path argument");
+  return value;
+}
+
+function resolveThemesDir(argv) {
+  return themesDirFlag(argv) ?? process.env["GHOSTTY_THEMES_DIR"] ?? DEFAULT_THEMES_DIR;
+}
+
+/**
+ * The Ghostty release these themes were read out of, or null when the themes
+ * directory is not inside an app bundle (`--themes-dir` at a bare folder).
+ *
+ * The catalog is third-party material and its license chain
+ * (`packages/shared/THIRD-PARTY-THEMES.md`) is pinned to one Ghostty release,
+ * which pins one iTerm2-Color-Schemes release in turn. Without the version in
+ * the generated header there is nothing tying the file's 463 themes to the
+ * end of that chain, and a regeneration against a newer Ghostty would silently
+ * replace the material the notice describes. Stamped here so
+ * `check-theme-provenance.mjs` can refuse the mismatch.
+ *
+ * Parsed rather than shelled out to `defaults`/`plutil`: one regex over an XML
+ * plist, and a bundle that turns out to be binary reports null instead of
+ * inventing a version.
+ */
+function readGhosttyVersion(themesDir) {
+  // <bundle>/Contents/Resources/ghostty/themes -> <bundle>/Contents/Info.plist
+  const plist = resolvePath(themesDir, "../../../Info.plist");
+  if (!existsSync(plist)) return null;
+  const xml = readFileSync(plist, "utf8");
+  const value = (key) =>
+    new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)?.[1] ?? null;
+  const short = value("CFBundleShortVersionString");
+  const build = value("CFBundleVersion");
+  return short === null ? null : { short, build };
+}
+
+/**
+ * Every theme name paired with its raw file text, sorted case-insensitively
+ * (locale-aware compare matches how the previous, restty-supplied catalog was
+ * ordered — same rule `Intl.Collator` gives for a plain alphabetical list).
+ */
+function readThemes(themesDir) {
+  if (!existsSync(themesDir)) {
+    throw new Error(
+      `Ghostty themes directory not found: ${themesDir}\n` +
+        "Install Ghostty.app, or point this script at a themes directory with " +
+        "--themes-dir <path> or GHOSTTY_THEMES_DIR.",
+    );
+  }
+  const names = readdirSync(themesDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .toSorted((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }));
+
+  return names.map((name) => [name, readFileSync(resolvePath(themesDir, name), "utf8")]);
+}
+
+/** The generated module's full source text. */
+function render(themes, themesDir, version) {
+  const entries = themes
+    .map(([name, text]) => `  ${JSON.stringify(name)}: ${JSON.stringify(text)},`)
+    .join("\n");
+
+  const stamped =
+    version === null
+      ? "// Ghostty version: unknown (themes read from a directory outside an app bundle)\n"
+      : `// Ghostty version: ${version.short} (CFBundleVersion ${version.build})\n`;
+
+  return (
+    "// GENERATED — do not hand-edit. Regenerate with:\n" +
+    "//     node apps/desktop/scripts/generate-ghostty-themes.mjs\n" +
+    "//\n" +
+    `// Vendored verbatim from Ghostty.app's bundled theme collection (${themes.length} files\n` +
+    `// at generation time), read from:\n` +
+    `//     ${themesDir}\n` +
+    stamped +
+    "//\n" +
+    "// THIRD-PARTY MATERIAL. These themes are not Volli's: the chain is\n" +
+    "// Ghostty -> iTerm2-Color-Schemes (MIT, Copyright (c) 2011 to Present Mark\n" +
+    "// Badolato), and the per-theme terms behind that collection license are an\n" +
+    "// open question with at least one known conflict. Source, release pins,\n" +
+    "// full license text and the open question are in\n" +
+    "//     packages/shared/THIRD-PARTY-THEMES.md\n" +
+    "// Re-pin that notice before regenerating against a different Ghostty; the\n" +
+    "// version above is what `check:theme-provenance` holds it to.\n" +
+    "//\n" +
+    "// One entry per theme file, keyed by filename (the theme's own name) and\n" +
+    "// sorted case-insensitively. `ghostty-theme.ts` parses these lazily through\n" +
+    "// `getGhosttyTheme`; nothing here is hand-authored.\n" +
+    "export const GHOSTTY_THEME_SOURCES: Record<string, string> = {\n" +
+    `${entries}\n` +
+    "};\n"
+  );
+}
+
+/** Runs the repo formatter over `path` — see `generate-theme-css.mjs` for why. */
+function format(path) {
+  const local = resolvePath(HERE, "../../../node_modules/.bin/vp");
+  const bin = existsSync(local) ? local : "vp";
+  const run = spawnSync(bin, ["fmt", path], { stdio: "ignore" });
+  if (run.status !== 0) {
+    throw new Error(`\`${bin} fmt\` failed — cannot verify the generated file`);
+  }
+}
+
+/** The current generated file, or null when this checkout has none yet. */
+function readExistingOutput() {
+  try {
+    return readFileSync(OUTPUT, "utf8");
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+const argv = process.argv.slice(2);
+const isCheck = argv.includes("--check");
+const themesDir = resolveThemesDir(argv);
+
+const themes = readThemes(themesDir);
+const body = render(themes, themesDir, readGhosttyVersion(themesDir));
+
+// Read-or-null in one call rather than exists-then-read: the file is only
+// ever absent on a fresh checkout, and a single read cannot race a check.
+const before = readExistingOutput();
+writeFileSync(OUTPUT, body);
+
+let moved = before !== body;
+try {
+  format(OUTPUT);
+  const after = readFileSync(OUTPUT, "utf8");
+  moved = before !== after;
+} finally {
+  // --check must leave the tree exactly as it found it: restore the prior
+  // content when there was one, or remove the file this run wrote when there
+  // was not (a fresh checkout with no generated file yet).
+  if (isCheck) {
+    if (before !== null) writeFileSync(OUTPUT, before);
+    else rmSync(OUTPUT, { force: true });
+  }
+}
+
+if (isCheck) {
+  if (moved) {
+    console.error(
+      `ghostty-theme-sources.generated.ts stale — run \`node apps/desktop/scripts/generate-ghostty-themes.mjs\`.`,
+    );
+    process.exit(1);
+  }
+  console.log("ghostty-theme-sources.generated.ts is up to date.");
+} else {
+  console.log(moved ? `Wrote ${OUTPUT}` : "already up to date.");
+}

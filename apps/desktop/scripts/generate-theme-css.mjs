@@ -40,7 +40,7 @@
  * the exact function the renderer paints the DOM with, at both appearances, so
  * the canvas declarations below and a live repaint cannot disagree about what a
  * canvas produces. No bundler, no extra dependency beyond what that import chain
- * already needs (react, restty — both resolve headless; nothing on the path from
+ * already needs (react resolves headless; nothing on the path from
  * `canvas-paint.ts` to its imports touches `document` or `window` at module load,
  * only inside functions this script never calls).
  */

@@ -145,41 +145,20 @@ export async function installFontWorkaround(page, fontPath = "/System/Library/Fo
  * that claims to have exercised WebGL2 must prove it through `readBackend`,
  * never through the flag alone.
  */
-export async function installContextSpy(page, { forceWebgl2 = false } = {}) {
+export async function installContextSpy(page) {
   await page.addInitScript(() => {
     window.volliCtxSpy = [];
-    const original = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function getContext(type, ...rest) {
-      const ctx = original.call(this, type, ...rest);
-      window.volliCtxSpy.push({ type, ok: ctx != null });
-      return ctx;
-    };
   });
-  if (forceWebgl2) {
-    await page.addInitScript(() => {
-      try {
-        Object.defineProperty(Navigator.prototype, "gpu", {
-          get: () => undefined,
-          configurable: true,
-        });
-      } catch {
-        /* best effort: a locked-down prototype leaves WebGPU in place, and
-           readBackend then reports the truth rather than the intent */
-      }
-    });
-  }
 }
 
 export const readBackend = (page) =>
-  page.evaluate(() => {
-    const ctx = window.volliCtxSpy ?? [];
-    return {
-      webgpu: ctx.some((c) => c.type === "webgpu" && c.ok),
-      webgl2: ctx.some((c) => c.type === "webgl2" && c.ok),
-      navigatorGpu: typeof navigator?.gpu !== "undefined",
-      contexts: ctx.length,
-    };
-  });
+  page.evaluate(() => ({
+    renderer: document.querySelector(".xterm") ? "xterm-dom" : "not-ready",
+    webgpu: false,
+    webgl2: false,
+    navigatorGpu: typeof navigator?.gpu !== "undefined",
+    contexts: 0,
+  }));
 
 /** Every console line, at every level — the WebGL eviction signal is a warning. */
 export function captureConsole(page) {
@@ -285,13 +264,16 @@ export async function seedTicketAndOpen(page, title) {
 // Terminal pane geometry
 // ---------------------------------------------------------------------------
 
-/** Visible terminal canvases, in spatial (top-left first) order. */
+/** Visible xterm roots, in spatial (top-left first) order. */
 export const visibleCanvasRects = (page) =>
   page.evaluate(() =>
-    Array.from(document.querySelectorAll("canvas"))
-      .filter((c) => c.offsetParent !== null && c.clientWidth > 0 && c.clientHeight > 0)
-      .map((c) => {
-        const r = c.getBoundingClientRect();
+    Array.from(document.querySelectorAll(".xterm"))
+      .filter(
+        (terminal) =>
+          terminal.offsetParent !== null && terminal.clientWidth > 0 && terminal.clientHeight > 0,
+      )
+      .map((terminal) => {
+        const r = terminal.getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width, height: r.height };
       })
       .toSorted((a, b) => a.y - b.y || a.x - b.x),
@@ -300,7 +282,7 @@ export const visibleCanvasRects = (page) =>
 export async function focusCanvasAt(page, index = 0) {
   const rects = await visibleCanvasRects(page);
   const rect = rects[index];
-  if (!rect) throw new Error(`visible canvas ${index} missing (count=${rects.length})`);
+  if (!rect) throw new Error(`visible terminal ${index} missing (count=${rects.length})`);
   await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
   await sleep(250);
   return rect;
@@ -329,10 +311,13 @@ export function readPane(page, paneIndex = 0) {
     });
     const root = roots[idx];
     if (!root) return null;
-    const host = root.querySelector(".restty-native-scroll-host");
-    const renderer = root.matches("[data-terminal-renderer]")
-      ? root
-      : root.querySelector("[data-terminal-renderer]");
+    const host = root.querySelector(".xterm-viewport");
+    const renderer = root.querySelector(".xterm");
+    const visibleRows = renderer?.querySelector(".xterm-rows")?.children.length ?? null;
+    const scrollTop = renderer?.getAttribute("data-terminal-scroll-top");
+    const scrollMax = renderer?.getAttribute("data-terminal-scroll-max");
+    const lineTop = scrollTop === null ? null : Number(scrollTop);
+    const lineMax = scrollMax === null ? null : Number(scrollMax);
     const box = (host ?? renderer ?? root).getBoundingClientRect();
     // Serialized into the page; it cannot live in this module's scope.
     // eslint-disable-next-line unicorn/consistent-function-scoping
@@ -354,14 +339,20 @@ export function readPane(page, paneIndex = 0) {
       paneId: idOf(root),
       paneIndex: idx,
       paneCount: roots.length,
-      scrollTop: host ? host.scrollTop : null,
-      scrollHeight: host ? host.scrollHeight : null,
-      clientHeight: host ? host.clientHeight : null,
+      scrollTop: lineTop ?? (host ? host.scrollTop : null),
+      scrollHeight:
+        lineMax !== null && visibleRows !== null
+          ? lineMax + visibleRows
+          : host
+            ? host.scrollHeight
+            : null,
+      clientHeight: visibleRows ?? (host ? host.clientHeight : null),
       clip: { x: box.x, y: box.y, width: box.width, height: box.height },
       dpr: window.devicePixelRatio,
       focusedPaneId,
       ringActivePaneId: ringed.length === 1 ? idOf(ringed[0]) : null,
       liveTerminalHosts: document.querySelectorAll("[data-terminal-renderer]").length,
+      renderer: renderer ? "xterm-dom" : "legacy",
     };
   }, paneIndex);
 }
@@ -387,10 +378,11 @@ export function paneReading(pane) {
  * Is the viewport still following the bottom? A checked boolean, so anchoring
  * is a recorded RESULT rather than something a reader infers from two numbers.
  *
- * `anchorTolerance` is about one text row: the host settles a pixel or two off
- * the exact bottom after a refit even when it IS following the tail.
+ * xterm reports line-based offsets, so one line is the useful tolerance. The
+ * old canvas host reported pixels and needed a larger value; keeping this in
+ * line units prevents a multi-row drift from being misclassified as anchored.
  */
-export const isAnchoredAtBottom = (pane, { anchorTolerance = 16 } = {}) => {
+export const isAnchoredAtBottom = (pane, { anchorTolerance = 1 } = {}) => {
   if (!pane || pane.scrollHeight === null) return undefined;
   const max = pane.scrollHeight - pane.clientHeight;
   return max <= 0 ? true : pane.scrollTop >= max - anchorTolerance;
@@ -410,8 +402,18 @@ export async function setScrollTop(page, paneIndex, top) {
         const rb = b.getBoundingClientRect();
         return ra.y - rb.y || ra.x - rb.x;
       });
-      const host = roots[idx]?.querySelector(".restty-native-scroll-host");
-      if (host) host.scrollTop = t;
+      const root = roots[idx];
+      const host = root?.querySelector(".xterm-viewport");
+      if (host) {
+        // xterm's public buffer offsets are measured in rows, while its
+        // custom viewport still scrolls in CSS pixels. Map through the actual
+        // scroll range so this remains correct when the font or grid changes.
+        const lineMax = Number(
+          root?.querySelector(".xterm")?.getAttribute("data-terminal-scroll-max"),
+        );
+        const pixelMax = Math.max(0, host.scrollHeight - host.clientHeight);
+        host.scrollTop = lineMax > 0 ? (t / lineMax) * pixelMax : 0;
+      }
     },
     { idx: paneIndex, t: top },
   );
@@ -419,10 +421,10 @@ export async function setScrollTop(page, paneIndex, top) {
 }
 
 // ---------------------------------------------------------------------------
-// Reading canvas text
+// Reading terminal text
 // ---------------------------------------------------------------------------
 
-/** OCR one image through the macOS Vision framework (canvas text is not DOM). */
+/** OCR one image through the macOS Vision framework for durable screenshots. */
 export const ocrImage = (path) =>
   new Promise((resolve) => {
     execFile(

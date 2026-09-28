@@ -138,6 +138,19 @@ export interface SessionEngine {
   listSessions(query: ListSessionsQuery): Promise<readonly SessionProjection[]>;
   countSessions(query: ListSessionsQuery): Promise<number>;
   /**
+   * Every Session holding an open attachment, across every project, folded.
+   *
+   * The concurrency budget's read (VC-403). `listSessions` folds a project's
+   * whole roster to answer how many Sessions are working, which on a machine
+   * with a long history is thousands of folds for a number bounded by how many
+   * things are actually attached. This folds the narrowed set the ledger
+   * selects — see {@link SessionLedgerTransaction.listAttachedSessions} for why
+   * the Sessions it drops provably cannot be working — and returns ordinary
+   * projections, so the caller counts them with exactly the code that counts a
+   * listing rather than a parallel rule that can drift from it.
+   */
+  listAttachedSessions(): Promise<readonly SessionProjection[]>;
+  /**
    * When Sessions were started, across every project — the practice chart's
    * whole input. Stamps rather than Sessions, so a 26-week window costs one
    * indexed read and no folds.
@@ -189,6 +202,13 @@ export interface SessionEnginePorts {
    * that reads are quietly slow forever. Reporting the miss is what makes that
    * condition observable. Seam failures are isolated, exactly as the runtime's
    * {@link SessionRuntimePorts.onSubscriberFailure} is.
+   *
+   * A listing's fold cache (VC-388) changes how often this fires without
+   * changing whether it does: a cache hit answers straight from {@link
+   * ListingFold} and never calls {@link projectStoredSession}, so a checkpoint
+   * failure for a Session that stays cached is reported once — on the fold
+   * that populated the entry — rather than once per listing, until the entry
+   * is evicted or the Session's log moves again.
    */
   onProjectionCheckpointFailure?: (error: unknown) => void;
   /**
@@ -247,6 +267,13 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    * A log rewritten out of band, beneath the ledger's insert-only contract,
    * is not seen here; it is not seen by the durable checkpoint rows either,
    * and a host that does that must build a new engine.
+   *
+   * What comes back is deep-frozen and shared (VC-393). `getSession` folds a
+   * fresh graph per call and freezes nothing, and the difference is the
+   * sharing rather than the contract: `SessionProjection` is `readonly`
+   * throughout, so no caller of either verb may mutate what it gets, and the
+   * freeze is the runtime backstop on the one path where a mutation would
+   * reach past the mutating caller into everybody else's next read.
    */
   const listingProjection = (
     transaction: SessionLedgerTransaction,
@@ -261,7 +288,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       listingFolds.set(session.id, cached);
       return cached.projection;
     }
-    const projection = projectStoredSession(transaction, session, reportCheckpointFailure);
+    const projection = frozenProjectionCopy(
+      projectStoredSession(transaction, session, reportCheckpointFailure),
+    );
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
     for (const oldest of listingFolds.keys()) {
@@ -770,6 +799,35 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       return ports.ledger.transaction((transaction) => transaction.countSessions(query));
     },
 
+    async listAttachedSessions() {
+      // Membership decided once, then folded in the same chunks and with the
+      // same host yields `listSessions` uses, through the same per-Session fold
+      // cache: a budget read and a listing read of the same Session are one
+      // fold, not two. Which also means what comes back is the same deep-frozen
+      // shared projection a listing gets (VC-393) — the budget only counts, so
+      // sharing is free here, and going around `listingProjection` to avoid the
+      // freeze would cost the shared fold it exists to protect.
+      //
+      // The skew `listSessions` documents applies here for the same reasons and
+      // matters less: this answers "how many are working", and a count taken
+      // across microseconds of skew is already what a budget computed at Session
+      // start means.
+      const rows = await ports.ledger.transaction((transaction) =>
+        transaction.listAttachedSessions(),
+      );
+      const projections: SessionProjection[] = [];
+      for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
+        if (from > 0) await yieldToHost();
+        const chunk = rows.slice(from, from + SESSION_LISTING_FOLD_CHUNK);
+        projections.push(
+          ...(await ports.ledger.transaction((transaction) =>
+            chunk.map((session) => listingProjection(transaction, session)),
+          )),
+        );
+      }
+      return projections;
+    },
+
     async listSessionStarts(query) {
       return ports.ledger.transaction((transaction) => transaction.listSessionStarts(query));
     },
@@ -905,7 +963,80 @@ interface ListingFold {
   session: Session;
   /** Log head at the moment of the fold, from the metadata-only read. */
   throughSequence: number;
+  /**
+   * The cache's own deep-frozen copy, shared by every caller that lists this
+   * Session while the entry survives. See {@link frozenProjectionCopy} for why
+   * it is a copy and not the folded object itself.
+   */
   projection: SessionProjection;
+}
+
+/**
+ * The cache's OWN deep-frozen copy of a freshly folded projection (VC-393).
+ *
+ * Two things make this a copy rather than a freeze in place.
+ *
+ * The first is why anything is needed at all: `listingProjection` hands the
+ * SAME object to every caller that lists this Session while its entry
+ * survives, which is the cache's entire value — a fold's cost is paid once,
+ * not once per listing. That sharing turns a mutating caller into a corruption
+ * of every later read rather than a bug local to itself, and neither a
+ * sequence change nor the `sameSession` comparison would dislodge the damage.
+ *
+ * The second is why freezing the folded object itself would be wrong. A fold
+ * does not own its whole graph: `foldSessionProjection` copies CONTAINERS and
+ * re-uses their ELEMENTS, seeding `commands`, `receipts`, `attachments`,
+ * `attention` and `interactions` from the base checkpoint's own objects and
+ * then pushing the very objects it read out of the event payloads
+ * (`commands.push(event.payload.command)`). Freezing that graph in place would
+ * reach back through the projection and freeze objects the ledger handed us —
+ * an event payload, a decoded checkpoint element — and the sibling checkpoint
+ * shares them too (`pendingExecutorStarts` holds the same `SessionCommand`
+ * objects as `projection.commands`). It happens to be harmless today only
+ * because every ledger in the tree answers reads with fresh objects: the
+ * in-memory one clones, the SQLite one decodes each row. {@link SessionLedger}
+ * does not promise that, and a conforming implementation that cached decoded
+ * rows would find them frozen by a mere listing. A copy owes the ledger
+ * nothing, so the promise is not needed.
+ *
+ * The copy costs one extra walk of a graph the fold has just built, paid once
+ * per fold and never on the cache-hit path, which is where listings spend
+ * their time. Priced by `listing-cache-cost.bench.test.ts` against the entry
+ * weights in `docs/research/perf/session-listing-vc388.md`, per row:
+ *
+ * |                  | ordinary (5.6 KB) | extreme (79.8 KB) |
+ * |------------------|-------------------|-------------------|
+ * | freeze in place  | 13 µs             | 108 µs            |
+ * | copy and freeze  | 23 µs             | 176 µs            |
+ * | copy on read     | 30 µs             | 451 µs            |
+ *
+ * So owning the graph rather than freezing somebody else's costs about ten
+ * microseconds on the row shape a real roster has — roughly 0.2 ms added to a
+ * cold listing of sixty Sessions, and nothing at all to a warm one. Copying on
+ * READ is both dearer per walk and paid on EVERY listing of every Session,
+ * including the warm ones, which is precisely the cost the cache exists to
+ * remove. The chunk bound is undisturbed either way: eight ordinary rows carry
+ * about 0.2 ms of copying, well inside the 3.6 ms block the chunk size was
+ * chosen for.
+ *
+ * A plain recursive copy is sufficient because a `SessionProjection` is
+ * JSON-shaped: plain objects and arrays of strings, numbers, booleans and
+ * nulls, with no `Date`, `Map`, `Set` or class instance anywhere in the tree
+ * — `assertSessionEvent` rejects any payload that is not JSON-compatible on
+ * the way in, and a checkpoint of the same projection is persisted as JSON on
+ * the way out. That also means it cannot contain a reference cycle, so the
+ * recursion needs no guard and always terminates. A future field holding one
+ * of those types would survive neither this copy nor the checkpoint it is
+ * written to, and would have to be caught at the fold rather than here.
+ */
+function frozenProjectionCopy<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((item: unknown) => frozenProjectionCopy(item))) as T;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) copy[key] = frozenProjectionCopy(child);
+  return Object.freeze(copy) as T;
 }
 
 interface StoredSessionProjection {

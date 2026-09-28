@@ -625,6 +625,17 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
+  // A column watches its own scroller to keep its mounted window sized
+  // (VC-316). jsdom ships no `ResizeObserver`, and inert is the right stub
+  // here: these cases move the board by dragging, never by resizing it.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {

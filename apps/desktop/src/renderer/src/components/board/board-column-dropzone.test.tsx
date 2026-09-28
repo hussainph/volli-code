@@ -123,6 +123,17 @@ beforeEach(() => {
     removeListener: () => {},
     dispatchEvent: () => false,
   }));
+  // A column watches its own scroller to keep its mounted window sized
+  // (VC-316). jsdom ships no `ResizeObserver`, and this file is about the
+  // NESTING rather than about any measurement, so an inert one is enough.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
 });
 
 afterEach(async () => {

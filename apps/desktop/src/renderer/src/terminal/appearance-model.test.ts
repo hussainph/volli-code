@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { GhosttyTheme } from "restty";
-import type { GhosttyAppearancePayload, GhosttyTerminalPrefs } from "@volli/shared";
+import type { GhosttyAppearancePayload, GhosttyTerminalPrefs, GhosttyTheme } from "@volli/shared";
 
 import {
   DEFAULT_TERMINAL_FONT_SIZE,

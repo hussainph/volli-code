@@ -2348,7 +2348,7 @@ export interface VolliSystemIpcContract {
     args: [sessionId: string, command: string];
     result: TerminalCommandResult;
   };
-  /** Reads the user's resolved Ghostty config, mapped onto restty's appearance model. */
+  /** Reads the user's resolved Ghostty config as the renderer's terminal appearance. */
   "volli:ghostty-config-get": { args: []; result: GhosttyConfigResult };
 }
 

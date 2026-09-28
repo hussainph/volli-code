@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
+  harnessLabel,
   PERSON_STARTED,
   type ChatSessionRecord,
   type HarnessId,
@@ -8,7 +9,7 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
-import { sessionSourceLabel } from "./session-source";
+import { sessionSourceHarness, sessionSourceLabel } from "./session-source";
 
 function terminalRow(session: SessionRecord): SessionListingRow {
   return {
@@ -128,5 +129,93 @@ describe("sessionSourceLabel", () => {
     expect(sessionSourceLabel({ kind: "chat", record: chatRecord({ role: "subagent" }) })).toBe(
       "Subagent",
     );
+  });
+});
+
+describe("sessionSourceHarness", () => {
+  const sourceHarness = (session: SessionRecord) => sessionSourceHarness(terminalRow(session));
+
+  // The id half of the label's own verdict, reached by the same rule: a glyph
+  // and the words beside it must never name two different harnesses.
+  it("names the harness an agent launch is running", () => {
+    expect(sourceHarness(record({ launchKind: "agent", harnessId: "codex" }))).toBe("codex");
+    expect(
+      sourceHarness(
+        record({ launchKind: "agent", harnessId: "opencode", activeHarnessId: "claude-code" }),
+      ),
+    ).toBe("claude-code");
+  });
+
+  // A custom slug round-trips rather than collapsing to the default harness —
+  // the caller decides what artwork an unknown harness gets, and it can only
+  // decide that if it is told the slug.
+  it("hands back an unrecognized slug verbatim", () => {
+    expect(
+      sourceHarness(record({ launchKind: "agent", harnessId: "my-custom-harness" as HarnessId })),
+    ).toBe("my-custom-harness");
+  });
+
+  // Everything the label refuses to call a harness, this refuses to name one
+  // for — including the shell that later ran an agent.
+  it("names none for a session that did not launch one", () => {
+    expect(sourceHarness(record({ launchKind: "shell" }))).toBeNull();
+    expect(
+      sourceHarness(record({ launchKind: "shell", activeHarnessId: "claude-code" })),
+    ).toBeNull();
+    expect(sourceHarness(record())).toBeNull();
+  });
+
+  // A structured Session runs the Agent Runtime, not a CLI.
+  it("names none for a chat row", () => {
+    expect(sessionSourceHarness({ kind: "chat", record: chatRecord() })).toBeNull();
+  });
+});
+
+/**
+ * The pairing itself, which is the thing VC-402 actually rests on: a row draws
+ * the glyph `sessionSourceHarness` picks and prints the words
+ * `sessionSourceLabel` picks, so a reader is told one harness twice or two
+ * harnesses once.
+ *
+ * Asserted as a RELATION over a matrix rather than as two lists of expected
+ * strings, because the failure this guards is drift between the two functions,
+ * and two independently-maintained expectation lists are exactly how that drift
+ * gets written down as intended. The matrix is every axis either function reads
+ * — `launchKind`, `harnessId`, `activeHarnessId`, `placement` — so a change to
+ * the gate in one has nowhere to hide.
+ */
+describe("sessionSourceHarness agrees with sessionSourceLabel", () => {
+  const LAUNCH_KINDS = ["agent", "shell", "unknown"] as const;
+  const HARNESSES = ["claude-code", "codex", "my-custom-harness" as HarnessId] as const;
+  const ACTIVE = [null, "cursor" as HarnessId] as const;
+  const PLACEMENTS = ["tab", "split", "unknown"] as const;
+
+  it("names the same harness in the glyph and in the words, or names none", () => {
+    let namedAHarness = 0;
+    for (const launchKind of LAUNCH_KINDS) {
+      for (const harnessId of HARNESSES) {
+        for (const activeHarnessId of ACTIVE) {
+          for (const placement of PLACEMENTS) {
+            const session = record({ launchKind, harnessId, activeHarnessId, placement });
+            const harness = sessionSourceHarness(terminalRow(session));
+            const label = sourceLabel(session);
+            if (harness === null) {
+              // No glyph to decode, so the words must not be naming a CLI
+              // either: the only labels left are the two generic ones.
+              expect(["Shell", "Shell · Split", "Terminal", "Terminal · Split"]).toContain(label);
+              continue;
+            }
+            namedAHarness += 1;
+            // The label is the harness's own words, plus only the placement
+            // suffix the glyph never claimed to carry.
+            expect(label).toBe(
+              placement === "split" ? `${harnessLabel(harness)} · Split` : harnessLabel(harness),
+            );
+          }
+        }
+      }
+    }
+    // The relation above is vacuously true if nothing ever names a harness.
+    expect(namedAHarness).toBe(HARNESSES.length * ACTIVE.length * PLACEMENTS.length);
   });
 });

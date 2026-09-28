@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { BACKUP_RETENTION_LOG_PREFIX, migrationBackupCandidatePattern } from "./backup-retention";
 import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
+import { internSessionEventProvenance } from "./session-event-provenance";
 import { openRawDb } from "./test-helpers";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -3678,6 +3679,85 @@ describe("migrate — 050, MCP provenance and the management audit trail (VC-380
     expect(() => migrate(db, dbPath)).not.toThrow();
 
     expect(columnNames(db, "mcp_servers")).toContain("registry_type");
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+});
+
+/** A project, a Session, and one attachment with the events that decide it. */
+function seedAttachment(db: ReturnType<typeof openRawDb>, id: string, closed: boolean): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, path, ticket_prefix, color_index, sort_order, created_at, updated_at)
+     VALUES ('p1', 'Project', '/repo', 'PRJ', 0, 0, 1, 1)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO sessions (id, project_id, ticket_id, role, parent_session_id, title, created_at)
+     VALUES (@id, 'p1', NULL, 'project', NULL, 'S', 1)`,
+  ).run({ id: `s-${id}` });
+  db.prepare(
+    `INSERT INTO session_attachments
+       (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id, native_detail,
+        observed_kind, failure, created_sequence)
+     VALUES (@id, @sessionId, 'terminal', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1)`,
+  ).run({ id, sessionId: `s-${id}` });
+  const provenanceId = internSessionEventProvenance(
+    db,
+    JSON.stringify({
+      source: { kind: "system", id: "desktop", detail: null },
+      venue: { id: "local", kind: "local" },
+    }),
+  );
+  const appendEvent = (sequence: number, payload: unknown): void => {
+    db.prepare(
+      `INSERT INTO session_events
+         (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+       VALUES (@eventId, @sessionId, @sequence, 1, 1, @provenanceId, NULL, NULL, @payload)`,
+    ).run({
+      eventId: `e-${id}-${sequence}`,
+      sessionId: `s-${id}`,
+      sequence,
+      provenanceId,
+      payload: JSON.stringify(payload),
+    });
+  };
+  appendEvent(1, { kind: "attachment.opened", attachment: { id, sessionId: `s-${id}` } });
+  if (closed) appendEvent(2, { kind: "attachment.closed", attachmentId: id, outcome: "completed" });
+}
+
+describe("migrate — 051, the attachment closure mark (VC-403)", () => {
+  it("backfills the mark from the events that already recorded the close", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath, { toVersion: 50 });
+    seedAttachment(db, "still-open", false);
+    seedAttachment(db, "already-closed", true);
+
+    migrate(db, dbPath);
+
+    expect(columnNames(db, "session_attachments")).toContain("closed_sequence");
+    // The close was always a fact; the migration only makes it indexable, so a
+    // history that predates the column reads exactly as the fold reads it.
+    expect(
+      db.prepare("SELECT id, closed_sequence FROM session_attachments ORDER BY id").all(),
+    ).toEqual([
+      { id: "already-closed", closed_sequence: 2 },
+      { id: "still-open", closed_sequence: null },
+    ]);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("converges a lineage whose user_version already claims 051", () => {
+    const dbPath = tempDbPath();
+    const db = openRawDb(dbPath);
+    db.pragma("foreign_keys = ON");
+    migrate(db, dbPath);
+    db.pragma("user_version = 50");
+
+    expect(() => migrate(db, dbPath)).not.toThrow();
+
+    expect(columnNames(db, "session_attachments")).toContain("closed_sequence");
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });

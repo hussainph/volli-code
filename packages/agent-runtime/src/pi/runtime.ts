@@ -2296,10 +2296,18 @@ async function attachSession(
           ...(instructions === undefined ? {} : { customInstructions: instructions }),
         });
         // Pi found nothing to compact — an empty history, or one already ending
-        // in a summary. Nothing happened, so nothing is reported: the caller
-        // that needed this to work is the one that has something to say about
-        // it. The live marker still has to leave, because it has no durable
-        // outcome that can dismiss it.
+        // in a summary. No compaction happened, so no compaction is recorded:
+        // there is no summary, no elided context and no spend to file, and a
+        // `CompactionObservation` saying otherwise would be a fact about work
+        // that did not occur. The live marker still has to leave, because it
+        // has no durable outcome that can dismiss it.
+        //
+        // Reporting it is the caller's job, and only one caller has anybody to
+        // report to (VC-141): the attachment's `compact` below turns this arm
+        // into a `nothing-to-compact` refusal, which reaches the person who
+        // typed `/compact` as a receipt, a durable `command.receipt.recorded`
+        // Session Event, and one neutral toast. Threshold and overflow stay
+        // silent here exactly as before — nobody is waiting on those.
         if (outcome.kind === "skipped") {
           await finishProgress();
           return outcome;

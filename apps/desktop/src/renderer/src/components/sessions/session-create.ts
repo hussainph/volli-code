@@ -30,7 +30,7 @@ import {
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
 
-/** Initial PTY grid; restty re-measures and resizes the shell within a frame. */
+/** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
 const INITIAL_ROWS = 24;
 

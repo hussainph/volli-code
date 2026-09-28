@@ -4,6 +4,9 @@
     "composite": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    // The authority for @renderer/* at type-check time. tsconfig.json carries a
+    // deliberate copy of this mapping for the shadcn CLI, which cannot read
+    // this file — change the two together.
     "paths": {
       "@renderer/*": ["./src/renderer/src/*"]
     }
