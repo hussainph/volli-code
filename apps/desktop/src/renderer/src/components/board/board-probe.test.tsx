@@ -528,7 +528,6 @@ beforeEach(() => {
     byProject: {},
     armingByProject: {},
     orderByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     railReadAt: {},
@@ -836,7 +835,7 @@ describe("PROBE isolate", () => {
 
       // (iii) automations store only
       await act(async () => {
-        useAutomationsStore.setState({ runsByTicket: { t9: [] } });
+        useAutomationsStore.setState({ runsByAutomation: { "p1:a1": [] } });
       });
       counts("iii automations-runs");
 

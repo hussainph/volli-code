@@ -4,12 +4,11 @@
  * status, the ticket's durable `prUrl`, and the local busy stage, it returns the
  * one primary action (label + disabled reason) and the always-listed chevron
  * menu (each verb with its own disabled reason). Raw status is formatted here,
- * never printed directly: it drives those actions and the compact Git-state
- * strip on the Diffs page. Kept side-effect-free and separate from
- * `ticket-repository-summary.tsx` so the rules are unit-testable without
- * mounting React or faking `window.api`.
+ * never printed directly: it drives those actions and the Git-state row of the
+ * repository card, which the Diffs page carries (VC-406). Kept side-effect-free
+ * and separate from `ticket-repository-summary.tsx` so the rules are
+ * unit-testable without mounting React or faking `window.api`.
  */
-import type { DiffStat } from "@volli/shared";
 
 /** The finer Details-rail worktree status (mirrors `WorktreeStatusResult["status"]`, apps/desktop/src/ipc/contract.ts). */
 export interface WorktreeStatusSnapshot {
@@ -245,23 +244,4 @@ export function resolveDoneFlow(
           : { kind: "open-pr", label: "Open PR", disabled: true, reason: REASON_NO_PR_YET },
     },
   };
-}
-
-/**
- * "2 files · +11 −2", with a trailing "· +2 binary/untracked" clause when the
- * Change Set has files whose line counts are unknown (binary, or an untracked
- * path that raced or could not be read). `null` when there are no
- * changes vs base yet, so the caller can show its own "no changes" copy
- * instead of a hollow "0 files · +0 −0".
- *
- * This summarizes the Change Set, not `git diff base...HEAD`: it counts the
- * worktree's whole current outcome, uncommitted and untracked work included,
- * which is why it can differ from what a PR would contain.
- */
-export function formatChangeSetSummary(diff: DiffStat): string | null {
-  if (diff.files.length === 0) return null;
-  const specialCount = diff.files.filter((file) => file.insertions === null).length;
-  const fileCount = diff.files.length;
-  const base = `${fileCount} file${fileCount === 1 ? "" : "s"} · +${diff.insertions} −${diff.deletions}`;
-  return specialCount > 0 ? `${base} · +${specialCount} binary/untracked` : base;
 }

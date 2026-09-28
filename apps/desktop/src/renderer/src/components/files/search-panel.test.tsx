@@ -19,7 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { FileSearchResult } from "../../../../ipc/contract";
 import { fileRevealKey, takeFileReveal } from "@renderer/editor/reveal-line";
-import { FileSearchPanel } from "./search-panel";
+import { FileSearchPanel, searchSummaryLine } from "./search-panel";
+import {
+  clearRememberedNavigatorViews,
+  navigatorScopeKey,
+  readNavigatorView,
+} from "./navigator-scope-state";
 import type { SearchScope } from "./search-model";
 
 const onOpenMatch = vi.fn();
@@ -38,8 +43,13 @@ const oneMatch: FileSearchResult = {
   limit: "none",
 };
 
-async function mount(scope: SearchScope, result: FileSearchResult = oneMatch) {
-  const search = vi.fn(async (): Promise<FileSearchResult> => result);
+async function mount(
+  scope: SearchScope,
+  result: FileSearchResult | (() => Promise<FileSearchResult>) = oneMatch,
+) {
+  const search = vi.fn(async (): Promise<FileSearchResult> =>
+    typeof result === "function" ? await result() : result,
+  );
   Object.defineProperty(window, "api", {
     configurable: true,
     // `listExternalApps` is a file row's context menu asking what is installed;
@@ -58,8 +68,8 @@ async function mount(scope: SearchScope, result: FileSearchResult = oneMatch) {
   return { search };
 }
 
-/** Types into the search box and lets the debounce settle. */
-async function type(text: string): Promise<void> {
+/** Types into the search box WITHOUT letting the debounce elapse. */
+async function typeOnly(text: string): Promise<void> {
   const input = document.querySelector("input");
   if (input === null) throw new Error("no search input");
   await act(async () => {
@@ -69,9 +79,18 @@ async function type(text: string): Promise<void> {
     setter?.call(input, text);
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
   });
+}
+
+/** Types into the search box and lets the debounce settle. */
+async function type(text: string): Promise<void> {
+  await typeOnly(text);
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
   });
+}
+
+function summaryText(): string | null {
+  return document.querySelector('[data-testid="file-search-summary"]')?.textContent ?? null;
 }
 
 function rows(selector: string): Element[] {
@@ -91,6 +110,10 @@ afterEach(async () => {
   container?.remove();
   container = null;
   vi.unstubAllGlobals();
+  // The typed query now OUTLIVES the page (VC-406), which is the point — and
+  // which means one test's words would otherwise be the next one's starting
+  // state, in the same module-level map the app uses.
+  clearRememberedNavigatorViews();
 });
 
 describe("what the page sends", () => {
@@ -267,5 +290,304 @@ describe("what a click does", () => {
     expect(
       takeFileReveal(fileRevealKey({ projectId: "p1", ticketId: "t1", relPath: "src/app.ts" })),
     ).toEqual({ line: 12, column: 7, length: 6 });
+  });
+});
+
+/**
+ * VC-406: a result on screen is an answer to a QUESTION, and the page never
+ * lets the two drift apart — not while a second query is in flight, not when a
+ * re-search fails, and never by claiming a checkout holds no matches on the
+ * strength of a read that did not happen.
+ */
+describe("the summary line, as pure text", () => {
+  const outcome = {
+    query: "needle",
+    files: oneMatch.ok ? oneMatch.files : [],
+    matches: 3,
+    limit: "none" as const,
+  };
+
+  it("says nothing at rest", () => {
+    expect(searchSummaryLine({ pending: null, outcome: null, failed: false })).toBeNull();
+  });
+
+  it("names the query it is still searching for", () => {
+    expect(searchSummaryLine({ pending: "needle", outcome: null, failed: false })).toBe(
+      "Searching “needle”…",
+    );
+  });
+
+  it("names BOTH queries when a new one runs over an old answer", () => {
+    expect(searchSummaryLine({ pending: "needles", outcome, failed: false })).toBe(
+      "Searching “needles” · results below are for “needle”",
+    );
+  });
+
+  it("says the rows are the LAST read when the newest attempt failed", () => {
+    expect(searchSummaryLine({ pending: null, outcome, failed: true })).toBe(
+      "Last read for “needle” · 3 matches in 1 file",
+    );
+  });
+
+  it("is just the count once a search has settled", () => {
+    expect(searchSummaryLine({ pending: null, outcome, failed: false })).toBe(
+      "3 matches in 1 file",
+    );
+  });
+});
+
+describe("a read that has not landed", () => {
+  it("never draws 'No matches' for a search that failed", async () => {
+    await mount({ kind: "home", projectId: "p1" }, { ok: false, error: "Search is unavailable" });
+
+    await type("needle");
+
+    expect(rows('[data-testid="file-search-error"]')).toHaveLength(1);
+    expect(rows('[data-testid="file-search-empty"]')).toHaveLength(0);
+  });
+
+  it("offers a retry that re-runs the same query", async () => {
+    const { search } = await mount(
+      { kind: "home", projectId: "p1" },
+      { ok: false, error: "Search is unavailable" },
+    );
+    await type("needle");
+    expect(search).toHaveBeenCalledTimes(1);
+
+    const retry = document.querySelector<HTMLButtonElement>(
+      '[data-testid="file-search-error"] button',
+    );
+    await act(async () => {
+      retry?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(search).toHaveBeenLastCalledWith({ projectId: "p1", query: "needle" });
+  });
+
+  it("claims no matches only once a search has actually returned none", async () => {
+    await mount(
+      { kind: "home", projectId: "p1" },
+      { ok: true, files: [], matches: 0, limit: "none" },
+    );
+
+    await type("needle");
+
+    expect(rows('[data-testid="file-search-empty"]')).toHaveLength(1);
+    expect(rows('[data-testid="file-search-error"]')).toHaveLength(0);
+  });
+});
+
+/** A search whose answer the test decides when to give. */
+function deferred() {
+  const queue: ((result: FileSearchResult) => void)[] = [];
+  return {
+    next: async () => await new Promise<FileSearchResult>((resolve) => queue.push(resolve)),
+    async settle(result: FileSearchResult) {
+      const resolve = queue.shift();
+      await act(async () => {
+        resolve?.(result);
+      });
+    },
+  };
+}
+
+describe("a re-search over results already on screen", () => {
+  it("keeps the rows and names both queries while the new one is in flight", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+
+    await type("needle");
+    await answers.settle(oneMatch);
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+
+    await type("needles");
+
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+    expect(document.querySelector('[data-testid="file-search-summary"]')?.textContent).toBe(
+      "Searching “needles” · results below are for “needle”",
+    );
+  });
+
+  it("keeps the rows when the re-search fails, and says so on the heading", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+
+    await type("needle");
+    await answers.settle(oneMatch);
+    await type("needles");
+    await answers.settle({ ok: false, error: "Search is unavailable" });
+
+    // The rows are still there, because they were true for the query they name.
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+    // The fault rides the heading rather than replacing the list.
+    const status = document.querySelector('[data-testid="file-search-read-status"]');
+    expect(status?.getAttribute("data-read-status")).toBe("refresh-failed");
+    expect(rows('[data-testid="file-search-error"]')).toHaveLength(0);
+    expect(document.querySelector('[data-testid="file-search-summary"]')?.textContent).toBe(
+      "Last read for “needle” · 1 match in 1 file",
+    );
+  });
+
+  it("writes nothing after the page is gone", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+    await type("needle");
+
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+
+    // Landing after the unmount must be a no-op, not a state write.
+    await expect(answers.settle(oneMatch)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * VC-406 review: the mislabelled window was the DEBOUNCE, not the request. A
+ * query typed over a retained answer is a different question from the moment it
+ * is typed, and the 200ms before any IPC leaves is where a rapidly edited query
+ * spends most of its visible life.
+ */
+describe("a query typed over an answer, before the debounce elapses", () => {
+  it("names the pending question and says which query the rows belong to", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+    await type("needle");
+    await answers.settle(oneMatch);
+    expect(summaryText()).toBe("1 match in 1 file");
+
+    // No debounce settle: nothing has been asked of main yet.
+    await typeOnly("needles");
+
+    expect(summaryText()).toBe("Searching “needles” · results below are for “needle”");
+    // The rows stay, because they are still the answer they name.
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+  });
+
+  it("says it is searching before the first request leaves, rather than nothing", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+
+    await typeOnly("needle");
+
+    expect(summaryText()).toBe("Searching “needle”…");
+    expect(rows('[data-testid="file-search-pending"]')).toHaveLength(1);
+  });
+
+  it("does not talk over a failure with a search that is not happening", async () => {
+    const answers = deferred();
+    await mount({ kind: "home", projectId: "p1" }, answers.next);
+    await type("needle");
+    await answers.settle(oneMatch);
+    await type("needles");
+    await answers.settle({ ok: false, error: "Search is unavailable" });
+    expect(summaryText()).toBe("Last read for “needle” · 1 match in 1 file");
+
+    // Typing again while the last attempt is still the failed one: nothing is in
+    // flight, so the line keeps naming what the rows are and the heading keeps
+    // the fault and its retry.
+    await typeOnly("needlessly");
+
+    expect(summaryText()).toBe("Last read for “needle” · 1 match in 1 file");
+    expect(
+      document
+        .querySelector('[data-testid="file-search-read-status"]')
+        ?.getAttribute("data-read-status"),
+    ).toBe("refresh-failed");
+
+    // Once the debounce elapses the read really is out, and the line names both
+    // questions again.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260));
+    });
+
+    expect(summaryText()).toBe("Searching “needlessly” · results below are for “needle”");
+  });
+});
+
+/**
+ * VC-406 review: the rail mounts this page ONCE and hands it another scope, so
+ * the old answer has to be gone in the same frame the new scope's name arrives —
+ * a click on a retained row opens a path in a checkout the reader is no longer
+ * looking at.
+ */
+describe("a scope swapped under the page", () => {
+  async function show(scope: SearchScope): Promise<void> {
+    await act(async () => {
+      root?.render(
+        <FileSearchPanel scope={scope} root="volli/VC-193-search" onOpenMatch={onOpenMatch} />,
+      );
+    });
+  }
+
+  it("drops the previous checkout's matches in the frame the new scope arrives", async () => {
+    const answers = deferred();
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" }, answers.next);
+    await type("needle");
+    await answers.settle(oneMatch);
+    const before = document.querySelector('[data-testid="file-search-panel"]');
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+
+    await show({ kind: "ticket", projectId: "p1", ticketId: "t2" });
+
+    // Keyed by the scope: a new instance, not the old one asked to forget.
+    const after = document.querySelector('[data-testid="file-search-panel"]');
+    expect(after).not.toBe(before);
+    expect(before?.isConnected).toBe(false);
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
+    expect(summaryText()).toBeNull();
+    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+  });
+
+  it("lets a search the old scope left in flight write nothing here", async () => {
+    const answers = deferred();
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" }, answers.next);
+    await type("needle");
+
+    await show({ kind: "ticket", projectId: "p1", ticketId: "t2" });
+    // The first ticket's search answering after the swap.
+    await answers.settle(oneMatch);
+
+    expect(rows('[data-testid="file-search-match"]')).toHaveLength(0);
+    expect(rows('[data-testid="file-search-error"]')).toHaveLength(0);
+    expect(rows('[data-testid="file-search-idle"]')).toHaveLength(1);
+  });
+});
+
+describe("the query across a tab switch", () => {
+  it("remembers what was typed, per checkout", async () => {
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
+    await type("needle");
+
+    expect(
+      readNavigatorView(navigatorScopeKey("search", { projectId: "p1", ticketId: "t1" })),
+    ).toEqual({ cwd: "", filtering: false, query: "needle" });
+    // Another ticket's Search page is a different question about a different
+    // checkout, and must not inherit it.
+    expect(
+      readNavigatorView(navigatorScopeKey("search", { projectId: "p1", ticketId: "t2" })).query,
+    ).toBe("");
+    expect(readNavigatorView(navigatorScopeKey("search", { projectId: "p1" })).query).toBe("");
+  });
+
+  it("comes back with the words still in the box after a remount", async () => {
+    await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
+    await type("needle");
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    container?.remove();
+
+    const { search } = await mount({ kind: "ticket", projectId: "p1", ticketId: "t1" });
+
+    expect(document.querySelector("input")?.value).toBe("needle");
+    // And it asks again for what is in the box, rather than drawing an idle page.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 260));
+    });
+    expect(search).toHaveBeenCalledWith({ projectId: "p1", ticketId: "t1", query: "needle" });
   });
 });

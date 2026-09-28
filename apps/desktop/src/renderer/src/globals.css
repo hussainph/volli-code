@@ -1665,6 +1665,41 @@
   background-color: var(--muted-foreground);
 }
 
+/* THE RAILS KEEP NO SCROLLBAR AT ALL (VC-406 follow-up).
+ *
+ * The bars above are styled but still CLASSIC: Chromium takes their 10px out of
+ * the scroll container's content box the moment it overflows, and gives it back
+ * the moment it does not. On a rail that is not a stripe appearing at the edge
+ * — it is every row in the column stepping 10px left and back again each time a
+ * fold opens or closes, which is the one motion a page of folds must not have.
+ * The rail is 240–400px of mostly-one-line rows, so that step is a visible
+ * reflow of the whole page for a bar nobody was reading.
+ *
+ * Scoped to the rail ROOTS (`home-rail.tsx`, `ticket-rail.tsx`) and everything
+ * inside them — the Now column, the Files, Diffs and Search lists, the capped
+ * Automations list, and the folds under the footer rows — rather than to a
+ * handful of named scrollers, because a page handed in by the host scrolls in
+ * its own element that those files never see. It reaches nothing outside a
+ * rail: the editor, the sidebar and the main surfaces keep the overlay bar
+ * above, and menus, popovers and tooltips opened FROM a rail are portalled to
+ * the body, so they are not descendants of this scope and keep theirs too.
+ *
+ * Only the bar is gone. `overflow` is untouched, so the wheel, the trackpad,
+ * keyboard paging and `scrollIntoView` all behave exactly as before — this is
+ * the same pair (`scrollbar-width` plus the `-webkit` pseudo-element) that the
+ * tab strip, the board and the workspace rail already use inline, spelled once
+ * here for a subtree instead. */
+[data-volli-rail],
+[data-volli-rail] * {
+  scrollbar-width: none;
+}
+[data-volli-rail]::-webkit-scrollbar,
+[data-volli-rail] *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* Range inputs — painted in tokens rather than accented, for the same reason
  * the scrollbars above are.
  *
