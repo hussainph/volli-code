@@ -12,21 +12,25 @@
  *      two lines under the eyebrow AUTOMATIONS). There is no Run once
  *      control: VC-406 retired it from the rail (a one-off is `+ Chat` and
  *      typing), and this step guards that it does not quietly come back.
- *   2. With a column armed, the offer list leads with that Automation and
- *      marks it Armed, because the Ticket sits in that column.
+ *   2. With a column armed, the offer list MARKS that Automation Armed where
+ *      it already sits, because the Ticket sits in that column. It is not
+ *      floated to the top: the menu and the lane are one list read twice
+ *      (VC-132), and only the lane's drag has digits to protect.
  *   3. The list draws every column's Offered work as its own row, the Ticket's
  *      current column first and each row naming the column that offers it — a
  *      switched-off Automation among them is offered rather than withheld
  *      (running by hand is universal, VC-112), wearing a slashed bolt
  *      (`data-triggers="off"`) with the words in its title.
- *   4. Pressing the Armed row reaches the Run door.
+ *   4. Pressing the Armed row opens its inspection, and the Run inside that
+ *      record — its own labelled act (VC-406) — reaches the Run door.
  *   5. There is no authoring form anywhere in the rail: no Name, no Trigger,
  *      no save, no delete.
  *   6. This Ticket's Runs are drawn from this Ticket's own read: with nothing
  *      run yet the rail draws no list, and the door it reads agrees.
- *   7. Right-clicking a ROW opens its own nested menu — the other deliberate
- *      surface VC-112 names for the per-invocation override, now per
- *      Automation rather than only for the column's default (VC-406).
+ *   7. Right-clicking a ROW opens that row's own inspection — the other
+ *      deliberate surface VC-112 names for the per-invocation override, now
+ *      per Automation rather than only for the column's default (VC-406). It
+ *      is the SAME record a press opens, never a second menu.
  *   8. The board card's own `Automations ▸` submenu offers every column's
  *      grouped list without opening the Ticket, and holds the same nested
  *      override.
@@ -137,6 +141,23 @@ try {
   /** The offer list's rows — one per Automation this Ticket may be made to run. */
   const offerRows = () => rail().locator('[data-testid="ticket-rail-automation-row"]');
 
+  /**
+   * The one row wearing this column's Armed mark, wherever the lane's rank put
+   * it (VC-132) — the list is not reordered to bring it to the front.
+   */
+  const armedOfferRow = () =>
+    rail().locator('[data-testid="ticket-rail-automation-row"][data-armed="true"]');
+
+  /**
+   * Rows whose Automation has every Trigger switched off. The mark rides on
+   * the ROW itself (VC-406), not on anything inside it.
+   */
+  const switchedOffRows = () =>
+    rail().locator('[data-testid="ticket-rail-automation-row"][data-triggers="off"]');
+
+  /** A row's inspection — the popover both a press and a right-click open. */
+  const inspection = () => page.locator('[data-testid="ticket-rail-automation-inspect"]');
+
   await must(
     1,
     "with nothing to run, the block is still there and the header's door reaches the page",
@@ -227,30 +248,32 @@ try {
     detail: created.fail ?? `armed=${created.armedId}`,
   }));
 
-  await must(3, "the offer list leads with this column's Armed automation", async () => {
+  await must(3, "the offer list marks this column's Armed automation in place", async () => {
     await openTicket();
-    const armed = offerRows().first();
-    await armed.waitFor({ timeout: 15000 });
-    const label = await armed.getAttribute("aria-label");
-    const marked = await armed.getAttribute("data-armed");
+    await offerRows().first().waitFor({ timeout: 15000 });
+    // Marked WHERE IT SITS, not floated: the list keeps the lane's rank
+    // (VC-132, pinned in `ticket-rail-automations-model.test.ts`), so this
+    // asks which row wears the mark rather than what the first row is. The
+    // row is the Inspect affordance now (VC-406) — the press that RUNS is its
+    // own control inside the row, which check 4 takes.
+    const markedRows = armedOfferRow();
+    const markedCount = await markedRows.count();
+    const label = markedCount > 0 ? await markedRows.first().getAttribute("aria-label") : null;
     // The door is in the header at EVERY state now (VC-406) — it used to be
     // the empty state's consolation prize, which left the one reader who could
     // not reach the page from here as the one with lanes to arrange.
     const pageDoors = await pageDoor().count();
     return {
-      ok: label === "Run Review sweep on this ticket" && marked === "true" && pageDoors === 1,
-      detail: `first=${label} armed=${marked} pageDoors=${pageDoors}`,
+      ok: label === "Inspect Review sweep" && markedCount === 1 && pageDoors === 1,
+      detail: `marked=${label} markedCount=${markedCount} pageDoors=${pageDoors}`,
     };
   });
 
   await attempt(4, "the list draws every column's Offered work as a row", async () => {
     const items = await rail().locator('[data-testid="ticket-rail-automation-list"]').innerText();
-    const offRows = await offerRows().locator('[data-triggers="off"]').count();
+    const offRows = await switchedOffRows().count();
     const offTitle =
-      offRows === 0
-        ? ""
-        : ((await offerRows().locator('[data-triggers="off"]').first().getAttribute("title")) ??
-          "");
+      offRows === 0 ? "" : ((await switchedOffRows().first().getAttribute("title")) ?? "");
     return {
       ok:
         items.includes("Review sweep") &&
@@ -270,11 +293,14 @@ try {
     };
   });
 
-  await attempt(5, "pressing the Armed row reaches the Run door", async () => {
-    // No default model on this profile, so the Run's own refusal opens Model
-    // Access — which is the evidence the press reached the door.
-    // Switched off on this profile, so the row's name carries the note (VC-406).
-    await page.getByLabel("Run Review sweep on this ticket (manual only)").first().click();
+  await attempt(5, "the Armed row's inspection reaches the Run door", async () => {
+    // Two acts now, not one (VC-406): the ROW opens the record, and the Run
+    // inside it is its own labelled press. No default model on this profile,
+    // so the Run's own refusal opens Model Access — which is the evidence the
+    // press reached the door.
+    await armedOfferRow().first().click();
+    await inspection().waitFor({ timeout: 15000 });
+    await page.getByTestId("ticket-rail-automation-run").click();
     await page.getByRole("navigation", { name: "Settings categories" }).waitFor({ timeout: 20000 });
     await backToBoard();
     return { ok: true, detail: "ran the armed Automation, refused for the missing model" };
@@ -303,19 +329,19 @@ try {
     },
   );
 
-  await attempt(7, "right-clicking a row opens that row's own nested menu", async () => {
+  await attempt(7, "right-clicking a row opens that row's own inspection", async () => {
     // The second deliberate surface VC-112 names beside the rail itself, and
-    // since VC-406 it is PER ROW: the old caret could only re-run the column's
-    // default on another model. The override row rides here when the profile
-    // has a catalog; this profile has none, so it is printed, not required.
-    await offerRows().first().click({ button: "right" });
-    const menu = page.getByRole("menu").first();
-    await menu.waitFor({ timeout: 10000 });
-    const items = await menu.innerText();
+    // since VC-406 it is PER ROW. It is deliberately NOT a second menu: the
+    // right-click opens the SAME inspection the press does, because a
+    // right-click that offered different controls would be a second answer to
+    // what this row can be made to do. Check 6 left the Ticket open.
+    await armedOfferRow().first().click({ button: "right" });
+    await inspection().waitFor({ timeout: 10000 });
+    const items = await inspection().innerText();
     await page.keyboard.press("Escape");
     await backToBoard();
     return {
-      // The row's menu is about THAT row: it runs the Automation it was opened
+      // The inspection is about THAT row: it runs the Automation it was opened
       // on, and offers no sibling's name to run by mistake.
       ok: items.includes("Review sweep") && !items.includes("Done sweep"),
       detail: items.replaceAll("\n", " | ").slice(0, 240),

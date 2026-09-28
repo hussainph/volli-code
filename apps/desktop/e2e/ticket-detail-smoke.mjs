@@ -867,7 +867,12 @@ async function main() {
         });
 
         const railRow = (await aside.getByText(SESSION_INITIAL, { exact: true }).count()) >= 1;
-        const railChip = (await aside.getByText(/^(Working|Idle|Exited)$/).count()) >= 1;
+        // Every roster row carries its age BESIDE its state now (VC-406:
+        // `ticket-sessions-panel.tsx`), so the chip reads "Working · just now"
+        // rather than the bare word. Matching the pair keeps this a stronger
+        // assertion than the old anchored word: it pins the state vocabulary
+        // AND the age that now has to ride with it.
+        const railChip = (await aside.getByText(/^(Working|Idle|Exited) · .+$/).count()) >= 1;
         // The Calm Stack roster is one flat line per Session — glyph, title,
         // status — so the harness name is no longer printed anywhere under this
         // `aside`: not on a roster row, and not in History either, where
