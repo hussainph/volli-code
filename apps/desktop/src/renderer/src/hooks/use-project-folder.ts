@@ -63,7 +63,12 @@ export function useProjectFolder(
       return;
     }
     let live = true;
-    void checkFolder(projectId)
+    // `Promise.resolve().then(call)` rather than calling straight into it: a
+    // bridge method that is absent throws SYNCHRONOUSLY, and an effect that
+    // throws takes the whole Board down with it. A fault surface must never be
+    // the reason the surface it was watching over fails to render.
+    void Promise.resolve()
+      .then(() => checkFolder(projectId))
       .then((result) => {
         if (live) setState(result.ok ? result.state : null);
       })

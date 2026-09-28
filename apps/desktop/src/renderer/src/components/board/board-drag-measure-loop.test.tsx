@@ -648,12 +648,6 @@ beforeEach(() => {
         columnOrders: vi.fn(async () => ({ ok: true, orders: [] })),
         enablement: vi.fn(async () => ({ ok: true, enabledAutomationIds: ["a1", "a2"] })),
       },
-      // The board asks once per project whether its folder is still on disk
-      // (VC-430). Answering `present` keeps the recovery banner off the
-      // fixture, which is the state every case here is measuring.
-      projects: {
-        checkFolder: vi.fn(async () => ({ ok: true, path: "/repo/p1", state: "present" })),
-      },
     },
   });
   useBoardStore.setState({
