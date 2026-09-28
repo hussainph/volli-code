@@ -746,10 +746,14 @@ export interface VolliDataIpcContract {
   /**
    * Points an existing project at the folder it moved to (VC-430).
    *
-   * APP-ONLY, for `volli:project-authority-policy`'s reason rather than by
-   * analogy: re-homing a project changes where every Session it starts will
-   * run, so it is a decision for the person in front of the app, never for a
-   * caller on the socket. The folder is validated here before it is saved.
+   * App-only, and note WHERE that comes from: no data channel is reachable from
+   * the agent socket at all — the socket dispatches verbs from
+   * `verb-registry.ts`, and this has none. So unlike
+   * `volli:project-authority-policy`, which argues for a boundary that must
+   * never be crossed, this is simply the ordinary state of a renderer channel.
+   * It stays that way on the same grounds: re-homing a project changes where
+   * every Session it starts will run, so no agent verb may ever be added behind
+   * it. The folder is validated here before it is saved.
    */
   "volli:project-relink": { args: [input: ProjectRelinkInput]; result: ProjectRelinkResult };
   /** Whether one project's registered folder is still on disk (VC-430). */

@@ -615,6 +615,14 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
+        // Relinking a project to the folder it moved to (VC-430). In the gate
+        // because every branch of it is a rule about a filesystem nobody is
+        // watching: the refusal that stops two projects tracking one checkout,
+        // and the container move that keeps a renamed project's worktrees
+        // inside the set this database recognises as its own. Both are silent
+        // when wrong — one duplicates a project, the other strands checkouts
+        // that no cleanup surface will ever list again.
+        "**/src/main/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",

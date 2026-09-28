@@ -2102,9 +2102,9 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toHaveLength(78);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
-      // the project at the one it moved to. App-only for the same reason the
-      // authority write below is — re-homing a project decides where every
-      // Session it starts will run.
+      // the project at the one it moved to. Renderer channels with no agent verb
+      // behind them, and none may ever be added — re-homing a project decides
+      // where every Session it starts will run.
       expect(DATA_CHANNELS).toContain("volli:project-folder-check");
       expect(DATA_CHANNELS).toContain("volli:project-relink");
       // The steady-state refresh pair (VC-387): one project's board without

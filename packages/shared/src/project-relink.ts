@@ -28,11 +28,30 @@
  */
 export type ProjectFolderState = "present" | "missing" | "not-a-directory";
 
+/**
+ * What identifies a FOLDER, as opposed to one spelling of its path.
+ *
+ * A path is not an identity. macOS is case-insensitive by default, so
+ * `/Users/me/Volli` and `/Users/me/volli` are one directory under two names; a
+ * symlink gives a third. Comparing the strings answers "different" for all
+ * three, and a rule built on that would let two projects track one checkout —
+ * the duplicate this module exists to refuse.
+ *
+ * The caller supplies the answer because only it can look: on a POSIX machine
+ * this is the device and inode the folder lives at, which is stable across
+ * every spelling of the path that reaches it. `null` means the look failed,
+ * and comparison then falls back to the paths, which is the old behaviour
+ * rather than a silent yes.
+ */
+export type FolderIdentity = string | null;
+
 /** The little of a project this module needs: who it is, and where it points. */
 export interface ProjectRelinkSubject {
   id: string;
   name: string;
   path: string;
+  /** Which folder {@link path} names, as the caller measured it. */
+  folder?: FolderIdentity;
 }
 
 export interface ProjectRelinkInput {
@@ -42,6 +61,8 @@ export interface ProjectRelinkInput {
   candidatePath: string;
   /** What the caller's look at {@link candidatePath} found. */
   candidateState: ProjectFolderState;
+  /** Which folder {@link candidatePath} names, as the caller measured it. */
+  candidateFolder?: FolderIdentity;
   /** Every tracked project, INCLUDING {@link project} — filtered by id here. */
   projects: readonly ProjectRelinkSubject[];
 }
@@ -69,8 +90,10 @@ export const PROJECT_RELINK_NOTICES = [
   "worktrees-repaired",
   /** They could not be, and git commands in those worktrees will fail until they are. */
   "worktrees-unrepaired",
-  /** New worktrees will land in a container named after the new folder. */
-  "worktree-container-renamed",
+  /** The ticket worktrees moved too, so their container still matches the project. */
+  "worktrees-followed",
+  /** They could not move, which costs them Volli's worktree cleanup. */
+  "worktrees-left-behind",
 ] as const;
 
 /** One thing the move left behind, by its durable id. */
@@ -84,11 +107,20 @@ export interface ProjectRelinkAftermath {
   worktrees: number;
   /** Whether repairing git's administrative links in the new root succeeded. */
   worktreesRepaired: boolean;
-  /** Whether the move changed the folder name new worktrees are grouped under. */
-  containerRenamed: boolean;
+  /**
+   * Whether the worktree container had to move to keep matching the project.
+   *
+   * A project's container is named after its folder, so a RENAME would leave
+   * the existing worktrees in a directory the app no longer recognises as its
+   * own. `false` means the folder's name did not change and nothing had to
+   * move — the ordinary case for a project that was moved rather than renamed.
+   */
+  containerMoveNeeded: boolean;
+  /** Whether that move succeeded. Meaningless when none was needed. */
+  containerMoved: boolean;
 }
 
-/** Everything {@link aftermath} says did not follow the project, in reading order. */
+/** Everything {@link aftermath} says about what the move left behind, in reading order. */
 export function projectRelinkNotices(
   aftermath: ProjectRelinkAftermath,
 ): readonly ProjectRelinkNotice[] {
@@ -96,8 +128,10 @@ export function projectRelinkNotices(
   if (aftermath.liveSessions > 0) notices.push("sessions-keep-old-cwd");
   if (aftermath.worktrees > 0) {
     notices.push(aftermath.worktreesRepaired ? "worktrees-repaired" : "worktrees-unrepaired");
+    if (aftermath.containerMoveNeeded) {
+      notices.push(aftermath.containerMoved ? "worktrees-followed" : "worktrees-left-behind");
+    }
   }
-  if (aftermath.containerRenamed) notices.push("worktree-container-renamed");
   return notices;
 }
 
@@ -110,8 +144,13 @@ const NOTICE_TEXT: Record<ProjectRelinkNotice, (aftermath: ProjectRelinkAftermat
     `Reconnected ${worktrees} ticket ${plural(worktrees, "worktree")} to the repository at its new path.`,
   "worktrees-unrepaired": ({ worktrees }) =>
     `${worktrees} ticket ${plural(worktrees, "worktree")} could not be reconnected. Run \`git worktree repair\` in the project folder.`,
-  "worktree-container-renamed": () =>
-    "New worktrees will be grouped under the new folder name; existing ones stay put.",
+  // No count in either sentence: `worktrees` is the whole set, and a set can
+  // hold a row stamped outside the container that nothing moved. The count that
+  // is true of them all is already in the repair notice above.
+  "worktrees-followed": () =>
+    "The ticket worktrees moved with it, so they stay under the project's folder name.",
+  "worktrees-left-behind": () =>
+    "The ticket worktrees could not move to match the folder's new name. Git still reaches them, but Volli's worktree cleanup will not list them.",
 };
 
 /** `"worktree"` / `"worktrees"`, so a count of one never reads like a typo. */
@@ -139,6 +178,23 @@ function normalizeFolderPath(path: string): string {
 }
 
 /**
+ * Whether these two places are one folder.
+ *
+ * The DISK wins when it answered for both: two spellings of one directory
+ * (case, a symlink, a trailing slash) share an identity, and a rule that read
+ * only the strings would call them different. When either look failed there is
+ * nothing to compare but the paths, so that is what it compares — a missing
+ * measurement must not turn into a confident "different folder".
+ */
+function sameFolder(
+  a: { path: string; folder?: FolderIdentity },
+  b: { path: string; folder?: FolderIdentity },
+): boolean {
+  if (a.folder != null && b.folder != null) return a.folder === b.folder;
+  return normalizeFolderPath(a.path) === normalizeFolderPath(b.path);
+}
+
+/**
  * Whether this replacement folder may be saved onto this project's row.
  *
  * Four refusals, and the last is the one the ticket exists for: a folder
@@ -154,7 +210,8 @@ export function validateProjectRelink(input: ProjectRelinkInput): ProjectRelinkV
     return { ok: false, refusal: "not-a-directory", error: "That's a file, not a folder." };
   }
   const candidatePath = normalizeFolderPath(input.candidatePath);
-  if (candidatePath === normalizeFolderPath(input.project.path)) {
+  const candidate = { path: candidatePath, folder: input.candidateFolder };
+  if (sameFolder(candidate, input.project)) {
     return {
       ok: false,
       refusal: "unchanged",
@@ -162,8 +219,7 @@ export function validateProjectRelink(input: ProjectRelinkInput): ProjectRelinkV
     };
   }
   const claimant = input.projects.find(
-    (project) =>
-      project.id !== input.project.id && normalizeFolderPath(project.path) === candidatePath,
+    (project) => project.id !== input.project.id && sameFolder(candidate, project),
   );
   if (claimant !== undefined) {
     return {

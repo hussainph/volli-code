@@ -11,10 +11,16 @@
  * persistence is the separate `commitReorder`, which the rail calls once, on
  * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
  */
-import { errorMessage, type Project, type ProjectRelinkAftermath } from "@volli/shared";
+import {
+  errorMessage,
+  type Project,
+  type ProjectRelinkAftermath,
+  type ProjectRelinkRefusal,
+} from "@volli/shared";
 import type {
   AppStateSetResult,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectMutationResult,
   ProjectRelinkResult,
   ProjectUpdateResult,
@@ -80,6 +86,14 @@ export interface ProjectsGateway {
   remove(id: string): Promise<ProjectMutationResult>;
   /** Points an existing project at the folder it moved to (VC-430). */
   relink(input: { id: string; path: string }): Promise<ProjectRelinkResult>;
+  /**
+   * Whether one project's registered folder is still on disk (VC-430).
+   *
+   * Behind the gateway rather than reached for directly, like every other
+   * main-process read this store owns: the add flow has to ask it before it may
+   * create anything, and a seam is what lets that rule be stated in a test.
+   */
+  checkFolder(projectId: string): Promise<ProjectFolderResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
   setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
@@ -118,6 +132,7 @@ const defaultGateway: ProjectsGateway = {
   update: (input) => window.api.projects.update(input),
   remove: (id) => window.api.projects.remove(id),
   relink: (input) => window.api.projects.relink(input),
+  checkFolder: (projectId) => window.api.projects.checkFolder(projectId),
   reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
   setSelection: (selectedProjectId) =>
     window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, encodeProjectsUiState(selectedProjectId)),
@@ -141,7 +156,45 @@ interface ProjectsState {
    * while its write was in flight must not come back.
    */
   adoptProject(project: Project): void;
-  addProject(input: { path: string; defaultName: string }): Promise<void>;
+  /**
+   * Adds the chosen folder as a project — UNLESS it might be a project Volli
+   * already has.
+   *
+   * A project whose folder was renamed still has a row, pointing at a path
+   * that no longer resolves. Adding the folder it moved to is the thing a
+   * person reaches for, and it is exactly the duplicate VC-430 exists to
+   * prevent: a second project id, with none of the first one's tickets,
+   * settings or history. Nothing on disk can prove that this folder IS that
+   * project — the old path is gone, so there is no identity left to compare —
+   * so the store does not guess. It stops, records the question in
+   * {@link ProjectsState.folderClaim}, and lets a person answer it.
+   *
+   * Resolves `true` when a project was added or selected, `false` when the
+   * question is now waiting to be answered.
+   */
+  addProject(input: { path: string; defaultName: string }): Promise<boolean>;
+  /**
+   * The pending "is this folder one of these projects?" question, or `null`.
+   *
+   * Held in the store rather than in whichever component happened to open the
+   * picker, because both entry points (the rail's `+` tile and the empty
+   * sidebar) raise the same question and one surface answers it.
+   */
+  folderClaim: ProjectFolderClaim | null;
+  /** Adds the claimed folder as a NEW project after all, and clears the question. */
+  resolveClaimAsNewProject(): Promise<void>;
+  /** Relinks `projectId` to the claimed folder, and clears the question. */
+  resolveClaimAsRelink(projectId: string): Promise<ProjectRelinkSettlement>;
+  /** Drops the question unanswered; nothing is added and nothing is relinked. */
+  dismissFolderClaim(): void;
+  /**
+   * Whether one project's registered folder is still on disk (VC-430).
+   *
+   * On the store rather than reached for through `window.api`, so the board's
+   * recovery banner and the add flow's claim question ask one question through
+   * one seam — and so a test can answer it.
+   */
+  checkFolder(projectId: string): Promise<ProjectFolderResult>;
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
   /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
   updateSetupCommand(id: string, setupCommand: string | null): Promise<boolean>;
@@ -155,7 +208,7 @@ interface ProjectsState {
    * project in a new location and anything else would be the duplicate this
    * exists to avoid.
    */
-  relink(id: string, path: string): Promise<ProjectRelinkAftermath | null>;
+  relink(id: string, path: string): Promise<ProjectRelinkSettlement>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -169,6 +222,31 @@ interface ProjectsState {
 function sameOrder(a: readonly Project[], b: readonly Project[]): boolean {
   return a.length === b.length && a.every((project, index) => project.id === b[index]?.id);
 }
+
+/**
+ * A chosen folder, and the projects it might be the new home of (VC-430).
+ *
+ * `candidates` are the tracked projects whose own registered folder is not
+ * there any more. They are the only projects a moved folder could belong to,
+ * and the list is what turns a silent duplicate into a question.
+ */
+export interface ProjectFolderClaim {
+  path: string;
+  defaultName: string;
+  candidates: readonly Project[];
+}
+
+/**
+ * How a relink ended: what the move left behind, or which rule refused it.
+ *
+ * The REFUSAL id travels, not just its sentence, so a surface can behave
+ * differently for a different refusal without matching on prose — the dialog
+ * closes on `unchanged` (there is nothing left to do) and stays open on
+ * `claimed` (there is another folder to choose).
+ */
+export type ProjectRelinkSettlement =
+  | { ok: true; aftermath: ProjectRelinkAftermath }
+  | { ok: false; refusal: ProjectRelinkRefusal | null };
 
 /** Factory so tests can inject a fake gateway (and scope listener) instead of the real seams. */
 export function createProjectsStore(
@@ -230,27 +308,19 @@ export function createProjectsStore(
     if (next !== previous) onSelectedProjectChange(next);
   }
 
-  return create<ProjectsState>()((set, get) => ({
-    projects: [],
-    selectedProjectId: null,
-
-    hydrate(projects, selectedProjectId) {
-      const previous = get().selectedProjectId;
-      set({ projects, selectedProjectId });
-      announceSelection(previous, selectedProjectId);
-    },
-
-    adoptProject(project) {
-      const projects = get().projects;
-      if (!projects.some(({ id }) => id === project.id)) return;
-      set({ projects: projects.map((row) => (row.id === project.id ? project : row)) });
-    },
-
-    async addProject({ path, defaultName }) {
+  return create<ProjectsState>()((set, get) => {
+    /**
+     * Creates the project at `path` and selects it.
+     *
+     * Shared by the ordinary add and by the answer "no, this really is a new
+     * project": one body, so a project born through the claim question is built
+     * exactly like any other.
+     */
+    async function createAndSelect(path: string, defaultName: string): Promise<boolean> {
       const result = await writeThrough("add project", (): Promise<ProjectCreateResult> =>
         gateway.create({ path, name: defaultName }),
       );
-      if (!result) return;
+      if (!result) return false;
 
       // Seed the board's ticket/label slices before anything else touches
       // them — bootstrap seeds every project's slice wholesale (see
@@ -276,165 +346,254 @@ export function createProjectsStore(
       });
       persistSelection(result.project.id);
       announceSelection(selectedProjectId, result.project.id);
-    },
+      return true;
+    }
 
-    async relink(id, path) {
-      const result = await writeThrough("relink project", (): Promise<ProjectRelinkResult> =>
-        gateway.relink({ id, path }),
-      );
-      if (!result) return null;
-      // Re-read FRESH after the await (writeThrough's contract): a project
-      // removed while the relink was in flight must not be resurrected by its
-      // own answer.
-      set({
-        projects: get().projects.map((project) =>
-          project.id === result.project.id ? result.project : project,
+    /**
+     * The tracked projects whose own registered folder is no longer on disk.
+     *
+     * A check that FAILS counts as present: "we could not look" is not evidence
+     * that a folder moved, and putting a project on this list would ask a person
+     * to answer a question about a project that is probably fine.
+     */
+    async function projectsWithMissingFolders(): Promise<readonly Project[]> {
+      const projects = get().projects;
+      const states = await Promise.all(
+        projects.map((project) =>
+          gateway
+            .checkFolder(project.id)
+            .then((result) => (result.ok ? result.state : "present"))
+            .catch(() => "present" as const),
         ),
-      });
-      return result.aftermath;
-    },
+      );
+      return projects.filter((_, index) => states[index] === "missing");
+    }
 
-    async updateBaseBranch(id, baseBranch) {
-      return queueProjectUpdate(id, async () => {
+    return {
+      projects: [],
+      selectedProjectId: null,
+      folderClaim: null,
+
+      hydrate(projects, selectedProjectId) {
+        const previous = get().selectedProjectId;
+        set({ projects, selectedProjectId });
+        announceSelection(previous, selectedProjectId);
+      },
+
+      adoptProject(project) {
+        const projects = get().projects;
+        if (!projects.some(({ id }) => id === project.id)) return;
+        set({ projects: projects.map((row) => (row.id === project.id ? project : row)) });
+      },
+
+      async addProject({ path, defaultName }) {
+        // A folder this renderer already tracks is not a claim question at all:
+        // main answers the create with the existing project, which is the
+        // established "you already have this one" path.
+        const known = get().projects.some((project) => project.path === path);
+        const candidates = known ? [] : await projectsWithMissingFolders();
+        if (candidates.length > 0) {
+          set({ folderClaim: { path, defaultName, candidates } });
+          return false;
+        }
+        return createAndSelect(path, defaultName);
+      },
+
+      async resolveClaimAsNewProject() {
+        const claim = get().folderClaim;
+        if (claim === null) return;
+        set({ folderClaim: null });
+        await createAndSelect(claim.path, claim.defaultName);
+      },
+
+      async resolveClaimAsRelink(projectId) {
+        const claim = get().folderClaim;
+        if (claim === null) return { ok: false, refusal: null };
+        set({ folderClaim: null });
+        const settlement = await get().relink(projectId, claim.path);
+        if (settlement.ok) get().select(projectId);
+        return settlement;
+      },
+
+      dismissFolderClaim() {
+        set({ folderClaim: null });
+      },
+
+      checkFolder(projectId) {
+        return gateway.checkFolder(projectId);
+      },
+
+      async relink(id, path) {
+        // The refusal id is read on the way THROUGH `writeThrough` rather than
+        // from its answer: that helper's job is the toast, and it collapses every
+        // failure to `null` on purpose. Catching the id here keeps the shared
+        // shape intact and still lets the dialog behave differently for a folder
+        // somebody else tracks than for one this project already points at.
+        let refusal: ProjectRelinkRefusal | null = null;
         const result = await writeThrough(
-          "save project base branch",
-          (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
+          "relink project",
+          async (): Promise<ProjectRelinkResult> => {
+            const answer = await gateway.relink({ id, path });
+            if (!answer.ok) refusal = answer.refusal ?? null;
+            return answer;
+          },
         );
-        if (!result) return false;
+        if (!result) return { ok: false, refusal };
+        // Re-read FRESH after the await (writeThrough's contract): a project
+        // removed while the relink was in flight must not be resurrected by its
+        // own answer.
         set({
           projects: get().projects.map((project) =>
             project.id === result.project.id ? result.project : project,
           ),
         });
-        return true;
-      });
-    },
+        return { ok: true, aftermath: result.aftermath };
+      },
 
-    async updateSetupCommand(id, setupCommand) {
-      return queueProjectUpdate(id, async () => {
-        // The gateway's `update` always requires baseBranch (it's a full
-        // pinned fields write) — re-send the project's current value so this
-        // save can't clobber it. Reading it here (this call's turn in the
-        // per-id queue) rather than before queuing means any earlier-queued
-        // `updateBaseBranch` for this project has already landed in state, so
-        // this always re-sends the latest known value, not a stale one. An
-        // unknown id has nothing to re-send; no-op.
-        const current = get().projects.find((project) => project.id === id);
-        if (!current) return false;
+      async updateBaseBranch(id, baseBranch) {
+        return queueProjectUpdate(id, async () => {
+          const result = await writeThrough(
+            "save project base branch",
+            (): Promise<ProjectUpdateResult> => gateway.update({ id, baseBranch }),
+          );
+          if (!result) return false;
+          set({
+            projects: get().projects.map((project) =>
+              project.id === result.project.id ? result.project : project,
+            ),
+          });
+          return true;
+        });
+      },
+
+      async updateSetupCommand(id, setupCommand) {
+        return queueProjectUpdate(id, async () => {
+          // The gateway's `update` always requires baseBranch (it's a full
+          // pinned fields write) — re-send the project's current value so this
+          // save can't clobber it. Reading it here (this call's turn in the
+          // per-id queue) rather than before queuing means any earlier-queued
+          // `updateBaseBranch` for this project has already landed in state, so
+          // this always re-sends the latest known value, not a stale one. An
+          // unknown id has nothing to re-send; no-op.
+          const current = get().projects.find((project) => project.id === id);
+          if (!current) return false;
+
+          const result = await writeThrough(
+            "save project setup command",
+            (): Promise<ProjectUpdateResult> =>
+              gateway.update({ id, baseBranch: current.baseBranch ?? null, setupCommand }),
+          );
+          if (!result) return false;
+          set({
+            projects: get().projects.map((project) =>
+              project.id === result.project.id ? result.project : project,
+            ),
+          });
+          return true;
+        });
+      },
+
+      async removeProject(id) {
+        // No-op (and no IPC) for an unknown id — checked against the pre-await
+        // snapshot; the fresh re-read below handles what actually changed.
+        if (!get().projects.some((project) => project.id === id)) return;
+
+        const result = await writeThrough("remove project", (): Promise<ProjectMutationResult> =>
+          gateway.remove(id),
+        );
+        if (!result) return;
+
+        // Removal, per-workspace-UI cleanup, and session teardown are one
+        // invariant, enforced here so no removal path (dialog today, context
+        // menu / CLI later) can forget the forget. Each kill* helper kills every
+        // live PTY and disposes its engine explicitly — teardown does NOT depend
+        // on a terminal view being mounted — then drops the session record.
+        // Ticket sessions are keyed by ticketId; killProjectTicketSessions finds
+        // them from the SESSIONS store (not the board's live ticket list), so an
+        // archived ticket's sessions are torn down too, not just live ones.
+        killProjectTicketSessions(id);
+        useWorkspaceStore.getState().forget(id);
+        // `board.forget` owns chat teardown as well as its owner-key bookkeeping,
+        // so a local removal and an authoritative board hydration that loses the
+        // same project share one disposal path.
+        useBoardStore.getState().forget(id);
+        killProjectSessions(id);
+
+        // Re-read FRESH: a concurrent add/reorder may have changed `projects`
+        // while the remove IPC was in flight; computing the next list from the
+        // pre-await snapshot would clobber that concurrent change (drop a
+        // just-added project from the rail though SQLite still has it).
+        const { projects, selectedProjectId } = get();
+        const removedIndex = projects.findIndex((project) => project.id === id);
+        const nextProjects = projects.filter((project) => project.id !== id);
+        if (selectedProjectId !== id) {
+          set({ projects: nextProjects });
+          return;
+        }
+
+        const nextSelectedId =
+          nextProjects.length === 0
+            ? null
+            : nextProjects[Math.min(Math.max(removedIndex, 0), nextProjects.length - 1)]!.id;
+        set({ projects: nextProjects, selectedProjectId: nextSelectedId });
+        persistSelection(nextSelectedId);
+        announceSelection(selectedProjectId, nextSelectedId);
+      },
+
+      reorder(activeId, overId) {
+        if (activeId === overId) return;
+
+        const { projects } = get();
+        const activeIndex = projects.findIndex((project) => project.id === activeId);
+        const overIndex = projects.findIndex((project) => project.id === overId);
+        if (activeIndex === -1 || overIndex === -1) return;
+
+        const next = projects.slice();
+        const [moved] = next.splice(activeIndex, 1);
+        next.splice(overIndex, 0, moved!);
+        set({ projects: next });
+      },
+
+      async commitReorder(previousOrder) {
+        const { projects } = get();
+        if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
 
         const result = await writeThrough(
-          "save project setup command",
-          (): Promise<ProjectUpdateResult> =>
-            gateway.update({ id, baseBranch: current.baseBranch ?? null, setupCommand }),
+          "save project order",
+          (): Promise<ProjectMutationResult> =>
+            gateway.reorder(projects.map((project) => project.id)),
         );
-        if (!result) return false;
+        if (result) return; // persisted — the optimistic order stands
+
+        // Failure: restore the PREVIOUS order, but reconcile membership against
+        // FRESH state — a project added (or removed) while the reorder IPC was in
+        // flight must survive the revert. Restore order, not membership: drop
+        // previous entries no longer present, then append any newcomer.
+        const current = get().projects;
+        const currentIds = new Set(current.map((project) => project.id));
+        const previousIds = new Set(previousOrder.map((project) => project.id));
         set({
-          projects: get().projects.map((project) =>
-            project.id === result.project.id ? result.project : project,
-          ),
+          projects: [
+            ...previousOrder.filter((project) => currentIds.has(project.id)),
+            ...current.filter((project) => !previousIds.has(project.id)),
+          ],
         });
-        return true;
-      });
-    },
+      },
 
-    async removeProject(id) {
-      // No-op (and no IPC) for an unknown id — checked against the pre-await
-      // snapshot; the fresh re-read below handles what actually changed.
-      if (!get().projects.some((project) => project.id === id)) return;
+      select(id) {
+        const { projects, selectedProjectId } = get();
+        if (!projects.some((project) => project.id === id)) return;
+        set({ selectedProjectId: id });
+        persistSelection(id);
+        announceSelection(selectedProjectId, id);
+      },
 
-      const result = await writeThrough("remove project", (): Promise<ProjectMutationResult> =>
-        gateway.remove(id),
-      );
-      if (!result) return;
-
-      // Removal, per-workspace-UI cleanup, and session teardown are one
-      // invariant, enforced here so no removal path (dialog today, context
-      // menu / CLI later) can forget the forget. Each kill* helper kills every
-      // live PTY and disposes its engine explicitly — teardown does NOT depend
-      // on a terminal view being mounted — then drops the session record.
-      // Ticket sessions are keyed by ticketId; killProjectTicketSessions finds
-      // them from the SESSIONS store (not the board's live ticket list), so an
-      // archived ticket's sessions are torn down too, not just live ones.
-      killProjectTicketSessions(id);
-      useWorkspaceStore.getState().forget(id);
-      // `board.forget` owns chat teardown as well as its owner-key bookkeeping,
-      // so a local removal and an authoritative board hydration that loses the
-      // same project share one disposal path.
-      useBoardStore.getState().forget(id);
-      killProjectSessions(id);
-
-      // Re-read FRESH: a concurrent add/reorder may have changed `projects`
-      // while the remove IPC was in flight; computing the next list from the
-      // pre-await snapshot would clobber that concurrent change (drop a
-      // just-added project from the rail though SQLite still has it).
-      const { projects, selectedProjectId } = get();
-      const removedIndex = projects.findIndex((project) => project.id === id);
-      const nextProjects = projects.filter((project) => project.id !== id);
-      if (selectedProjectId !== id) {
-        set({ projects: nextProjects });
-        return;
-      }
-
-      const nextSelectedId =
-        nextProjects.length === 0
-          ? null
-          : nextProjects[Math.min(Math.max(removedIndex, 0), nextProjects.length - 1)]!.id;
-      set({ projects: nextProjects, selectedProjectId: nextSelectedId });
-      persistSelection(nextSelectedId);
-      announceSelection(selectedProjectId, nextSelectedId);
-    },
-
-    reorder(activeId, overId) {
-      if (activeId === overId) return;
-
-      const { projects } = get();
-      const activeIndex = projects.findIndex((project) => project.id === activeId);
-      const overIndex = projects.findIndex((project) => project.id === overId);
-      if (activeIndex === -1 || overIndex === -1) return;
-
-      const next = projects.slice();
-      const [moved] = next.splice(activeIndex, 1);
-      next.splice(overIndex, 0, moved!);
-      set({ projects: next });
-    },
-
-    async commitReorder(previousOrder) {
-      const { projects } = get();
-      if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
-
-      const result = await writeThrough("save project order", (): Promise<ProjectMutationResult> =>
-        gateway.reorder(projects.map((project) => project.id)),
-      );
-      if (result) return; // persisted — the optimistic order stands
-
-      // Failure: restore the PREVIOUS order, but reconcile membership against
-      // FRESH state — a project added (or removed) while the reorder IPC was in
-      // flight must survive the revert. Restore order, not membership: drop
-      // previous entries no longer present, then append any newcomer.
-      const current = get().projects;
-      const currentIds = new Set(current.map((project) => project.id));
-      const previousIds = new Set(previousOrder.map((project) => project.id));
-      set({
-        projects: [
-          ...previousOrder.filter((project) => currentIds.has(project.id)),
-          ...current.filter((project) => !previousIds.has(project.id)),
-        ],
-      });
-    },
-
-    select(id) {
-      const { projects, selectedProjectId } = get();
-      if (!projects.some((project) => project.id === id)) return;
-      set({ selectedProjectId: id });
-      persistSelection(id);
-      announceSelection(selectedProjectId, id);
-    },
-
-    selectByIndex(index) {
-      const project = get().projects[index];
-      if (project) get().select(project.id);
-    },
-  }));
+      selectByIndex(index) {
+        const project = get().projects[index];
+        if (project) get().select(project.id);
+      },
+    };
+  });
 }
 
 /** App-wide singleton; components import this directly. */

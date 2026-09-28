@@ -676,9 +676,12 @@ export function registerDataIpcHandlers(
     /**
      * Whether one project's registered folder is still there (VC-430) — the
      * read the recovery path hangs off. Cheap by construction: one row and one
-     * `stat`, so a surface may ask it whenever a project comes into view.
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
      */
-    "volli:project-folder-check": (input: ProjectIdInput): ProjectFolderResult =>
+    "volli:project-folder-check": (input: ProjectIdInput): Promise<ProjectFolderResult> =>
       inspectProjectFolder(db, input.projectId),
 
     /**

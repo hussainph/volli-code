@@ -69,14 +69,20 @@ export function RelinkProjectDialog({
     try {
       const picked = await window.api.projects.pickFolder();
       if (picked.canceled) return;
-      const moved = await relink(project.id, picked.path);
-      // A refusal has already been surfaced by the store's write-through, and
-      // the dialog stays open on its chooser so the person can pick again.
-      if (moved === null) return;
+      const settled = await relink(project.id, picked.path);
+      if (!settled.ok) {
+        // The sentence is already on screen as a toast. What is decided here is
+        // whether there is anything left for this dialog to do: `unchanged`
+        // means the project ALREADY points at the folder that was chosen, so
+        // the chooser has nothing to offer and closing is the honest answer.
+        // Every other refusal leaves a different folder to pick.
+        if (settled.refusal === "unchanged") onOpenChange(false);
+        return;
+      }
       // Nothing to report is not a report: close, and let the surfaces that
       // were broken simply work again.
-      if (projectRelinkNotices(moved).length === 0) onOpenChange(false);
-      else setAftermath(moved);
+      if (projectRelinkNotices(settled.aftermath).length === 0) onOpenChange(false);
+      else setAftermath(settled.aftermath);
     } catch (error) {
       toastError(`Couldn't open folder picker: ${errorMessage(error)}`);
     } finally {
