@@ -3469,6 +3469,21 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:automation-runs-for-ticket", () => {
+    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-ticket"];
+
+    it("accepts a ticketId record and refuses everything else", () => {
+      expect(guard([{ ticketId: "t1" }])).toBe(true);
+      expect(guard([])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([{ ticketId: 7 }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid automation runs request");
+    });
+  });
+
   describe("volli:automation-arming-list", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arming-list"];
 
@@ -3656,10 +3671,8 @@ describe("AUTOMATION_IPC descriptor table", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
       // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel,
       // VC-228's retained-command Retry doors, and VC-297's two scoped history
-      // reads, LESS the Ticket-Runs read VC-406 retired with the rail block
-      // that was its only caller. Derived above; the count catches an
-      // accidentally omitted guard.
-      expect(AUTOMATION_CHANNELS).toHaveLength(19);
+      // reads. Derived above; the count catches an accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(20);
     });
   });
 });

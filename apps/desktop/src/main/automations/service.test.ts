@@ -17,6 +17,7 @@ import {
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForProject,
+  listRunsForTicket,
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "../db/automations-repo";
@@ -65,6 +66,7 @@ function setup(overrides: { inspectModelAccess?: () => Promise<ModelAccessSnapsh
     findProject: (id) => id === project.id,
     findAutomation: (id) => getAutomation(ctx.db, id),
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
+    runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
     skipsForProject: (id) => listSkippedOccurrencesForProject(ctx.db, id),
     runsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),

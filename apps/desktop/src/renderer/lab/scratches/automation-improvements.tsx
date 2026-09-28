@@ -33,6 +33,7 @@ export const api: ApiOverrides = {
   ...automationApi,
   automations: {
     ...(automationApi.automations as Record<string, unknown>),
+    runsForTicket: async () => ({ ok: true, runs: [] }),
     run: previewOnly,
     runForProject: previewOnly,
   },

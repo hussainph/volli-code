@@ -901,6 +901,9 @@ const api = {
     /** Runs an Automation by hand on a Ticket. */
     run: (input: AutomationRunInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run", input),
+    /** A Ticket's Runs, newest first. */
+    runsForTicket: (input: TicketIdInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-ticket", input),
     /**
      * One project's armed columns (VC-128). Machine-local and deliberately a
      * separate read from the record's list: arming never travels with a project,

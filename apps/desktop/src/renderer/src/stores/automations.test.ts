@@ -82,6 +82,7 @@ function stubApi(impl: {
   skipsForProject?: () => Promise<unknown>;
   runsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
   skipsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
+  runsForTicket?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
   armings?: () => Promise<unknown>;
@@ -110,6 +111,7 @@ function stubApi(impl: {
         skipsForAutomation: vi.fn(
           impl.skipsForAutomation ?? (() => Promise.resolve({ ok: true, skips: [] })),
         ),
+        runsForTicket: vi.fn(impl.runsForTicket ?? (() => Promise.resolve({ ok: true, runs: [] }))),
         // The stored set is the ENABLED one (`automations/enablement.ts`), so
         // the resting default here is an empty enabled set: nothing on.
         enablement: vi.fn(

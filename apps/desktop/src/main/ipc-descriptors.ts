@@ -1631,6 +1631,11 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       (args[0]["modelOverride"] === null || isModelSelectionShape(args[0]["modelOverride"])),
     invalidError: "Invalid automation run request",
   },
+  "volli:automation-runs-for-ticket": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-ticket"> =>
+      args.length === 1 && isRecord(args[0]) && typeof args[0]["ticketId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
   "volli:automation-arming-list": {
     guard: (args): args is IpcArgs<"volli:automation-arming-list"> =>
       args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",

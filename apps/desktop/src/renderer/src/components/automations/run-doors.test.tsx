@@ -182,6 +182,10 @@ const doors = {
     ok: true,
     enabledAutomationIds: [],
   })),
+  runsForTicket: vi.fn(async (): Promise<{ ok: true; runs: AutomationRun[] }> => ({
+    ok: true,
+    runs: [],
+  })),
   runsForProject: vi.fn(async (): Promise<{ ok: true; runs: AutomationRun[] }> => ({
     ok: true,
     runs: [],

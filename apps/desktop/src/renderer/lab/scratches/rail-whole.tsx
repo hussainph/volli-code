@@ -746,6 +746,7 @@ export const api: ApiOverrides = {
     armings: () => Promise.resolve({ ok: true, armings: ARMINGS }),
     enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-implement"] }),
     columnOrders: () => Promise.resolve({ ok: true, orders: [] }),
+    runsForTicket: () => Promise.resolve({ ok: true, runs: [] }),
   },
   venue: {
     snapshot: () => Promise.resolve({ ok: true, reading: { state: "measured", venue: VENUE } }),

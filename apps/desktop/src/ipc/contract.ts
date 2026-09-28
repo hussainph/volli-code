@@ -2237,6 +2237,11 @@ export interface VolliAutomationIpcContract {
    * hand on a Ticket: one fresh chat Session, one Run row, either way.
    */
   "volli:automation-run": { args: [input: AutomationRunInput]; result: AutomationRunStartResult };
+  /** A Ticket's Runs, newest first. */
+  "volli:automation-runs-for-ticket": {
+    args: [input: TicketIdInput];
+    result: AutomationRunsResult;
+  };
   /** One project's armed columns — machine-local, never listed with the record. */
   "volli:automation-arming-list": {
     args: [input: ProjectIdInput];
