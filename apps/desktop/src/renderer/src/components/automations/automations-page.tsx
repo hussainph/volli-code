@@ -58,6 +58,7 @@ import {
   listingRunTarget,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -858,8 +859,16 @@ function RunHistory({
  * control that starts it now.
  *
  * It wears a different mark from a Run and says what went wrong in its own
- * line, so it can never be mistaken for work that happened. "Run now" starts
- * ONE Run at the Target the schedule would have used — the Project — whatever
+ * line, so it can never be mistaken for work that happened.
+ *
+ * No "how it started" word here, unlike a Run row (VC-297): a Skipped
+ * occurrence IS a schedule's missed due time, so it could never have been
+ * started by hand, and a mark every row of this kind must carry is a mark that
+ * tells the reader nothing. What the row owes is why it was missed, which
+ * `skipReasonLabel` says in words.
+ *
+ * "Run now" starts ONE Run at the Target the schedule would have used — the
+ * Project — whatever
  * number of occurrences this row stands for: a missed occurrence is never
  * replayed (VC-112), and this is the by-hand recovery that ruling promises
  * instead.
@@ -962,6 +971,14 @@ function RunRow({
           {/* The RESOLVED model this Session was born with, printed from the
               Run's own row — never re-labelled through today's catalogue. */}
           <span className="truncate text-muted-foreground">{runModelLabel(run)}</span>
+          <span aria-hidden className="text-muted-foreground">
+            ·
+          </span>
+          {/* How it started (VC-297), from the Run's own attendance rather than
+              from the record's Trigger today. `shrink-0` because this is the
+              half of the row VC-297 asked to keep visible: the model may
+              truncate before it does. */}
+          <span className="shrink-0 text-muted-foreground">{runStartLabel(run)}</span>
         </span>
       }
       trailing={

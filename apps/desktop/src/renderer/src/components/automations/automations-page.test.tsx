@@ -506,6 +506,23 @@ describe("run history", () => {
     expect(text().indexOf("Newest")).toBeLessThan(text().indexOf("Oldest"));
   });
 
+  it("says how each Run started, so the row carries its trigger too (VC-297)", async () => {
+    // VC-297 asks for the originating record AND its trigger on every row. The
+    // record cannot supply the second one — a Trigger is editable and a record
+    // is deletable — so the row prints the Run's OWN attendance instead.
+    await mount({
+      runs: [
+        run({ id: "run-by-hand", attendance: "attended", createdAt: 200 }),
+        run({ id: "run-automatic", attendance: "unattended", createdAt: 100 }),
+      ],
+    });
+
+    expect(historyRun("run-by-hand").textContent).toContain("By hand");
+    expect(historyRun("run-automatic").textContent).toContain("Automatic");
+    // Never a schedule: an unattended Run may be the agent's, not a timer's.
+    expect(historyRun("run-automatic").textContent?.toLowerCase()).not.toContain("schedule");
+  });
+
   it("names an Unbound Run rather than leaving its row anonymous", async () => {
     await mount({ runs: [run({ automationId: null, automationName: null })] });
 

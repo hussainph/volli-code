@@ -15,6 +15,7 @@ import {
   ownershipLabel,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -130,6 +131,20 @@ describe("a Run prints its own evidence", () => {
   it("keeps the Automation name a deleted record left behind", () => {
     expect(runAutomationLabel(run())).toBe("Review");
     expect(runAutomationLabel(run({ automationId: null, automationName: null }))).toBe("Run once");
+  });
+
+  it("says how it started, from its own attendance (VC-297)", () => {
+    expect(runStartLabel(run({ attendance: "attended" }))).toBe("By hand");
+    expect(runStartLabel(run({ attendance: "unattended" }))).toBe("Automatic");
+  });
+
+  it("never names a schedule for an unattended Run", () => {
+    // `unattended` is the schedule timer AND the agent's own Run verb, so a
+    // Run another Session started has no schedule to name. One word covers
+    // both, or the row would be false for half of them.
+    expect(runStartLabel(run({ attendance: "unattended" })).toLowerCase()).not.toContain(
+      "schedule",
+    );
   });
 });
 
