@@ -27,8 +27,9 @@
  *    attachment, dropped (and logged) for a parent that stopped, and a refused
  *    receipt is logged rather than swallowed.
  * 7. Boot recovery folds the child's ledger and notifies the same way.
- * 8. A delegation that names no model and no tier runs on its PARENT's anchor
- *    (VC-431), and never on the Utility row.
+ * 8. The caller's model override reaches the facade untouched; what a
+ *    delegation that names nothing runs on is the facade's answer (VC-431,
+ *    `anchoredOnParent`), tested beside it.
  */
 
 import { describe, expect, it } from "vite-plus/test";
@@ -549,105 +550,28 @@ describe("delegate — the child is a real Session, and the parent keeps working
   });
 
   /**
-   * VC-431. A delegation that names nothing anchors to its PARENT's anchor:
-   * the tier the parent resolved through, or the model and level it was
-   * pinned to. The rung this replaced was `utility` — the slot for work nobody
-   * asked for — which ran every un-named delegation on whatever cheap
-   * background model that row held.
-   *
-   * What is asserted is the OVERRIDE handed to the facade, because that is
-   * this module's half of the act: resolving an override into a model is the
-   * facade's, and is tested beside it.
+   * VC-431. Anchoring a child to its parent moved to the facade, beside the
+   * tool surface and MCP a child already inherits there. What is left here is
+   * carriage: whatever the door validated arrives unchanged, and a delegation
+   * that named nothing carries nothing — so the facade, not this module, is
+   * what decides the answer.
    */
-  describe("the child's model is its parent's anchor", () => {
-    const PINNED = {
-      providerId: "anthropic",
-      modelId: "claude-opus-5",
-      reasoningLevel: "high",
-    } as const;
+  it("carries the caller's model override to the facade, and invents none", async () => {
+    const h = harness();
 
-    it("inherits the tier the parent resolved through, as a tier", async () => {
-      const h = harness();
-      // A Board chat started on the Deep row: the child reads that row live,
-      // rather than the model it happened to resolve to a moment ago.
-      h.setParent({ modelTier: "deep", modelSelection: PINNED });
-
-      await h.delegate();
-
-      expect(h.starts[0]?.modelOverride).toEqual({ tier: "deep" });
+    await h.delegate("tc-tier", "Quick check", { tier: "fast" });
+    await h.delegate("tc-model", "Look at this screenshot", {
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" },
     });
+    await h.delegate("tc-level", "Think harder", { reasoningLevel: "low" });
+    await h.delegate("tc-bare", "Whatever my parent runs");
 
-    it("inherits an exact-id parent's model AND its level", async () => {
-      const h = harness();
-      // No tier: a chat pinned from the composer's picker, and equally a Board
-      // chat that simply resolved its Role's default. Either way, what the
-      // parent is running is what the helper runs.
-      h.setParent({ modelTier: null, modelSelection: PINNED });
-
-      await h.delegate();
-
-      expect(h.starts[0]?.modelOverride).toEqual({
-        model: { providerId: PINNED.providerId, modelId: PINNED.modelId },
-        reasoningLevel: "high",
-      });
-    });
-
-    it("never inherits the Utility row as a tier, whatever an older build recorded", async () => {
-      const h = harness();
-      h.setParent({
-        modelTier: "utility" as SessionProjection["modelTier"],
-        modelSelection: PINNED,
-      });
-
-      await h.delegate();
-
-      // The model the parent is actually running, not the row no Session may
-      // be started on.
-      expect(h.starts[0]?.modelOverride).toEqual({
-        model: { providerId: PINNED.providerId, modelId: PINNED.modelId },
-        reasoningLevel: "high",
-      });
-    });
-
-    it("passes nothing for a parent that recorded no anchor, leaving the Role's rung standing", async () => {
-      const h = harness();
-      h.setParent({ modelTier: null, modelSelection: null });
-
-      await h.delegate();
-
-      expect(h.starts[0]?.modelOverride).toBeUndefined();
-    });
-
-    it("lets the caller's own tier or model win, and rides a bare reasoning on the anchor", async () => {
-      const h = harness();
-      h.setParent({ modelTier: "deep", modelSelection: PINNED });
-
-      await h.delegate("tc-tier", "Quick check", { tier: "fast" });
-      await h.delegate("tc-model", "Look at this screenshot", {
-        model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" },
-      });
-      // Naming only a level is naming no anchor: the parent's still applies,
-      // and the caller's level wins over the tier's stored one.
-      await h.delegate("tc-level", "Think harder", { reasoningLevel: "low" });
-
-      expect(h.starts.map((start) => start.modelOverride)).toEqual([
-        { tier: "fast" },
-        { model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" } },
-        { tier: "deep", reasoningLevel: "low" },
-      ]);
-    });
-
-    it("rides a caller's level on an inherited exact model too", async () => {
-      const h = harness();
-      h.setParent({ modelTier: null, modelSelection: PINNED });
-
-      await h.delegate("tc-level", "Think less", { reasoningLevel: "low" });
-
-      expect(h.starts[0]?.modelOverride).toEqual({
-        model: { providerId: PINNED.providerId, modelId: PINNED.modelId },
-        reasoningLevel: "low",
-      });
-    });
+    expect(h.starts.map((start) => start.modelOverride)).toEqual([
+      { tier: "fast" },
+      { model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" } },
+      { reasoningLevel: "low" },
+      undefined,
+    ]);
   });
 
   it("does not cap live children, and replays one tool call as one child, one watcher, one kickoff id", async () => {

@@ -707,10 +707,21 @@ describe("the registry table", () => {
     const tier = tool?.input.find((field) => field.name === "tier");
     expect(tier).toBeDefined();
     expect(tier?.required).toBeUndefined();
-    expect(tier?.type === "enum" ? tier.values : []).toEqual(AGENT_MODEL_TIERS);
+    // Written out rather than compared against `AGENT_MODEL_TIERS`, which is
+    // the constant the schema is BUILT from: that comparison holds however the
+    // constant changes, so it could never fail on the one thing this test is
+    // named for. The literal is what refuses `utility` here.
+    expect(tier?.type === "enum" ? tier.values : []).toEqual([
+      "fast",
+      "deep",
+      "visual",
+      "ticket",
+      "global",
+    ]);
     for (const name of AGENT_MODEL_TIERS) {
       expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
     }
+    expect(tier?.description).not.toMatch(/utility/i);
     expect(tier?.description).toMatch(/instead of `model`/);
     expect(tool?.input.find((field) => field.name === "model")?.description).not.toMatch(
       /utility/i,

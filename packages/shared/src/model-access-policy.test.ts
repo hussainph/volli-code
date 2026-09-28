@@ -204,9 +204,13 @@ describe("modelPurposeForRole", () => {
     // The rule this map and `AGENT_MODEL_TIERS` state together: no Role reads
     // `utility`, and no door may name it. A chat Session is never background
     // work, whoever opened it.
+    //
+    // The literal is the assertion. `isAgentModelTier(...)` would say the same
+    // thing in the code's own words — `MODEL_TIERS` minus `AGENT_MODEL_TIERS`
+    // is exactly `{utility}` — so it could not catch a Role this map adds and
+    // that set adds with it.
     const roles = ["project", "ticket", "subagent"] as const;
     expect(roles.map(modelPurposeForRole)).not.toContain("utility");
-    for (const role of roles) expect(isAgentModelTier(modelPurposeForRole(role))).toBe(true);
   });
 
   it("is the rung a start resolves through only when it names no tier of its own", () => {

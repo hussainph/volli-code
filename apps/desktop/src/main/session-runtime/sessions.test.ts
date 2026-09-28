@@ -14,6 +14,7 @@ import type {
 import { defaultModelRequiredForTier, mcpProviderToolName } from "@volli/shared";
 
 import {
+  anchoredOnParent,
   createSessions,
   STRUCTURED_ADAPTER_ID,
   StructuredSessionsError,
@@ -59,7 +60,7 @@ function sessions(
     commands,
     sessions: createSessions({
       readDefaultModel: async () => MODEL,
-      readModelSelection: async () => MODEL,
+      readModelAnchor: async () => ({ selection: MODEL, tier: null }),
       ticketBelongsToProject: () => true,
       skills: NO_SKILLS,
       toolSurface: CODING_AND_ASK,
@@ -94,6 +95,9 @@ describe("Sessions", () => {
       mcpTools: readonly McpToolDefinition[];
     }> = [];
     const { sessions: door } = sessions({
+      // This test is about MCP inheritance, not model inheritance: a parent
+      // with no recorded anchor keeps the child's model off the stage.
+      readModelAnchor: async () => ({ selection: null, tier: null }),
       toolSurface: {
         resolve: (_role, _grants, within, mcpTools = []) => [
           "read",
@@ -497,6 +501,9 @@ describe("Sessions", () => {
     const surfaceAsks: { role: string; within: readonly string[] | undefined }[] = [];
     const births: { role: string; parentSessionId: string | null }[] = [];
     const { commands, sessions: door } = sessions({
+      // A parent that recorded NO anchor, which is the only condition under
+      // which the Role's own rung is what a subagent resolves through.
+      readModelAnchor: async () => ({ selection: null, tier: null }),
       readDefaultModel: async (tier) => {
         modelTiers.push(tier);
         return MODEL;
@@ -546,9 +553,9 @@ describe("Sessions", () => {
       },
     });
     // The LAST RESORT rung, and never `utility` (VC-431): a delegation is work
-    // its parent asked for, so it normally arrives carrying the parent's own
-    // anchor as an override (`delegate-session.ts`), and this is only what a
-    // parent that recorded no anchor leaves standing.
+    // its parent asked for, so a subagent normally runs on the parent's own
+    // anchor (`anchoredOnParent`), and this is only what a parent that
+    // recorded no anchor leaves standing.
     // The port is asked in TIERS since VC-259 — a Role names no rung of its
     // own once a start may name one — so what arrives is the rung, mapped by
     // `modelPurposeForRole` at the one moment both facts are in hand.
@@ -644,7 +651,9 @@ describe("Sessions", () => {
     // In real data only a Board Session born before the model policy can
     // reach this branch (every mint above records at birth), but the rule is
     // stated for every Session rather than re-deriving the Role to scope it.
-    const { commands, sessions: door } = sessions({ readModelSelection: async () => null });
+    const { commands, sessions: door } = sessions({
+      readModelAnchor: async () => ({ selection: null, tier: null }),
+    });
 
     const attached = await door.attach({
       operationId: "operation-backfill",
@@ -672,7 +681,7 @@ describe("Sessions", () => {
     // still in flight or long after it settled.
     const issued = new Map<string, Promise<SessionRuntimeCommandResult>>();
     const { sessions: door } = sessions({
-      readModelSelection: async () => null,
+      readModelAnchor: async () => ({ selection: null, tier: null }),
       runtime: {
         command: (request) => {
           const already = issued.get(request.commandId);
@@ -698,7 +707,7 @@ describe("Sessions", () => {
   it("backfills from the global tier with no project — the rung every Role inherits", async () => {
     const asked: Array<[string, string | null]> = [];
     const { sessions: door } = sessions({
-      readModelSelection: async () => null,
+      readModelAnchor: async () => ({ selection: null, tier: null }),
       readDefaultModel: async (tier, projectId) => {
         asked.push([tier, projectId]);
         return MODEL;
@@ -712,7 +721,7 @@ describe("Sessions", () => {
 
   it("refuses a backfill it cannot make honestly", async () => {
     const { commands, sessions: door } = sessions({
-      readModelSelection: async () => null,
+      readModelAnchor: async () => ({ selection: null, tier: null }),
       readDefaultModel: async () => null,
     });
 
@@ -1475,6 +1484,173 @@ describe("Sessions", () => {
       }),
     ).rejects.toMatchObject({ code: "DEFAULT_MODEL_REQUIRED" });
     expect(startedEvents).toEqual([]);
+  });
+});
+
+/**
+ * VC-431. A Subagent Session runs on its PARENT's anchor when the delegation
+ * named nothing. The rung this replaced was `utility` — the slot for work
+ * nobody asked for — which ran every un-named delegation on whatever cheap
+ * background model that row held.
+ *
+ * The decision is pure and is tested directly: it is the whole of the rule,
+ * and a harness between the assertion and the rule would only hide it. The
+ * mint integration below covers the one thing purity cannot — that what a
+ * child inherits is also what it RECORDS, so its own children read the same
+ * answer.
+ */
+describe("anchoredOnParent — a subagent runs on its parent's anchor (VC-431)", () => {
+  const PINNED: ModelSelection = {
+    providerId: "anthropic",
+    modelId: "claude-opus-5",
+    reasoningLevel: "high",
+  };
+  const MODEL_OF_PINNED = { providerId: "anthropic", modelId: "claude-opus-5" };
+
+  it("inherits the parent's rung AS A RUNG, not as the model it resolved to", () => {
+    // The child therefore reads the user's current Deep row, rather than the
+    // model its parent happened to resolve a moment ago. `selection` is
+    // present and is deliberately NOT what comes back.
+    expect(anchoredOnParent(undefined, { tier: "deep", selection: PINNED })).toEqual({
+      tier: "deep",
+    });
+  });
+
+  it("inherits an exact-id parent's model AND its level", () => {
+    expect(anchoredOnParent(undefined, { tier: null, selection: PINNED })).toEqual({
+      model: MODEL_OF_PINNED,
+      reasoningLevel: "high",
+    });
+  });
+
+  it("never inherits the Utility row as a rung, whatever an older build recorded", () => {
+    // The model the parent is actually running, not the row no Session may be
+    // started on.
+    expect(anchoredOnParent(undefined, { tier: "utility", selection: PINNED })).toEqual({
+      model: MODEL_OF_PINNED,
+      reasoningLevel: "high",
+    });
+  });
+
+  it("anchors to nothing for a parent that recorded nothing, leaving the Role's rung", () => {
+    expect(anchoredOnParent(undefined, { tier: null, selection: null })).toBeUndefined();
+  });
+
+  it("anchors to nothing when a legacy Utility parent also recorded no model", () => {
+    expect(anchoredOnParent(undefined, { tier: "utility", selection: null })).toBeUndefined();
+  });
+
+  it("lets the caller's own rung or model win, untouched", () => {
+    const parent = { tier: "deep", selection: PINNED } as const;
+
+    expect(anchoredOnParent({ tier: "fast" }, parent)).toEqual({ tier: "fast" });
+    expect(anchoredOnParent({ model: MODEL_OF_PINNED }, parent)).toEqual({
+      model: MODEL_OF_PINNED,
+    });
+  });
+
+  it("rides a bare reasoning on an inherited rung, and on an inherited model", () => {
+    // Naming only a level is naming no anchor: the parent's still applies, and
+    // the caller's level wins over the rung's or the model's stored one.
+    expect(
+      anchoredOnParent({ reasoningLevel: "low" }, { tier: "deep", selection: PINNED }),
+    ).toEqual({ tier: "deep", reasoningLevel: "low" });
+    expect(anchoredOnParent({ reasoningLevel: "low" }, { tier: null, selection: PINNED })).toEqual({
+      model: MODEL_OF_PINNED,
+      reasoningLevel: "low",
+    });
+  });
+
+  it("carries `whenUnavailable` onto either anchor, and onto no anchor at all", () => {
+    // Where a refusal lands is the caller's to state, and is not part of the
+    // model/rung alternative, so it survives every arm — including the one
+    // that finds no anchor and hands the caller's own override back.
+    expect(
+      anchoredOnParent({ whenUnavailable: "record" }, { tier: "deep", selection: null }),
+    ).toEqual({ tier: "deep", whenUnavailable: "record" });
+    expect(
+      anchoredOnParent({ whenUnavailable: "record" }, { tier: null, selection: PINNED }),
+    ).toEqual({
+      model: MODEL_OF_PINNED,
+      reasoningLevel: "high",
+      whenUnavailable: "record",
+    });
+    expect(
+      anchoredOnParent(
+        { reasoningLevel: "low", whenUnavailable: "record" },
+        { tier: null, selection: null },
+      ),
+    ).toEqual({ reasoningLevel: "low", whenUnavailable: "record" });
+  });
+});
+
+describe("a subagent's inherited anchor, through the one start door (VC-431)", () => {
+  it("records the rung it inherited, so its own children inherit the same rung", async () => {
+    const tiers: string[] = [];
+    const { commands, sessions: door } = sessions({
+      readModelAnchor: async () => ({ selection: MODEL, tier: "deep" }),
+      readDefaultModel: async (tier) => {
+        tiers.push(tier);
+        return MODEL;
+      },
+    });
+
+    await door.create({
+      operationId: "operation-child",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      role: "subagent",
+      parentSessionId: "parent-session",
+      title: "Find the flaky test",
+    });
+
+    // The Deep row was read, NOT the Subagent Role's own rung: the anchor is
+    // an override, and an override names which rung `readDefaultModel` walks.
+    expect(tiers).toEqual(["deep"]);
+    // And the rung rides beside the resolved model, so the child's own
+    // delegations read `deep` off it rather than falling to the Role's rung.
+    expect(
+      commands.find((request) => request.command.kind === "model.select")?.command,
+    ).toMatchObject({ kind: "model.select", selection: MODEL, tier: "deep" });
+  });
+
+  it("refuses in words when the model it inherited is no longer available", async () => {
+    // A parent pinned by exact id hands down that model, and an exact model is
+    // validated against Model Access at start. Volli never silently falls back
+    // to another model, so the delegating Session is told and nothing durable
+    // is created.
+    const { commands, sessions: door } = sessions({
+      readModelAnchor: async () => ({ selection: MODEL, tier: null }),
+      inspectModelAccess: async () => ({ models: [] }) as unknown as ModelAccessSnapshot,
+    });
+
+    await expect(
+      door.create({
+        operationId: "operation-child",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        role: "subagent",
+        parentSessionId: "parent-session",
+        title: "Find the flaky test",
+      }),
+    ).rejects.toThrow(/not currently available/);
+    expect(commands).toEqual([]);
+  });
+
+  it("asks nothing of a parent for a Session that has none", async () => {
+    const asked: string[] = [];
+    const { sessions: door } = sessions({
+      readModelAnchor: async (sessionId) => {
+        asked.push(sessionId);
+        return { selection: MODEL, tier: "deep" };
+      },
+    });
+
+    await door.create(startInput("operation-parentless"));
+
+    // A Board or Ticket Session has no parent to inherit from, so the port is
+    // never consulted and the Role's own rung stands.
+    expect(asked).toEqual([]);
   });
 });
 

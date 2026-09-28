@@ -25,20 +25,13 @@
  *
  * ## The child's model is its parent's anchor (VC-431)
  *
- * A delegation that names neither a `model` nor a `tier` runs on what the
- * PARENT resolved through: the tier, when the parent was started on one, so
- * the child reads the same Settings row live; otherwise the parent's exact
- * model and reasoning level. Only a parent that recorded no anchor at all
- * leaves the Role's own rung standing. A caller-supplied `reasoning` rides on
- * top of whichever anchor was found.
- *
- * The rung this replaced was `utility`, and that was the bug: `utility` is the
- * slot for work nobody asked for — chat names, summaries, background
- * processing — so a profile that filled it with a cheap background model ran
- * every un-named delegation there. A delegation is work the parent asked for,
- * and "whatever the parent is running" is the only default that needs no
- * explanation. Nothing here can resolve the Utility row: a parent that somehow
- * recorded that tier is inherited by its exact model instead.
+ * A delegation that names neither a `model` nor a `tier` runs on what its
+ * PARENT is anchored to, rather than on a rung of the Subagent Role's own.
+ * This module does not decide that: it passes the caller's override through
+ * untouched, and the facade resolves it in `mint`, beside the tool surface and
+ * MCP a child already inherits there (`sessions.ts`, `anchoredOnParent`). One
+ * place answers "what does a subagent inherit from its parent", so a future
+ * start path cannot get half of it.
  *
  * ## The answer arrives through a tool, never as the parent's user
  *
@@ -98,7 +91,6 @@
  */
 
 import {
-  isAgentModelTier,
   sessionHostNoticeMetadata,
   shortSessionId,
   SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
@@ -269,56 +261,6 @@ export interface DelegationRecovery {
   reported: number;
   /** Children that never began a turn; nothing to say until a person retries. */
   skipped: number;
-}
-
-/**
- * The model override a delegation actually starts its child with: the caller's
- * own, when it named a model or a tier, and otherwise the PARENT's anchor.
- *
- * Read off the parent's durable projection, in this order:
- *
- * 1. `modelTier` — the rung the parent resolved through, when it was started
- *    on one. Passed as a TIER rather than as the model it resolved to, so the
- *    child reads the user's current row the way the parent did.
- * 2. `modelSelection` — the parent's exact model and level, which is what a
- *    parent pinned by id (or resolved off its Role's default) recorded. An
- *    exact model is validated against Model Access at start, so a delegation
- *    whose inherited model has since become unavailable is refused in words
- *    rather than started on some other model.
- * 3. Nothing. A parent with no durable model policy at all — a legacy Session
- *    that never recorded one — anchors its child to nothing, and the Role's
- *    rung stands.
- *
- * A `utility` tier is never inherited as a tier: no door may name that row
- * (`AGENT_MODEL_TIERS`), so a parent carrying it from an older build hands
- * down the model it is actually running instead of the row.
- *
- * A caller-supplied `reasoningLevel` (and `whenUnavailable`) rides on top of
- * the anchor: `reasoning` alone means "what my parent runs, at this level".
- */
-async function delegationModelOverride(
-  ports: Pick<DelegateSessionPorts, "runtime">,
-  parentSessionId: string,
-  override: SessionModelOverride | undefined,
-): Promise<SessionModelOverride | undefined> {
-  if (override?.model !== undefined || override?.tier !== undefined) return override;
-  const { projection } = await ports.runtime.projection({ sessionId: parentSessionId });
-  const level = override?.reasoningLevel;
-  const base = {
-    ...(level === undefined ? {} : { reasoningLevel: level }),
-    ...(override?.whenUnavailable === undefined
-      ? {}
-      : { whenUnavailable: override.whenUnavailable }),
-  };
-  const tier = projection.modelTier;
-  if (tier !== null && isAgentModelTier(tier)) return { ...base, tier };
-  const selection = projection.modelSelection;
-  if (selection === null) return override;
-  return {
-    ...base,
-    model: { providerId: selection.providerId, modelId: selection.modelId },
-    reasoningLevel: level ?? selection.reasoningLevel,
-  };
 }
 
 /** How a child event ends a watch, or `null` for one that does not. */
@@ -592,13 +534,6 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     async delegate(input) {
       const parent = input.parent;
       const title = input.title?.trim() || titleFromTask(input.task);
-      // What the child runs on when the caller named nothing: the parent's own
-      // anchor, never a rung of its own. See `delegationModelOverride`.
-      const modelOverride = await delegationModelOverride(
-        ports,
-        parent.sessionId,
-        input.modelOverride,
-      );
       const started = await ports.sessions.start({
         operationId: input.operationId,
         projectId: parent.projectId,
@@ -607,7 +542,7 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         parentSessionId: parent.sessionId,
         title,
         actor: input.actor,
-        ...(modelOverride === undefined ? {} : { modelOverride }),
+        ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
       });
       ports.onMutation?.({
         kind: "session",

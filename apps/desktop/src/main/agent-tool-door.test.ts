@@ -1401,9 +1401,18 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
   /**
    * VC-431. The delegate door offers the same tier list `session_start` does,
    * and the same refusals — one `readModelOverride`, so a tier means the same
-   * thing at both doors. A delegation that names NEITHER carries no override
-   * at all from here: anchoring it to the parent's own model is the
-   * operation's job, where the parent's projection is in hand.
+   * thing at both doors.
+   *
+   * The door already READ `tier` before the schema advertised it, so what
+   * these pin is the agreement rather than a new code path: the word the
+   * registry now publishes is the word this door accepts, and the row it
+   * refuses is the row no Session may run on. What makes the schema itself
+   * honest is `verb-registry.test.ts` and the CLI reference snapshot.
+   *
+   * The last assertion is the load-bearing one for this ticket: a delegation
+   * that names NEITHER carries no override at all from here, because
+   * anchoring a child to its parent is the facade's job (`anchoredOnParent`),
+   * beside the tool surface and MCP a child already inherits there.
    */
   describe("tier", () => {
     it("hands a named tier to the operation", async () => {

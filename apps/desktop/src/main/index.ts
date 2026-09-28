@@ -1714,8 +1714,8 @@ app.whenReady().then(async () => {
           // from the named rung down (VC-53, VC-9, VC-259). The facade maps a
           // Role onto its rung before it asks: a Ticket Session's default
           // reads `ticket`, a Board chat's `global`, a Subagent's `global`
-          // (VC-431: a delegation normally carries its parent's own anchor as
-          // an override, and no Role reads `utility`), and a named tier reads
+          // (VC-431: a subagent normally runs on its parent's own anchor, and
+          // no Role reads `utility`), and a named tier reads
           // its own row — stated by
           // `resolveDefaultModel`, never substituted. One closure so every
           // door — renderer chat, the tool door, an Automation Run — walks
@@ -1742,8 +1742,10 @@ app.whenReady().then(async () => {
           },
           ticketBelongsToProject: (projectId, ticketId) =>
             getTicket(sessionDb, ticketId)?.projectId === projectId,
-          readModelSelection: async (sessionId) =>
-            (await sessionRuntime.projection({ sessionId })).projection.modelSelection,
+          readModelAnchor: async (sessionId) => {
+            const { projection } = await sessionRuntime.projection({ sessionId });
+            return { selection: projection.modelSelection, tier: projection.modelTier };
+          },
           skills: sessionSkills,
           toolSurface: sessionToolSurface,
           grants: sessionDelegation,

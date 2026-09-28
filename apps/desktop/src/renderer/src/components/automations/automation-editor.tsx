@@ -28,7 +28,7 @@ import {
   AGENT_MODEL_TIERS,
   isAutomationRuntimePin,
   isAutomationRuntimeTier,
-  isModelTier,
+  isAgentModelTier,
   isValidAutomationRuntime,
   modelTierRow,
   NO_AUTOMATION_TRIGGER,
@@ -346,7 +346,9 @@ function RuntimeFields({
           }
           if (next.startsWith(TIER_VALUE_PREFIX)) {
             const tier = next.slice(TIER_VALUE_PREFIX.length);
-            if (isModelTier(tier)) onChange({ kind: "tier", tier });
+            // The same set the options below are built from (VC-431): a Run
+            // starts a Session, and no Session runs on the Utility row.
+            if (isAgentModelTier(tier)) onChange({ kind: "tier", tier });
             return;
           }
           const model = models.find((candidate) => candidate.id === next);
