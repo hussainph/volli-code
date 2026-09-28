@@ -1247,6 +1247,24 @@ describe("Pi native adapter attach", () => {
     expect("callVerb" in runtime.spec).toBe(false);
   });
 
+  it("passes the frozen MCP-management naming mode to Pi without changing the durable verb", async () => {
+    for (const mode of [undefined, "server"] as const) {
+      const { runtime } = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          toolSurface: [...context.toolSurface, "mcp.list"],
+          ...(mode === undefined ? {} : { mcpManagementNames: mode }),
+        }),
+        callVerb: async () => ({ text: "listed" }),
+      });
+      expect(runtime.spec.tools).toMatchObject({
+        verbs: ["mcp.list"],
+        ...(mode === undefined ? {} : { mcpManagementNames: "server" }),
+      });
+      if (mode === undefined) expect(runtime.spec.tools.mcpManagementNames).toBeUndefined();
+    }
+  });
+
   it("refuses the attachment rather than dropping a frozen verb it cannot bind", async () => {
     // The Web Access rule, one surface over: an attachment that quietly sent a
     // smaller tool array would have thrown away the Session's Cache Prefix and

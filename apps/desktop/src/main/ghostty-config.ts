@@ -67,10 +67,15 @@ function entryConfigPaths(deps: GhosttyConfigDeps): string[] {
 
 /**
  * Resolves the named theme (absolute path, or a name probed across ghostty's
- * theme directories) to its raw text. Null when `themeName` is unset, when
- * it's a builtin name with no on-disk file (the common case — the renderer
- * falls back to the vendored Ghostty theme catalog in `@volli/shared`), or
- * when the resolved file fails to read.
+ * theme directories) to its raw text. Null when `themeName` is unset, when no
+ * on-disk file answers to the name, or when the resolved file fails to read.
+ *
+ * THESE PROBES ARE THE WHOLE ANSWER NOW (VC-413). A name that misses used to be
+ * looked up in a theme catalog vendored into `@volli/shared`; the app ships no
+ * such catalog any more, so a null here means the renderer paints its own
+ * token-derived palette instead. That makes the user's own disk — their two
+ * theme directories, and Ghostty.app's own bundle when they have it installed —
+ * the only place terminal theme colors ever come from.
  */
 function resolveThemeSource(themeName: string | null, deps: GhosttyConfigDeps): string | null {
   if (themeName === null) return null;

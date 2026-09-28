@@ -104,6 +104,7 @@ import {
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
+  listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
 } from "./db/automations-repo";
 import {
@@ -338,6 +339,7 @@ import {
 import { browserPictureDisk, browserPicturesRoot } from "./browser/picture-disk";
 import { BrowserPictureStore } from "./browser/picture-store";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -493,6 +495,19 @@ function recordedToolSurface(events: readonly SessionEvent[]): readonly SessionT
     }
   }
   return null;
+}
+
+/** The MCP-management wire spelling frozen beside the canonical verb keys. */
+function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.mcpManagementNames;
+    }
+  }
+  return undefined;
 }
 
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
@@ -1105,6 +1120,9 @@ app.whenReady().then(async () => {
               input: {
                 kind: "tool-surface",
                 tools,
+                // At birth, freeze the wire spelling too. The old mcp_* names
+                // remain available only to Sessions whose record predates this marker.
+                mcpManagementNames: "server",
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
               },
               provenance: {
@@ -1396,7 +1414,9 @@ app.whenReady().then(async () => {
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
             let mcpTools = recordedMcpTools(events);
+            let mcpManagementNames = recordedMcpManagementNames(events);
             if (toolSurface === null) {
+              mcpManagementNames = "server";
               // Legacy backfill: the first attach under VC-164 freezes whatever
               // this Session can honestly bind now. Every later attach reads
               // the record and Settings can no longer recompose membership.
@@ -1411,6 +1431,7 @@ app.whenReady().then(async () => {
                   input: {
                     kind: "tool-surface",
                     tools: sessionToolSurface.resolve(attaching.role, []),
+                    mcpManagementNames: "server",
                   },
                   provenance,
                 }),
@@ -1424,6 +1445,7 @@ app.whenReady().then(async () => {
               rootThreadId: sessionRootThreadId(sessionId),
               model: projection.modelSelection,
               toolSurface,
+              ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
               ...(mcpTools.length === 0 ? {} : { mcpTools }),
               // The policy a FRESH attachment is pinned to (VC-44), read from
               // app-owned state and never from the tree the Session is about to
@@ -1569,6 +1591,8 @@ app.whenReady().then(async () => {
           runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
+          runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),
+          skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(sessionDb, input),
           ...(piRuntimeHost === null
             ? {}
             : { inspectModelAccess: () => piRuntimeHost.inspectModelAccess({}) }),
@@ -3006,6 +3030,19 @@ app.whenReady().then(async () => {
       if (details.isMainFrame && !details.isSameDocument) notifications.forgetRenderer(windowId);
     });
     window.webContents.on("render-process-gone", () => notifications.forgetRenderer(windowId));
+    // A committed page reset strands any Browser plane the old page had put on
+    // screen (VC-424): a native view is the window's child, not the page's, so
+    // it goes on compositing over a fresh app UI that cannot hide a tab it has
+    // never heard of. Its own events, not the two above — a plane must not come
+    // off for a navigation that never commits. Parking is per window, and the
+    // tabs, their holds and their engines all survive it: a pane in the new
+    // page shows them again.
+    parkBrowserPlanesOnRendererReset({
+      host: browserTabs,
+      window,
+      contents: window.webContents,
+      log: (message) => console.error(message),
+    });
     return window;
   };
   // A notification clicked with every window closed asks for one (macOS keeps

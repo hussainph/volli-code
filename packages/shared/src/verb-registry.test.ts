@@ -13,6 +13,7 @@ import {
   VERB_TOOLS,
   verbEntry,
   verbTier,
+  verbToolWireName,
 } from "./verb-registry";
 import type { VerbEntry, VerbKey, VerbTier } from "./verb-registry";
 import { AGENT_MODEL_TIERS, modelTierRow } from "./model-access-policy";
@@ -884,10 +885,19 @@ describe("the MCP management verbs (VC-380)", () => {
     }
   });
 
+  it("freezes management wire names separately from the durable dot-keys", () => {
+    expect(verbToolWireName("mcp.list")).toBe("mcp_list");
+    expect(verbToolWireName("mcp.list", "server")).toBe("server_list");
+    expect(verbToolWireName("session.start")).toBe("session_start");
+    expect(verbToolWireName("mcp.unknown" as never)).toBeUndefined();
+  });
+
   it("projects a wire name a provider accepts, with no caller field in any schema", () => {
     for (const key of MCP_VERBS) {
       const tool = verbEntry(key)!.tool;
-      expect(tool?.name, key).toBe(key.replace(".", "_"));
+      // Management is a native Volli verb, not an MCP-discovered tool. The
+      // single-underscore mcp_ prefix routes Anthropic OAuth to extra usage.
+      expect(tool?.name, key).toBe(key.replace("mcp.", "server_"));
       expect(tool!.description.length, key).toBeGreaterThan(0);
       for (const field of tool!.input) {
         expect(field.name, `${key}.${field.name}`).not.toMatch(/^-/);
@@ -926,7 +936,7 @@ describe("the MCP management verbs (VC-380)", () => {
 
     const remove = verbEntry("mcp.remove")!.tool!.description;
     expect(remove).toMatch(/reattach/i);
-    expect(remove).toContain("mcp_disable");
+    expect(remove).toContain("server_disable");
   });
 
   it("spells args as the array the whole MCP ecosystem spells it as", () => {

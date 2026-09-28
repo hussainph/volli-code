@@ -583,6 +583,8 @@ export type SessionInput =
   | {
       kind: "tool-surface";
       tools: readonly SessionToolId[];
+      /** New MCP-management wire names. Absent on historical surfaces, whose mcp_* names must survive reattachment. */
+      mcpManagementNames?: "server";
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
     };

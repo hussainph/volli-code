@@ -1,0 +1,389 @@
+{
+  "ticket": "VC-344",
+  "baseline": false,
+  "marker": "VC344-OUTPUT-READABLE",
+  "startedAt": "2026-09-18T20:00:00.833Z",
+  "commit": "1896d3a4c5f32532fc7755c9d88deab6d19596a2",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.5.1\nBuildVersion:\t\t25F80",
+  "checks": [
+    {
+      "name": "before-focus-is-chrome",
+      "ok": true
+    },
+    {
+      "name": "AX-before-focus",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-OUTPUT-READABLE"
+        }
+      ],
+      "matches": [
+        true
+      ],
+      "exposedNodes": 357
+    },
+    {
+      "name": "input-name-before-focus",
+      "ok": true,
+      "expectedName": "Terminal 1 \u2014 pane 1"
+    },
+    {
+      "name": "Terminal 1 \u2014 pane 1",
+      "ok": true,
+      "role": "region",
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": "_r_1p_",
+      "inputDescription": "Tab sends to terminal. Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.",
+      "tabIndex": 0,
+      "accessibleRows": 44
+    },
+    {
+      "name": "mac-AX-before-focus",
+      "ok": true,
+      "trusted": true,
+      "nodes": 472,
+      "exposesChrome": true,
+      "containsMarkers": [
+        true
+      ]
+    },
+    {
+      "name": "AX-after-focus",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-OUTPUT-READABLE"
+        }
+      ],
+      "matches": [
+        true
+      ],
+      "exposedNodes": 357
+    },
+    {
+      "name": "input-name-after-focus",
+      "ok": true,
+      "expectedName": "Terminal 1 \u2014 pane 1"
+    },
+    {
+      "name": "Terminal 1 \u2014 pane 1",
+      "ok": true,
+      "role": "region",
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": "_r_1p_",
+      "inputDescription": "Tab sends to terminal. Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.",
+      "tabIndex": 0,
+      "accessibleRows": 44
+    },
+    {
+      "name": "mac-AX-after-focus",
+      "ok": true,
+      "trusted": true,
+      "nodes": 473,
+      "exposesChrome": true,
+      "containsMarkers": [
+        true
+      ]
+    },
+    {
+      "name": "normal-Tab-stays-in-PTY",
+      "ok": true,
+      "walk": [
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        }
+      ]
+    },
+    {
+      "name": "normal-Shift+Tab-stays-in-PTY",
+      "ok": true,
+      "walk": [
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        },
+        {
+          "tag": "TEXTAREA",
+          "name": "Terminal input",
+          "inside": true
+        }
+      ]
+    },
+    {
+      "name": "Enter terminal focus",
+      "ok": true,
+      "tag": "BUTTON",
+      "inside": false
+    },
+    {
+      "name": "Terminal input",
+      "ok": true,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "Hide details rail",
+      "ok": true,
+      "tag": "BUTTON",
+      "inside": false
+    },
+    {
+      "name": "Terminal input",
+      "ok": true,
+      "tag": "TEXTAREA",
+      "inside": true
+    },
+    {
+      "name": "navigation-does-not-write-PTY",
+      "ok": true,
+      "hex": "091b5b5a78"
+    },
+    {
+      "name": "AX-terminal-focus",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-OUTPUT-READABLE"
+        }
+      ],
+      "matches": [
+        true
+      ],
+      "exposedNodes": 183
+    },
+    {
+      "name": "input-name-terminal-focus",
+      "ok": true,
+      "expectedName": "Terminal 1 \u2014 pane 1"
+    },
+    {
+      "name": "Terminal 1 \u2014 pane 1",
+      "ok": true,
+      "role": "region",
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": "_r_1p_",
+      "inputDescription": "Tab sends to terminal. Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.",
+      "tabIndex": 0,
+      "accessibleRows": 48
+    },
+    {
+      "name": "mac-AX-terminal-focus",
+      "ok": true,
+      "trusted": true,
+      "nodes": 357,
+      "exposesChrome": true,
+      "containsMarkers": [
+        true
+      ]
+    },
+    {
+      "name": "AX-hidden",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-OUTPUT-READABLE"
+        }
+      ],
+      "matches": [
+        false
+      ],
+      "exposedNodes": 171
+    },
+    {
+      "name": "mac-AX-hidden",
+      "ok": true,
+      "trusted": true,
+      "nodes": 354,
+      "exposesChrome": true,
+      "containsMarkers": [
+        false
+      ]
+    },
+    {
+      "name": "AX-hide-show",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-OUTPUT-READABLE"
+        }
+      ],
+      "matches": [
+        true
+      ],
+      "exposedNodes": 354
+    },
+    {
+      "name": "input-name-hide-show",
+      "ok": true,
+      "expectedName": "Terminal 1 \u2014 pane 1"
+    },
+    {
+      "name": "Terminal 1 \u2014 pane 1",
+      "ok": true,
+      "role": "region",
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": "_r_1p_",
+      "inputDescription": "Tab sends to terminal. Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.",
+      "tabIndex": 0,
+      "accessibleRows": 44
+    },
+    {
+      "name": "mac-AX-hide-show",
+      "ok": true,
+      "trusted": true,
+      "nodes": 479,
+      "exposesChrome": true,
+      "containsMarkers": [
+        true
+      ]
+    },
+    {
+      "name": "AX-split",
+      "ok": true,
+      "outputs": [
+        {
+          "marker": "VC344-SPLIT-1",
+          "region": "Terminal 1 \u2014 pane 1"
+        },
+        {
+          "marker": "VC344-SPLIT-2",
+          "region": "Terminal 1 \u2014 pane 2"
+        }
+      ],
+      "matches": [
+        true,
+        true
+      ],
+      "exposedNodes": 527
+    },
+    {
+      "name": "input-name-split",
+      "ok": true,
+      "expectedName": "Terminal 1 \u2014 pane 1"
+    },
+    {
+      "name": "Terminal 1 \u2014 pane 1",
+      "ok": true,
+      "role": "region",
+      "inputLabel": "Terminal input",
+      "inputLabelledBy": "_r_33_",
+      "inputDescription": "Tab sends to terminal. Press Control+Shift+M to toggle Tab and Shift+Tab focus navigation.",
+      "tabIndex": 0,
+      "accessibleRows": 44
+    },
+    {
+      "name": "mac-AX-split",
+      "ok": true,
+      "trusted": true,
+      "nodes": 580,
+      "exposesChrome": true,
+      "containsMarkers": [
+        true,
+        true
+      ]
+    },
+    {
+      "name": "split-has-distinct-names",
+      "ok": true,
+      "names": [
+        "Terminal 1 \u2014 pane 1",
+        "Terminal 1 \u2014 pane 2"
+      ]
+    },
+    {
+      "name": "Resize left and right terminal panes",
+      "ok": true,
+      "tag": "DIV",
+      "inside": false
+    },
+    {
+      "name": "Hide details rail",
+      "ok": true,
+      "tag": "BUTTON",
+      "inside": false
+    },
+    {
+      "name": "Enter terminal focus",
+      "ok": true,
+      "tag": "BUTTON",
+      "inside": false
+    },
+    {
+      "name": "Resize left and right terminal panes",
+      "ok": true,
+      "tag": "DIV",
+      "inside": false
+    }
+  ],
+  "appPid": 96429,
+  "finishedAt": "2026-09-18T20:01:44.738Z"
+}

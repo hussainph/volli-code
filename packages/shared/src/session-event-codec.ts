@@ -1265,9 +1265,14 @@ function decodeToolSurfaceInput(
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
+  mcpManagementNames?: "server";
   mcpTools?: readonly McpToolDefinition[];
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  const mcpManagementNames =
+    input.mcpManagementNames === undefined
+      ? undefined
+      : enumValue(input.mcpManagementNames, ["server"], `${context}.mcpManagementNames`);
   const mcpTools =
     input.mcpTools === undefined
       ? undefined
@@ -1277,7 +1282,12 @@ function decodeToolSurfaceInput(
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
-  return mcpTools === undefined ? { kind, tools } : { kind, tools, mcpTools };
+  return {
+    kind,
+    tools,
+    ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+  };
 }
 
 /**

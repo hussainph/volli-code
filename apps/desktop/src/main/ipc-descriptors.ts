@@ -1683,6 +1683,25 @@ export const AUTOMATION_IPC: { readonly [C in AutomationIpcChannel]: IpcRequestD
       args.length === 1 && isRecord(args[0]) && typeof args[0]["projectId"] === "string",
     invalidError: "Invalid automation runs request",
   },
+  // BOTH ids required (VC-297): the project is what main guards the read by,
+  // and the Automation is what narrows it. A caller that sent only one would
+  // be asking a different question than the one this door answers.
+  "volli:automation-runs-for-automation": {
+    guard: (args): args is IpcArgs<"volli:automation-runs-for-automation"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation runs request",
+  },
+  "volli:automation-skips-for-automation": {
+    guard: (args): args is IpcArgs<"volli:automation-skips-for-automation"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["automationId"] === "string",
+    invalidError: "Invalid automation skips request",
+  },
   "volli:automation-enablement": {
     guard: (args): args is IpcArgs<"volli:automation-enablement"> => args.length === 0,
     invalidError: "Invalid automation enablement request",

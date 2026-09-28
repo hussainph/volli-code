@@ -922,7 +922,7 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_list
+Tool: server_list
 
 Effects:
 - Durable writes: none.
@@ -943,7 +943,7 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_preview
+Tool: server_preview
 
 Input:
   id  A short stable id for this server, letters, digits, dashes and underscores only. Installing the same id twice updates that server rather than adding a second one.
@@ -971,7 +971,7 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_install
+Tool: server_install
 
 Input:
   id  A short stable id for this server, letters, digits, dashes and underscores only. Installing the same id twice updates that server rather than adding a second one.
@@ -979,7 +979,7 @@ Input:
   command (optional)  For a LOCAL server: the executable to run, which must already be on PATH, for example 'npx' or 'uvx'. Volli installs nothing. Give this or url, never both.
   args (optional)  Arguments for the local command, one per entry, exactly as an MCP config spells them: ["-y", "@acme/files-mcp"]. An entry may contain spaces. Ignored for a remote server.
   url (optional)  For a REMOTE server: its streamable HTTP endpoint, http or https, with no credentials in the URL. Give this or command, never both.
-  tools (optional)  Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.
+  tools (optional)  Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use server_tools. A name the server did not offer is refused rather than ignored.
   source (optional)  Where this configuration came from, recorded so a person can audit it later: a registry entry, a URL, or a document. Recorded as given; Volli fetches nothing from it.
   registryType (optional)  The ecosystem the source named, as an MCP server.json spells it. Recorded metadata; Volli resolves nothing in that ecosystem. (valid: npm, pypi, nuget, cargo, oci, mcpb)
   version (optional)  The version string this install asked for. Recorded as asked; nothing pins the command that actually runs to it.
@@ -1009,10 +1009,10 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_refresh
+Tool: server_refresh
 
 Input:
-  server  The server's id, as mcp_list prints it.
+  server  The server's id, as server_list prints it.
 
 Effects:
 - Durable write: Replace the stored tool catalog with the one just discovered, or mark the server stale with the failure while keeping the last working catalog.
@@ -1032,10 +1032,10 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_enable
+Tool: server_enable
 
 Input:
-  server  The server's id, as mcp_list prints it.
+  server  The server's id, as server_list prints it.
 
 Effects:
 - Durable write: Set the server's enabled flag.
@@ -1055,10 +1055,10 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_disable
+Tool: server_disable
 
 Input:
-  server  The server's id, as mcp_list prints it.
+  server  The server's id, as server_list prints it.
 
 Effects:
 - Durable write: Clear the server's enabled flag.
@@ -1078,10 +1078,10 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_tools
+Tool: server_tools
 
 Input:
-  server  The server's id, as mcp_list prints it.
+  server  The server's id, as server_list prints it.
   tools  The complete set of tool names to leave on, separated by spaces or commas. Pass an empty string to turn every tool off.
 
 Effects:
@@ -1102,10 +1102,10 @@ Door: Agent Tool Surface (named tool; not shell-executable)
 Verb tier: control
 Tool availability: not claimed outside a resolved Session.
 
-Tool: mcp_remove
+Tool: server_remove
 
 Input:
-  server  The server's id, as mcp_list prints it.
+  server  The server's id, as server_list prints it.
   confirm (optional)  Omit it, or pass "preview", to see the warning and what would happen while writing nothing. Pass "apply" only after reading that warning, to actually perform the operation. (valid: preview, apply)
 
 Effects:

@@ -682,6 +682,23 @@ describe("composeFirstUserMessage", () => {
     ).toContain("This Ticket Session's frozen tool surface holds these Volli verbs");
   });
 
+  it("uses the exact frozen MCP-management wire names in the first-message tool block", () => {
+    const legacy = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+    });
+    const current = composeToolSurfaceBlock("project", {
+      tools: ["read"],
+      verbs: ["mcp.list", "mcp.install"],
+      mcpManagementNames: "server",
+    });
+    expect(legacy).toContain("mcp.list — call it as mcp_list");
+    expect(legacy).toContain("mcp.install — call it as mcp_install");
+    expect(current).toContain("mcp.list — call it as server_list");
+    expect(current).toContain("mcp.install — call it as server_install");
+    expect(current).not.toContain("mcp_list");
+  });
+
   it("still names a verb this build stopped projecting", () => {
     // Deliberately impossible through the types: `VerbToolKey` only admits keys
     // with a projection, and `sessionToolBindings` refuses a surface without

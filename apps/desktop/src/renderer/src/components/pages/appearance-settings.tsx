@@ -5,14 +5,10 @@ import { MinusIcon } from "@phosphor-icons/react/dist/csr/Minus";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import { getGhosttyTheme, resolveAppearance } from "@volli/shared";
+import { resolveAppearance } from "@volli/shared";
 
 import { PrefRow, PrefSection } from "@renderer/components/settings/kit";
-import {
-  fallbackTerminalThemeLabel,
-  revealPath,
-  terminalThemeItems,
-} from "@renderer/components/theme/appearance-catalog";
+import { fallbackTerminalThemeLabel, revealPath } from "@renderer/components/theme/appearance-rows";
 import { AppearanceModeChoice, CanvasEditor } from "@renderer/components/theme/canvas-editor";
 import { ThemeComboBox, ThemeOriginPill } from "@renderer/components/theme/theme-combo-box";
 import {
@@ -23,7 +19,6 @@ import {
 import { Button } from "@renderer/components/ui/button";
 import { writeThrough } from "@renderer/stores/mutate";
 import { effectiveAppearance, useThemeStore, type ThemeScope } from "@renderer/stores/theme";
-import { previewTerminalTheme } from "@renderer/terminal/appearance";
 import { DEFAULT_TERMINAL_FONT_SIZE } from "@renderer/terminal/appearance-model";
 import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
 
@@ -54,13 +49,14 @@ import { listLocalFontFamilies } from "@renderer/terminal/local-fonts";
  * one click away — because the file, not this panel, is the full interface
  * (#68: the overlay takes any ghostty key, hand-written, and Volli honors it).
  *
- * Preview here is a real palette swap, not a sample panel: we render the
- * terminal, so highlighting a theme repaints every live session and closing
- * the menu puts it back.
+ * The Theme row READS rather than picks (VC-413). The theme list it used to
+ * open was a catalog vendored out of Ghostty.app, so it left with the catalog;
+ * what the row still does is the part decision #67 actually promised — name the
+ * theme in force, say which layer set it, and revert Volli's own key. The
+ * control that chooses one is the config file, which is one click away.
  *
- * The editor has no row and no preview of its own (VC-123). It wears one light
- * theme or one dark one, decided by Mode above — so the App theme section
- * previews Monaco too, through the same repaint.
+ * The editor has no row of its own either (VC-123). It wears one light theme or
+ * one dark one, decided by Mode above.
  */
 export function AppearanceSettings() {
   const terminal = useThemeStore((state) => state.terminal);
@@ -226,25 +222,22 @@ function RevertButton({ settingKey }: { settingKey: TerminalSettingKey }) {
 }
 
 /**
- * Repaints every live terminal in `name`'s palette, writing nothing. A name the
- * catalog doesn't have (cmdk hands back `""` when the selection empties) ends
- * the preview rather than painting nothing.
- */
-const preview = (name: string): void => previewTerminalTheme(getGhosttyTheme(name));
-
-/** Puts the resolved palette back, ending a preview. */
-const endPreview = (): void => previewTerminalTheme(null);
-
-/**
- * Terminal theme picker over Ghostty's own theme collection, vendored into
- * the app bundle (`ghostty-theme.ts`).
+ * What the terminal's theme currently is, and who said so.
  *
- * Apply-then-revert preview: highlighting a name repaints every live terminal
- * and writes nothing; picking one writes `theme = <name>` to the overlay;
- * closing the menu any other way puts the resolved palette back.
+ * A VALUE, not a control (VC-413). The picker that used to sit here listed a
+ * theme catalog vendored out of Ghostty.app; the app ships none, so there is
+ * nothing to offer and Volli will not invent a list. The row keeps everything
+ * that was ever true about it: the resolved name, the #67 origin label, and a
+ * revert that removes Volli's key so the user's own config wins again. Choosing
+ * a theme is `theme = …` in one of the two files below — #68's promise that the
+ * file takes any ghostty key, unchanged.
+ *
+ * `row.value` is the name the CHAIN resolved, which may be a theme this machine
+ * has no file for; the terminal is then wearing the token-derived palette. The
+ * row still reports the name, because the config still says it and hiding that
+ * would make the file and the panel disagree.
  */
 function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
-  const items = React.useMemo(() => terminalThemeItems(), []);
   // A string, so it is safe as a selector result (see `activeTheme`'s note), and
   // it is what makes the fallback label follow a mode flip live.
   const resolved = useThemeStore(effectiveAppearance);
@@ -252,17 +245,9 @@ function TerminalThemeRow({ row }: { row: TerminalSettingRow }) {
   return (
     <PrefRow label={row.label}>
       <OriginBadge row={row} />
-      <ThemeComboBox
-        ariaLabel="Terminal theme"
-        searchLabel="Search terminal themes"
-        buttonLabel={row.value ?? fallbackTerminalThemeLabel(resolved)}
-        empty="No matching theme."
-        items={items}
-        activeValue={row.value}
-        onPreview={preview}
-        onEndPreview={endPreview}
-        onSelect={(name) => writeOverlay({ theme: name })}
-      />
+      <span className="text-ui text-muted-foreground">
+        {row.value ?? fallbackTerminalThemeLabel(resolved)}
+      </span>
     </PrefRow>
   );
 }

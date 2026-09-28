@@ -33,6 +33,11 @@ export interface AutomationServiceDeps {
   runsForTicket(ticketId: string): AutomationRun[];
   runsForProject(projectId: string): AutomationRun[];
   skipsForProject(projectId: string): AutomationSkippedOccurrence[];
+  runsForAutomation(input: { automationId: string; projectId: string }): AutomationRun[];
+  skipsForAutomation(input: {
+    automationId: string;
+    projectId: string;
+  }): AutomationSkippedOccurrence[];
   inspectModelAccess?: () => Promise<ModelAccessSnapshot>;
   onMutation?(change: { projectId?: string }): void;
   /**
@@ -314,6 +319,43 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     skipsForProject(projectId: string): AutomationSkipHistoryOutcome {
       if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };
       return { ok: true, skips: deps.skipsForProject(projectId) };
+    },
+
+    /**
+     * ONE Automation's Runs inside one project, newest first (VC-297).
+     *
+     * The editor asks a narrower question than the page, and it is answered
+     * here rather than by handing the project's whole history to a client that
+     * filters it. Two reasons, and the second is the one that lasts: a reader
+     * who opens one record must not be shown a neighbour's work, and a client
+     * that is not this process — a phone, a browser — should not have to
+     * download every Run in a project to draw one Automation's list.
+     *
+     * Project-guarded like {@link runsForProject}. The AUTOMATION id is not
+     * guarded: a Run keeps its Automation id after the record is deleted, so
+     * an id main can no longer resolve is still a real question with a real
+     * answer, and refusing it would hide exactly the history VC-126 kept.
+     */
+    runsForAutomation(input: {
+      automationId: string;
+      projectId: string;
+    }): AutomationRunHistoryOutcome {
+      if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, runs: deps.runsForAutomation(input) };
+    },
+
+    /**
+     * One Automation's Skipped occurrences inside one project (VC-297), read
+     * beside its Runs and separate from them for the reason
+     * {@link skipsForProject} states: they are different records with
+     * different actions, and the transport does not pretend they are one kind.
+     */
+    skipsForAutomation(input: {
+      automationId: string;
+      projectId: string;
+    }): AutomationSkipHistoryOutcome {
+      if (!deps.findProject(input.projectId)) return { ok: false, error: "Unknown project" };
+      return { ok: true, skips: deps.skipsForAutomation(input) };
     },
 
     /**

@@ -63,7 +63,7 @@ export function InfoHint({
       <PopoverTrigger
         aria-label={`About ${label}`}
         className={cn(
-          "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none",
+          "inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
           className,
         )}
         onMouseEnter={() => {
