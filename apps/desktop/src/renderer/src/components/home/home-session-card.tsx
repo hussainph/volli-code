@@ -2,6 +2,20 @@
  * Home's Now page as ONE framed object: the Session in front, and the tree it
  * writes to (VC-406).
  *
+ * NOT A PRODUCTION SURFACE ANY MORE — `home-rail.tsx` composes Now from its
+ * own `BoardSessionsBlock` over the usage footer, and pins the checkout
+ * under every page through `home-rail-footer.tsx`; the later VC-406 pass moved
+ * "where does it write" out of this card and into that footer, where it is
+ * true of Files and Search too. `home-rail.test.tsx` pins the absence. It is
+ * kept because the UI lab still mounts it: `lab/scratches/home-rail-now.tsx`
+ * draws it at every state it had to survive, and `lab/scratches/usage-surfaces.tsx`
+ * puts it beside the usage card it was designed as a sibling of. The lab is
+ * type-checked with the app (see `tsconfig.web.json`), so this export has real
+ * callers a signature change would break; it is not dead code.
+ *
+ * Everything below is the reasoning as it stood when the card WAS the page,
+ * kept because it is what the lab galleries are read against.
+ *
  * WHAT IT REPLACES. The page drew this in three drawings. A hand-rolled venue
  * card (`rounded-row border-border bg-card p-4`, its own radius and its own
  * inset), then an uppercase eyebrow, then a `<dl>` of key/value lines — Model,

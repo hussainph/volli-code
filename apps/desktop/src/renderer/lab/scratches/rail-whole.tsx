@@ -30,8 +30,31 @@
  *      still unfolds over the files it would commit. (Both columns read one
  *      `railMode`, as the app's two rails do, so this scratch mounts one
  *      Ticket rail rather than one per page.)
- *   3. The same rails at the 240px floor, where every truncation decision
- *      shows (the width control at the top switches both columns at once).
+ *   3. The Ticket's Files pill — the directory leads, with New File,
+ *      attachments and filter icons alongside, over one-line rows. The
+ *      paperclip opens attachment management without a permanent pill strip.
+ *      Walk into `apps/`: the paperclip still belongs to the Ticket, not the
+ *      folder. Home uses the same header without the attachment menu.
+ *   4. Search, at both scopes — type `rail` (five lines across two files, so the
+ *      per-file grouping and the count at the right of each heading are both
+ *      doing something), then `zzz` (“No matches”, said only because a read
+ *      landed). Switch pages and come back: the words are still there,
+ *      remembered per checkout, as the Files navigator's folder and filter are.
+ *   5. Home's own footer: the Main checkout under EVERY Home page (VC-406) —
+ *      switch Home to Files or Search and the branch row stays, which is the
+ *      whole reason it stopped being the bottom half of a card on Now. Press
+ *      the fact at its right and the reading unfolds upward.
+ *   6. The same rails at 240 / 300 / 360 — the floor, the resting width, and a
+ *      width someone has dragged out to. The control at the top switches both
+ *      columns at once; 240 is at or under the narrow step (270) that BOTH
+ *      rails now read from `RAIL_NARROW_MAX_WIDTH`, so it is where every
+ *      truncation decision and the tighter 12px gutter show — on Home too,
+ *      which spent one revision pinned to the roomy inset.
+ *   7. Both of the above in light AND dark, through the LAB'S OWN appearance
+ *      control (the floating theme toolbar, top right — `theme-toolbar.tsx`
+ *      over the production theme store). This scratch deliberately adds no
+ *      second theme switch: the toolbar already drives the real Canvas +
+ *      Appearance pipeline, which is the thing worth judging a rail against.
  *
  * WHAT TO LOOK FOR ACROSS THE PAIR, since that is what only this scratch can
  * show: one eyebrow recipe, one list row, one fold, one card frame — and the
@@ -43,30 +66,60 @@
  * `rail-now-compare.tsx` and left with the port; it is in this branch's
  * history (`design(lab): the Now page compared`, rounds one and two).
  *
- * The honest limits of the lab here: Files and Search are not passed (both
- * navigators need a filesystem), so those two pills are present and their
- * pages are empty. The rail's resize grip is absent for the same reason the
- * width is a control rather than a drag: the frame is the app's, the sizing is
- * the scratch's.
+ * ALL FOUR NAVIGATOR PAGES MOUNT FOR REAL, over a fixture filesystem. This
+ * scratch used to pass the Ticket rail no `filesContent` / `searchContent` at
+ * all, on the grounds that a lab has no filesystem to mount one against — and
+ * the cost was that the two pages the revision CHANGED most (the Files
+ * header's navigation, the Search page's read states) could not be looked at
+ * on the one page that shows both rails together. A navigator does not need a
+ * filesystem; it needs answers to `fs.listDirectory`, `files.search` and
+ * `attachments.list`, and those are fixtures like every other fixture here.
+ * The components are the shipping ones (`TicketFilesPanel`, `FileSearchPanel`,
+ * and Home's own two, which `HomeRail` builds itself) reading the same bridge
+ * the app reads.
+ *
+ * THE HONEST LIMITS OF THE LAB HERE:
+ *
+ *  • The tree below is INVENTED — a few folders, a few files, one small corpus
+ *    of source lines for Search to match against. It is shaped to exercise the
+ *    chrome (a folder to walk into, a filter that can miss, an attachment run,
+ *    a body reference, a result with more than one match in a file), not to
+ *    resemble this repository.
+ *  • Opening a file opens nothing. There is no editor behind this page and no
+ *    Electron to hand a path to, so preview (click) and pin (double-click) are
+ *    recorded in the scratch's own state and printed above the columns, where
+ *    you can see WHICH gesture the row took. The same goes for the row menus'
+ *    Reveal/Open-in items, which resolve to the fake bridge's refusal.
+ *  • The create/rename/duplicate/delete verbs refuse in one sentence that says
+ *    it is the lab refusing. They are wired, so the menus and the draft row are
+ *    real; nothing is written, because there is nowhere to write it.
+ *  • The rail's resize grip is absent for the same reason the width is a
+ *    control rather than a drag: the frame is the app's, the sizing is the
+ *    scratch's.
  */
 import * as React from "react";
 
 import {
   reportSessionUsage,
   type Automation,
+  type BlobLinkView,
   type ChangeSetSnapshot,
   type ColumnArming,
+  type DirEntry,
   type ModelAccessSnapshot,
   type SessionUsageEntry,
   type SessionUsageReportQuery,
   type SessionUsageScope,
+  type Ticket,
   type VenueSnapshot,
 } from "@volli/shared";
 import { EMPTY_TRANSCRIPT, type ChatSessionSlice } from "@volli/session-presentation";
 
+import { FileSearchPanel } from "@renderer/components/files/search-panel";
 import { HomeRail } from "@renderer/components/home/home-rail";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TicketChangesPanel } from "@renderer/components/ticket/ticket-changes-panel";
+import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { EMPTY_CHANGE_RECENCY_STATE } from "@renderer/components/ticket/ticket-change-recency";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -77,6 +130,14 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+import type {
+  FileSearchFile,
+  FileSearchInput,
+  FileSearchResult,
+  ListDirectoryResult,
+  Result,
+} from "../../../ipc/contract";
 
 import type { ApiOverrides } from "../fake-api";
 import { NOW, project, ticketById } from "../fixtures";
@@ -92,14 +153,40 @@ export const note = "The shipping TicketRail and HomeRail, framed as the app fra
  */
 export const viewport = "window" as const;
 
-/** The rail's two widths, from `stores/ui.ts`. */
+/**
+ * The three widths worth judging, from `stores/ui.ts`: the `RAIL_MIN_WIDTH`
+ * floor, the default, and a dragged-out width. 240 is the only one below the
+ * Ticket rail's narrow step (`(240 + 300) / 2` = 270), so it is the one where
+ * the tighter gutter and every truncation decision are on screen.
+ */
+const RAIL_WIDTHS = [240, 300, 360] as const;
 const RAIL_DEFAULT = 300;
-const RAIL_FLOOR = 240;
 
-/** The Ticket the rail is about: Doing, two Sessions, a worktree. */
-const TICKET = ticketById("tkt-14");
-/** The chat in front at Home, and the one whose money the Home card reports. */
-const HOME_CHAT_ID = "chat-home-1";
+/**
+ * The Ticket the rail is about: Doing, two Sessions, a worktree — and, for the
+ * Files page, a BODY that points at two paths. The `@ref` rows are the group a
+ * ticket navigator has and Home's does not, so a body with none of them would
+ * leave half of that page undrawn. The override is made here rather than in
+ * `fixtures.ts` because it is this scratch's question: the shared fixture is
+ * read by the board and sidebar scratches, which are not about file references.
+ */
+const TICKET: Ticket = {
+  ...ticketById("tkt-14"),
+  body: [
+    "Scrolling the changeset view faster than the decoration debounce leaves stale",
+    "gutter marks behind. The debounce is in",
+    "@apps/desktop/src/renderer/src/editor/diff-decorations.ts and the rail's own",
+    "page is @docs/DESIGN.md.",
+  ].join("\n"),
+};
+/**
+ * The chat in front at Home — one of `fixtures.ts`'s own ticketless project
+ * Sessions rather than an id invented here, so the Session on the tab, the row
+ * in the Board-session roster and the Session the usage footer prices are ONE
+ * Session. A front chat missing from the roster beside it is the one
+ * incoherence this page cannot afford, since the roster is what Now is for.
+ */
+const HOME_CHAT_ID = "chat-scratch-a";
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -205,6 +292,172 @@ const CHANGE_SET: ChangeSetSnapshot = {
   ],
 };
 
+// ─── the fixture filesystem ─────────────────────────────────────────────────
+
+/**
+ * One repository, as a flat list of the files in it.
+ *
+ * FLAT, and turned into directory listings by {@link directoryListing} below,
+ * because a navigator reads one level at a time and a hand-written map of
+ * levels is a map whose parents and children drift apart the moment a path is
+ * added. Deliberately small: the page has to show a folder worth walking into,
+ * a filter that can miss, and a listing at the 240px floor — not a repository.
+ *
+ * Both checkouts answer with the same tree, which is what a worktree IS: the
+ * same repository at a second working copy. The Ticket rail lists it under the
+ * worktree path, Home under the Main checkout, and the paths on the two pages
+ * agreeing is the point rather than a shortcut.
+ *
+ * It also holds every path {@link CHANGE_SET} names, so the file a row on Diffs
+ * says was modified is a file the Files page can be walked to — one repository
+ * across the rail's pages, rather than three fixtures that disagree about what
+ * is in it.
+ */
+const REPOSITORY_FILES: readonly string[] = [
+  "README.md",
+  "package.json",
+  "apps/desktop/package.json",
+  "apps/desktop/src/renderer/lab/scratches/rail-whole.tsx",
+  "apps/desktop/src/renderer/src/components/automations/ticket-rail-automations.tsx",
+  "apps/desktop/src/renderer/src/components/files/search-panel.tsx",
+  "apps/desktop/src/renderer/src/components/usage/usage-card.tsx",
+  "apps/desktop/src/renderer/src/components/ticket/ticket-files-panel.tsx",
+  "apps/desktop/src/renderer/src/components/ticket/ticket-rail.tsx",
+  "apps/desktop/src/renderer/src/editor/diff-decorations.ts",
+  "docs/DESIGN.md",
+  "docs/plans/fullscreen-placement.md",
+  "packages/shared/src/tickets.ts",
+];
+
+/** The two roots this lab filesystem answers for, longest first so a nested one wins. */
+const FIXTURE_ROOTS: readonly string[] = [TICKET.worktreePath ?? "", project.path].filter(
+  (root) => root !== "",
+);
+
+/**
+ * One directory level, derived from {@link REPOSITORY_FILES} — directories
+ * first, then files, each group by name, which is the order main's own listing
+ * returns (`sortDirEntries`).
+ *
+ * `null` for a path no fixture file lives under, so the navigator's REAL
+ * failure path is reachable here: walk somewhere that does not exist and the
+ * page draws the refusal and its retry rather than an empty folder.
+ */
+function directoryListing(relDir: string): DirEntry[] | null {
+  const prefix = relDir === "" ? "" : `${relDir}/`;
+  const names = new Map<string, DirEntry>();
+  for (const path of REPOSITORY_FILES) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const slash = rest.indexOf("/");
+    const name = slash === -1 ? rest : rest.slice(0, slash);
+    names.set(name, { name, kind: slash === -1 ? "file" : "dir" });
+  }
+  if (names.size === 0) return null;
+  return [...names.values()].toSorted((a, b) =>
+    a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "dir" ? -1 : 1,
+  );
+}
+
+/** An absolute path, resolved back to the checkout-relative folder it names. */
+function relativeToRoot(absPath: string): string | null {
+  const path = absPath.endsWith("/") ? absPath.slice(0, -1) : absPath;
+  for (const root of FIXTURE_ROOTS) {
+    if (path === root) return "";
+    if (path.startsWith(`${root}/`)) return path.slice(root.length + 1);
+  }
+  return null;
+}
+
+/**
+ * The source the Search page matches against — three files with real lines in
+ * them, so a result is a place (a line number, a quoted line, a match inside
+ * it) rather than a shape. `rail` spans two of them (five lines), `decoration`
+ * hits four lines of one, and `zzz` hits nothing — which is the state the
+ * page's "No matches" is for.
+ */
+const SEARCH_CORPUS: Record<string, readonly string[]> = {
+  "apps/desktop/src/renderer/src/editor/diff-decorations.ts": [
+    "const DECORATION_DEBOUNCE_MS = 16;",
+    "",
+    "export function applyDiffDecorations(editor: Editor, ranges: readonly Range[]): void {",
+    "  // Stale decoration marks survive a scroll faster than the debounce.",
+    "  editor.deltaDecorations(previous, ranges.map(toDecoration));",
+    "}",
+  ],
+  "apps/desktop/src/renderer/src/components/ticket/ticket-rail.tsx": [
+    "export function TicketRail({ projectId, ticket }: TicketRailProps) {",
+    "  const narrow = useUiStore((state) => state.railWidth <= RAIL_NARROW_MAX_WIDTH);",
+    '  return <div className="group/rail" data-narrow={narrow}>{/* pages */}</div>;',
+    "}",
+  ],
+  "docs/DESIGN.md": [
+    "## The ticket rail (VC-406)",
+    "",
+    "The rail is the Ticket's hub, and its scope is the line that decides what goes on it.",
+    "Four pages in one pill: Now, Diffs, Files, Search.",
+  ],
+};
+
+/**
+ * The fixture search: a case-insensitive substring scan of {@link
+ * SEARCH_CORPUS}, in the shape `volli:search` returns.
+ *
+ * Substring rather than a regex engine on purpose — what this page is for is
+ * the RESULT's drawing (the file heading, the line column, the highlight inside
+ * the quoted line, the summary sentence), and ripgrep's grammar is not
+ * something a lab can honestly stand in for.
+ */
+function searchFixture(query: string): { files: FileSearchFile[]; matches: number } {
+  const needle = query.toLowerCase();
+  const files: FileSearchFile[] = [];
+  let matches = 0;
+  for (const [relPath, lines] of Object.entries(SEARCH_CORPUS)) {
+    const hits = lines.flatMap((text, index) => {
+      const at = text.toLowerCase().indexOf(needle);
+      if (at === -1) return [];
+      return [
+        {
+          line: index + 1,
+          column: at + 1,
+          preview: text,
+          start: at,
+          end: at + query.length,
+        },
+      ];
+    });
+    if (hits.length === 0) continue;
+    matches += hits.length;
+    files.push({ relPath, matches: hits });
+  }
+  return { files, matches };
+}
+
+/**
+ * What is attached to this Ticket (VC-50). Two, because one chip cannot show
+ * that the run wraps and stays inside the header's own group, and because the
+ * navigator turns each of them into a referenced row beside the Body's `@refs`
+ * — which is the group the Ticket page has and Home's does not.
+ */
+const ATTACHMENTS: readonly BlobLinkView[] = [
+  {
+    linkId: "blob-link-1",
+    blobHash: "3f0a9c1e",
+    label: "gutter-scroll.png",
+    originalName: "gutter-scroll.png",
+    mime: "image/png",
+    sizeBytes: 148_221,
+  },
+  {
+    linkId: "blob-link-2",
+    blobHash: "7b21d4aa",
+    label: "repro-steps.md",
+    originalName: "repro-steps.md",
+    mime: "text/markdown",
+    sizeBytes: 2_140,
+  },
+];
+
 /** Uncommitted work on a branch that has never been pushed — the card's busiest row. */
 const WORKTREE_STATUS = {
   uncommitted: true,
@@ -214,7 +467,15 @@ const WORKTREE_STATUS = {
   unpushed: 3,
 };
 
-/** The catalogue the Home card names its model against (VC-406: drawn, not spelled). */
+/**
+ * The catalogue the rails name their models against (VC-406: drawn, not
+ * spelled).
+ *
+ * EVERY MODEL THE LEDGER BELOW SPENT ON is listed, because the usage footers'
+ * model rows resolve against exactly this: a fixture that held only one of them
+ * would show a real name on one row and a wire id on the next, which is the one
+ * thing on this page nobody is reviewing.
+ */
 const SNAPSHOT: ModelAccessSnapshot = {
   observedAt: NOW,
   providers: [
@@ -228,6 +489,16 @@ const SNAPSHOT: ModelAccessSnapshot = {
       signIn: [],
       hasStoredCredential: true,
     },
+    {
+      id: "openai",
+      label: "OpenAI",
+      state: "available",
+      accountLabel: "someone@example.com",
+      billingSource: "api-key",
+      recovery: null,
+      signIn: [],
+      hasStoredCredential: true,
+    },
   ],
   models: [
     {
@@ -237,6 +508,24 @@ const SNAPSHOT: ModelAccessSnapshot = {
       state: "available",
       reasoningLevels: ["low", "medium", "high"],
       contextWindow: 200_000,
+      acceptsImageInput: true,
+    },
+    {
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      label: "Claude Sonnet 4.5",
+      state: "available",
+      reasoningLevels: ["low", "medium", "high"],
+      contextWindow: 200_000,
+      acceptsImageInput: true,
+    },
+    {
+      providerId: "openai",
+      modelId: "gpt-5.3-codex",
+      label: "GPT-5.3 Codex",
+      state: "available",
+      reasoningLevels: ["low", "medium", "high"],
+      contextWindow: 400_000,
       acceptsImageInput: true,
     },
   ],
@@ -374,6 +663,10 @@ export function seed(): void {
     railWidth: RAIL_DEFAULT,
     railCollapsed: false,
     costVisible: true,
+    // Every fold rests closed in the app, and this page is partly about what
+    // the closed state says — so it is seeded closed rather than inheriting
+    // whatever the previous scratch left in the persisted preference.
+    railFolds: { sessionsRecord: false, worktree: false, usage: false },
   });
   // Seeded as ALREADY-READ, for the reason the automations scratch spells out:
   // the rail refuses to draw a row from a cache it has not confirmed at the
@@ -401,8 +694,53 @@ export function seed(): void {
   });
 }
 
+/**
+ * One refusal for every verb that would WRITE, in a sentence that says who is
+ * refusing. The fake bridge's own default says "not stubbed", which reads as a
+ * hole in this scratch rather than as the truth — the menus and the draft row
+ * are wired, and there is simply nowhere for the bytes to land.
+ */
+function labCannotWrite(): Promise<Result> {
+  return Promise.resolve({
+    ok: false,
+    error: "The UI lab has no filesystem — nothing was written.",
+  });
+}
+
 export const api: ApiOverrides = {
   ...appApi,
+  attachments: {
+    list: () => Promise.resolve({ ok: true, blobs: [...ATTACHMENTS] }),
+  },
+  fs: {
+    // The navigators' one read. A path outside the two fixture checkouts, or a
+    // folder no fixture file lives under, fails the way main fails it — which
+    // is how the page's fault state is reachable here at all.
+    listDirectory: (absPath: string): Promise<ListDirectoryResult> => {
+      const relDir = relativeToRoot(absPath);
+      const entries = relDir === null ? null : directoryListing(relDir);
+      return Promise.resolve(
+        entries === null
+          ? { ok: false, error: `No such directory in this lab's fixture checkout: ${absPath}` }
+          : { ok: true, entries },
+      );
+    },
+  },
+  files: {
+    ...(appApi.files as Record<string, unknown>),
+    // Both scopes search the one corpus, for the reason both list the one tree:
+    // a worktree is the same repository at a second working copy.
+    search: (input: FileSearchInput): Promise<FileSearchResult> => {
+      const query = input.query.trim();
+      const { files, matches } = query === "" ? { files: [], matches: 0 } : searchFixture(query);
+      return Promise.resolve({ ok: true, files, matches, limit: "none" });
+    },
+    create: labCannotWrite,
+    createDirectory: labCannotWrite,
+    rename: labCannotWrite,
+    duplicate: labCannotWrite,
+    delete: labCannotWrite,
+  },
   automations: {
     list: () => Promise.resolve({ ok: true, automations: AUTOMATIONS }),
     armings: () => Promise.resolve({ ok: true, armings: ARMINGS }),
@@ -467,7 +805,19 @@ function RailFrame({ width, children }: React.PropsWithChildren<{ width: number 
   );
 }
 
-function TicketColumn({ width = RAIL_DEFAULT }: { width?: number }) {
+/** What a file gesture in the lab did, since it cannot do the real thing. */
+interface LabOpen {
+  gesture: "preview" | "pin";
+  relPath: string;
+}
+
+function TicketColumn({
+  width = RAIL_DEFAULT,
+  onOpen,
+}: {
+  width?: number;
+  onOpen(open: LabOpen): void;
+}) {
   return (
     <RailFrame width={width}>
       <TicketRail
@@ -485,6 +835,29 @@ function TicketColumn({ width = RAIL_DEFAULT }: { width?: number }) {
             activeTabId={chatTabId("chat-14a")}
             recency={EMPTY_CHANGE_RECENCY_STATE}
             onOpenDiff={() => {}}
+          />
+        }
+        // The app passes these from `ticket-detail.tsx`, where they open a File
+        // tab in the main strip. There is no strip here, so the gesture is
+        // recorded above the columns instead — which also makes the
+        // preview/pin distinction (click vs double-click) visible, and it is
+        // not visible anywhere else in the lab.
+        filesContent={
+          <TicketFilesPanel
+            ticket={TICKET}
+            onPreviewFile={(relPath) => onOpen({ gesture: "preview", relPath })}
+            onPinFile={(relPath) => onOpen({ gesture: "pin", relPath })}
+            onOpenCreatedFile={(relPath) => onOpen({ gesture: "pin", relPath })}
+            onRenameFile={() => {}}
+          />
+        }
+        searchContent={
+          <FileSearchPanel
+            scope={{ kind: "ticket", projectId: project.id, ticketId: TICKET.id }}
+            // The branch, which is what the Ticket navigator calls this
+            // checkout on its own header — one rail, one name for one tree.
+            root={TICKET.branch ?? TICKET.baseBranch ?? "No branch yet"}
+            onOpenMatch={(relPath) => onOpen({ gesture: "preview", relPath })}
           />
         }
       />
@@ -513,16 +886,17 @@ function useRailWidth(width: number): void {
 
 export default function BothRailsWhole() {
   const [width, setWidth] = React.useState(RAIL_DEFAULT);
+  const [opened, setOpened] = React.useState<LabOpen | null>(null);
   useRailWidth(width);
 
   return (
     <TooltipProvider>
       <ModelAccessProvider client={MODEL_ACCESS}>
         <div className="flex h-svh min-h-0 flex-col gap-4 p-6">
-          <Intro width={width} onWidth={setWidth} />
+          <Intro width={width} onWidth={setWidth} opened={opened} />
           <div className="flex min-h-0 flex-1 items-stretch gap-6">
             <Labelled label="Ticket · VLT-14, Doing">
-              <TicketColumn width={width} />
+              <TicketColumn width={width} onOpen={setOpened} />
             </Labelled>
             <Labelled label="Home · the project scope">
               <HomeColumn width={width} />
@@ -534,7 +908,15 @@ export default function BothRailsWhole() {
   );
 }
 
-function Intro({ width, onWidth }: { width: number; onWidth: (width: number) => void }) {
+function Intro({
+  width,
+  onWidth,
+  opened,
+}: {
+  width: number;
+  onWidth: (width: number) => void;
+  opened: LabOpen | null;
+}) {
   return (
     <div className="flex shrink-0 flex-col gap-3">
       <p className="max-w-[70ch] text-ui text-muted-foreground">
@@ -547,8 +929,25 @@ function Intro({ width, onWidth }: { width: number; onWidth: (width: number) => 
         <strong className="text-foreground">worktree</strong> stands, each a row that folds open
         upward without moving. Home is the same language one scope up.
       </p>
+      <p className="max-w-[70ch] text-ui text-muted-foreground">
+        Files and Search are live on both rails, over a fixture tree — walk into{" "}
+        <code className="font-mono">apps/</code>, filter the listing, or search{" "}
+        <code className="font-mono">rail</code>. Nothing opens: there is no editor and no filesystem
+        behind this page, so a click is recorded here instead.
+      </p>
       <div className="flex items-center gap-2">
-        {[RAIL_DEFAULT, RAIL_FLOOR].map((candidate) => (
+        <span
+          data-testid="rail-whole-opened"
+          className="font-mono text-caption text-muted-foreground"
+        >
+          {opened === null
+            ? "no file gesture yet"
+            : `${opened.gesture === "pin" ? "pinned" : "previewed"} · ${opened.relPath}`}
+        </span>
+        <span aria-hidden className="text-caption text-muted-foreground/60">
+          ·
+        </span>
+        {RAIL_WIDTHS.map((candidate) => (
           <button
             key={candidate}
             type="button"

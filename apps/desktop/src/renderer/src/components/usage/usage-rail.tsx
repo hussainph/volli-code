@@ -14,20 +14,19 @@
  * happened, on a surface whose whole argument is that spend should be cheap to
  * watch.
  *
- * WHICH ROWS a breakdown has, and whose money each one carries, is decided in
- * `usage-rail-model.ts` — pure, beside this file, so a test can reach it.
+ * WHICH ROWS a breakdown has, whose money each one carries and what a model is
+ * CALLED are all decided in `usage-rail-model.ts` — pure, beside this file, so a
+ * test can reach them. The catalogue those names are resolved against is read
+ * here, like every other read: `usage-model-catalogue.ts`.
  */
 import * as React from "react";
 
 import { type SessionUsageReport, type SessionUsageScope } from "@volli/shared";
 
-import { HomeUsageBlock } from "@renderer/components/usage/home-usage-block";
+import { HomeUsageFooter } from "@renderer/components/usage/home-usage-block";
 import { TicketUsageBlock } from "@renderer/components/usage/ticket-usage-block";
-import {
-  groupRows,
-  modelLabel,
-  ticketSessionRows,
-} from "@renderer/components/usage/usage-rail-model";
+import { useUsageModelCatalogue } from "@renderer/components/usage/usage-model-catalogue";
+import { modelRows, ticketSessionRows } from "@renderer/components/usage/usage-rail-model";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
@@ -94,8 +93,14 @@ function useCostVisible(): boolean {
 }
 
 /**
- * Home's usage card: the project rollup, the Session in front, and the window
- * control they are read through.
+ * Home's usage footer: the project rollup, the Session in front, and the window
+ * control they are read through — pinned under the Now page (VC-406).
+ *
+ * Named for where it sits, because where it sits is the decision: it is not a
+ * block in the page's stack and must not be mounted as one. The approved Home
+ * Now is ONE roster; cost is read rather than worked in, so it is a row under
+ * the scroller with its body folded above it — the same ruling, the same fold
+ * preference and the same geometry as the Ticket rail's.
  *
  * ONE COMPONENT FOR BOTH SCOPES since VC-203. They used to be two exports
  * mounted a section apart, which is why they could drift into two different
@@ -109,7 +114,7 @@ function useCostVisible(): boolean {
  * time, because a project's all-time total only grows and stops being a number
  * anyone can act on.
  */
-export function HomeUsageRailCard({
+export function HomeUsageRailFooter({
   projectId,
   sessionId,
 }: {
@@ -118,6 +123,8 @@ export function HomeUsageRailCard({
   sessionId: string | null;
 }) {
   const costVisible = useCostVisible();
+  const usageOpen = useUiStore((state) => state.railFolds.usage);
+  const catalogue = useUsageModelCatalogue();
   const [window, setWindow] = React.useState<UsageWindow>("30d");
   const scope = React.useMemo<SessionUsageScope>(
     () => ({ kind: "project", projectId }),
@@ -165,9 +172,9 @@ export function HomeUsageRailCard({
 
   if (!costVisible || report === null) return null;
   return (
-    <HomeUsageBlock
+    <HomeUsageFooter
       summary={report.total}
-      models={groupRows(report, modelLabel)}
+      models={modelRows(report, catalogue)}
       // The larger of the two, because the listing can lag a Session that has
       // just been created while its first turn is already metered. Never the
       // metered count alone — that would hide exactly the gap the two numbers
@@ -181,6 +188,8 @@ export function HomeUsageRailCard({
       session={sessionReport?.total ?? null}
       window={window}
       onWindowChange={setWindow}
+      open={usageOpen}
+      onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />
   );
 }
@@ -197,6 +206,7 @@ export function HomeUsageRailCard({
 export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const costVisible = useCostVisible();
   const usageOpen = useUiStore((state) => state.railFolds.usage);
+  const catalogue = useUsageModelCatalogue();
   const scope = React.useMemo<SessionUsageScope>(() => ({ kind: "ticket", ticketId }), [ticketId]);
   const bySession = useUsageReport({ scope, groupBy: "session" });
   const byModel = useUsageReport({ scope, groupBy: "model" });
@@ -206,13 +216,16 @@ export function TicketUsageRailFooter({ ticketId }: { ticketId: string }) {
   const roster = useTicketSessionRecordsStore((state) => state.byTicket[ticketId]);
 
   if (!costVisible || bySession === null) return null;
-  const topModel = byModel?.groups[0];
+  // The dearest model as the ranking's own first row, so the one fact this
+  // footer says about models cannot be named differently from the way Home's
+  // list names it.
+  const topModel = byModel === null ? null : (modelRows(byModel, catalogue)[0] ?? null);
   const sessions = ticketSessionRows(bySession, roster);
   return (
     <TicketUsageBlock
       summary={bySession.total}
       sessions={sessions}
-      topModelLabel={topModel === undefined ? null : modelLabel(topModel.key)}
+      topModel={topModel}
       open={usageOpen}
       onOpenChange={(open) => useUiStore.getState().setRailFold("usage", open)}
     />

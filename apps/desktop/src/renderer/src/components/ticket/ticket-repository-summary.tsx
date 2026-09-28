@@ -119,6 +119,9 @@ import {
   RailFoldCaret,
   RailFoldTrigger,
   RAIL_CARD_SEAM,
+  RAIL_CHECKOUT_FACT,
+  RAIL_CHECKOUT_IDENTITY,
+  RAIL_CHECKOUT_ROW,
   RAIL_CONTROL,
   RAIL_FOOTER,
   RAIL_PANEL_INSET,
@@ -1363,8 +1366,11 @@ export function TicketRepositorySummary({
             at the right, with its caret, is the fold's trigger. Each is its own
             button with its own hover so the pointer can tell which it is on;
             the dot is quiet for local state and lit only where CI has an
-            opinion (`worktree-glance-model.ts`). */}
-        <div className="flex min-h-8 items-stretch">
+            opinion (`worktree-glance-model.ts`). The geometry — 42px, both
+            targets edge-aligned to the rail's content gutter, no dead band
+            between them — is `RAIL_CHECKOUT_ROW`'s, shared with Home's own
+            checkout footer so the two scopes draw one row. */}
+        <div className={RAIL_CHECKOUT_ROW}>
           <Popover>
             <PopoverTrigger asChild>
               <button
@@ -1375,7 +1381,7 @@ export function TicketRepositorySummary({
                     ? "Worktree identity"
                     : `Branch ${ticket.baseBranch ?? "base"} to ${ticket.branch}`
                 }
-                className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 pl-4 text-left outline-none group-data-[narrow=true]/rail:pl-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45"
+                className={RAIL_CHECKOUT_IDENTITY}
               >
                 <GitBranchIcon className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate font-mono text-ui text-sidebar-foreground">
@@ -1391,7 +1397,7 @@ export function TicketRepositorySummary({
                 type="button"
                 data-testid="ticket-repository-fold"
                 aria-label={`${glance === null ? "Worktree" : `Worktree: ${glance.phrase}`}. ${open ? "Hide" : "Show"} details`}
-                className="flex shrink-0 items-center gap-2 py-2 pr-4 pl-2 text-left outline-none group-data-[narrow=true]/rail:pr-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45"
+                className={RAIL_CHECKOUT_FACT}
               >
                 {glance === null ? null : (
                   <span

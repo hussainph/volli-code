@@ -47,6 +47,17 @@
  * model, which is one fact rather than a ranking, and it says it in the body
  * where it qualifies the figure instead of costing a line on the face.
  *
+ * THE BODY IS BOUNDED, like Home's. A Ticket can hold dozens of Sessions and
+ * `UsageRankList` draws every one of them, so a body as tall as its data would
+ * push the Now scroller — the roster this footer exists to stay out of the way
+ * of — out of the rail entirely. It scrolls inside a fixed budget instead, so
+ * the fold's travel is the same every time and the trigger under the pointer
+ * moves by an amount that does not depend on the data. `max-h-40` (160px) is
+ * the rail's existing cap, shared with Home's footer and the Automations list;
+ * the comparison prototype spelled the usage budget 150px, and the ten pixels
+ * are deliberately spent on agreeing with the tokens the app already uses
+ * rather than minting a one-off height.
+ *
  * `open`/`onOpenChange` are PROPS, not a store read: this file stays pure over
  * its summary so the UI lab can mount it against fixtures; the connected
  * wrapper in `usage-rail.tsx` reads and writes `railFolds.usage`.
@@ -69,6 +80,7 @@ import {
   UsageBreakdownFact,
   UsageCostFigure,
   UsageRankList,
+  UsageRowSubject,
 } from "@renderer/components/usage/usage-card";
 import { cn } from "@renderer/lib/utils";
 import { formatTokens } from "@volli/session-presentation";
@@ -83,7 +95,7 @@ import {
 export function TicketUsageBlock({
   summary,
   sessions,
-  topModelLabel,
+  topModel,
   className,
   open = false,
   onOpenChange,
@@ -91,8 +103,13 @@ export function TicketUsageBlock({
   summary: SessionUsageSummary;
   /** Every Session that ran on this Ticket, ordered by known cost, descending. */
   sessions: readonly UsageGroupRow[];
-  /** The model with the most known spend, already resolved to a display label. */
-  topModelLabel: string | null;
+  /**
+   * The model with the most known spend, as its row — already named against the
+   * catalogue and carrying the identity its mark is drawn from. Its NAME is
+   * what the fact says and never its cost: this is one fact, not the ranking,
+   * which stays Home's alone (see above).
+   */
+  topModel: UsageGroupRow | null;
   className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -116,20 +133,26 @@ export function TicketUsageBlock({
         {/* The body comes BEFORE the row in the DOM: it opens upward. */}
         <RailFoldBody>
           <div
+            data-testid="ticket-usage-body"
             className={cn(
-              "flex flex-col gap-3 border-b border-sidebar-border/70 pt-3 pb-4",
+              // `overscroll-contain` so reaching the end of this list does not
+              // hand the wheel to the Now scroller behind it.
+              "flex max-h-40 flex-col gap-3 overflow-y-auto overscroll-contain border-b border-sidebar-border/70 pt-3 pb-4",
               RAIL_PANEL_INSET,
             )}
           >
             {tokens > 0 ? <UsageBar summary={summary} /> : null}
             {basis === null ? null : <p className="text-ui text-muted-foreground">{basis}</p>}
-            {cached !== null || topModelLabel !== null ? (
+            {cached !== null || topModel !== null ? (
               <div className="flex flex-col gap-2">
                 {cached === null ? null : (
                   <UsageBreakdownFact label="Cached input share" value={cached} />
                 )}
-                {topModelLabel === null ? null : (
-                  <UsageBreakdownFact label="Top model" value={topModelLabel} />
+                {topModel === null ? null : (
+                  <UsageBreakdownFact
+                    label="Top model"
+                    value={<UsageRowSubject row={topModel} />}
+                  />
                 )}
               </div>
             ) : null}

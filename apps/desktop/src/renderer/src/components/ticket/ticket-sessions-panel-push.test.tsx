@@ -272,7 +272,13 @@ describe("the rail roster on the push path", () => {
 
     expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
     expect(currentSectionText()).not.toContain("No active sessions");
-    expect(currentSectionText()).toContain("Couldn't load sessions.");
+    // The shared read grammar's body placement (VC-406): a refused FIRST read
+    // takes the body, says so, and brings the one action that can change it.
+    // The bridge detail stays on `title`, off the row.
+    const fault = container?.querySelector('[data-testid="ticket-sessions-error"]');
+    expect(fault?.textContent).toContain("Sessions failed to read");
+    expect(fault?.getAttribute("title")).toBe("db locked");
+    expect(fault?.querySelector("button")?.textContent).toContain("Retry");
   });
 
   it("shows a Sessions row a create's push announces", async () => {

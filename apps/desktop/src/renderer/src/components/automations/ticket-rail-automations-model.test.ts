@@ -4,13 +4,20 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   automationGroupsFor,
+  automationInspectMeta,
   modelOverrideRows,
   overridePressable,
   railAutomationRows,
+  railRowQualifier,
   railRunLabel,
+  RAIL_PENDING_LABEL,
   RAIL_UNARMED_LABEL,
   RAIL_UNREAD_LABEL,
+  runLaunchLabel,
+  runModelChoices,
+  SAVED_RUNTIME_CHOICE,
   ticketRailAutomations,
+  type RailAutomationRow,
 } from "./ticket-rail-automations-model";
 import type { ComposerModel } from "@renderer/components/chat/composer-ui";
 
@@ -427,5 +434,95 @@ describe("railAutomationRows", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+/* ----------------------------------------------- the inspection (VC-406) */
+
+function railRow(overrides: Partial<RailAutomationRow> = {}): RailAutomationRow {
+  return { automation: automation(), columnLabel: "Doing", armed: false, ...overrides };
+}
+
+describe("runLaunchLabel", () => {
+  it("names the three states a launch can be in", () => {
+    expect(runLaunchLabel("idle")).toBe("Run");
+    expect(runLaunchLabel("pending")).toBe(RAIL_PENDING_LABEL);
+    // A second press on an intent that is still the same intent, not a first
+    // attempt wearing the same word.
+    expect(runLaunchLabel("failed")).toBe("Retry Run");
+  });
+});
+
+describe("railRowQualifier", () => {
+  it("says the one thing that is happening now, while it is happening", () => {
+    // The wait outranks both other answers: it is the row's acknowledgment
+    // that a press was heard, which is what lets the inspection be closed.
+    expect(railRowQualifier(railRow({ armed: true }), true)).toBe(RAIL_PENDING_LABEL);
+    expect(railRowQualifier(railRow(), true)).toBe(RAIL_PENDING_LABEL);
+  });
+
+  it("otherwise says Armed, or the column that offers the row", () => {
+    expect(railRowQualifier(railRow({ armed: true }), false)).toBe("Armed");
+    expect(railRowQualifier(railRow({ columnLabel: "Needs Review" }), false)).toBe("Needs Review");
+  });
+});
+
+describe("automationInspectMeta", () => {
+  it("says how the record would start, and in which column", () => {
+    expect(automationInspectMeta(railRow({ armed: true }), false)).toBe("Armed · Doing");
+    expect(automationInspectMeta(railRow({ columnLabel: "Done" }), false)).toBe(
+      "Manual launch · Done",
+    );
+  });
+
+  it("adds the switch's own words where nothing but a person starts it", () => {
+    // VC-112: the switch governs what starts an Automation BESIDES a person,
+    // so the record is still offered and still runs by hand.
+    expect(automationInspectMeta(railRow({ armed: true }), true)).toBe(
+      "Armed · Doing · Manual only",
+    );
+    expect(automationInspectMeta(railRow(), true)).toBe("Manual launch · Doing · Manual only");
+  });
+});
+
+describe("runModelChoices", () => {
+  it("leads with the record's own saved Runtime", () => {
+    const choices = runModelChoices([model()]);
+
+    expect(choices[0]).toEqual({ id: SAVED_RUNTIME_CHOICE, label: "Saved model", selection: null });
+  });
+
+  it("gives a model with several levels one row per whole pair", () => {
+    // Model and reasoning travel together (VC-112): there is no row here that
+    // names a model and leaves the level to a default nobody chose.
+    expect(runModelChoices([model()]).slice(1)).toEqual([
+      {
+        id: "anthropic/claude-opus\u0000low",
+        label: "claude-opus · low",
+        selection: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "low" },
+      },
+      {
+        id: "anthropic/claude-opus\u0000high",
+        label: "claude-opus · high",
+        selection: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+    ]);
+  });
+
+  it("gives a model with exactly one level its own name alone", () => {
+    expect(runModelChoices([model({ reasoningLevels: ["high"] })]).slice(1)).toEqual([
+      {
+        id: "anthropic/claude-opus\u0000high",
+        label: "claude-opus",
+        selection: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      },
+    ]);
+  });
+
+  it("offers nothing at all when the catalog names no runnable model", () => {
+    // Not even the saved row: a control whose only choice is the default is a
+    // field with nothing to choose, and the inspection drops it.
+    expect(runModelChoices([])).toEqual([]);
+    expect(runModelChoices([model({ reasoningLevels: ["turbo"] })])).toEqual([]);
   });
 });

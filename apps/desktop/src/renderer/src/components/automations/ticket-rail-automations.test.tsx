@@ -16,7 +16,7 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Automation, ColumnArming, Ticket } from "@volli/shared";
 
-import { runAutomationOnTicket } from "./run-automation";
+import { runAutomationOnTicket, type AutomationRunOutcome } from "./run-automation";
 import { TicketAutomationsPanel } from "./ticket-rail-automations";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider } from "@renderer/lib/model-access-client";
@@ -25,7 +25,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("./run-automation", () => ({
-  runAutomationOnTicket: vi.fn(() => Promise.resolve()),
+  runAutomationOnTicket: vi.fn(() => Promise.resolve("started")),
 }));
 
 let root: Root | null = null;
@@ -124,21 +124,26 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   return { promise, resolve };
 }
 
-async function render() {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+/** Draw the panel for one project into the current root — again, for a switch. */
+async function paint(projectId: string): Promise<void> {
   await act(async () => {
     root?.render(
       // The header's door wears a tooltip, which needs the provider the app
       // root mounts once.
       <TooltipProvider>
         <ModelAccessProvider client={MODEL_ACCESS}>
-          <TicketAutomationsPanel projectId="p1" ticket={TICKET} />
+          <TicketAutomationsPanel projectId={projectId} ticket={TICKET} />
         </ModelAccessProvider>
       </TooltipProvider>,
     );
   });
+}
+
+async function render(projectId = "p1") {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await paint(projectId);
 }
 
 async function mount(seed: {
@@ -176,30 +181,106 @@ function row(name: string): HTMLElement {
   return found;
 }
 
-/** Open a row's context menu — where the per-invocation override lives (VC-112). */
-async function openRowMenu(name: string): Promise<void> {
+/** Radix opens a popover trigger on click, and a dropdown on pointerdown. */
+async function press(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    element.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0 }));
+    element.click();
+  });
+}
+
+/** Open a row's inspection — the one surface both press routes reach (VC-406). */
+async function inspect(name: string): Promise<void> {
+  await press(row(name));
+}
+
+/** Right-click a row. The same inspection, and still no launch. */
+async function rightClick(name: string): Promise<void> {
   await act(async () => {
     row(name).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 }));
   });
 }
 
+/** The open inspection, or `null`. */
+function inspection(): HTMLElement | null {
+  return document.querySelector('[data-testid="ticket-rail-automation-inspect"]');
+}
+
+/** The body's refused-first-read frame, or `null`. */
+function fault(): HTMLElement | null {
+  return document.querySelector('[data-testid="ticket-rail-automations-error"]');
+}
+
+/** The eyebrow's caveat about a read that happened over rows, or `null`. */
+function readStatus(): HTMLElement | null {
+  return document.querySelector('[data-testid="ticket-rail-automations-read-status"]');
+}
+
+/** The skeleton the block draws only when it has nothing to retain. */
+function skeleton(): HTMLElement | null {
+  return document.querySelector('[data-testid="ticket-rail-automations-unread"]');
+}
+
+/** Press one of the block's own retry controls (heading mark, or body frame). */
+async function pressRetry(scope: HTMLElement): Promise<void> {
+  const button = scope.querySelector("button");
+  if (button === null) throw new Error("no retry control");
+  await press(button);
+}
+
+/**
+ * Move the planning clock past every rail cache, the way a board move does:
+ * the next render's read is no longer answered by what these slices hold.
+ */
+function stalePlanningClock(): void {
+  useAutomationsStore.setState({ railReadAt: {} });
+}
+
+/** The inspection's explicit Run control. */
+function runButton(): HTMLButtonElement {
+  const found = document.querySelector<HTMLButtonElement>(
+    '[data-testid="ticket-rail-automation-run"]',
+  );
+  if (found === null) throw new Error("the inspection has no Run control");
+  return found;
+}
+
+/** One row of an open dropdown, by the words on its face. */
 function menuItem(label: string): HTMLElement {
-  const found = [...document.querySelectorAll('[data-slot="context-menu-item"]')].find(
-    (candidate) => candidate.textContent?.includes(label),
+  const found = [...document.querySelectorAll('[data-slot="dropdown-menu-radio-item"]')].find(
+    (candidate) => candidate.textContent?.trim() === label,
   );
   if (found === undefined) throw new Error(`no menu item named ${label}`);
   return found as HTMLElement;
 }
 
-/** Open a nested menu — where the per-invocation override lives (VC-112). */
-async function openSubmenu(label: string): Promise<void> {
-  const trigger = [...document.querySelectorAll('[data-slot="context-menu-sub-trigger"]')].find(
-    (candidate) => candidate.textContent?.includes(label),
-  );
-  if (trigger === undefined) throw new Error(`no submenu named ${label}`);
+async function choose(label: string): Promise<void> {
+  const item = menuItem(label);
   await act(async () => {
-    (trigger as HTMLElement).click();
+    item.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+    item.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    item.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0 }));
+    item.click();
   });
+}
+
+/** A launch this test holds open, so the pending gate can be seen mid-flight. */
+function heldLaunch(): { resolve(outcome: AutomationRunOutcome): Promise<void> } {
+  let settle!: (outcome: AutomationRunOutcome) => void;
+  vi.mocked(runAutomationOnTicket).mockImplementation(
+    () =>
+      new Promise<AutomationRunOutcome>((resolveLaunch) => {
+        settle = resolveLaunch;
+      }),
+  );
+  return {
+    resolve: async (outcome) => {
+      await act(async () => {
+        settle(outcome);
+      });
+    },
+  };
 }
 
 beforeEach(() => {
@@ -207,7 +288,7 @@ beforeEach(() => {
   for (const door of Object.values(doors)) door.mockReset();
   doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
   vi.mocked(runAutomationOnTicket).mockReset();
-  vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
+  vi.mocked(runAutomationOnTicket).mockResolvedValue("started");
   useProjectsStore.setState({ projects: [PROJECT], selectedProjectId: "p1" });
   useWorkspaceStore.setState({ byProject: {} });
   useAutomationsStore.setState({
@@ -244,17 +325,15 @@ describe("the offer list", () => {
     // button naming this column's armed record, with every other column's work
     // reachable only by opening a caret a reader had no reason to suspect.
     expect(rows()).toHaveLength(1);
-    // Switched off in this mount (no `enabled`), so the name carries the note.
-    expect(row("Review sweep").getAttribute("aria-label")).toBe(
-      "Run Review sweep on this ticket (manual only)",
-    );
+    // The press OPENS the record; it does not spend a Session on it (VC-406).
+    expect(row("Review sweep").getAttribute("aria-label")).toBe("Inspect Review sweep");
     // Each row names the column that offers it, so a hand-run across lanes is
     // readable without a heading per column.
     expect(text()).toContain("Needs Review");
-    // And running it is the row's own press — no menu in the way.
-    await act(async () => {
-      row("Review sweep").click();
-    });
+    // And the launch is the inspection's own explicit, labelled act.
+    await inspect("Review sweep");
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+    await press(runButton());
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -294,9 +373,8 @@ describe("the offer list", () => {
   it("presses the Armed automation of this Ticket's current column", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
 
-    await act(async () => {
-      row("Review sweep").click();
-    });
+    await inspect("Review sweep");
+    await press(runButton());
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a1" },
@@ -313,9 +391,8 @@ describe("the offer list", () => {
       armings: [ARMING],
     });
 
-    await act(async () => {
-      row("Nightly sweep").click();
-    });
+    await inspect("Nightly sweep");
+    await press(runButton());
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a2" },
@@ -351,15 +428,12 @@ describe("the offer list", () => {
 
     const offered = row("Review sweep");
     expect(offered.dataset.triggers).toBe("off");
-    expect(offered.getAttribute("aria-label")).toBe(
-      "Run Review sweep on this ticket (manual only)",
-    );
-    expect(offered.getAttribute("title")).toBe("Review sweep — Manual only · Armed");
+    expect(offered.getAttribute("aria-label")).toBe("Inspect Review sweep");
+    expect(offered.getAttribute("title")).toBe("Review sweep — Armed · Doing · Manual only");
     // The right edge says ONE thing.
     expect(offered.textContent).toBe("Review sweepArmed");
-    await act(async () => {
-      offered.click();
-    });
+    await inspect("Review sweep");
+    await press(runButton());
     expect(runAutomationOnTicket).toHaveBeenCalled();
   });
 
@@ -368,15 +442,23 @@ describe("the offer list", () => {
 
     const offered = row("Review sweep");
     expect(offered.dataset.triggers).toBe("on");
-    expect(offered.getAttribute("aria-label")).toBe("Run Review sweep on this ticket");
-    expect(offered.getAttribute("title")).toBe("Review sweep — Armed");
+    expect(offered.getAttribute("aria-label")).toBe("Inspect Review sweep");
+    expect(offered.getAttribute("title")).toBe("Review sweep — Armed · Doing");
   });
 
-  it("keeps the name a floor so the qualifier cannot outlive it", async () => {
+  it("keeps the name a floor, and makes the qualifier yield first", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
 
-    const name = row("Review sweep").querySelector("span.truncate");
+    const offered = row("Review sweep");
+    const name = offered.querySelector("span.truncate");
     expect(name?.className).toContain("min-w-24");
+    // One qualifier, and it is the half of the row that gives way: at the
+    // 240px floor the column's own words are what a reader can afford to lose.
+    const qualifier = offered.lastElementChild;
+    expect(qualifier?.textContent).toBe("Armed");
+    expect(qualifier?.className).toContain("max-w-20");
+    expect(qualifier?.className).toContain("truncate");
+    expect(qualifier?.className).not.toContain("shrink-0");
   });
 
   it("offers no Run once, and no stand-in press, where the column arms nothing (VC-406)", async () => {
@@ -404,9 +486,13 @@ describe("the offer list", () => {
     const heading = panel?.querySelector("h2");
     const door = control("Open Automations");
     expect(heading?.textContent).toBe("Automations");
-    // VC-257 is a layout change: the heading and door must be siblings in the
-    // shared heading row, not merely somewhere inside the same rail panel.
-    expect(door.parentElement).toBe(heading?.parentElement);
+    // VC-257 is a layout change: the heading and the door must share the
+    // shared heading ROW, not merely sit somewhere inside the same rail panel.
+    // (The label and the block's read mark share a span inside that row, so
+    // the door is the row's child rather than the heading's sibling.)
+    const headingRow = heading?.closest("div") ?? null;
+    expect(headingRow).not.toBeNull();
+    expect(door.parentElement).toBe(headingRow);
     // The empty sentence is a report, never a second door under that row.
     expect(panel?.querySelector("a")).toBeNull();
     expect(
@@ -515,16 +601,21 @@ describe("the offer list", () => {
     Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
     await render();
 
-    // Landed caches, and still nothing listed: the rail says what it knows.
+    // Landed caches, and still nothing listed: this mount has read nothing
+    // ITSELF, and a slice another surface filled is not a snapshot it may draw
+    // rows from — least of all one whose arming half just failed to land.
     expect(useAutomationsStore.getState().armingByProject.p1).toEqual([ARMING]);
     expect(rows()).toHaveLength(0);
-    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).not.toBeNull();
+    // The refused read says so, with the one press that retries it, instead of
+    // a skeleton that waits for a read nobody is going to make (VC-406).
+    expect(fault()).not.toBeNull();
+    expect(document.querySelector('[data-testid="ticket-rail-automations-unread"]')).toBeNull();
     expect(runAutomationOnTicket).not.toHaveBeenCalled();
   });
 
   it("holds no authoring form: nothing here creates, edits or deletes a record", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
-    await openRowMenu("Review sweep");
+    await rightClick("Review sweep");
 
     expect(text()).not.toContain("New Automation");
     expect(text()).not.toContain("Edit");
@@ -534,15 +625,212 @@ describe("the offer list", () => {
   });
 });
 
+/**
+ * What the block says about its OWN read, and where (VC-406).
+ *
+ * The two halves are one decision: a read that has never landed owns the body,
+ * because there is nothing there to caveat and "nothing here" and "this could
+ * not be read" are opposite claims; a read that happens OVER rows owns the
+ * eyebrow, because the rows were true a second ago and hiding them behind a
+ * skeleton loses the thing the reader came for. What never changes across the
+ * pair is the launch: a Run is spent on an arming, and an arming a failed
+ * re-read left unproven is not something to spend one on.
+ */
+describe("what it says about its own read", () => {
+  it("says a refused FIRST read failed, and reads again when asked", async () => {
+    doors.list.mockResolvedValue({ ok: false, error: "database is locked" });
+    doors.armings.mockResolvedValue({ ok: true, armings: [] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+
+    const refused = fault();
+    expect(refused).not.toBeNull();
+    expect(refused?.textContent).toContain("Automations failed to read");
+    // Not a skeleton waiting for a read nobody will make, and not a claim
+    // about a project this block never read.
+    expect(skeleton()).toBeNull();
+    expect(text()).not.toContain("No automations in this project yet.");
+    expect(rows()).toHaveLength(0);
+
+    // The one press that changes it, local to the block: no planning change,
+    // no ticket switch, no app-wide refresh.
+    doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
+    await pressRetry(refused as HTMLElement);
+
+    expect(fault()).toBeNull();
+    expect(rows()).toHaveLength(1);
+    expect(row("Review sweep")).toBeTruthy();
+  });
+
+  it("keeps the rows it last read while a re-read is out, and caveats them in the eyebrow", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    expect(rows()).toHaveLength(1);
+
+    const second = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockReturnValue(second.promise);
+    await act(async () => {
+      stalePlanningClock();
+    });
+
+    // The rows stay, at their own height: no skeleton over data that was true
+    // a second ago, and nothing under this block moves.
+    expect(rows()).toHaveLength(1);
+    expect(skeleton()).toBeNull();
+    expect(readStatus()?.dataset.readStatus).toBe("refreshing");
+    expect(text()).toContain("Refreshing · last read shown");
+
+    // Readable, not pressable: the arming behind the row is exactly what this
+    // read has not confirmed yet.
+    await inspect("Review sweep");
+    expect(text()).toContain("Run waits for a fresh read.");
+    expect(runButton().disabled).toBe(true);
+    await press(runButton());
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+
+    await act(async () => {
+      second.resolve({ ok: true, automations: [automation()] });
+    });
+    expect(readStatus()).toBeNull();
+    expect(runButton().disabled).toBe(false);
+  });
+
+  it("holds the last COHERENT read when a re-read fails halfway, and refuses the launch behind it", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    expect(row("Review sweep").dataset.armed).toBe("true");
+
+    // The partial cache: the list half lands a record the rail has never seen
+    // armed, the arming half fails. Composing from the slices now would draw a
+    // combination no read ever returned.
+    doors.list.mockResolvedValue({
+      ok: true,
+      automations: [automation({ id: "a2", name: "Nightly sweep" })],
+    });
+    doors.armings.mockResolvedValue({ ok: false, error: "database is locked" });
+    await act(async () => {
+      stalePlanningClock();
+    });
+
+    expect(text()).not.toContain("Nightly sweep");
+    expect(rows()).toHaveLength(1);
+    expect(skeleton()).toBeNull();
+    expect(fault()).toBeNull();
+    const status = readStatus();
+    expect(status?.dataset.readStatus).toBe("refresh-failed");
+    expect(text()).toContain("Refresh failed · last read shown");
+
+    // The armed row is still ON SCREEN and still un-pressable — the refusal
+    // VC-112 makes about a stale arming, spent on the Run rather than on the
+    // reader's ability to see what is there.
+    await inspect("Review sweep");
+    expect(runButton().disabled).toBe(true);
+    await press(runButton());
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+
+    // And the eyebrow's own retry is the way back to a pressable row: the half
+    // that failed is re-read, the whole answer becomes current, and the rows
+    // the reader was looking at are replaced by the ones the read returned.
+    doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
+    await pressRetry(status as HTMLElement);
+
+    expect(readStatus()).toBeNull();
+    expect(text()).toContain("Nightly sweep");
+    await inspect("Nightly sweep");
+    expect(runButton().disabled).toBe(false);
+    await press(runButton());
+    expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains nothing across a project switch: the rows it held were that project's", async () => {
+    const second = deferred<{ ok: true; automations: Automation[] }>();
+    doors.list.mockImplementation(({ projectId }: { projectId: string }) =>
+      projectId === "p1"
+        ? Promise.resolve({ ok: true, automations: [automation()] })
+        : second.promise,
+    );
+    doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
+    doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { automations: doors } });
+    await render();
+    expect(rows()).toHaveLength(1);
+
+    // The rail arrives on another project before its read lands. Retention is
+    // scoped to the project and column it was read for, so nothing of the one
+    // just left is drawn — or pressable — under the new heading.
+    await paint("p2");
+
+    expect(rows()).toHaveLength(0);
+    expect(text()).not.toContain("Review sweep");
+    expect(readStatus()).toBeNull();
+    expect(skeleton()).not.toBeNull();
+    expect(text()).not.toContain("No automations in this project yet.");
+
+    await act(async () => {
+      second.resolve({ ok: true, automations: [automation({ id: "b1", name: "Deploy check" })] });
+    });
+    expect(rows()).toHaveLength(1);
+    expect(text()).toContain("Deploy check");
+  });
+});
+
+describe("the inspection", () => {
+  it("opens beside the row, with no scrim over the app", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    await inspect("Review sweep");
+
+    const open = inspection();
+    expect(open).not.toBeNull();
+    // Anchored and non-modal: Radix mounts no overlay, and nothing behind the
+    // popover is made inert.
+    expect(document.querySelector('[data-slot="popover-overlay"]')).toBeNull();
+    expect(document.querySelector("[data-aria-hidden]")).toBeNull();
+    expect(open?.getAttribute("data-state")).toBe("open");
+  });
+
+  it("holds the saved instructions, the model and one explicit Run together", async () => {
+    await mount({
+      automations: [automation({ instructions: "Review every behavioural change" })],
+      armings: [ARMING],
+    });
+    await inspect("Review sweep");
+
+    // The record's own instructions, as saved — not a fixture's words.
+    expect(
+      document.querySelector('[data-testid="ticket-rail-automation-instructions"]')?.textContent,
+    ).toBe("Review every behavioural change");
+    // How it would start, in which column.
+    expect(inspection()?.textContent).toContain("Armed · Doing");
+    // The Runtime this invocation would use, and the one press that spends it.
+    expect(control("Run on model").textContent).toContain("Saved model");
+    expect(runButton().textContent).toContain("Run");
+    // And no second door to the page, no Diffs shortcut, no authoring.
+    expect(inspection()?.textContent).not.toContain("Automations page");
+    expect(inspection()?.textContent).not.toContain("Diffs");
+    expect(inspection()?.textContent).not.toContain("Edit");
+  });
+
+  it("opens on right-click too, and neither route launches anything", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+
+    await rightClick("Review sweep");
+    expect(inspection()).not.toBeNull();
+    // Inspecting is reading. A press that silently ran the record is what this
+    // replaced, and a right-click that ran it would be the same mistake with
+    // a different button.
+    expect(runAutomationOnTicket).not.toHaveBeenCalled();
+    // The same controls as the left-click route, not a second menu.
+    expect(control("Run on model")).not.toBeNull();
+    expect(runButton()).not.toBeNull();
+  });
+});
+
 describe("the per-invocation override", () => {
   it("spends the model it names on that row's own Run", async () => {
     await mount({ automations: [automation()], armings: [ARMING] });
-    await openRowMenu("Review sweep");
-    await openSubmenu("Run on model");
-    await openSubmenu("claude-opus");
-    await act(async () => {
-      menuItem("high").click();
-    });
+    await inspect("Review sweep");
+    await press(control("Run on model"));
+    await choose("claude-opus · high");
+    await press(runButton());
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith({
       target: { kind: "automation", automationId: "a1" },
@@ -572,12 +860,10 @@ describe("the per-invocation override", () => {
       ],
       armings: [ARMING],
     });
-    await openRowMenu("Nightly sweep");
-    await openSubmenu("Run on model");
-    await openSubmenu("claude-opus");
-    await act(async () => {
-      menuItem("high").click();
-    });
+    await inspect("Nightly sweep");
+    await press(control("Run on model"));
+    await choose("claude-opus · high");
+    await press(runButton());
 
     expect(runAutomationOnTicket).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -589,5 +875,149 @@ describe("the per-invocation override", () => {
         },
       }),
     );
+  });
+});
+
+describe("the pending gate and the failure that earns a retry", () => {
+  it("refuses a second press while the first launch is still in flight", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    const launch = heldLaunch();
+    await inspect("Review sweep");
+    await press(runButton());
+
+    // One press, one Run — and the control says so rather than staying
+    // pressable and minting a second Session.
+    expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
+    expect(runButton().disabled).toBe(true);
+    expect(runButton().textContent).toContain("Starting…");
+    // The row carries the same acknowledgment, so the popover need not stay
+    // open to prove the press was heard.
+    expect(row("Review sweep").dataset.launch).toBe("pending");
+    expect(row("Review sweep").textContent).toContain("Starting…");
+
+    await press(runButton());
+    expect(runAutomationOnTicket).toHaveBeenCalledTimes(1);
+
+    await launch.resolve("started");
+    expect(row("Review sweep").dataset.launch).toBe("idle");
+  });
+
+  it("offers Retry after a refusal, keeping the model that was chosen", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    const launch = heldLaunch();
+    await inspect("Review sweep");
+    await press(control("Run on model"));
+    await choose("claude-opus · high");
+    await press(runButton());
+    await launch.resolve("refused");
+
+    // The toast is gone by the time anyone reads this; the popover says the
+    // Session did not start, beside the press that tries again.
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn’t start the Session",
+    );
+    expect(runButton().disabled).toBe(false);
+    expect(runButton().textContent).toContain("Retry Run");
+    // The override survives the failure: a retry is the same intent.
+    expect(control("Run on model").textContent).toContain("claude-opus · high");
+
+    vi.mocked(runAutomationOnTicket).mockResolvedValue("started");
+    await press(runButton());
+    expect(runAutomationOnTicket).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        modelOverride: { providerId: "anthropic", modelId: "claude-opus", reasoningLevel: "high" },
+      }),
+    );
+  });
+
+  it("offers Retry after a transport failure, and clears the alert on the next attempt", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    let launch = heldLaunch();
+    await inspect("Review sweep");
+    await press(runButton());
+    await launch.resolve("failed");
+
+    expect(runButton().textContent).toContain("Retry Run");
+
+    launch = heldLaunch();
+    await press(runButton());
+    // The alert belonged to the attempt that produced it.
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(runButton().textContent).toContain("Starting…");
+    await launch.resolve("started");
+  });
+
+  it("does not offer Retry for a missing default model: that recovery is Settings", async () => {
+    // AGENTS.md: configuration failures require explicit user recovery, and
+    // pressing Run again would fail the same way.
+    await mount({ automations: [automation()], armings: [ARMING] });
+    const launch = heldLaunch();
+    await inspect("Review sweep");
+    await press(runButton());
+    await launch.resolve("needs-model-access");
+
+    // The gate is released and nothing is marked failed: reopening the
+    // inspection offers a plain Run, with no alert to dismiss.
+    expect(row("Review sweep").dataset.launch).toBe("idle");
+    await inspect("Review sweep");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(runButton().textContent).toContain("Run");
+    expect(runButton().textContent).not.toContain("Retry");
+  });
+
+  it("lands in the background without taking focus back from where the person went", async () => {
+    // VC-234: no Run door navigates. The inspection adds one rule of its own —
+    // a landing closes it only while the person is still following that
+    // launch, which is what focus inside the popover means.
+    await mount({ automations: [automation()], armings: [ARMING] });
+    const launch = heldLaunch();
+    await inspect("Review sweep");
+    await press(runButton());
+
+    // The person moves on. Focus leaving the popover light-dismisses it, the
+    // way every anchored surface in the app behaves — that is them leaving,
+    // not the Run doing anything.
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    await act(async () => {
+      elsewhere.focus();
+    });
+    expect(inspection()).toBeNull();
+
+    await launch.resolve("started");
+
+    // Nothing was stolen when it landed: focus stayed where they put it, no
+    // popover reopened under them, and the workspace did not navigate.
+    expect(document.activeElement).toBe(elsewhere);
+    expect(inspection()).toBeNull();
+    expect(useWorkspaceStore.getState().byProject.p1?.nav).toBeUndefined();
+    // The row still tells the truth about the launch it started.
+    expect(row("Review sweep").dataset.launch).toBe("idle");
+    elsewhere.remove();
+  });
+
+  it("closes the inspection when the launch lands while it still holds focus", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    const launch = heldLaunch();
+    await inspect("Review sweep");
+    await act(async () => {
+      runButton().focus();
+    });
+    await press(runButton());
+    await launch.resolve("started");
+
+    expect(inspection()).toBeNull();
+  });
+
+  it("lists no Run of its own: a Run is a Session, and the roster owns it", async () => {
+    await mount({ automations: [automation()], armings: [ARMING] });
+    await inspect("Review sweep");
+    await press(runButton());
+
+    // One row per saved record, before and after a launch — the block never
+    // grows a second feed of what it started (VC-406).
+    expect(rows()).toHaveLength(1);
+    expect(text()).not.toContain("Runs");
   });
 });

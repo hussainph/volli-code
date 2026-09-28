@@ -37,6 +37,7 @@ import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 
 import type { SessionUsageSummary } from "@volli/shared";
 
+import { ModelMark } from "@renderer/components/models/model-identity";
 import {
   RAIL_CARD_FRAME,
   RAIL_CARD_ROW,
@@ -44,6 +45,7 @@ import {
   RAIL_PANEL_MARGIN,
 } from "@renderer/components/ticket/rail-panel-parts";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
+import { ValueReveal } from "@renderer/components/ui/value-reveal";
 import { SectionHeading } from "@renderer/components/ui/section-heading";
 import { UsageBar, UsageClassRows } from "@renderer/components/usage/usage-bar";
 import { formatTokens } from "@volli/session-presentation";
@@ -414,11 +416,46 @@ export function UsageRankRow({ row }: { row: UsageGroupRow }) {
   const cost = formatUsageCost(row.usage);
   return (
     <div className="flex items-center justify-between gap-2">
-      <dt className="min-w-0 truncate text-ui text-foreground">{row.label}</dt>
+      <dt className="flex min-w-0 items-center gap-2 text-ui text-foreground">
+        <UsageRowSubject row={row} />
+      </dt>
       <dd className="shrink-0 text-ui tabular-nums text-muted-foreground">
         {cost === null ? "—" : <UsageCostFigure summary={row.usage} />}
       </dd>
     </div>
+  );
+}
+
+/**
+ * What a row is ABOUT: a model drawn the way the composer pill, the picker and
+ * Settings draw one, or a plain truncating label for everything else.
+ *
+ * THE MARK IS THE MODEL'S ALONE. A Session row's glyph would be its kind, which
+ * every row in that ranking shares and which therefore marks nothing; on a
+ * model row the vendor is exactly the fact the eye is scanning for, so it leads
+ * (`ModelMark`, the app's one drawing of it).
+ *
+ * THE ACCOUNT IS NOT SPELLED ON THE ROW. A rail cannot afford the "· Anthropic"
+ * the roomier surfaces append — it is what pushes the NAME into an ellipsis —
+ * and the mark already tells two accounts apart. `ValueReveal` hands the whole
+ * identity back where it clips, on hover and on the keyboard's focus alike,
+ * which is how every other rail row answers for what it truncated (VC-288).
+ */
+export function UsageRowSubject({ row }: { row: UsageGroupRow }) {
+  const model = row.model ?? null;
+  if (model === null) return <span className="min-w-0 truncate">{row.label}</span>;
+  return (
+    <>
+      <ModelMark model={model.model} providerLabel={model.providerLabel} />
+      <ValueReveal
+        term="Model"
+        full={`${row.label} · ${model.providerLabel}`}
+        side="left"
+        className="min-w-0 truncate rounded-sm text-left"
+      >
+        {row.label}
+      </ValueReveal>
+    </>
   );
 }
 
@@ -429,11 +466,15 @@ export function UsageRankRow({ row }: { row: UsageGroupRow }) {
  * always money, so a "38 sessions · 24 metered" line drawn as one would put a
  * count where every neighbour has a price.
  */
-export function UsageBreakdownFact({ label, value }: { label: string; value: string }) {
+export function UsageBreakdownFact({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
       <span className="shrink-0 text-ui text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-ui tabular-nums text-foreground">{value}</span>
+      <span className="flex min-w-0 items-center justify-end gap-2 text-ui tabular-nums text-foreground">
+        {/* A drawn value brings its own parts — a model's mark and its name; a
+            spoken one keeps the truncating box it has always had. */}
+        {typeof value === "string" ? <span className="min-w-0 truncate">{value}</span> : value}
+      </span>
     </div>
   );
 }

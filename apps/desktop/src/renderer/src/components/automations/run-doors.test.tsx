@@ -277,6 +277,15 @@ function control(label: string): HTMLElement {
   return found as HTMLElement;
 }
 
+/** Radix opens a popover on click and a dropdown on pointerdown. */
+async function press(element: HTMLElement): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    element.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, button: 0 }));
+    element.click();
+  });
+}
+
 function itemContaining(slot: string, label: string): HTMLElement {
   const found = [...document.querySelectorAll(`[data-slot="${slot}"]`)].find((candidate) =>
     candidate.textContent?.includes(label),
@@ -371,10 +380,11 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    await act(async () => {
-      // Switched off in this fixture, so the row's name carries the note (VC-406).
-      control("Run Review sweep on this ticket (manual only)").click();
-    });
+    // The row INSPECTS (VC-406 revision 05); the Run inside the inspection is
+    // the explicit act that reaches the seam.
+    await press(control("Inspect Review sweep"));
+    expect(run).not.toHaveBeenCalled();
+    await press(control("Run Review sweep"));
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
@@ -397,20 +407,14 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     // The same door with the other answer it can give (VC-112). It is its own
     // case because the override travels on the request: a door that dropped it
     // would reach the seam asking for a different Run than the one pressed.
-    // The offer is a list now (VC-406), so the override is the ROW's own menu.
+    // The offer is a list now (VC-406), and the override lives beside the Run
+    // it will be spent on, inside the row's own inspection.
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    await act(async () => {
-      document
-        .querySelector('[data-testid="ticket-rail-automation-row"]')
-        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 2 }));
-    });
-    await act(async () => {
-      itemContaining("context-menu-sub-trigger", "Run on model").click();
-    });
-    await act(async () => {
-      itemContaining("context-menu-item", "claude-opus").click();
-    });
+    await press(control("Inspect Review sweep"));
+    await press(control("Run on model"));
+    await press(itemContaining("dropdown-menu-radio-item", "claude-opus"));
+    await press(control("Run Review sweep"));
 
     expect(run).toHaveBeenCalledWith(
       askedFor({

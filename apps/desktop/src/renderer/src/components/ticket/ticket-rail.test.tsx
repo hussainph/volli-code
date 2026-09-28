@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { Ticket } from "@volli/shared";
@@ -100,6 +104,48 @@ describe("TicketRail header", () => {
     expect(html).not.toContain('data-testid="ticket-rail-tab-properties"');
   });
 
+  // VC-406 follow-up. The rail's scroll containers draw no scrollbar, so a fold
+  // opening cannot take 10px out of every row's width and hand it back on the
+  // way out. The rule is in globals.css and keyed to this marker, so the marker
+  // is what a test can hold: dropped from the column, the stylesheet still
+  // parses and every rail page silently gets its reflow back.
+  it("marks its column as the scope globals.css hides rail scrollbars in", () => {
+    const html = render();
+
+    expect(html).toContain('data-volli-rail="ticket"');
+    // On the ROOT, not on one scroller: the Diffs, Files and Search pages are
+    // handed in by the host and scroll in elements this file never sees.
+    const root = html.indexOf('data-volli-rail="ticket"');
+    expect(root).toBeGreaterThan(-1);
+    expect(root).toBeLessThan(html.indexOf('role="tablist"'));
+    expect(root).toBeLessThan(html.indexOf("overflow-y-auto"));
+    expect([...html.matchAll(/data-volli-rail=/g)]).toHaveLength(1);
+    // The page still scrolls — only the bar is gone, so the overflow the
+    // scroller declares is untouched by the marker beside it.
+    expect(html).toContain("overflow-y-auto");
+  });
+
+  // The stylesheet half of the same contract, read off the file rather than
+  // rendered: jsdom draws no scrollbar and Chromium is not in this suite, so
+  // what is provable here is that the RULE exists, that it is keyed to the
+  // marker above, and — the part that matters most — that it is still SCOPED.
+  // Widening it to `*` would take the app's overlay scrollbars off the editor,
+  // the sidebar and every portalled menu, which is the one way this cosmetic
+  // fix could do real damage.
+  it("hides the scrollbar in globals.css for that scope alone", () => {
+    const css = readFileSync(
+      path.join(fileURLToPath(new URL(".", import.meta.url)), "../../globals.css"),
+      "utf8",
+    );
+
+    expect(css).toContain("[data-volli-rail] *::-webkit-scrollbar");
+    expect(css).toMatch(/\[data-volli-rail\][\s\S]{0,120}scrollbar-width: none/);
+    // The global treatment the rest of the app keeps: a 10px bar with a token
+    // thumb. If this ever stops matching, the rail's rule stopped being an
+    // exception and became the policy.
+    expect(css).toMatch(/\*::-webkit-scrollbar \{\s*width: 10px/);
+  });
+
   it("has no control that collapses the rail — that lives outside the panel", () => {
     const html = render();
 
@@ -167,7 +213,7 @@ describe("TicketRail's Now page", () => {
     expect(sessions).toBeLessThan(automations);
   });
 
-  it("draws every block on Now as a section — an eyebrow over rows, no card, no button", () => {
+  it("draws every block on Now as a section — an eyebrow over rows, no card, no act button", () => {
     const html = render();
     const page = html.slice(
       html.indexOf('id="ticket-rail-page-now"'),
@@ -179,10 +225,17 @@ describe("TicketRail's Now page", () => {
       ...page.matchAll(/<h2[^>]*>(?:<button[^>]*>)?(Properties|Sessions|Automations)/g),
     ].map((match) => match[1]);
     expect(eyebrows).toEqual(["Properties", "Sessions", "Automations"]);
-    // No framed card and no `RAIL_CONTROL` button inside the page any more.
+    // No framed card, and no ACT the page offers: `Run once` is gone. The
+    // `RAIL_CONTROL` recipe survives on Now in exactly one place — the two
+    // Properties dropdowns, which are a row's VALUE rather than something the
+    // page does, and are the app's own pickers rather than a rail-local
+    // control. Counted, so a third raised button cannot appear unnoticed.
     expect(page).not.toContain("rounded-xl border border-sidebar-border/70");
-    expect(page).not.toContain("shadow-raised");
     expect(page).not.toContain("Run once");
+    expect([...page.matchAll(/shadow-raised/g)]).toHaveLength(2);
+    for (const field of ["status", "priority"]) {
+      expect(page).toContain(`data-testid="ticket-rail-property-${field}"`);
+    }
   });
 
   // Pinned, not stacked: it is a sibling of the scroller rather than a block

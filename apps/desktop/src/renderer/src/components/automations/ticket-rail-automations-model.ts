@@ -42,6 +42,7 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
+import { SWITCHED_OFF_NOTE } from "./automations-page-model";
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import type { ComposerModel } from "@renderer/components/chat/composer-ui";
 
@@ -310,4 +311,103 @@ export function modelOverrideRows(models: readonly ComposerModel[]): readonly Mo
     });
     return selections.length === 0 ? [] : [{ model, selections }];
   });
+}
+
+/* ------------------------------------------------- the inspect popover (VC-406) */
+
+/**
+ * What a row's Run control is doing, as one value.
+ *
+ * The rail's press used to BE the Run: a click started work, and the only way
+ * to read an Automation's saved instructions before spending a Session on it
+ * was to open the Automations page. Revision 05 splits the two — the row opens
+ * an anchored inspection, and the Run inside it is an explicit, labelled act —
+ * which gives the launch three states worth drawing rather than none.
+ */
+export type RunLaunchState = "idle" | "pending" | "failed";
+
+/** What the row's right edge says while a launch it started is in flight. */
+export const RAIL_PENDING_LABEL = "Starting…";
+
+/**
+ * What the explicit Run control says in each state.
+ *
+ * `Retry Run` rather than `Run` after a failure, because the two are not the
+ * same offer: one is a first attempt and the other is a second one on an
+ * intent that is still the same intent (`automationRunRetryKey` keeps the
+ * durable command id, so a retried lost reply repeats the Run rather than
+ * opening a second Session).
+ */
+export function runLaunchLabel(state: RunLaunchState): string {
+  if (state === "pending") return RAIL_PENDING_LABEL;
+  return state === "failed" ? "Retry Run" : "Run";
+}
+
+/**
+ * The ONE thing a row's right edge says: the wait, `Armed`, or the column that
+ * offers it.
+ *
+ * The wait outranks the other two for the duration of a launch, because it is
+ * the only one of the three that is about something happening now — and it is
+ * the row's own acknowledgment that a press was heard, which is what keeps the
+ * inspect popover from having to stay open to prove it.
+ */
+export function railRowQualifier(row: RailAutomationRow, pending: boolean): string {
+  if (pending) return RAIL_PENDING_LABEL;
+  return row.armed ? "Armed" : row.columnLabel;
+}
+
+/**
+ * The inspection's one meta line: how this record would start, in which
+ * column, and whether anything besides a person may start it.
+ *
+ * The words are the ones the row's hover title already carried (VC-406 moved
+ * them off the row's face); the popover is where they are read rather than
+ * hovered for.
+ */
+export function automationInspectMeta(row: RailAutomationRow, switchedOff: boolean): string {
+  const lead = `${row.armed ? "Armed" : "Manual launch"} · ${row.columnLabel}`;
+  return switchedOff ? `${lead} · ${SWITCHED_OFF_NOTE}` : lead;
+}
+
+/** One row of the inspection's model control: the saved Runtime, or a whole pair. */
+export interface RunModelChoice {
+  /** Stable identity for the control's own selection state. */
+  id: string;
+  label: string;
+  /** `null` is the record's own saved Runtime — no override at all. */
+  selection: ModelSelection | null;
+}
+
+/** The id of the no-override row, so a caller need not spell it. */
+export const SAVED_RUNTIME_CHOICE = "saved";
+
+/**
+ * The inspection's model control, flattened: the saved Runtime first, then
+ * every whole model+level pair a Run could actually name.
+ *
+ * FLAT rather than the context menu's nested shape, because this control is a
+ * single field inside a popover rather than a menu with room to open sideways:
+ * a model offering several levels contributes one row per level, and a model
+ * offering exactly one contributes its own name alone.
+ *
+ * EMPTY when the catalog offers nothing (an unreadable catalog, a profile with
+ * every model hidden). A control whose only row is "Saved model" is a field
+ * with nothing to choose, and the popover drops it rather than drawing one —
+ * the same rule the context menu's override already followed.
+ */
+export function runModelChoices(models: readonly ComposerModel[]): readonly RunModelChoice[] {
+  const rows = modelOverrideRows(models);
+  if (rows.length === 0) return [];
+  return [
+    { id: SAVED_RUNTIME_CHOICE, label: "Saved model", selection: null },
+    ...rows.flatMap(({ model, selections }) =>
+      selections.map((selection) => ({
+        id: `${model.id}\u0000${selection.reasoningLevel}`,
+        label:
+          selections.length === 1 ? model.label : `${model.label} · ${selection.reasoningLevel}`,
+        selection,
+      })),
+    ),
+  ];
 }

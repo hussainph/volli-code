@@ -142,6 +142,22 @@ export const RAIL_DEFAULT_WIDTH = 300;
 export const RAIL_MIN_WIDTH = 240;
 export const RAIL_MAX_WIDTH = 560;
 
+/**
+ * At or below this width a rail takes the tighter 12px edge inset; above it,
+ * the design's roomy 16px (`RAIL_PANEL_INSET`).
+ *
+ * The scratch offered three fixed widths and drew only its 240px floor narrow,
+ * so the boundary sits between the two it tested (240 and the 300 default) —
+ * the app's rail resizes continuously and has to answer for 260px too.
+ *
+ * It lives HERE, beside the width it is read against, because BOTH rails read
+ * it: the Ticket's and Home's are one panel at two scopes, and Home spent one
+ * revision hardcoding `data-narrow="false"` — a rail that simply did not
+ * respond to its own width, silently, while its footer sat 4px off the gutters
+ * of the page above it. A second copy of the number is how that comes back.
+ */
+export const RAIL_NARROW_MAX_WIDTH = (RAIL_MIN_WIDTH + RAIL_DEFAULT_WIDTH) / 2;
+
 /** Monaco diff layout preference (CONCEPT #51). Default inline; optional side-by-side. */
 export type DiffPresentation = "inline" | "side-by-side";
 

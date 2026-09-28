@@ -46,7 +46,7 @@
  * billing at about a tenth of an uncached input token.
  */
 
-import type { SessionUsageSummary } from "@volli/shared";
+import type { ModelAccessModel, SessionUsageSummary } from "@volli/shared";
 
 /**
  * The four non-overlapping token classes, in the order the bar draws them.
@@ -78,6 +78,29 @@ export interface UsageGroupRow {
   key: string;
   label: string;
   usage: SessionUsageSummary;
+  /**
+   * The model this row is about, where it is about one — a Session row has no
+   * model and therefore no mark. `null` for a model group nothing could
+   * resolve, where {@link UsageGroupRow.label} is the wire id the ledger holds.
+   */
+  model?: UsageModelIdentity | null;
+}
+
+/**
+ * A model row's identity, as the app's model mark takes one (`ModelMark`).
+ *
+ * Resolved against the catalogue at the connected boundary rather than by a
+ * drawing, for the reason everything in `components/usage/` is props-in: what
+ * arrives here is already the answer.
+ */
+export interface UsageModelIdentity {
+  model: Pick<ModelAccessModel, "providerId" | "modelId" | "label">;
+  /**
+   * The account as the catalogue names it. NOT drawn on a rail row — the mark
+   * is what says whose model this is — but it is the lettermark's initial for a
+   * vendor with no glyph of its own, and the reveal's second term.
+   */
+  providerLabel: string;
 }
 
 /**

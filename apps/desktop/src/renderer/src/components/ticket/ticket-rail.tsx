@@ -3,7 +3,8 @@
  * ticket-right-sidebar lab scratch, since retired — this file reproduces its
  * `SidebarPanel` + `ActiveLabelTabs` + `NowPanel` and is now the design of
  * record; the Now page's second shape was settled in
- * `lab/scratches/rail-now-compare.tsx`).
+ * `lab/scratches/rail-now-compare.tsx`, since retired with it — the shipped
+ * pair is mounted whole in `lab/scratches/rail-whole.tsx`).
  *
  * The panel owns its own header: one centred pill of four pages — Now, Diffs,
  * Files, Search — floating above whichever page is showing. The icon strip
@@ -88,7 +89,7 @@ import {
   selectRailMode,
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
-import { RAIL_MIN_WIDTH, useUiStore } from "@renderer/stores/ui";
+import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
 
 const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
   now: ChatCircleDotsIcon,
@@ -101,14 +102,6 @@ const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = 
 function railModeTabs(modes: readonly TicketRailMode[]): RailModeTab<TicketRailMode>[] {
   return modes.map((key) => ({ key, label: TICKET_RAIL_MODE_LABELS[key], icon: MODE_ICONS[key] }));
 }
-
-/**
- * Above this width the rail takes the design's roomy 16px edge inset; at or
- * below it, 12px. The scratch offered three fixed widths and drew only its
- * 240px floor narrow, so the boundary sits between the two it tested (240 and
- * 300) — the app's rail resizes continuously and has to answer for 260px too.
- */
-const RAIL_NARROW_MAX_WIDTH = (RAIL_MIN_WIDTH + 300) / 2;
 
 export function TicketRail({
   projectId,
@@ -179,9 +172,15 @@ export function TicketRail({
     // prop would have to be threaded through `TicketDetail` to reach them, and
     // a rail whose inset came from two sources is a rail with two answers for
     // the blocks that only read one of them.
+    //
+    // `data-volli-rail` marks the whole column, including the pages handed in
+    // from the host and the footer rows under them, as the scope globals.css
+    // hides scrollbars in — which is why it sits on this root rather than on
+    // each scroller: the page that overflows is not always one this file owns.
     <div
       className="group/rail flex min-h-0 min-w-0 flex-1 flex-col"
       data-narrow={narrow ? "true" : "false"}
+      data-volli-rail="ticket"
       data-testid="ticket-rail"
     >
       <RailModeTabs
