@@ -29,6 +29,7 @@ import {
 } from "@volli/shared";
 
 import { TicketSessionsPanel } from "./ticket-sessions-panel";
+import { useUiStore } from "@renderer/stores/ui";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
@@ -106,9 +107,13 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
-/** The panel's first section — the live "Sessions" list, before History. */
+/** The live rows alone — the section's text with the folded record's taken out. */
 function currentSectionText(): string {
-  return container?.querySelector("section")?.textContent ?? "";
+  const section = container?.querySelector("section");
+  if (section === null || section === undefined) return "";
+  const folded = section.querySelector('[data-testid="session-history"]')?.textContent ?? "";
+  const whole = section.textContent ?? "";
+  return folded === "" ? whole : whole.replace(folded, "");
 }
 
 beforeEach(async () => {
@@ -123,6 +128,7 @@ beforeEach(async () => {
   });
   useTicketSessionRecordsStore.setState({ byTicket: {}, listingState: {}, listingError: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {} });
+  useUiStore.setState({ railFolds: { sessionsRecord: false, worktree: false, usage: false } });
   // The rail is looking at a ticket with one live root shell, as a fresh open
   // would leave it: baseline read, live tab mounted.
   await act(async () => {
@@ -267,7 +273,13 @@ describe("the rail roster on the push path", () => {
 
     expect(container?.querySelector('[data-testid="ticket-sessions-loading"]')).toBeNull();
     expect(currentSectionText()).not.toContain("No active sessions");
-    expect(currentSectionText()).toContain("Couldn't load sessions.");
+    // The shared read grammar's body placement (VC-406): a refused FIRST read
+    // takes the body, says so, and brings the one action that can change it.
+    // The bridge detail stays on `title`, off the row.
+    const fault = container?.querySelector('[data-testid="ticket-sessions-error"]');
+    expect(fault?.textContent).toContain("Sessions failed to read");
+    expect(fault?.getAttribute("title")).toBe("db locked");
+    expect(fault?.querySelector("button")?.textContent).toContain("Retry");
   });
 
   it("shows a Sessions row a create's push announces", async () => {
@@ -301,7 +313,45 @@ describe("the rail roster on the push path", () => {
     expect(window.api.sessions.listForTicket).toHaveBeenCalledTimes(1);
   });
 
-  it("moves a pane the exit push marks ended into History", async () => {
+  it("offers no fold while nothing has ended, and folds the record by default once something has", async () => {
+    // A roster with no record has nothing to fold: plain eyebrow, no trigger.
+    expect(document.querySelector('[data-testid="ticket-sessions-fold"]')).toBeNull();
+
+    await act(async () => {
+      useSessionsStore.getState().markExited("root", 0);
+    });
+    await push("t1", terminalRow({ endedAt: 40, exitCode: 0 }));
+
+    // Folded (VC-406): the record is off the page, and the count of what is
+    // folded lives in the trigger's name — nowhere on the face.
+    const trigger = document.querySelector('[data-testid="ticket-sessions-fold"]');
+    expect(trigger?.getAttribute("aria-label")).toBe("Show 1 past session");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[data-testid="session-history"]')).toBeNull();
+    expect(text()).not.toContain("History");
+
+    // The label IS the fold, and it writes the global preference.
+    await act(async () => {
+      (trigger as HTMLElement).click();
+    });
+    expect(useUiStore.getState().railFolds.sessionsRecord).toBe(true);
+    expect(trigger?.getAttribute("aria-label")).toBe("Hide past sessions");
+    expect(document.querySelector('[data-testid="session-history"]')?.textContent).toContain(
+      "Root shell",
+    );
+
+    await act(async () => {
+      (trigger as HTMLElement).click();
+    });
+    expect(useUiStore.getState().railFolds.sessionsRecord).toBe(false);
+  });
+
+  it("moves a pane the exit push marks ended into the folded record", async () => {
+    // The record is folded by default (VC-406); open it so the row it moves
+    // into is on screen to be found.
+    await act(async () => {
+      useUiStore.getState().setRailFold("sessionsRecord", true);
+    });
     // The exit has two halves and both arrive on their own channel: this is
     // the live one (`volli:terminal-exit` → `markExited`) ...
     await act(async () => {
@@ -312,8 +362,8 @@ describe("the rail roster on the push path", () => {
 
     const history = document.querySelector('[data-testid="session-history"]');
     expect(history?.textContent).toContain("Root shell");
-    // Out of Sessions and into History: the row's own section is the visible
-    // half of the transition.
+    // Out of the live rows and into the record: the row's own place in the
+    // section is the visible half of the transition.
     expect(currentSectionText()).not.toContain("Root shell");
   });
 

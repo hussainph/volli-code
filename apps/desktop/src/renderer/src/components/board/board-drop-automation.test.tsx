@@ -602,7 +602,6 @@ beforeEach(() => {
     byProject: {},
     armingByProject: {},
     orderByProject: {},
-    runsByTicket: {},
     enabledIds: [],
     enablementRead: false,
     railReadAt: {},

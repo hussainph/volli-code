@@ -160,7 +160,10 @@ beforeEach(() => {
   for (const door of Object.values(doors)) door.mockReset();
   doors.columnOrders.mockResolvedValue({ ok: true, orders: [] });
   vi.mocked(runAutomationOnTicket).mockReset();
-  vi.mocked(runAutomationOnTicket).mockResolvedValue(undefined);
+  // The door ANSWERS what became of the launch now (VC-406); this menu is one
+  // of the callers that fires and forgets, and a landed Run is the honest
+  // default for it to ignore.
+  vi.mocked(runAutomationOnTicket).mockResolvedValue("started");
   doors.list.mockResolvedValue({ ok: true, automations: [automation()] });
   doors.armings.mockResolvedValue({ ok: true, armings: [ARMING] });
   doors.enablement.mockResolvedValue({ ok: true, enabledAutomationIds: [] });
@@ -252,7 +255,7 @@ describe("the board card's Automations submenu", () => {
     });
   });
 
-  it("offers no Run once, because a card has nowhere to type one", async () => {
+  it("offers no Run once — no surface does any more (VC-406)", async () => {
     await open();
 
     expect(text()).not.toContain("Run once");
