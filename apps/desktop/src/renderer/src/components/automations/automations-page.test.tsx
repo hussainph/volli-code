@@ -302,6 +302,12 @@ beforeEach(() => {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
+    // The scoped slices too (VC-297). The store is a module singleton, so a
+    // record's history cached by one test would otherwise be read by the next
+    // — which is exactly how a cold-cache assertion passes for the wrong
+    // reason, or a scoping bug hides behind a neighbour's warm cache.
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     editor: null,
   });
@@ -666,6 +672,45 @@ describe("history is scoped to the selected Automation", () => {
       projectId: "p1",
       ticketId: "t1",
     });
+  });
+
+  it("does not claim a record has never run before its history is read", async () => {
+    // Each scope is its own read now, so a cold cache is the ordinary state
+    // every time the reader picks another record. Answering that with
+    // "Nothing has run this Automation yet" states a fact the next frame may
+    // contradict, so the list stays silent until the read lands.
+    await mount(INTERLEAVED);
+    expect(historyRowIds("run")).toEqual(["run-review"]);
+
+    // Now hold the neighbour's read open and move to it.
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    doors.runsForAutomation.mockImplementation(async (input: { automationId: string }) => {
+      await held;
+      return {
+        ok: true,
+        runs: INTERLEAVED.runs.filter((row) => row.automationId === input.automationId),
+      };
+    });
+
+    await act(async () => {
+      railRow("automation-2").click();
+    });
+
+    // The read is in flight: the neighbour's heading, and NO claim under it.
+    // Critically, not the previous record's rows either.
+    expect(historySection().getAttribute("data-run-history")).toBe("automation-2");
+    expect(historyRowIds("run")).toEqual([]);
+    expect(historySection().textContent).not.toContain("Nothing has run");
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+
+    expect(historyRowIds("run")).toEqual(["run-nightly"]);
   });
 
   it("says nothing has run THIS Automation while the project has other Runs", async () => {

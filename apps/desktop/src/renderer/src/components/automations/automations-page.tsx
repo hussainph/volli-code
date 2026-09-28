@@ -55,6 +55,7 @@ import {
 import {
   automationHistory,
   groupByOwnership,
+  historyEmptyCopy,
   listingRunTarget,
   runAutomationLabel,
   runModelLabel,
@@ -97,6 +98,7 @@ import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
 import {
+  automationHistoryKey,
   selectAutomationRuns,
   selectAutomationSkips,
   useAutomationsStore,
@@ -256,6 +258,12 @@ function AutomationsSurface({
   const selectedSkips = useAutomationsStore((state) =>
     selectedId === null ? NO_SKIPS : selectAutomationSkips(state, projectId, selectedId),
   );
+  // READ, not non-empty. One write lands both halves, so one key answers.
+  const selectedHistoryLoaded = useAutomationsStore((state) =>
+    selectedId === null
+      ? false
+      : state.runsByAutomation[automationHistoryKey(projectId, selectedId)] !== undefined,
+  );
   React.useEffect(() => {
     if (selectedId === null) return;
     void refreshAutomationHistory(projectId, selectedId);
@@ -265,6 +273,12 @@ function AutomationsSurface({
   // the activity view, or the empty state of a project that has no records.
   // An editor no longer pays for a read it does not use.
   const showsProjectHistory = showingActivity || (automationsLoaded && automations.length === 0);
+  // Two separate reads here, unlike the scoped pair, so both must have landed
+  // before the list may say it found nothing.
+  const projectHistoryLoaded = useAutomationsStore(
+    (state) =>
+      state.runsByProject[projectId] !== undefined && state.skipsByProject[projectId] !== undefined,
+  );
   React.useEffect(() => {
     if (!showsProjectHistory) return;
     void refreshRuns(projectId);
@@ -419,6 +433,7 @@ function AutomationsSurface({
             ticketPrefix={ticketPrefix}
             runs={runs}
             skips={skips}
+            loaded={projectHistoryLoaded}
           />
         ) : target !== null ? (
           <AutomationEditorPanel
@@ -439,6 +454,7 @@ function AutomationsSurface({
                   runs={selectedRuns}
                   skips={selectedSkips}
                   automationId={selectedAutomation.id}
+                  loaded={selectedHistoryLoaded}
                 />
               )
             }
@@ -453,6 +469,7 @@ function AutomationsSurface({
                 runs={runs}
                 skips={skips}
                 automationId={null}
+                loaded={projectHistoryLoaded}
               />
             }
           />
@@ -634,11 +651,13 @@ function ProjectActivity({
   ticketPrefix,
   runs,
   skips,
+  loaded,
 }: {
   projectId: string;
   ticketPrefix: string;
   runs: readonly AutomationRun[];
   skips: readonly AutomationSkippedOccurrence[];
+  loaded: boolean;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -649,6 +668,7 @@ function ProjectActivity({
           runs={runs}
           skips={skips}
           automationId={null}
+          loaded={loaded}
         />
       </div>
     </div>
@@ -815,6 +835,7 @@ function RunHistory({
   runs,
   skips,
   automationId,
+  loaded,
 }: {
   projectId: string;
   ticketPrefix: string;
@@ -823,19 +844,20 @@ function RunHistory({
   skips: readonly AutomationSkippedOccurrence[];
   /** The record these rows were read for, or `null` for the whole project. */
   automationId: string | null;
+  /** Whether this scope's read has LANDED — not whether it found anything. */
+  loaded: boolean;
 }) {
   const entries = React.useMemo(() => automationHistory(runs, skips), [runs, skips]);
+  const emptyCopy = historyEmptyCopy(automationId, loaded);
   return (
     <section className="flex flex-col gap-1" data-run-history={automationId ?? "project"}>
       <SectionHeading className="h-6 leading-6">
         {automationId === null ? "Project activity" : "Runs"}
       </SectionHeading>
       {entries.length === 0 ? (
-        <p className="py-2 text-ui text-muted-foreground">
-          {automationId === null
-            ? "Nothing has run in this project yet."
-            : "Nothing has run this Automation yet."}
-        </p>
+        emptyCopy === null ? null : (
+          <p className="py-2 text-ui text-muted-foreground">{emptyCopy}</p>
+        )
       ) : (
         entries.map((entry) =>
           entry.kind === "run" ? (

@@ -197,6 +197,26 @@ export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
 }
 
 /**
+ * What an EMPTY history says — or `null` while it does not yet know (VC-297).
+ *
+ * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * that has never been read cannot make it. Each scope is its own read now, so
+ * a cold cache is the ordinary state every time the reader picks another
+ * record — and answering that with a sentence would state a fact the very next
+ * frame may contradict. The Ticket rail already draws this line for its own
+ * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
+ *
+ * `loaded` therefore means READ, not non-empty. An empty answer that landed is
+ * a real answer and gets its sentence; silence gets silence.
+ */
+export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+  if (!loaded) return null;
+  return automationId === null
+    ? "Nothing has run in this project yet."
+    : "Nothing has run this Automation yet.";
+}
+
+/**
  * One project's Automations, split by Ownership with its own first.
  *
  * The order main already returns (own, then global, name-ordered within each)
