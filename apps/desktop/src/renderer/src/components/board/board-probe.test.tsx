@@ -198,7 +198,7 @@ function installAnimations(): () => void {
   const element = Element.prototype as unknown as Record<string, unknown>;
   const had = Object.prototype.hasOwnProperty.call(element, "animate");
   const real = element["animate"];
-  element["animate"] = function animate(this: Element) {
+  element["animate"] = function (this: Element) {
     const animation = {
       onfinish: null as null | (() => void),
       oncancel: null as null | (() => void),
@@ -453,7 +453,7 @@ function moveGateway(input: {
 }): Promise<{ ok: true; tickets: Ticket[] }> {
   const slice = useBoardStore.getState().ticketsByProject[input.projectId] ?? [];
   const moved = slice.map((row) =>
-    row.id === input.ticketId ? { ...row, status: input.toStatus } : row,
+    row.id === input.ticketId ? Object.assign({}, row, { status: input.toStatus }) : row,
   );
   if (
     AUTOMATION.trigger.kind === "columns" &&
@@ -601,7 +601,7 @@ describe("PROBE", () => {
           triggered.push({ ticketId: input.ticketId, toStatus: input.toStatus });
           const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
           const moved = slice.map((row) =>
-            row.id === input.ticketId ? { ...row, status: input.toStatus } : row,
+            row.id === input.ticketId ? Object.assign({}, row, { status: input.toStatus }) : row,
           );
           automationRoster((row) =>
             row.id === input.ticketId
@@ -659,7 +659,7 @@ describe("PROBE", () => {
           triggered.push({ ticketId: input.ticketId, toStatus: input.toStatus });
           const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
           const moved = slice.map((row) =>
-            row.id === input.ticketId ? { ...row, status: input.toStatus } : row,
+            row.id === input.ticketId ? Object.assign({}, row, { status: input.toStatus }) : row,
           );
           queueMicrotask(() => {
             // the automation de-escalates it onward, emptying/refilling columns
@@ -694,7 +694,7 @@ describe("PROBE", () => {
           triggered.push({ ticketId: input.ticketId, toStatus: input.toStatus });
           const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
           const moved = slice.map((row) =>
-            row.id === input.ticketId ? { ...row, status: input.toStatus } : row,
+            row.id === input.ticketId ? Object.assign({}, row, { status: input.toStatus }) : row,
           );
           queueMicrotask(() => {
             automationRoster((row) => ({ ...row }));
@@ -736,7 +736,7 @@ describe("PROBE churn", () => {
         const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
         useBoardStore.getState().hydrateProjectRoster(
           "p1",
-          slice.map((row) => ({ ...row, updatedAt: 99 })),
+          slice.map((row) => Object.assign({}, row, { updatedAt: 99 })),
           [{ id: "l1", projectId: "p1", name: "running", color: null }],
         );
       });
@@ -753,7 +753,9 @@ describe("PROBE churn", () => {
         useBoardStore.getState().hydrateProjectRoster(
           "p1",
           slice.map((row) =>
-            row.id === "t1" ? { ...row, status: "needs_review" as TicketStatus } : { ...row },
+            row.id === "t1"
+              ? Object.assign({}, row, { status: "needs_review" as TicketStatus })
+              : Object.assign({}, row),
           ),
           [],
         );
@@ -818,7 +820,9 @@ describe("PROBE isolate", () => {
       // (i) tickets only — object identities replaced, same statuses
       await act(async () => {
         const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
-        useBoardStore.setState({ ticketsByProject: { p1: slice.map((r) => ({ ...r })) } });
+        useBoardStore.setState({
+          ticketsByProject: { p1: slice.map((r) => Object.assign({}, r)) },
+        });
       });
       counts("i tickets-only");
 

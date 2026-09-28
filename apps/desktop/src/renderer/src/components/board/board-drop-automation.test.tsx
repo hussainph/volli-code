@@ -176,7 +176,7 @@ function installAnimations(): () => void {
   const element = Element.prototype as unknown as Record<string, unknown>;
   const had = Object.prototype.hasOwnProperty.call(element, "animate");
   const real = element["animate"];
-  element["animate"] = function animate(this: Element) {
+  element["animate"] = function (this: Element) {
     const animation = {
       onfinish: null as null | (() => void),
       oncancel: null as null | (() => void),
@@ -431,7 +431,7 @@ function moveGateway(input: {
 }): Promise<{ ok: true; tickets: Ticket[] }> {
   const slice = useBoardStore.getState().ticketsByProject[input.projectId] ?? [];
   const moved = slice.map((row) =>
-    row.id === input.ticketId ? { ...row, status: input.toStatus } : row,
+    row.id === input.ticketId ? Object.assign({}, row, { status: input.toStatus }) : row,
   );
   if (
     AUTOMATION.trigger.kind === "columns" &&

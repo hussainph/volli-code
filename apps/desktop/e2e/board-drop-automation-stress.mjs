@@ -57,6 +57,8 @@ const CONTROL_FILE = resolve(CONTROL_DIR, "board-control.tsx");
 const PROJECT_ID = "prj-voltaic";
 /** Column → the Automation the scratch's fixture arms it with. */
 const ARMED = { doing: "automation-implement", needs_review: "automation-standards" };
+/** Persisted and store rosters both land in `order` sequence; shared comparator. */
+const byOrder = (a, b) => a.order - b.order;
 const ERROR_PATTERN =
   /Maximum update depth|Too many re-renders|Minified React error #185|error #185|The board stopped responding/;
 
@@ -239,7 +241,9 @@ try {
       };
       window.lab = lab;
       const broadcastPending = () =>
-        receivePendingArmedRuns([...lab.pendingByTicket.values()].map((row) => ({ ...row })));
+        receivePendingArmedRuns(
+          Array.from(lab.pendingByTicket.values(), (row) => Object.assign({}, row)),
+        );
       /**
        * The roster broadcast's store write. `hydrateProjectRoster` where the
        * checkout has it (VC-387); on an older checkout the same wholesale
@@ -390,13 +394,13 @@ try {
       .locator("[data-board-ticket-slot]")
       .evaluateAll((nodes) => nodes.map((node) => node.dataset.boardTicketSlot));
   const snapshot = () => page.evaluate(() => window.lab.snapshot());
-  const churnBurst = (count, flip) =>
+  const churnBurst = (burstCount, burstFlip) =>
     page.evaluate(
       ({ count, flip }) => {
         for (let i = 0; i < count; i++) window.lab.churn();
         if (flip) window.lab.flipPending();
       },
-      { count, flip },
+      { count: burstCount, flip: burstFlip },
     );
   const health = async (label) => {
     if (fatal.length > 0) throw new Error(`${label}: ${fatal.join("\n")}`);
@@ -524,9 +528,8 @@ try {
 
       // Store == persisted truth; ticket sits at the slot the drop named.
       const after = await snapshot();
-      const byOrder = (a, b) => a.order - b.order;
-      const persistedTarget = move.tickets.filter((t) => t.status === to).sort(byOrder);
-      const storeTarget = after.filter((t) => t.status === to).sort(byOrder);
+      const persistedTarget = move.tickets.filter((t) => t.status === to).toSorted(byOrder);
+      const storeTarget = after.filter((t) => t.status === to).toSorted(byOrder);
       assert.deepEqual(
         storeTarget.map((t) => t.id),
         persistedTarget.map((t) => t.id),
