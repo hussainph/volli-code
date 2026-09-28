@@ -3656,8 +3656,10 @@ describe("AUTOMATION_IPC descriptor table", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
       // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel,
       // VC-228's retained-command Retry doors, and VC-297's two scoped history
-      // reads. Derived above; the count catches an accidentally omitted guard.
-      expect(AUTOMATION_CHANNELS).toHaveLength(20);
+      // reads, LESS the Ticket-Runs read VC-406 retired with the rail block
+      // that was its only caller. Derived above; the count catches an
+      // accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(19);
     });
   });
 });
