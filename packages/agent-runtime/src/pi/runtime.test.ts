@@ -77,7 +77,13 @@ import { createSessionTools } from "./tools";
 import { withoutReasoning } from "./reasoning";
 import { recoveryRefFor } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
-import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
+import { createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
+import type { ConnectivityPort } from "./connectivity";
+import {
+  TRANSPORT_NOTICE_AFTER_ATTEMPTS,
+  TRANSPORT_RETRY_BUDGET_MS,
+  TRANSPORT_RETRY_LIMIT,
+} from "./transport-retry";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import type { UsageProbeFetch } from "./usage-limits/probe";
 
@@ -5756,7 +5762,7 @@ describe("auto-retrying a dropped transport", () => {
     await handle.close();
   });
 
-  it("gives up after ten attempts and says how many it spent", async () => {
+  it("gives up at the attempt backstop and says how many it spent", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const attempts: number[] = [];
     const runtime = createPiAgentRuntime({
@@ -5765,27 +5771,61 @@ describe("auto-retrying a dropped transport", () => {
         attempts.push(attempt);
         return 0;
       },
-      models: modelsWithStream(scriptedStream(drops(11))),
+      models: modelsWithStream(scriptedStream(drops(TRANSPORT_RETRY_LIMIT + 1))),
     });
     const handle = await runtime.startSession(spec);
 
     await handle.submitUserMessage("go");
 
-    expect(attempts).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    // Eleven metered attempts for one turn that produced nothing. An owner
-    // asking why a quiet pass was expensive has to be able to see this.
+    // Asked once more than it spends: the schedule is read before the budget
+    // says no to the attempt after the last one.
+    expect(attempts).toEqual(Array.from({ length: TRANSPORT_RETRY_LIMIT + 1 }, (_, n) => n));
+    // Every metered attempt for one turn that produced nothing. An owner
+    // asking why a quiet pass was expensive has to be able to see this. The
+    // reconnecting notice appears at the third retry, and gives way to the
+    // dead end rather than standing beside it.
     expect(kinds(observations)).toEqual([
       "attachment:started",
       "turn:started",
-      ...Array.from({ length: 11 }, () => "usage"),
+      ...Array.from({ length: TRANSPORT_NOTICE_AFTER_ATTEMPTS }, () => "usage"),
+      "attention",
+      ...Array.from(
+        { length: TRANSPORT_RETRY_LIMIT + 1 - TRANSPORT_NOTICE_AFTER_ATTEMPTS },
+        () => "usage",
+      ),
+      "attention",
       "attention",
       "turn:interrupted",
     ]);
     expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport", message: DROPPED_SOCKET }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
       expect.objectContaining({
         state: "raised",
         reason: "runtime-failure",
-        message: `${DROPPED_SOCKET} (after 10 retries)`,
+        message: `${DROPPED_SOCKET} (after ${TRANSPORT_RETRY_LIMIT} retries)`,
+      }),
+    ]);
+    await handle.close();
+  });
+
+  it("gives up once the waiting would pass the online budget", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      // Two instant retries, then a wait longer than the whole budget.
+      retryBackoffMs: (attempt) => (attempt < 2 ? 0 : TRANSPORT_RETRY_BUDGET_MS + 1),
+      models: modelsWithStream(scriptedStream(drops(3))),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "runtime-failure",
+        message: `${DROPPED_SOCKET} (after 2 retries)`,
       }),
     ]);
     await handle.close();
@@ -5795,8 +5835,10 @@ describe("auto-retrying a dropped transport", () => {
     const { spec, observations, sessionDataDir } = fixture();
     const runtime = createPiAgentRuntime({
       sessionDataDir,
-      retryBackoffMs: instantBackoff,
-      models: modelsWithStream(scriptedStream([...drops(12), settles("recovered")])),
+      // One free retry per turn, then a wait past the budget: a turn that
+      // inherited the first one's spend would give up on its first drop.
+      retryBackoffMs: (attempt) => (attempt < 1 ? 0 : TRANSPORT_RETRY_BUDGET_MS + 1),
+      models: modelsWithStream(scriptedStream([...drops(3), settles("recovered")])),
     });
     const handle = await runtime.startSession(spec);
     await handle.submitUserMessage("go");
@@ -5810,6 +5852,85 @@ describe("auto-retrying a dropped transport", () => {
       expect.objectContaining({ state: "raised", reason: "runtime-failure" }),
       expect.objectContaining({ state: "cleared", reason: "runtime-failure" }),
     ]);
+    await handle.close();
+  });
+
+  it("says it is reconnecting from the third retry, and stops saying so once the provider answers", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "usage",
+      "usage",
+      "attention",
+      // Cleared by the first streamed word, not by the end of the turn.
+      "attention",
+      "delta",
+      "usage",
+      "message-settled",
+      "turn:completed",
+    ]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport", message: DROPPED_SOCKET }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("raises the notice once for a provider that fails the same way again and again", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS + 2), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("clears the notice at the end of a turn that never streamed another word", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          ...drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS),
+          // A reply with nothing in it: no delta ever clears the notice.
+          (emit) => emit.finish(),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
     await handle.close();
   });
 
@@ -5958,6 +6079,467 @@ describe("auto-retrying a dropped transport", () => {
       expect.objectContaining({ commandId: "command-follow-up" }),
     ]);
     await handle.close();
+  });
+});
+
+/** A host whose network a test switches off and on, and whose lid it opens. */
+function fakeConnectivity(initiallyOnline: boolean) {
+  let online = initiallyOnline;
+  let waitStarted = Promise.withResolvers<void>();
+  const waiters = new Set<() => void>();
+  const resumeListeners = new Set<() => void>();
+  const signals: AbortSignal[] = [];
+  const port: ConnectivityPort = {
+    isOnline: () => online,
+    waitUntilOnline: (signal) =>
+      new Promise<void>((resolve, reject) => {
+        signals.push(signal);
+        const onAbort = (): void => {
+          waiters.delete(done);
+          reject(new Error("wait abandoned"));
+        };
+        const done = (): void => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        waiters.add(done);
+        waitStarted.resolve();
+      }),
+    onResume: (listener) => {
+      resumeListeners.add(listener);
+      return () => {
+        resumeListeners.delete(listener);
+      };
+    },
+  };
+  return {
+    port,
+    signals,
+    /** Resolves once the runtime is waiting for the network. */
+    waiting: () => waitStarted.promise,
+    goOffline(): void {
+      online = false;
+    },
+    reconnect(): void {
+      online = true;
+      waitStarted = Promise.withResolvers<void>();
+      for (const done of Array.from(waiters)) {
+        waiters.delete(done);
+        done();
+      }
+    },
+    wake(): void {
+      for (const listener of Array.from(resumeListeners)) listener();
+    },
+    resumeListenerCount: (): number => resumeListeners.size,
+  };
+}
+
+/** How an expired OAuth token's refresh reads when the machine has no network. */
+const REFRESH_UNREACHED =
+  "Anthropic token refresh request failed. url=https://console.anthropic.com/v1/oauth/token; details=TypeError: fetch failed";
+
+/** A provider request that hangs until its own signal is aborted. */
+function hangs(onStreaming: (signal: AbortSignal | undefined) => void): ScriptStep {
+  return async (emit, _context, signal) => {
+    onStreaming(signal);
+    await new Promise<void>((resolve) => {
+      signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    emit.cancel();
+  };
+}
+
+describe("waiting out a machine with no network", () => {
+  it("waits for the network without spending the budget, then resumes the same turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    const backoffs: number[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: (attempt) => {
+        backoffs.push(attempt);
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+    ]);
+    connectivity.reconnect();
+    await expect(delivery).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+
+    // No online attempt was charged for the time the lid was shut.
+    expect(backoffs).toEqual([]);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "attention",
+      "attention",
+      "delta",
+      "usage",
+      "message-settled",
+      "turn:completed",
+    ]);
+    expect(attentions(observations)[1]).toMatchObject({ state: "cleared", reason: "transport" });
+    await handle.close();
+  });
+
+  it("waits for the network again when a backoff ends to find it gone", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        // The network drops while the backoff runs.
+        connectivity.goOffline();
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["back online"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("says it once when the network goes away twice in one turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    let backoffs = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        backoffs += 1;
+        connectivity.goOffline();
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(2), settles("back online")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    // Back, and the retry fails online — whose backoff then finds it gone again.
+    connectivity.reconnect();
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(backoffs).toBe(1);
+    expect(settledTexts(observations)).toEqual(["back online"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({
+        state: "raised",
+        reason: "transport",
+        message: "Waiting for network",
+      }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("abandons the network wait when the turn is stopped", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(DROPPED_SOCKET);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+
+    await handle.interrupt();
+    await delivery;
+
+    expect(calls).toBe(1);
+    expect(connectivity.signals[0]?.aborted).toBe(true);
+    expect(kinds(observations)).toEqual([
+      "attachment:started",
+      "turn:started",
+      "usage",
+      "attention",
+      "attention",
+      "turn:interrupted",
+    ]);
+    expect(attentions(observations).at(-1)).toMatchObject({
+      state: "cleared",
+      reason: "transport",
+    });
+    await handle.close();
+  });
+
+  it("charges a network wait the host could not keep to the online budget", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const backoffs: number[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: {
+        isOnline: () => false,
+        waitUntilOnline: () => Promise.reject(new Error("the port broke its word")),
+        onResume: () => () => undefined,
+      },
+      retryBackoffMs: (attempt) => {
+        backoffs.push(attempt);
+        return 0;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("recovered anyway")])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(backoffs).toEqual([0]);
+    expect(settledTexts(observations)).toEqual(["recovered anyway"]);
+    await handle.close();
+  });
+
+  it("waits out a credential refresh that could not leave the machine", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(false);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([(emit) => emit.fail(REFRESH_UNREACHED), settles("refreshed")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await connectivity.waiting();
+    connectivity.reconnect();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["refreshed"]);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await handle.close();
+  });
+
+  it("hands the same refresh failure to the person when the machine is online", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    let calls = 0;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: fakeConnectivity(true).port,
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            calls += 1;
+            emit.fail(REFRESH_UNREACHED);
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(calls).toBe(1);
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "auth" }),
+    ]);
+    await handle.close();
+  });
+
+  it("hands it over too when the host cannot wait for the network", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: {
+        isOnline: () => false,
+        waitUntilOnline: () => Promise.reject(new Error("the port broke its word")),
+        onResume: () => () => undefined,
+      },
+      retryBackoffMs: instantBackoff,
+      models: modelsWithStream(scriptedStream([(emit) => emit.fail(REFRESH_UNREACHED)])),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await handle.submitUserMessage("go");
+
+    expect(attentions(observations)).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+      expect.objectContaining({ state: "raised", reason: "auth" }),
+    ]);
+    await handle.close();
+  });
+
+  it("retires a reconnecting notice a crashed process left behind", async () => {
+    const attachment = fixture();
+    const connectivity = fakeConnectivity(false);
+    const firstRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const firstHandle = await firstRuntime.startSession(attachment.spec);
+    const delivery = firstHandle.submitUserMessage("go");
+    await connectivity.waiting();
+    const recovery = firstHandle.recovery!;
+    await firstHandle.close();
+    await delivery;
+    // The process died mid-wait: nothing after the notice was ever written —
+    // not its clearance, and not the end of the turn it was waiting in.
+    const entries = entryRecords(recovery.sessionFilePath);
+    const clearance = entries.findIndex((entry) => {
+      const data = entry["data"] as { kind?: string; state?: string; reason?: string } | undefined;
+      return data?.kind === "attention" && data.reason === "transport" && data.state === "cleared";
+    });
+    expect(clearance).toBeGreaterThan(0);
+    writeSidecarEntries(recovery.sessionFilePath, entries.slice(0, clearance));
+
+    const secondRuntime = createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+    const replay = await secondHandle.reconcile(null);
+
+    expect(attentions([...replay.observations])).toEqual([
+      expect.objectContaining({ state: "raised", reason: "transport" }),
+      expect.objectContaining({ state: "raised", reason: "partial-turn" }),
+      expect.objectContaining({ state: "cleared", reason: "transport" }),
+    ]);
+    await secondHandle.close();
+  });
+});
+
+describe("recovering a provider request that went silent", () => {
+  it("cuts a request that stops answering and resumes the same turn", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const providerSignals: (AbortSignal | undefined)[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      retryBackoffMs: instantBackoff,
+      streamSupervision: { idleTimeoutMs: 30, wakeGraceMs: 10_000 },
+      models: modelsWithStream(
+        scriptedStream([hangs((signal) => providerSignals.push(signal)), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+
+    await expect(handle.submitUserMessage("go")).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+    });
+
+    // Only the provider's request was cut; the turn carried on in place.
+    expect(providerSignals[0]?.aborted).toBe(true);
+    expect(kinds(observations).filter((kind) => kind === "turn:started")).toHaveLength(1);
+    expect(settledTexts(observations)).toEqual(["recovered"]);
+    expect(attentions(observations)).toEqual([]);
+    expect(kinds(observations).at(-1)).toBe("turn:completed");
+    await handle.close();
+  });
+
+  it("cuts a request that says nothing after the machine wakes", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const streaming = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: instantBackoff,
+      streamSupervision: { idleTimeoutMs: 60_000, wakeGraceMs: 10 },
+      models: modelsWithStream(
+        scriptedStream([hangs(() => streaming.resolve()), settles("recovered")]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await streaming.promise;
+    // Let what the request said before the sleep drain first.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    connectivity.wake();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["recovered"]);
+    expect(attentions(observations)).toEqual([]);
+    await handle.close();
+  });
+
+  it("retries at once when the machine wakes in the middle of a backoff", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const backingOff = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      retryBackoffMs: () => {
+        backingOff.resolve();
+        return 10 * 60_000;
+      },
+      models: modelsWithStream(scriptedStream([...drops(1), settles("awake")])),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await backingOff.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    connectivity.wake();
+    await delivery;
+
+    expect(settledTexts(observations)).toEqual(["awake"]);
+    await handle.close();
+  });
+
+  it("stops listening for wakes when the attachment closes", async () => {
+    const { spec, sessionDataDir } = fixture();
+    const connectivity = fakeConnectivity(true);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream([])),
+    });
+    const handle = await runtime.startSession(spec);
+    expect(connectivity.resumeListenerCount()).toBe(1);
+
+    await handle.close();
+
+    expect(connectivity.resumeListenerCount()).toBe(0);
+    // A wake after close reaches nothing.
+    connectivity.wake();
   });
 });
 
@@ -9528,17 +10110,6 @@ describe("a provider that drops reasoning instead of refusing it (VC-254)", () =
     expect(settledTexts(attachment.observations)).toEqual(["first answer", "second answer"]);
     expect(attentions(attachment.observations)).toEqual([]);
     await handle.close();
-  });
-});
-
-describe("autoRetryDelayMs", () => {
-  it("doubles the wait up to a ceiling, jittered", () => {
-    expect(autoRetryDelayMs(0)).toBeGreaterThanOrEqual(500);
-    expect(autoRetryDelayMs(0)).toBeLessThan(600);
-    expect(autoRetryDelayMs(3)).toBeGreaterThanOrEqual(4000);
-    expect(autoRetryDelayMs(3)).toBeLessThan(4100);
-    expect(autoRetryDelayMs(9)).toBeGreaterThanOrEqual(8000);
-    expect(autoRetryDelayMs(9)).toBeLessThan(8100);
   });
 });
 

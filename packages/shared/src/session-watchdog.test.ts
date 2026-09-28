@@ -132,6 +132,37 @@ describe("sessionWedge", () => {
     ).toEqual({ wedged: false, reason: "awaiting-user" });
   });
 
+  it("stands down while the runtime reports it is waiting out the network", () => {
+    const reconnecting = {
+      id: "attention-transport",
+      kind: "transport_retrying",
+      attachmentId: null,
+      detail: "Waiting for network",
+      diagnostic: null,
+    } as SessionAttention;
+    // Offline for five hours of awake time, a bash call long past its limit:
+    // the runtime owns this wait, so neither silence nor the tool trips.
+    expect(
+      sessionWedge(
+        projection({ attention: { active: [reconnecting], primary: reconnecting } }),
+        T * 30,
+        T,
+        0,
+        { inFlightTools: [{ activityId: "a", toolName: "bash", declaredTimeoutMs: 60_000 }] },
+      ),
+    ).toEqual({ wedged: false, reason: "reconnecting" });
+
+    // Any other runtime-owned Attention is not a reason to stand down.
+    const failed = {
+      ...reconnecting,
+      id: "attention-dead",
+      kind: "adapter_unrecoverable",
+    } as SessionAttention;
+    expect(
+      sessionWedge(projection({ attention: { active: [failed], primary: failed } }), T * 30, T, 0),
+    ).toEqual({ wedged: true, silentForMs: T * 30, overdueTool: null });
+  });
+
   it("measures silence from runtime progress rather than durable recency", () => {
     // A durable fact can be old while streamed tokens are fresh.
     expect(sessionWedge(projection({ lastActivityAt: 0 }), T + 500, T, 500)).toEqual({

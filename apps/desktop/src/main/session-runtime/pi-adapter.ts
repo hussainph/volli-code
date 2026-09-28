@@ -382,6 +382,13 @@ export interface PiAdapterOptions {
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
   /**
+   * The machine's network and sleep, over Electron's `net` and `powerMonitor`
+   * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
+   * instead of spending its retry budget on it (VC-443). Absent, the runtime
+   * treats the host as always online.
+   */
+  connectivity?: PiRuntimeHostOptions["connectivity"];
+  /**
    * The web ports this profile can honestly bind now, resolved once per
    * attachment. Membership comes from the Session's durable tool surface, not
    * from this answer: extra ports are ignored and a missing required port
@@ -673,6 +680,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
   });
 

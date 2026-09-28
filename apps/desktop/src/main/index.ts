@@ -172,6 +172,7 @@ import { migrateLegacySafeStorageSecrets } from "./web/legacy-safe-storage";
 import { WebAccessSettings } from "./web/settings";
 import { webPortsFor } from "./web/ports";
 import { createPiRuntimeHost, PI_TOOLS } from "./session-runtime/pi-adapter";
+import { createConnectivityPort } from "./session-runtime/connectivity";
 import { createAutoTitler } from "./session-runtime/auto-title";
 import { createTicketSessionDelegationStore } from "./session-runtime/delegation-store";
 import {
@@ -1271,6 +1272,10 @@ app.whenReady().then(async () => {
           // after it. Absent when the database never opened, which leaves the
           // runtime on its own no-op default.
           ...(agentObservability === null ? {} : { observability: agentObservability }),
+          // A closed lid or a missing Wi-Fi is waited out rather than charged
+          // to a turn's retry budget, and a request open across a sleep is
+          // re-sent instead of hanging on a dead socket (VC-443).
+          connectivity: createConnectivityPort({ net, powerMonitor }),
           // A turn's attachments (VC-50): materialize them into the Session's
           // tree so the agent can open any of them by path, and read images
           // back as base64 so the model can actually see them. Injected here

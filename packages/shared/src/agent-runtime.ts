@@ -1720,21 +1720,27 @@ export type RuntimeActivityObservation =
     });
 
 /**
- * Attention's `reason` is frozen, unlike the arms of this union.
+ * Attention's `reason` may be widened, never narrowed or renamed.
  *
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
- * then whitelisting this exact set — and it throws rather than skipping what it
- * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar holds none of them, so no marker already on disk changes how it
- * validates — {@link CompactionObservation} was added exactly that way.
- * Adding a `reason` is not: every attention marker written by an older build is
- * re-validated against the new list on the next recovery, and a Session whose
- * marker no longer matches fails to attach outright.
+ * then whitelisting this exact set, so every attention marker already on disk
+ * is re-read against the current list on the next recovery. Adding a reason
+ * leaves each older marker valid. Removing or renaming one does not: a marker
+ * that stops validating is quarantined (skipped and counted, never thrown on),
+ * which costs the Session the attention state that marker held. A build OLDER
+ * than a reason quarantines that reason's markers the same way — the one price
+ * of widening, and a bounded one.
+ *
+ * `transport` is the widening (VC-443): the runtime is waiting out a network
+ * or provider failure on its own and the turn is still live. It projects to
+ * the ledger's existing `transport_retrying`, which is deliberately neither a
+ * failure nor a question — it clears itself when the provider answers, and
+ * nobody is notified about it.
  */
 export interface AttentionObservation {
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   message: string;
   occurredAt?: number;
   recoveryCursor?: string;

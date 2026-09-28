@@ -102,8 +102,13 @@ function errorMessageOf(body: Record<string, unknown>): string | undefined {
   const message = typeof inner === "string" && inner.length > 0 ? inner : body["message"];
   return typeof message === "string" && message.length > 0 ? message : undefined;
 }
+/**
+ * The status codes are bounded as whole numbers: a Cloudflare error page or a
+ * request id carries hex runs short enough to survive redaction, and one that
+ * happened to contain `401` read a 502 as a refused key.
+ */
 const AUTH_SIGNAL =
-  /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|401|403)/i;
+  /(api[ _-]?key|auth|credential|unauthorized|forbidden|login|sign[ _-]?in|not configured|\b401\b|\b403\b)/i;
 /**
  * How a provider says the window is spent, across the vocabularies they
  * actually use. Overflow recovery hangs off this classification: a refusal it
@@ -131,14 +136,68 @@ const CONTEXT_SIGNAL =
 const REASONING_SIGNAL =
   /(invalid .signature. in .thinking. block|(?:thinking|reasoning).{0,60}cannot be modified)/i;
 /**
- * How a connection that died mid-stream reads once the provider has rethrown
- * it. Deliberately narrower than pi-ai's own retry predicate: everything else a
- * model can fail with — a spent quota, a refused key, a payload it would build
- * the same way again — is answered by a person, and re-sending it just spends
- * another turn arriving at the same sentence.
+ * How a connection that died, or a provider that could not answer right now,
+ * reads once the provider has rethrown it. Deliberately narrower than pi-ai's
+ * own retry predicate: everything else a model can fail with — a spent quota, a
+ * refused key, a payload it would build the same way again — is answered by a
+ * person, and re-sending it just spends another turn arriving at the same
+ * sentence.
+ *
+ * Every alternative is a sentence the owner's ledger recorded raised as a dead
+ * end (VC-443), pinned by a table in `transcript.test.ts`:
+ *
+ * - the socket itself — Node's errno names, undici's `fetch failed`,
+ *   `other side closed` and bare `terminated` (a body cut mid-read; anchored,
+ *   because "terminated" inside a sentence is not this);
+ * - the SDKs' own wording for the same — `Connection error.` and
+ *   `Request timed out.`;
+ * - a stream that ended without its closing event — Anthropic's
+ *   `ended before message_stop`, an OpenAI-compatible `Stream ended without
+ *   finish_reason`, and this runtime's own {@link STREAM_STALLED} report;
+ * - a provider saying it is overloaded or that the request may simply be sent
+ *   again (`You can retry your request`).
  */
 const TRANSPORT_SIGNAL =
-  /(websocket|econnreset|etimedout|econnrefused|socket hang up|fetch failed|network|stream closed before)/i;
+  /(websocket|econnreset|etimedout|econnrefused|econnaborted|epipe|ehostunreach|enetunreach|enetdown|eai_again|enotfound|socket hang up|other side closed|^terminated\b|fetch failed|network|connection error|timed out|timeout|stream (?:closed|ended) (?:before|without)|ended before message_stop|stream stalled|overloaded|service unavailable|bad gateway|gateway time-?out|internal server error|you can retry your request)/i;
+
+/**
+ * A spent allowance: the subscription window or the account's credit is used
+ * up, and waiting minutes does not refill it. Read BEFORE any transient signal,
+ * because both halves of the most common shape ride together — a `429` whose
+ * sentence says the usage limit was reached is a quota, not a throttle.
+ */
+const QUOTA_SIGNAL =
+  /(usage limit|out of (?:extra )?usage|quota|insufficient[_ ]balance|credit balance|billing|spending limit)/i;
+
+/**
+ * A provider asking the caller to slow down. Transient — the same request
+ * succeeds once the window moves — which is exactly what a quota is not; the
+ * two are told apart by {@link QUOTA_SIGNAL}, never by the status code alone.
+ */
+const THROTTLE_SIGNAL = /(rate[ _-]?limit|too many requests)/i;
+
+/**
+ * The HTTP status an SDK prints ahead of the provider's sentence (`502 <html>`,
+ * `429: Rate limit…`, `500 status code (no body)`). Only a LEADING code is read:
+ * a number later in the sentence is a token count, a port, or part of an id.
+ */
+const LEADING_STATUS = /^(\d{3})(?=[\s:]|$)/;
+
+/**
+ * Server-side statuses that say "not now" rather than "not this": the gateway
+ * and overload family, including Cloudflare's 52x and Anthropic's 529.
+ */
+const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([
+  408, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529,
+]);
+
+/** This runtime's own report for a provider request that went silent; see `stream-supervision.ts`. */
+export const STREAM_STALLED = "Provider stream stalled";
+
+function leadingStatus(sanitized: string): number | undefined {
+  const match = LEADING_STATUS.exec(sanitized);
+  return match === null ? undefined : Number(match[1]);
+}
 
 const ATTENTION_REASON: Record<RuntimeFailure["reason"], AttentionObservation["reason"]> = {
   auth: "auth",
@@ -186,22 +245,76 @@ export function attentionReasonFor(failure: RuntimeFailure): AttentionObservatio
  * because the text around it mentions headers and settings that the broader
  * signals could mistake for their own. Auth failures need explicit user
  * recovery; everything else is a model failure.
+ *
+ * A leading gateway or overload status is a model failure whatever its body
+ * says: the body of a 502 is a CDN's HTML page, and whatever words it happens
+ * to contain are not the provider refusing anybody's credentials.
  */
 export function classifyDiagnostic(sanitized: string): RuntimeFailure["reason"] {
   if (REASONING_SIGNAL.test(sanitized)) return "reasoning";
   if (CONTEXT_SIGNAL.test(sanitized)) return "context";
+  const status = leadingStatus(sanitized);
+  if (status !== undefined && TRANSIENT_STATUSES.has(status)) return "model";
   return AUTH_SIGNAL.test(sanitized) ? "auth" : "model";
 }
 
 /**
- * Whether the run died of its transport rather than of anything about itself.
+ * Whether the run died of its transport, or of a provider that could not
+ * answer right now, rather than of anything about itself.
  *
  * The reason gate is load-bearing, not decoration: a socket the provider closed
  * over credentials carries both signals, and {@link classifyDiagnostic} has
  * already settled that argument in auth's favour by the time this reads it.
+ *
+ * A spent allowance is ruled out before anything else is asked, so a quota
+ * `429` stays the person's to answer while a throttling `429` — "slow down",
+ * which the next window answers — is retried.
  */
 export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
-  return failure.reason === "model" && TRANSPORT_SIGNAL.test(failure.message);
+  if (failure.reason !== "model") return false;
+  const text = failure.message;
+  if (QUOTA_SIGNAL.test(text)) return false;
+  const status = leadingStatus(text);
+  if (status !== undefined && TRANSIENT_STATUSES.has(status)) return true;
+  if (status === 429 || THROTTLE_SIGNAL.test(text)) return true;
+  return TRANSPORT_SIGNAL.test(text);
+}
+
+/**
+ * A credential refresh that never reached the server that would have judged it.
+ *
+ * Classified as auth, and kept out of {@link isTransientTransportFailure} on
+ * purpose: online, a refresh that failed is the person's to repair. The one
+ * thing this adds is that the runtime may wait it out while the machine is
+ * OFFLINE — a laptop opened hours later with no Wi-Fi finds its token expired
+ * and its refresh unable to leave the building, and nothing about the
+ * credential has been refused.
+ */
+export function isUnreachedAuthFailure(failure: RuntimeFailure): boolean {
+  return failure.reason === "auth" && TRANSPORT_SIGNAL.test(failure.message);
+}
+
+/**
+ * How long the provider asked to be left alone, when its sentence says.
+ *
+ * pi-ai folds a `retry-after` header it would not wait out into the message
+ * (`Server requested 120s retry delay (max: 60s)`), and providers state their
+ * own (`Please try again in 20s`, `retry after 1.5 seconds`). Headers never
+ * reach this runtime otherwise, so the sentence is the only place the hint is.
+ */
+export function retryHintMs(message: string): number | undefined {
+  const requested = /server requested (\d+(?:\.\d+)?)s retry delay/i.exec(message);
+  if (requested !== null) return Number(requested[1]) * 1000;
+  const stated =
+    /(?:try again|retry) (?:in|after) (\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)\b/i.exec(
+      message,
+    );
+  if (stated === null) return undefined;
+  const amount = Number(stated[1]);
+  const unit = stated[2].toLowerCase();
+  if (unit.startsWith("ms") || unit.startsWith("milli")) return amount;
+  if (unit.startsWith("m")) return amount * 60_000;
+  return amount * 1000;
 }
 
 /** Readable text for anything thrown across the Pi boundary. */

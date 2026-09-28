@@ -215,6 +215,7 @@ export type TranslatedObservation =
           | "configuration_invalid"
           | "context_limit_reached"
           | "partial_turn_interrupted"
+          | "transport_retrying"
           | "adapter_unrecoverable";
         detail: string | null;
         diagnostic: SessionNativeDetail | null;
@@ -232,6 +233,7 @@ const ATTENTION_KINDS = {
   context: "context_limit_reached",
   "runtime-failure": "adapter_unrecoverable",
   "partial-turn": "partial_turn_interrupted",
+  transport: "transport_retrying",
 } as const satisfies Record<
   AttentionObservation["reason"],
   Extract<TranslatedObservation, { kind: "attention.raised" }>["attention"]["kind"]

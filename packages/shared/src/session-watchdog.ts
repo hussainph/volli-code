@@ -39,6 +39,12 @@
  * - **A machine that was asleep** — a laptop closed mid-turn comes back with
  *   hours on the wall clock and no progress in them. Suspended time is not
  *   silence: the host measures it and the verdict subtracts it.
+ * - **A runtime waiting out the network** — while the runtime holds an active
+ *   `transport_retrying` Attention it is doing exactly what it should: waiting
+ *   for a machine with no network to get one, or backing off a provider that
+ *   dropped it. That wait is unbounded offline by design, and the runtime owns
+ *   its own bound online (a retry budget, then a dead-end Attention) and its
+ *   own stall cut, so a second observer calling it wedged would only be noise.
  */
 
 import type { RuntimeActivityValue, RuntimeObservation } from "./agent-runtime";
@@ -193,11 +199,18 @@ export function inFlightToolAllowanceMs(tool: SessionInFlightTool, thresholdMs: 
 }
 
 /**
- * Why a Session is not wedged. `active` means a turn is open and recent;
+ * Why a Session is not wedged. `reconnecting` means the runtime reports it is
+ * waiting out the network; `active` means a turn is open and recent;
  * `tool-running` means it is silent past the bare-turn threshold, but every
  * tool it is waiting on is still inside that tool's own allowance.
  */
-export type SessionWedgeCalm = "no-turn" | "stopped" | "awaiting-user" | "active" | "tool-running";
+export type SessionWedgeCalm =
+  | "no-turn"
+  | "stopped"
+  | "awaiting-user"
+  | "reconnecting"
+  | "active"
+  | "tool-running";
 
 export type SessionWedgeVerdict =
   | { wedged: false; reason: SessionWedgeCalm }
@@ -229,6 +242,9 @@ export function sessionWedge(
   if (!projection.turnActive) return { wedged: false, reason: "no-turn" };
   if (projection.stopped !== null) return { wedged: false, reason: "stopped" };
   if (sessionAwaitsUser(projection)) return { wedged: false, reason: "awaiting-user" };
+  if (projection.attention.active.some(({ kind }) => kind === "transport_retrying")) {
+    return { wedged: false, reason: "reconnecting" };
+  }
   const silentForMs = Math.max(0, now - lastProgressAt - (context.suspendedMs ?? 0));
   if (silentForMs < thresholdMs) return { wedged: false, reason: "active" };
   // The tightest allowance among the calls in flight decides: the turn cannot

@@ -2354,9 +2354,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         break;
       // `rate_limited` and `quota_exhausted` are Attention kinds no executor can
       // reach, so this arm no longer carries the `retryAt`/`resetAt` shapes they
-      // need. Reaching them means widening the runtime's attention `reason`,
-      // which the recovery sidecar re-validates against every marker already on
-      // disk — a schema migration, and its own piece of work.
+      // need. Reaching them means widening the runtime's attention `reason` —
+      // additive, as `transport` → `transport_retrying` was (VC-443) — and
+      // carrying a provider-stated time through this arm, which is its own
+      // piece of work.
       case "attention.raised":
         event = await this.ports.engine.observe({
           ...base,
