@@ -194,6 +194,17 @@ const doors = {
     ok: true,
     skips: [],
   })),
+  // The editor's own scoped history (VC-297): one record's Runs and skips.
+  runsForAutomation: vi.fn(async (): Promise<{ ok: true; runs: AutomationRun[] }> => ({
+    ok: true,
+    runs: [],
+  })),
+  skipsForAutomation: vi.fn(
+    async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
+      ok: true,
+      skips: [],
+    }),
+  ),
   columnOrders: vi.fn(async () => ({ ok: true, orders: [] })),
   setColumnOrder: vi.fn(async () => ({ ok: true, orders: [], receipt: {} })),
   setEnabled: vi.fn(async () => ({ ok: true, enabledAutomationIds: [], receipt: {} })),
@@ -535,7 +546,9 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
         ok: true,
         automations: [{ ...NIGHTLY, name: "Renamed nightly sweep" }],
       })),
-      skipsForProject: vi.fn(
+      // The skip belongs to the record on screen, so it arrives through that
+      // record's OWN history read (VC-297) rather than the project's.
+      skipsForAutomation: vi.fn(
         async (): Promise<{ ok: true; skips: AutomationSkippedOccurrence[] }> => ({
           ok: true,
           skips: [

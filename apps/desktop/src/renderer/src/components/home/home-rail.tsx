@@ -465,7 +465,7 @@ function BoardSessionsBlock({ projectId }: { projectId: string }) {
                   ? "Hide earlier sessions"
                   : `Show ${earlier.length} earlier session${earlier.length === 1 ? "" : "s"}`
               }
-              className="flex w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-label text-muted-foreground outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 motion-reduce:transition-none"
+              className="flex w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-label text-muted-foreground outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
             >
               Earlier · {earlier.length}
               <RailFoldCaret open={foldOpen} placement="eyebrow" />

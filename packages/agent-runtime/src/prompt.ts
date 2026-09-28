@@ -23,7 +23,7 @@
  * layer that reaches for a Session field does not compile.
  */
 
-import { promptResourceBlock, verbEntry } from "@volli/shared";
+import { promptResourceBlock, verbToolWireName } from "@volli/shared";
 import type {
   PromptResource,
   RuntimeBrief,
@@ -473,7 +473,7 @@ export function composeToolSurfaceBlock(
 ): string {
   const verbs = tools.verbs ?? [];
   const named = verbs.map((verb) => {
-    const wire = verbEntry(verb)?.tool?.name;
+    const wire = verbToolWireName(verb, tools.mcpManagementNames);
     // A key with no projection cannot reach a tool array, so it cannot reach
     // here either — `sessionToolBindings` would already have refused to build
     // the surface. Printing the bare key is the honest fallback rather than a

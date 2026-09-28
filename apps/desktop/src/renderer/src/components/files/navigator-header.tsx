@@ -100,7 +100,7 @@ export function FilesNavigatorHeader({
             data-testid={upTestId}
             onClick={onNavigateUp}
             aria-label={`Leave ${cwd}`}
-            className="flex min-w-0 flex-1 items-center gap-1 rounded-sm font-mono text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
+            className="flex min-w-0 flex-1 items-center gap-1 rounded-sm font-mono text-ui text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ArrowUUpLeftIcon aria-hidden className="size-3 shrink-0" />
             <span className="truncate">{cwd}</span>

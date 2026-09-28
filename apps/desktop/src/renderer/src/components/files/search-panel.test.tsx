@@ -166,6 +166,73 @@ describe("what the page draws", () => {
     expect(document.querySelector("mark")?.textContent).toBe("needle");
   });
 
+  it("gives a late hit space in the row, even when main sends the whole short line", async () => {
+    const preview = `${"x".repeat(100)}MIN_PANE_PX = 240;`;
+    await mount(
+      { kind: "home", projectId: "p1" },
+      {
+        ok: true,
+        files: [
+          {
+            relPath: "src/layout.ts",
+            matches: [{ line: 42, column: 101, preview, start: 100, end: 111 }],
+          },
+        ],
+        matches: 1,
+        limit: "none",
+      },
+    );
+    await type("MIN_PANE_PX");
+
+    const row = rows('[data-testid="file-search-match"]')[0];
+    const hit = row?.querySelector("mark");
+    const before = hit?.previousElementSibling;
+    const after = hit?.nextElementSibling;
+    expect(row?.getAttribute("data-line")).toBe("42");
+    expect(before?.textContent).toBe(`…${"x".repeat(12)}`);
+    expect(hit?.textContent).toBe("MIN_PANE_PX");
+    expect(after?.textContent).toBe(" = 240;");
+    // Unlike an inline mark inside a single truncating span, the context can
+    // shrink while the hit stays fixed. Pin the parent structure too: an outer
+    // `truncate` could clip the mark despite its own shrink-0. jsdom cannot
+    // verify pixel clipping.
+    const snippet = hit?.parentElement;
+    expect(snippet?.classList.contains("flex")).toBe(true);
+    expect(snippet?.classList.contains("min-w-0")).toBe(true);
+    expect(snippet?.classList.contains("overflow-hidden")).toBe(true);
+    expect(snippet?.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(snippet?.classList.contains("truncate")).toBe(false);
+    expect(hit?.classList.contains("shrink-0")).toBe(true);
+    expect(before?.classList.contains("min-w-0")).toBe(true);
+    expect(after?.classList.contains("min-w-0")).toBe(true);
+
+    await act(async () => {
+      row?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    });
+    expect(onOpenMatch).toHaveBeenCalledWith("src/layout.ts");
+    expect(takeFileReveal(fileRevealKey({ projectId: "p1", relPath: "src/layout.ts" }))).toEqual({
+      line: 42,
+      column: 101,
+      length: 11,
+    });
+  });
+
+  it("does not re-segment an unchanged match when the search input rerenders", async () => {
+    const { search } = await mount({ kind: "home", projectId: "p1" });
+    await type("needle");
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+    try {
+      // A subsequent search returns the same match object. Until it finishes,
+      // the previous result also stays mounted through input updates.
+      await type("need");
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(rows('[data-testid="file-search-match"]')).toHaveLength(1);
+      expect(segment).not.toHaveBeenCalled();
+    } finally {
+      segment.mockRestore();
+    }
+  });
+
   it("says out loud that a capped search is not the whole answer", async () => {
     await mount({ kind: "home", projectId: "p1" }, { ...oneMatch, matches: 500, limit: "matches" });
 
@@ -175,6 +242,16 @@ describe("what the page draws", () => {
       "First 500 matches in 1 file",
     );
     expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(1);
+  });
+
+  it("keeps zero results distinct from a truncated result", async () => {
+    await mount(
+      { kind: "home", projectId: "p1" },
+      { ok: true, files: [], matches: 0, limit: "none" },
+    );
+    await type("absent");
+    expect(rows('[data-testid="file-search-empty"]')[0]?.textContent).toBe("No matches");
+    expect(rows('[data-testid="file-search-truncated"]')).toHaveLength(0);
   });
 
   it("reports a failed search rather than drawing it as no matches", async () => {

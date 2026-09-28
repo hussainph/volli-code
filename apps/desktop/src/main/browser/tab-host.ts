@@ -1609,6 +1609,55 @@ export class BrowserTabHost {
   }
 
   /**
+   * Takes every plane off ONE window and parks it back on the stage, for an app
+   * page that has just been replaced or died (VC-424).
+   *
+   * Hide is otherwise the renderer's word: its plane controller emits it from
+   * React cleanup as a pane unmounts. A main-frame reload, an
+   * `ELECTRON_RENDERER_URL` re-navigation, or a crashed app renderer runs no
+   * cleanup at all — and a Browser Tab's `WebContentsView` is a sibling of the
+   * window's own `webContents`, not a child of it, so nothing in that reset
+   * detaches one. The view stays composited exactly where the dead page last
+   * placed it, over a fresh app UI that has never heard of the tab and cannot
+   * hide what it does not know it has.
+   *
+   * Deliberately the smallest act that ends that: the tabs stay open, their
+   * holds stay with the Sessions that took them, their engines keep running on
+   * the stage, and a pane in the new page shows the same tab again through the
+   * ordinary {@link show}. Closing them here would destroy live pages — and a
+   * page a person was reading — over a reload they may not even have asked for.
+   *
+   * Scoped to the window whose page reset, never host-wide: a second window's
+   * first navigation must not sweep planes off the window still showing them.
+   *
+   * Every plane comes off even when one cannot be parked. The view leaves the
+   * window before the stage is asked for, so the pixels over the app are gone
+   * either way, and the first {@link BrowserStageUnavailableError} is raised
+   * once the sweep is complete: surfacelessness is still a fault worth hearing
+   * about (VC-278), but never a reason to leave the remaining pages stranded on
+   * top of the new page. Returns the tabs taken off, in registry order.
+   */
+  parkPlanesOn(window: BrowserWindow): string[] {
+    const parked: string[] = [];
+    let failure: Error | null = null;
+    for (const entry of this.tabs.values()) {
+      if (entry.parent.kind !== "window" || entry.parent.window !== window) continue;
+      parked.push(entry.state.tabId);
+      try {
+        // The same pair every other off-screen path uses, so the cursor overlay
+        // hears the plane change (VC-239) and the page keeps a surface (VC-278).
+        this.goOffScreen(entry);
+      } catch (cause) {
+        // The first fault is the one reported; the sweep owes the rest of the
+        // planes their detach either way.
+        failure ??= cause instanceof Error ? cause : new Error(String(cause), { cause });
+      }
+    }
+    if (failure !== null) throw failure;
+    return parked;
+  }
+
+  /**
    * The one seam the agent port drives a tab's engine through: the live
    * webContents, whose app-private `debugger` is the CDP wire. Handed out for
    * exactly that composition — nothing else in the app reaches a remote

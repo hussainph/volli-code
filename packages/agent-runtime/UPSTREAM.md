@@ -6,7 +6,7 @@ Pi, consumed from npm.
 - Repository: https://github.com/earendil-works/pi
 - Previously `badlogic/pi-mono`, published under the `@mariozechner/*` npm scope.
   Both are stale — the current packages are `@earendil-works/*`.
-- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.85.1`. The 0.84.x
+- Pinned releases: `pi-agent-core` and `pi-ai` both at `0.87.1`. The 0.84.x
   split VC-117 tracked is gone; keep the two aligned on every bump.
 - Node floor: `>=22.19.0`. ESM only.
 
@@ -14,10 +14,10 @@ Pi, consumed from npm.
 
 Direct dependencies, pinned exactly:
 
-- `@earendil-works/pi-agent-core` `0.85.1` — `Agent`, JSONL Session
+- `@earendil-works/pi-agent-core` `0.87.1` — `Agent`, JSONL Session
   persistence, context-injected coding tools, and the Node execution
   environment
-- `@earendil-works/pi-ai` `0.85.1` — model catalog, provider streams, and
+- `@earendil-works/pi-ai` `0.87.1` — model catalog, provider streams, and
   message types
 
 `@earendil-works/pi-telemetry` arrives transitively and is not imported here.
@@ -54,7 +54,7 @@ path; and record any policy or API divergence here before bumping the pin.
 One, declared in `pnpm-workspace.yaml` under `patchedDependencies` and stored
 in `patches/` at the repo root.
 
-- `@earendil-works/pi-agent-core@0.85.1` — adds an optional `estimateMessage`
+- `@earendil-works/pi-agent-core@0.87.1` — adds an optional `estimateMessage`
   parameter to `prepareCompaction` and `findCutPoint` in
   `dist/harness/compaction/compaction.{js,d.ts}`. Upstream hardcodes pi's own
   `estimateTokens` at both the cut-point scan and the `tokensBefore` total, so
@@ -62,7 +62,11 @@ in `patches/` at the repo root.
   budgets against. `prepareModelCompaction` passes the model-aware counter
   (`estimateMessageTokens` ∘ `withoutReasoning`); a caller that passes nothing
   gets upstream behavior unchanged, which is what keeps the patch small and the
-  seam additive. Upstream ships no equivalent hook as of 0.85.1.
+  seam additive. Upstream ships no equivalent hook as of 0.87.1. At the 0.87.1
+  bump (VC-421) the patch rebased unchanged:
+  `dist/harness/compaction/compaction.{js,d.ts}` are byte-identical between
+  0.85.1 and 0.87.1 apart from the patched hunks; the 0.86/0.87
+  transcript-context work did not touch the harness compaction module.
 
 Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
 (`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale
@@ -97,6 +101,59 @@ against a stub `ExecutionEnv` that records the string Pi passes to
 `absolutePath`, and asserts the replica agrees for every transformation. Bumping
 the pin fails that test if Pi changes the normalization. Re-check it, and this
 section, on every version bump.
+
+## Transcript-carried prompt and tools (0.86+)
+
+In pi-ai 0.86, provider stream inputs moved from `Context` (`systemPrompt`,
+`messages`, `tools`) to normalized `TranscriptContext`: the system prompt and
+tool declarations are system messages inside `messages`. The leading system
+message carries both; later system messages carry prompt additions and
+`toolsAdded`/`toolsRemoved` deltas. `AgentState.systemPrompt` is now a read-only
+replay, and `AgentContext` no longer has `systemPrompt`.
+
+`src/pi/transcript-context.ts` restates pi-ai's `createInitialSystemMessage`
+as `systemHead` (PI-RESTATED; `transcript-context.test.ts` pins it against the
+original). The runtime must prepend this head itself: `Agent` seeds one only
+when its input array does not already start with a system message, so arrays
+rebuilt from the sidecar during compaction or model switches would otherwise
+lose the prompt. The head is never persisted; it is recomposed per attachment.
+Tool-change system messages emitted by Pi's loop through `message_end` ARE
+persisted and replayed in place, and Pi reconciles them against executable tools
+on the next request.
+
+`src/pi/token-counting.ts` prices `system` messages using pi-ai's
+`getSystemMessageText` rendered text, tool declarations at the per-tool rate,
+and removed names. This makes a normalized transcript cost exactly what the
+old `(systemPrompt, tools)` pair cost. The transcript is the ONLY spelling the
+estimator accepts: `estimateContextTokens`, `projectedContextTokens` and the
+projector take `(messages, model)` and nothing beside them, so there is no
+parameter through which the prompt or a declaration could be handed over a
+second time. A caller holding a sidecar conversation and the attachment's own
+prompt and tools (compaction's `tokensBefore`) composes the head with
+`systemHead` and prices `withSystemHead(head, conversation)` — the same array
+the runtime sends. A whole-request estimate prices declarations once per name
+over the whole transcript, through pi-ai's own `getCurrentTools` (later
+declarations win, removed tools are gone) — which is what every adapter is
+sent — so a persisted tool-change message that re-declares a tool the head
+declares is not counted twice.
+
+Native compaction in `src/pi/provider-compaction.ts` strips system messages from
+the conversation sent to `/responses/compact` and Anthropic's compaction
+request: those endpoints carry prompts in their own `instructions`/`system` and
+`tools` fields.
+
+`ToolCall.arguments` is now `JsonObject`; `ToolResultMessage.details` is
+JSON-only (`JsonValue` arrays readonly). Runtime tools already produced JSON,
+so only test fixtures needed retyping. `ExecutionEnv` gained
+`openTextLineReader`; `ScopedExecutionEnv` returns `not_supported`, as it does
+for `readTextLines`.
+
+The 0.87.1 built-in model catalog was generated 2026-09-22 and lists 41
+providers (including `meta`). The optional `Model.inputLimits` and
+`Model.promptCache` fields are used only by Pi's coding-agent for image resizing
+and cache warming. `model-catalog.ts`'s pi.dev-feed allowlist does not admit
+them; this runtime does not read them, and the pinned built-ins do not ship
+them.
 
 ## Credentials
 

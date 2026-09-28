@@ -49,6 +49,14 @@ interface BoardColumnProps {
   /** Play the enter transition — true for columns appearing on an already-mounted board. */
   animateEnter: boolean;
   /**
+   * A ticket that must be brought into this column's WINDOW so something
+   * outside can reach its card (VC-419: keyboard focus returning from the
+   * ticket it opened). `null`, or a ticket in another column, is a no-op — and
+   * so is one already mounted, since `scrollOffsetForRow` answers `null` for a
+   * row the window already holds.
+   */
+  revealTicketId?: string | null;
+  /**
    * This column's Offered list, mid-drag (VC-132) — absent when there is
    * nothing to show here, which is every column at rest and every column the
    * pointer is not over.
@@ -81,12 +89,15 @@ const COLUMN_ROW_GAP = 8;
 function useColumnWindow({
   count,
   selectedIndex,
+  revealIndex,
   dragActive,
   scrollerRef,
   listRef,
 }: {
   count: number;
   selectedIndex: number;
+  /** A row to scroll into the window on demand, or `-1` for none (VC-419). */
+  revealIndex: number;
   dragActive: boolean;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
@@ -178,23 +189,41 @@ function useColumnWindow({
   // reach it (see `scrollOffsetForRow`). Keyed on the index alone, so clicking
   // a card already on screen never moves anything: on an unwindowed column the
   // window is the whole list and this is a permanent no-op.
+  const scrollRowIntoWindow = React.useCallback(
+    (index: number) => {
+      const scroller = scrollerRef.current;
+      if (scroller === null) return;
+      const offset = scrollOffsetForRow({
+        index,
+        window: range,
+        rowStride: strideRef.current,
+        viewportHeight: scroller.clientHeight,
+        maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
+      });
+      if (offset === null) return;
+      scroller.scrollTop = offset;
+      recompute();
+    },
+    [range, scrollerRef, recompute],
+  );
   const lastScrolledTo = React.useRef(selectedIndex);
   React.useLayoutEffect(() => {
     if (selectedIndex === lastScrolledTo.current) return;
     lastScrolledTo.current = selectedIndex;
-    const scroller = scrollerRef.current;
-    if (scroller === null) return;
-    const offset = scrollOffsetForRow({
-      index: selectedIndex,
-      window: range,
-      rowStride: strideRef.current,
-      viewportHeight: scroller.clientHeight,
-      maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
-    });
-    if (offset === null) return;
-    scroller.scrollTop = offset;
-    recompute();
-  }, [selectedIndex, range, scrollerRef, recompute]);
+    scrollRowIntoWindow(selectedIndex);
+  }, [selectedIndex, scrollRowIntoWindow]);
+
+  // The same travel, asked for by something OUTSIDE the column (VC-419): a
+  // keyboard focus restore naming a card this window has left unmounted. Not
+  // folded into the effect above because the two are different requests that
+  // can be live at once — a restore must not be swallowed because the row it
+  // names happens to be the selected one, and it must re-run if the window
+  // moves under it before the card is reached, which is what keying on `range`
+  // (through `scrollRowIntoWindow`) buys.
+  React.useLayoutEffect(() => {
+    if (revealIndex < 0) return;
+    scrollRowIntoWindow(revealIndex);
+  }, [revealIndex, scrollRowIntoWindow]);
 
   // Reconciled against THIS render's count rather than trusted: `range` is
   // state and state is a commit behind the props that moved it, so a drop that
@@ -233,6 +262,7 @@ export const BoardColumn = React.memo(function BoardColumn({
   dimmed = false,
   aimed = false,
   dragActive = false,
+  revealTicketId = null,
 }: BoardColumnProps) {
   // ticketId → what is running on it; absent means nothing is (VC-100). Read
   // from the board's single derivation rather than handed down as a prop: the
@@ -274,9 +304,15 @@ export const BoardColumn = React.memo(function BoardColumn({
     },
     [setNodeRef],
   );
+  const revealIndex = React.useMemo(
+    () =>
+      revealTicketId === null ? -1 : tickets.findIndex((ticket) => ticket.id === revealTicketId),
+    [tickets, revealTicketId],
+  );
   const { window: mountedRange, rowStride } = useColumnWindow({
     count: tickets.length,
     selectedIndex,
+    revealIndex,
     dragActive,
     scrollerRef,
     listRef,

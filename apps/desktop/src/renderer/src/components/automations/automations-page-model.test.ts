@@ -13,8 +13,10 @@ import {
   listingRunTarget,
   parseLaneRowId,
   ownershipLabel,
+  historyEmptyCopy,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -130,6 +132,33 @@ describe("a Run prints its own evidence", () => {
   it("keeps the Automation name a deleted record left behind", () => {
     expect(runAutomationLabel(run())).toBe("Review");
     expect(runAutomationLabel(run({ automationId: null, automationName: null }))).toBe("Run once");
+  });
+
+  it("says how it started, from its own attendance (VC-297)", () => {
+    expect(runStartLabel(run({ attendance: "attended" }))).toBe("By hand");
+    expect(runStartLabel(run({ attendance: "unattended" }))).toBe("Automatic");
+  });
+
+  it("says nothing about an empty history until the read has landed (VC-297)", () => {
+    // "Nothing has run" is a claim about the past, and an unread cache cannot
+    // make it. A cold cache is the ordinary state on every record the reader
+    // picks, so this is the difference between silence and a false sentence.
+    expect(historyEmptyCopy("automation-1", false)).toBeNull();
+    expect(historyEmptyCopy(null, false)).toBeNull();
+  });
+
+  it("names the scope once it knows the answer is empty", () => {
+    expect(historyEmptyCopy("automation-1", true)).toBe("Nothing has run this Automation yet.");
+    expect(historyEmptyCopy(null, true)).toBe("Nothing has run in this project yet.");
+  });
+
+  it("never names a schedule for an unattended Run", () => {
+    // `unattended` is the schedule timer AND the agent's own Run verb, so a
+    // Run another Session started has no schedule to name. One word covers
+    // both, or the row would be false for half of them.
+    expect(runStartLabel(run({ attendance: "unattended" })).toLowerCase()).not.toContain(
+      "schedule",
+    );
   });
 });
 

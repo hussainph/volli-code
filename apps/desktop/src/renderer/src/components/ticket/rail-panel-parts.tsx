@@ -449,7 +449,7 @@ export function RailFoldHeadingRow({
                 type="button"
                 aria-label={triggerLabel}
                 data-testid={testId}
-                className="flex items-center gap-1 rounded-sm uppercase outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 motion-reduce:transition-none"
+                className="flex items-center gap-1 rounded-sm uppercase outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
               >
                 {label}
                 <RailFoldCaret open={open} placement="eyebrow" />
@@ -603,7 +603,7 @@ export function RailReadFaultBody({
  */
 export const RAIL_FOOTER = "shrink-0 border-t border-sidebar-border/70 bg-background/30";
 export const RAIL_FOOTER_ROW = cn(
-  "flex min-h-8 w-full items-center gap-2 py-2 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45",
+  "flex min-h-8 w-full items-center gap-2 py-2 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
   RAIL_PANEL_INSET,
 );
 
@@ -636,11 +636,11 @@ export const RAIL_CHECKOUT_ROW = "flex min-h-[42px] items-stretch";
 
 /** The left target: the tree's identity, from the content gutter inward. */
 export const RAIL_CHECKOUT_IDENTITY =
-  "flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 pl-4 text-left outline-none group-data-[narrow=true]/rail:pl-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45";
+  "flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 pl-4 text-left outline-none group-data-[narrow=true]/rail:pl-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The right target: the one fact, and the fold's caret, out to the same gutter. */
 export const RAIL_CHECKOUT_FACT =
-  "flex shrink-0 items-center gap-2 py-2 pr-4 pl-2 text-left outline-none group-data-[narrow=true]/rail:pr-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/45";
+  "flex shrink-0 items-center gap-2 py-2 pr-4 pl-2 text-left outline-none group-data-[narrow=true]/rail:pr-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * One repository-card row's shared frame: full-width, quiet hover, seam above
@@ -662,7 +662,7 @@ export const RAIL_CHECKOUT_FACT =
  * neighbours are fixed.
  */
 export const RAIL_CARD_ROW =
-  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
+  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * The framed card those rows sit in, and the hairline between them.

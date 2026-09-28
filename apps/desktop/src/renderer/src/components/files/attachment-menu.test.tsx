@@ -197,7 +197,7 @@ describe("AttachmentMenu", () => {
     const list = document.querySelector<HTMLElement>('[data-testid="rail-attachments-list"]');
     expect(list?.tabIndex).toBe(0);
     expect(list?.getAttribute("aria-label")).toBe("Attachments");
-    expect(list?.className).toContain("focus-visible:ring-ring/45");
+    expect(list?.className).toContain("focus-visible:ring-ring");
     list?.focus();
     expect(document.activeElement).toBe(list);
     // Focusable, not actionable: the rows stay as inert as they were.

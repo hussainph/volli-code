@@ -615,6 +615,18 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   ): Promise<Result<string[], FileError>> {
     return this.#unsupported();
   }
+  /**
+   * Pi 0.87's pull-based line reader, which its Node environment builds
+   * `readTextLines` on. The same answer as `readTextLines`: nothing this
+   * runtime hands the scoped environment reads a file line by line, and a
+   * capability nobody uses stays fail-closed rather than quietly delegated.
+   */
+  async openTextLineReader(
+    _path: string,
+    _context?: Context,
+  ): ReturnType<ExecutionEnv["openTextLineReader"]> {
+    return this.#unsupported();
+  }
   async appendFile(
     path: string,
     content: string | Uint8Array,

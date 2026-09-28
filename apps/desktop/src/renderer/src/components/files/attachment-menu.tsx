@@ -96,7 +96,7 @@ export function AttachmentMenuDetail<T extends AttachmentMenuEntry>({
           aria-label="Attachments"
           data-testid="rail-attachments-list"
           tabIndex={0}
-          className="flex max-h-64 flex-col overflow-y-auto focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+          className="flex max-h-64 flex-col overflow-y-auto focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           {attachments.map((attachment) => (
             <li key={attachment.linkId ?? attachment.blobHash}>

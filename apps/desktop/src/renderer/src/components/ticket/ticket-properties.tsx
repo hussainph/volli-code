@@ -222,7 +222,7 @@ function LabelPill({
         aria-label={`Remove ${name}`}
         title={`Remove ${name}`}
         data-testid="ticket-rail-label-remove"
-        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
+        className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onRemove}
       >
         <XIcon weight="bold" className="size-2.5" />
@@ -300,7 +300,7 @@ function AddLabelControl({
           aria-label="Add label"
           title="Add label"
           data-testid="ticket-rail-label-add"
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           {/* `bold` at 12px: the size tier where regular draws lighter than the
               text it sits among (CLAUDE.md), and this glyph now has no word

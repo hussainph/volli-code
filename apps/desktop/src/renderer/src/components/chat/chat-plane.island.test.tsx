@@ -97,6 +97,7 @@ function child(over: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     bornTicketless: true,
     role: "subagent",
     parentSessionId: SESSION,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -290,6 +291,10 @@ describe("the Activity Island in the chat plane", () => {
     click(cluster!);
     const row = document.body.querySelector<HTMLElement>(`[data-island-row="${CHILD}"]`);
     expect(row).not.toBeNull();
+    // What the parent picked for this helper (VC-416), read off the listing
+    // record and drawn without a second source.
+    expect(row!.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
+    expect(row!.querySelector("[data-agent-model]")?.textContent).toContain("High");
     act(() => row!.focus());
     click(row!);
     await settle();
@@ -298,6 +303,10 @@ describe("the Activity Island in the chat plane", () => {
     const dialog = dialogs[0]!;
     expect(dialog.textContent).toContain("Grep the tests");
     expect(dialog.querySelector("[data-subagent-peek-state]")?.textContent).toBe("done");
+    // The same two words the row drew, from the same object: a press between
+    // two surfaces must not change what the helper is reported to be running.
+    expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
+    expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("High");
     expect(dialog.querySelector("[data-subagent-peek-transcript]")?.textContent).toContain(
       "Found three matching tests.",
     );

@@ -26,6 +26,7 @@ import type { PromptResource, RuntimeToolBundle } from "@volli/shared";
 import { composeFirstUserMessage, composeSystemPrompt } from "../../src/prompt";
 import { mapPiActivity } from "../../src/pi/activity";
 import { createContextTokenProjector } from "../../src/pi/token-counting";
+import { systemHead, withSystemHead } from "../../src/pi/transcript-context";
 import { table } from "./report";
 import { measureSync, type TimingSummary } from "./runtime-cost-measure";
 
@@ -244,13 +245,20 @@ function positiveInteger(value: string | undefined): number | null {
  * the bench's assertions exercise the very fixture its table is timed on. A
  * property proved against a different fixture proves nothing about the table.
  */
+/**
+ * The long conversation as the runtime sends it: behind the head that carries
+ * the prompt and the 20 tool schemas, which pi-ai 0.86 moved into the
+ * transcript. One head object, as one attachment holds one.
+ */
+function transcriptFixture(): AgentMessage[] {
+  return withSystemHead(systemHead(systemPrompt, tools), conversationFixture());
+}
+
 export function longContextFixture(): {
   messages: AgentMessage[];
   model: Model<Api>;
-  systemPrompt: string;
-  tools: readonly Tool[];
 } {
-  return { messages: conversationFixture(), model, systemPrompt, tools };
+  return { messages: transcriptFixture(), model };
 }
 
 export const RUNTIME_COST_ARMS = {
@@ -274,7 +282,7 @@ export function buildRuntimeCostReport(
   const samples = options.samples ?? positiveInteger(process.env["BENCH_SAMPLES"]) ?? 25;
   const operationScale = options.operationScale ?? 1;
   const operations = (base: number): number => Math.max(1, Math.floor(base * operationScale));
-  const messages = conversationFixture();
+  const messages = transcriptFixture();
   const contextTokenProjector = createContextTokenProjector();
   const event = activityEvent();
 
@@ -313,7 +321,7 @@ export function buildRuntimeCostReport(
         operationsPerSample: operations(2),
         samples,
       },
-      () => contextTokenProjector(messages, model, systemPrompt, tools),
+      () => contextTokenProjector(messages, model),
     ),
   );
   timings.push(

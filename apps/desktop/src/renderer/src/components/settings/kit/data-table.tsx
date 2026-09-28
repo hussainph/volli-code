@@ -257,7 +257,7 @@ export function DataTable<T>({
                 onFocus={(event) => {
                   if (event.target === event.currentTarget) roving.setActive(index);
                 }}
-                className="border-t border-border/50 outline-none first:border-t-0 hover:bg-accent/40 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-inset"
+                className="border-t border-border/50 outline-none first:border-t-0 hover:bg-accent/40 focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               >
                 {columns.map((column) => (
                   <td

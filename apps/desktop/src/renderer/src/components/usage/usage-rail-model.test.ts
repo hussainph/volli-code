@@ -65,6 +65,7 @@ function chatRow(
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
   return { kind: "chat", record };

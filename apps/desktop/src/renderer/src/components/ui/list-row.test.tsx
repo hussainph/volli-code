@@ -12,7 +12,8 @@ describe("ListRow", () => {
 
     expect(html).toContain("<button");
     expect(html).toContain("focus-visible:ring-2");
-    expect(html).toContain("focus-visible:ring-ring/45");
+    expect(html).toContain("focus-visible:ring-ring");
+    expect(html).not.toContain("focus-visible:ring-ring/");
   });
 
   it("draws an inert row as a div with no hover fill", () => {

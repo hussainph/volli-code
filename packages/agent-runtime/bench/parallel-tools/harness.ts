@@ -26,6 +26,7 @@ import { Agent, type StreamFn, type ToolExecutionMode } from "@earendil-works/pi
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type JsonObject,
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -122,9 +123,7 @@ function benchTool(spec: BenchTool, samples: ToolSample[], now: () => number): A
  * emits one call per reply measures the case where parallel mode is
  * unreachable — which is why the control scenario emits exactly that.
  */
-export type ScriptedReply =
-  | { toolCalls: { name: string; args?: Record<string, unknown> }[] }
-  | { text: string };
+export type ScriptedReply = { toolCalls: { name: string; args?: JsonObject }[] } | { text: string };
 
 /** Deterministic per-reply usage, so token totals are comparable across modes. */
 export interface ScriptedUsage {

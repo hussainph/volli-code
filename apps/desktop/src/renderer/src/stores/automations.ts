@@ -89,6 +89,24 @@ interface AutomationsState {
    */
   skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
+   * {@link automationHistoryKey} → ONE Automation's Runs in ONE project,
+   * newest first (VC-297) — what the editor's history draws.
+   *
+   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
+   * the editor opens on one record and reads one record, and main answers each
+   * question with its own indexed read. Deriving it by filtering
+   * {@link AutomationsState.runsByProject} would make one Automation's history
+   * depend on having fetched every Run in the project — which is the read a
+   * client that is not this process should not have to make.
+   *
+   * Keyed by the PAIR, never by the Automation alone: a global Automation is
+   * listable in every project, and the Runs it made in one are not the Runs it
+   * made in another.
+   */
+  runsByAutomation: Record<string, readonly AutomationRun[]>;
+  /** The same key → that Automation's Skipped occurrences, newest due first. */
+  skipsByAutomation: Record<string, readonly AutomationSkippedOccurrence[]>;
+  /**
    * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
    * property of this host rather than of any project it can be listed in.
@@ -148,6 +166,12 @@ interface AutomationsState {
   refreshRuns(projectId: string): Promise<void>;
   /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
   refreshSkips(projectId: string): Promise<void>;
+  /**
+   * Re-fetches ONE Automation's Runs and Skipped occurrences in one project
+   * (VC-297). Both doors at once, because the editor draws one interleaved
+   * list and two sequential round trips would show it half-built.
+   */
+  refreshAutomationHistory(projectId: string, automationId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Resolves whether it landed. */
   refreshEnablement(): Promise<boolean>;
   /** Re-fetches one project's armed columns. Resolves whether the read landed. */
@@ -232,6 +256,8 @@ export function createAutomationsStore() {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     enablementRead: false,
     railReadAt: {},
@@ -367,6 +393,32 @@ export function createAutomationsStore() {
           return;
         }
         set((state) => ({ runsByProject: { ...state.runsByProject, [projectId]: result.runs } }));
+      } catch (error) {
+        toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
+    async refreshAutomationHistory(projectId, automationId) {
+      const key = automationHistoryKey(projectId, automationId);
+      try {
+        const [runs, skips] = await Promise.all([
+          window.api.automations.runsForAutomation({ projectId, automationId }),
+          window.api.automations.skipsForAutomation({ projectId, automationId }),
+        ]);
+        if (!runs.ok) {
+          toastError(`Couldn't load run history: ${runs.error}`);
+          return;
+        }
+        if (!skips.ok) {
+          toastError(`Couldn't load skipped occurrences: ${skips.error}`);
+          return;
+        }
+        // One write for both halves: the editor interleaves them by time, and a
+        // render between two writes would draw a list that was never true.
+        set((state) => ({
+          runsByAutomation: { ...state.runsByAutomation, [key]: runs.runs },
+          skipsByAutomation: { ...state.skipsByAutomation, [key]: skips.skips },
+        }));
       } catch (error) {
         toastError(`Couldn't load run history: ${errorMessage(error)}`);
       }
@@ -574,6 +626,39 @@ const NO_AUTOMATIONS: readonly Automation[] = [];
 const NO_ARMINGS: readonly ColumnArming[] = [];
 const NO_ORDERS: readonly ColumnAutomationOrder[] = [];
 const NO_RANK: readonly string[] = [];
+const NO_RUNS: readonly AutomationRun[] = [];
+const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
+
+/**
+ * The cache key for one Automation's history IN one project (VC-297).
+ *
+ * Both ids, because a global Automation is one record listable everywhere
+ * while each Run it produced happened in ONE project. Keying by the Automation
+ * alone would let a project show a neighbour project's Runs — the same fault
+ * VC-297 fixed one scope up.
+ */
+export function automationHistoryKey(projectId: string, automationId: string): string {
+  return `${projectId}:${automationId}`;
+}
+
+/** One Automation's Runs in one project — frozen empty before its first read. */
+export function selectAutomationRuns(
+  state: AutomationsState,
+  projectId: string,
+  automationId: string,
+): readonly AutomationRun[] {
+  return state.runsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_RUNS;
+}
+
+/** That Automation's Skipped occurrences — frozen empty before its first read. */
+export function selectAutomationSkips(
+  state: AutomationsState,
+  projectId: string,
+  automationId: string,
+): readonly AutomationSkippedOccurrence[] {
+  return state.skipsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_SKIPS;
+}
+
 /** One project's listable Automations — a frozen empty array before its first read. */
 export function selectAutomations(
   state: AutomationsState,

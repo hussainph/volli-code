@@ -31,6 +31,7 @@ function agent(over: Partial<IslandAgent> = {}): IslandAgent {
     progress: 0,
     state: "working",
     promoted: false,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -151,6 +152,33 @@ describe("SubagentPeekDialog", () => {
       button!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
     expect(onOpenAsTab).toHaveBeenCalledWith(CHILD);
+  });
+
+  // VC-416. The overlay is the other surface a parent glances at, and it said
+  // what the helper was doing without ever saying what it was doing it with.
+  it("says what the child is running, beside what it is doing", async () => {
+    const { store } = chatStore();
+    await render({
+      agent: agent({
+        model: { providerId: "openai", modelId: "o5-mini", reasoningLevel: "xhigh" },
+      }),
+      onClose: () => {},
+      store,
+    });
+
+    const policy = dialog()?.querySelector("[data-agent-model]");
+    expect(policy?.textContent).toContain("o5-mini");
+    // The composer's word for the level, the same one the island row draws —
+    // one setting must not have two names a press apart.
+    expect(policy?.textContent).toContain("Extra high");
+  });
+
+  it("draws no policy in the header for a child that has not recorded one", async () => {
+    const { store } = chatStore();
+    await render({ agent: agent({ model: null }), onClose: () => {}, store });
+
+    expect(dialog()?.querySelector("[data-agent-model]")).toBeNull();
+    expect(dialog()?.querySelector("[data-subagent-peek-state]")?.textContent).toBe("working");
   });
 
   it("says so when the child has said nothing yet", async () => {
