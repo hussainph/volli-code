@@ -1,0 +1,3302 @@
+{
+  "snapshot": {
+    "takenAt": "2026-09-28T19:04:18.546Z",
+    "gitRef": "origin/main",
+    "gitHead": "1ecfac17bb7a004fdaebdad4d6cf5d187938f025",
+    "analysisCheckout": "349f3d2da673f10105e20942b1c2cbb29c6f050b",
+    "firstParentCommits": 531,
+    "ledgerInputEventsConsidered": 4889,
+    "ledgerOccurredRecordedMaxSkewMs": 1,
+    "earliestMergeInWindow": "2026-08-15",
+    "latestMergeInWindow": "2026-09-28"
+  },
+  "recognition": {
+    "prMergeBranch": 212,
+    "prMergePrNumber": 0,
+    "branchMerge": 9,
+    "squashPrNumber": 19,
+    "mergeSubject": 19,
+    "squashSubject": 0,
+    "integrationMerge": 3,
+    "plain": 57,
+    "prBranchWithoutTicket": 147,
+    "unlinkedMergeEvents": 212
+  },
+  "linkAudit": {
+    "ledgerPrLinks": 242,
+    "ledgerPrCollisions": [],
+    "branchVsLedgerAgree": 186,
+    "branchVsLedgerDisagree": [],
+    "branchWithoutLedgerPr": 26,
+    "branchSlugDriftSameTicket": 6,
+    "subjectOnlyEvidence": 19,
+    "subjectOnlyCorroborated": 16,
+    "ambiguousBranchEvidence": 0,
+    "evidenceForTicketNotInLedger": 0,
+    "orphanedDelegatedSessions": 58
+  },
+  "coverage": {
+    "ticketsInProject": 444,
+    "ticketsMarkedDone": 332,
+    "ticketsWithStrongMergeEvidence": 234,
+    "ticketsWithAnyMergeEvidence": 253,
+    "primaryCohort": 227,
+    "extendedCohort": 246,
+    "coverageOfStrongEvidence": 0.9700854700854701,
+    "doneWithoutPrimaryCohortMembership": 105,
+    "exclusions": {
+      "noMergeEvidence": 210,
+      "noSession": 6,
+      "noFirstMessage": 1,
+      "nonPositiveElapsed": 0
+    },
+    "excludedTickets": [
+      {
+        "ticket": "VC-26",
+        "reason": "noFirstMessage"
+      },
+      {
+        "ticket": "VC-107",
+        "reason": "noSession"
+      },
+      {
+        "ticket": "VC-144",
+        "reason": "noSession"
+      },
+      {
+        "ticket": "VC-147",
+        "reason": "noSession"
+      },
+      {
+        "ticket": "VC-370",
+        "reason": "noSession"
+      },
+      {
+        "ticket": "VC-375",
+        "reason": "noSession"
+      },
+      {
+        "ticket": "VC-386",
+        "reason": "noSession"
+      }
+    ]
+  },
+  "sessionAttribution": {
+    "cohortSessions": 1102,
+    "cohortSessionsInheritingTicket": 0,
+    "cohortTicketsWithSilentLeadingSession": 1,
+    "startDefinitionDisagreements": 0,
+    "ticketsWithMultipleMerges": 5
+  },
+  "elapsed": {
+    "unit": "hours",
+    "quantileEstimator": "linear interpolation between order statistics (R type 7)",
+    "primary": {
+      "n": 227,
+      "min": 0.39768694444444447,
+      "p25": 2.033887361111111,
+      "median": 6.5077613888888886,
+      "p75": 17.68520458333333,
+      "p90": 44.52063761111115,
+      "p95": 86.91171324999996,
+      "max": 345.9332975,
+      "mean": 19.049738734703865,
+      "trimmedMean10": 10.00653016697025,
+      "medianCI95": {
+        "lower": 4.421304166666666,
+        "upper": 7.934454166666667,
+        "resamples": 10000,
+        "method": "percentile bootstrap, seeded"
+      },
+      "meanCI95": {
+        "lower": 14.46299692936246,
+        "upper": 24.115243765663237,
+        "resamples": 10000,
+        "method": "percentile bootstrap, seeded"
+      }
+    },
+    "sensitivityFirstMerge": {
+      "n": 227,
+      "min": 0.39768694444444447,
+      "p25": 2.033887361111111,
+      "median": 6.5077613888888886,
+      "p75": 17.390911805555554,
+      "p90": 44.52063761111115,
+      "p95": 86.91171324999996,
+      "max": 345.9332975,
+      "mean": 18.956848377386194,
+      "trimmedMean10": 9.89587746508804
+    },
+    "sensitivityEarliestMessageAnySession": {
+      "n": 227,
+      "min": 0.39768694444444447,
+      "p25": 2.033887361111111,
+      "median": 6.5077613888888886,
+      "p75": 17.68520458333333,
+      "p90": 44.52063761111115,
+      "p95": 86.91171324999996,
+      "max": 345.9332975,
+      "mean": 19.049738734703865,
+      "trimmedMean10": 10.00653016697025
+    },
+    "sensitivityExtendedCohort": {
+      "n": 246,
+      "min": 0.39768694444444447,
+      "p25": 2.148041458333333,
+      "median": 6.850343472222223,
+      "p75": 17.491504513888888,
+      "p90": 38.00553708333334,
+      "p95": 83.06141340277777,
+      "max": 345.9332975,
+      "mean": 18.561642489837396,
+      "trimmedMean10": 10.004558448372618
+    },
+    "histogram": [
+      {
+        "from": 0,
+        "to": 1,
+        "count": 24,
+        "share": 0.10572687224669604
+      },
+      {
+        "from": 1,
+        "to": 2,
+        "count": 32,
+        "share": 0.14096916299559473
+      },
+      {
+        "from": 2,
+        "to": 4,
+        "count": 38,
+        "share": 0.16740088105726872
+      },
+      {
+        "from": 4,
+        "to": 8,
+        "count": 35,
+        "share": 0.15418502202643172
+      },
+      {
+        "from": 8,
+        "to": 16,
+        "count": 37,
+        "share": 0.16299559471365638
+      },
+      {
+        "from": 16,
+        "to": 24,
+        "count": 17,
+        "share": 0.07488986784140969
+      },
+      {
+        "from": 24,
+        "to": 48,
+        "count": 22,
+        "share": 0.09691629955947137
+      },
+      {
+        "from": 48,
+        "to": 96,
+        "count": 14,
+        "share": 0.06167400881057269
+      },
+      {
+        "from": 96,
+        "to": 168,
+        "count": 5,
+        "share": 0.022026431718061675
+      },
+      {
+        "from": 168,
+        "count": 3,
+        "share": 0.013215859030837005
+      }
+    ],
+    "ecdf": [
+      {
+        "hours": 1,
+        "count": 24,
+        "share": 0.10572687224669604
+      },
+      {
+        "hours": 2,
+        "count": 56,
+        "share": 0.24669603524229075
+      },
+      {
+        "hours": 4,
+        "count": 94,
+        "share": 0.41409691629955947
+      },
+      {
+        "hours": 8,
+        "count": 129,
+        "share": 0.5682819383259912
+      },
+      {
+        "hours": 12,
+        "count": 150,
+        "share": 0.6607929515418502
+      },
+      {
+        "hours": 24,
+        "count": 183,
+        "share": 0.8061674008810573
+      },
+      {
+        "hours": 48,
+        "count": 205,
+        "share": 0.9030837004405287
+      },
+      {
+        "hours": 72,
+        "count": 209,
+        "share": 0.920704845814978
+      },
+      {
+        "hours": 168,
+        "count": 224,
+        "share": 0.986784140969163
+      }
+    ]
+  },
+  "strata": {
+    "byMergeMonthUtc": {
+      "minimum": 8,
+      "reported": [
+        {
+          "key": "2026-08",
+          "n": 128,
+          "min": 0.41605027777777775,
+          "p25": 1.6223220138888887,
+          "median": 5.170304444444444,
+          "p75": 11.8582525,
+          "p90": 24.74258252777776,
+          "p95": 45.95634254166662,
+          "max": 140.4660086111111,
+          "mean": 12.30190561197917,
+          "trimmedMean10": 6.8770253418803415
+        },
+        {
+          "key": "2026-09",
+          "n": 99,
+          "min": 0.39768694444444447,
+          "p25": 2.484930972222222,
+          "median": 10.496472777777777,
+          "p75": 26.97101361111111,
+          "p90": 77.26941583333334,
+          "p95": 98.07820211111095,
+          "max": 345.9332975,
+          "mean": 27.774209842873177,
+          "trimmedMean10": 16.983104478738
+        }
+      ],
+      "suppressed": []
+    },
+    "bySessionCount": {
+      "minimum": 8,
+      "reported": [
+        {
+          "key": "1 Session",
+          "n": 30,
+          "min": 0.39768694444444447,
+          "p25": 0.6747865972222222,
+          "median": 1.1123201388888888,
+          "p75": 2.2488088888888886,
+          "p90": 5.700243111111123,
+          "p95": 59.224688041666425,
+          "max": 140.4660086111111,
+          "mean": 9.601407787037036,
+          "trimmedMean10": 1.5083124074074072
+        },
+        {
+          "key": "2 Sessions",
+          "n": 54,
+          "min": 0.4345977777777778,
+          "p25": 1.545125763888889,
+          "median": 4.009739861111111,
+          "p75": 9.840725625,
+          "p90": 16.828833138888893,
+          "p95": 20.008599694444406,
+          "max": 42.223509722222225,
+          "mean": 6.9296066255144035,
+          "trimmedMean10": 5.499625000000001
+        },
+        {
+          "key": "3-4 Sessions",
+          "n": 48,
+          "min": 0.41862,
+          "p25": 2.286138888888889,
+          "median": 7.818419027777777,
+          "p75": 18.91721097222222,
+          "p90": 69.85779777777779,
+          "p95": 91.83275965277777,
+          "max": 211.78521472222224,
+          "mean": 22.202214369212964,
+          "trimmedMean10": 13.5116383125
+        },
+        {
+          "key": "5+ Sessions",
+          "n": 95,
+          "min": 0.7292661111111111,
+          "p25": 3.76431875,
+          "median": 12.072071666666666,
+          "p75": 28.05410125,
+          "p90": 76.75134677777778,
+          "p95": 94.43539694444443,
+          "max": 345.9332975,
+          "mean": 27.329930649122808,
+          "trimmedMean10": 17.522725530303035
+        }
+      ],
+      "suppressed": []
+    }
+  },
+  "tickets": [
+    {
+      "ticket": "VC-10",
+      "pr": 284,
+      "mergeDateUtc": "2026-08-15",
+      "elapsedHours": 1.018,
+      "firstMergeElapsedHours": 1.018,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-11",
+      "pr": 285,
+      "mergeDateUtc": "2026-08-15",
+      "elapsedHours": 0.97,
+      "firstMergeElapsedHours": 0.533,
+      "mergeEventCount": 2,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-4",
+      "pr": 283,
+      "mergeDateUtc": "2026-08-15",
+      "elapsedHours": 1.065,
+      "firstMergeElapsedHours": 1.065,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-16",
+      "pr": 293,
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 4.542,
+      "firstMergeElapsedHours": 4.542,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-19",
+      "pr": 288,
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 3.535,
+      "firstMergeElapsedHours": 3.535,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-5",
+      "pr": 287,
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 12.648,
+      "firstMergeElapsedHours": 12.648,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-24",
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 7.736,
+      "firstMergeElapsedHours": 6.689,
+      "mergeEventCount": 2,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge",
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-25",
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 1.16,
+      "firstMergeElapsedHours": 1.16,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-47",
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 15.115,
+      "firstMergeElapsedHours": 15.115,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-33",
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 4.847,
+      "firstMergeElapsedHours": 4.847,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-13",
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 17.19,
+      "firstMergeElapsedHours": 17.19,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-20",
+      "pr": 296,
+      "mergeDateUtc": "2026-08-16",
+      "elapsedHours": 20.779,
+      "firstMergeElapsedHours": 20.779,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-66",
+      "pr": 297,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.203,
+      "firstMergeElapsedHours": 1.203,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-78",
+      "pr": 298,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.223,
+      "firstMergeElapsedHours": 1.223,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-46",
+      "pr": 299,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 0.449,
+      "firstMergeElapsedHours": 0.449,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-27",
+      "pr": 300,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 0.465,
+      "firstMergeElapsedHours": 0.465,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-14",
+      "pr": 301,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 0.881,
+      "firstMergeElapsedHours": 0.881,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-49",
+      "pr": 302,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 2.41,
+      "firstMergeElapsedHours": 2.41,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-51",
+      "pr": 304,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.634,
+      "firstMergeElapsedHours": 1.634,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-76",
+      "pr": 305,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.523,
+      "firstMergeElapsedHours": 1.523,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-71",
+      "pr": 303,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.634,
+      "firstMergeElapsedHours": 1.634,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-79",
+      "pr": 306,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 0.519,
+      "firstMergeElapsedHours": 0.519,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-72",
+      "pr": 307,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 8.218,
+      "firstMergeElapsedHours": 8.218,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-67",
+      "pr": 308,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 8.349,
+      "firstMergeElapsedHours": 8.349,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-62",
+      "pr": 309,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 12.34,
+      "firstMergeElapsedHours": 12.34,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-61",
+      "pr": 310,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 14.986,
+      "firstMergeElapsedHours": 14.986,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-57",
+      "pr": 311,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 12.51,
+      "firstMergeElapsedHours": 12.51,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-52",
+      "pr": 312,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 12.839,
+      "firstMergeElapsedHours": 12.839,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-32",
+      "pr": 313,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 11.784,
+      "firstMergeElapsedHours": 11.784,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-65",
+      "pr": 314,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 9.912,
+      "firstMergeElapsedHours": 9.912,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-68",
+      "pr": 315,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 10.369,
+      "firstMergeElapsedHours": 10.369,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-53",
+      "pr": 316,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 14.365,
+      "firstMergeElapsedHours": 14.365,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-84",
+      "pr": 317,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 2.875,
+      "firstMergeElapsedHours": 2.875,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-97",
+      "pr": 320,
+      "mergeDateUtc": "2026-08-17",
+      "elapsedHours": 1.531,
+      "firstMergeElapsedHours": 1.531,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-98",
+      "pr": 318,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 2.947,
+      "firstMergeElapsedHours": 2.947,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-56",
+      "pr": 319,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 2.804,
+      "firstMergeElapsedHours": 2.804,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-60",
+      "pr": 322,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 1.859,
+      "firstMergeElapsedHours": 1.859,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-100",
+      "pr": 321,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 5.086,
+      "firstMergeElapsedHours": 5.086,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-99",
+      "pr": 323,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 0.993,
+      "firstMergeElapsedHours": 0.993,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-37",
+      "pr": 324,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 2.075,
+      "firstMergeElapsedHours": 2.075,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-50",
+      "pr": 325,
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 5.255,
+      "firstMergeElapsedHours": 5.255,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-106",
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 4.239,
+      "firstMergeElapsedHours": 4.239,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-54",
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 13.714,
+      "firstMergeElapsedHours": 13.714,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-69",
+      "mergeDateUtc": "2026-08-18",
+      "elapsedHours": 17.144,
+      "firstMergeElapsedHours": 17.144,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "branch-merge"
+      ]
+    },
+    {
+      "ticket": "VC-31",
+      "pr": 328,
+      "mergeDateUtc": "2026-08-19",
+      "elapsedHours": 22.524,
+      "firstMergeElapsedHours": 22.524,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-55",
+      "pr": 329,
+      "mergeDateUtc": "2026-08-19",
+      "elapsedHours": 31.941,
+      "firstMergeElapsedHours": 31.941,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-113",
+      "pr": 330,
+      "mergeDateUtc": "2026-08-19",
+      "elapsedHours": 3.055,
+      "firstMergeElapsedHours": 3.055,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-7",
+      "pr": 326,
+      "mergeDateUtc": "2026-08-19",
+      "elapsedHours": 35.539,
+      "firstMergeElapsedHours": 16.502,
+      "mergeEventCount": 2,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "branch-merge",
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-114",
+      "pr": 338,
+      "mergeDateUtc": "2026-08-20",
+      "elapsedHours": 10.548,
+      "firstMergeElapsedHours": 10.548,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-94",
+      "pr": 339,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 29.099,
+      "firstMergeElapsedHours": 29.099,
+      "mergeEventCount": 1,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-120",
+      "pr": 340,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 0.865,
+      "firstMergeElapsedHours": 0.865,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-115",
+      "pr": 342,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 42.224,
+      "firstMergeElapsedHours": 42.224,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-123",
+      "pr": 343,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 11.726,
+      "firstMergeElapsedHours": 11.726,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-121",
+      "pr": 344,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 3.509,
+      "firstMergeElapsedHours": 3.509,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-124",
+      "pr": 345,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 13.742,
+      "firstMergeElapsedHours": 13.742,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-81",
+      "pr": 335,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 93.839,
+      "firstMergeElapsedHours": 93.839,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-136",
+      "pr": 347,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 1.669,
+      "firstMergeElapsedHours": 1.669,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-138",
+      "pr": 348,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 1.001,
+      "firstMergeElapsedHours": 1.001,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-140",
+      "pr": 349,
+      "mergeDateUtc": "2026-08-21",
+      "elapsedHours": 0.531,
+      "firstMergeElapsedHours": 0.531,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-139",
+      "pr": 352,
+      "mergeDateUtc": "2026-08-22",
+      "elapsedHours": 1.506,
+      "firstMergeElapsedHours": 1.506,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-137",
+      "pr": 351,
+      "mergeDateUtc": "2026-08-22",
+      "elapsedHours": 2.396,
+      "firstMergeElapsedHours": 2.396,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-122",
+      "pr": 350,
+      "mergeDateUtc": "2026-08-22",
+      "elapsedHours": 2.012,
+      "firstMergeElapsedHours": 2.012,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-64",
+      "pr": 354,
+      "mergeDateUtc": "2026-08-22",
+      "elapsedHours": 7.277,
+      "firstMergeElapsedHours": 7.11,
+      "mergeEventCount": 2,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-22",
+      "pr": 356,
+      "mergeDateUtc": "2026-08-22",
+      "elapsedHours": 140.466,
+      "firstMergeElapsedHours": 140.466,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-155",
+      "pr": 367,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 6.984,
+      "firstMergeElapsedHours": 6.984,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-92",
+      "pr": 369,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 88.107,
+      "firstMergeElapsedHours": 88.107,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-158",
+      "pr": 368,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 6.784,
+      "firstMergeElapsedHours": 6.784,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-157",
+      "pr": 370,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 6.882,
+      "firstMergeElapsedHours": 6.882,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-160",
+      "pr": 366,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 6.759,
+      "firstMergeElapsedHours": 6.759,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-111",
+      "pr": 371,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 35.682,
+      "firstMergeElapsedHours": 35.682,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-156",
+      "pr": 372,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 7.4,
+      "firstMergeElapsedHours": 7.4,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-159",
+      "pr": 373,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 7.63,
+      "firstMergeElapsedHours": 7.63,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-142",
+      "pr": 374,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 2.056,
+      "firstMergeElapsedHours": 2.056,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-3",
+      "pr": 375,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 6.508,
+      "firstMergeElapsedHours": 6.508,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-161",
+      "pr": 376,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 9.202,
+      "firstMergeElapsedHours": 9.202,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-164",
+      "pr": 377,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 8.281,
+      "firstMergeElapsedHours": 8.281,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-119",
+      "pr": 378,
+      "mergeDateUtc": "2026-08-23",
+      "elapsedHours": 34.945,
+      "firstMergeElapsedHours": 34.945,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-112",
+      "pr": 379,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 96.733,
+      "firstMergeElapsedHours": 96.733,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-173",
+      "pr": 381,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 0.416,
+      "firstMergeElapsedHours": 0.416,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-44",
+      "pr": 380,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 5.883,
+      "firstMergeElapsedHours": 5.883,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-91",
+      "pr": 384,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 4.167,
+      "firstMergeElapsedHours": 4.167,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-172",
+      "pr": 385,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 1.586,
+      "firstMergeElapsedHours": 1.586,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-126",
+      "pr": 383,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 10.027,
+      "firstMergeElapsedHours": 10.027,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-167",
+      "pr": 382,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 10.427,
+      "firstMergeElapsedHours": 10.427,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-118",
+      "pr": 386,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 12.082,
+      "firstMergeElapsedHours": 12.082,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-87",
+      "pr": 387,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 76.385,
+      "firstMergeElapsedHours": 76.385,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-174",
+      "pr": 388,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 0.516,
+      "firstMergeElapsedHours": 0.516,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-169",
+      "pr": 391,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 18.297,
+      "firstMergeElapsedHours": 18.297,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-176",
+      "pr": 392,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 1.394,
+      "firstMergeElapsedHours": 1.394,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-162",
+      "pr": 389,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 22.876,
+      "firstMergeElapsedHours": 22.876,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-177",
+      "pr": 393,
+      "mergeDateUtc": "2026-08-24",
+      "elapsedHours": 1.588,
+      "firstMergeElapsedHours": 1.588,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-85",
+      "pr": 394,
+      "mergeDateUtc": "2026-08-25",
+      "elapsedHours": 128.668,
+      "firstMergeElapsedHours": 128.668,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-175",
+      "pr": 390,
+      "mergeDateUtc": "2026-08-25",
+      "elapsedHours": 16.094,
+      "firstMergeElapsedHours": 16.094,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-163",
+      "pr": 395,
+      "mergeDateUtc": "2026-08-25",
+      "elapsedHours": 17.592,
+      "firstMergeElapsedHours": 17.592,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-179",
+      "pr": 396,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 2.311,
+      "firstMergeElapsedHours": 2.311,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-178",
+      "pr": 397,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 6.22,
+      "firstMergeElapsedHours": 6.22,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-180",
+      "pr": 398,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 0.435,
+      "firstMergeElapsedHours": 0.435,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-134",
+      "pr": 401,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 6.818,
+      "firstMergeElapsedHours": 6.818,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-185",
+      "pr": 402,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 7.209,
+      "firstMergeElapsedHours": 7.209,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-183",
+      "pr": 403,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 10.542,
+      "firstMergeElapsedHours": 10.542,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-182",
+      "pr": 399,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 11.061,
+      "firstMergeElapsedHours": 11.061,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-181",
+      "pr": 404,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 11.489,
+      "firstMergeElapsedHours": 11.489,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-186",
+      "pr": 405,
+      "mergeDateUtc": "2026-08-26",
+      "elapsedHours": 0.962,
+      "firstMergeElapsedHours": 0.962,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-190",
+      "pr": 406,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 0.929,
+      "firstMergeElapsedHours": 0.929,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-187",
+      "pr": 407,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 1.183,
+      "firstMergeElapsedHours": 1.183,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-191",
+      "pr": 408,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 0.936,
+      "firstMergeElapsedHours": 0.936,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-193",
+      "pr": 409,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 1.244,
+      "firstMergeElapsedHours": 1.244,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-192",
+      "pr": 410,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 3.912,
+      "firstMergeElapsedHours": 3.912,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-188",
+      "pr": 411,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 4.421,
+      "firstMergeElapsedHours": 4.421,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-189",
+      "pr": 412,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 1.959,
+      "firstMergeElapsedHours": 1.959,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-194",
+      "pr": 413,
+      "mergeDateUtc": "2026-08-27",
+      "elapsedHours": 13.381,
+      "firstMergeElapsedHours": 13.381,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-196",
+      "pr": 415,
+      "mergeDateUtc": "2026-08-28",
+      "elapsedHours": 5.283,
+      "firstMergeElapsedHours": 5.283,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-86",
+      "pr": 400,
+      "mergeDateUtc": "2026-08-28",
+      "elapsedHours": 47.966,
+      "firstMergeElapsedHours": 47.966,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-203",
+      "pr": 427,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 1.856,
+      "firstMergeElapsedHours": 1.856,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-127",
+      "pr": 425,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 2.738,
+      "firstMergeElapsedHours": 2.738,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-207",
+      "pr": 428,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 0.419,
+      "firstMergeElapsedHours": 0.419,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-206",
+      "pr": 429,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 0.77,
+      "firstMergeElapsedHours": 0.77,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-128",
+      "pr": 426,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 4.962,
+      "firstMergeElapsedHours": 4.962,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-131",
+      "pr": 435,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 2.573,
+      "firstMergeElapsedHours": 2.573,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-129",
+      "pr": 433,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 3.144,
+      "firstMergeElapsedHours": 3.144,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-211",
+      "pr": 436,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 4.108,
+      "firstMergeElapsedHours": 4.108,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-212",
+      "pr": 439,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 0.673,
+      "firstMergeElapsedHours": 0.673,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-213",
+      "pr": 432,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 7.894,
+      "firstMergeElapsedHours": 7.894,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-130",
+      "pr": 434,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 8.235,
+      "firstMergeElapsedHours": 8.235,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-133",
+      "pr": 441,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 2.353,
+      "firstMergeElapsedHours": 2.353,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-132",
+      "pr": 442,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 4.028,
+      "firstMergeElapsedHours": 4.028,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-220",
+      "pr": 444,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 1.179,
+      "firstMergeElapsedHours": 1.179,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-221",
+      "pr": 445,
+      "mergeDateUtc": "2026-08-30",
+      "elapsedHours": 5.293,
+      "firstMergeElapsedHours": 5.293,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-110",
+      "pr": 443,
+      "mergeDateUtc": "2026-09-01",
+      "elapsedHours": 207.985,
+      "firstMergeElapsedHours": 207.985,
+      "mergeEventCount": 1,
+      "sessionCount": 13,
+      "messagedSessionCount": 13,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-166",
+      "pr": 424,
+      "mergeDateUtc": "2026-09-01",
+      "elapsedHours": 71.864,
+      "firstMergeElapsedHours": 71.864,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-205",
+      "pr": 431,
+      "mergeDateUtc": "2026-09-01",
+      "elapsedHours": 67.717,
+      "firstMergeElapsedHours": 67.717,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-204",
+      "pr": 452,
+      "mergeDateUtc": "2026-09-01",
+      "elapsedHours": 68.998,
+      "firstMergeElapsedHours": 68.598,
+      "mergeEventCount": 2,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-135",
+      "pr": 451,
+      "mergeDateUtc": "2026-09-02",
+      "elapsedHours": 6.747,
+      "firstMergeElapsedHours": 6.747,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-202",
+      "pr": 440,
+      "mergeDateUtc": "2026-09-02",
+      "elapsedHours": 74.909,
+      "firstMergeElapsedHours": 74.909,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-184",
+      "pr": 448,
+      "mergeDateUtc": "2026-09-02",
+      "elapsedHours": 84.123,
+      "firstMergeElapsedHours": 84.123,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-222",
+      "pr": 449,
+      "mergeDateUtc": "2026-09-02",
+      "elapsedHours": 28.835,
+      "firstMergeElapsedHours": 28.835,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-250",
+      "pr": 455,
+      "mergeDateUtc": "2026-09-03",
+      "elapsedHours": 23.071,
+      "firstMergeElapsedHours": 23.071,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-244",
+      "pr": 456,
+      "mergeDateUtc": "2026-09-03",
+      "elapsedHours": 30.25,
+      "firstMergeElapsedHours": 30.25,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-251",
+      "pr": 454,
+      "mergeDateUtc": "2026-09-03",
+      "elapsedHours": 25.904,
+      "firstMergeElapsedHours": 25.904,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-252",
+      "pr": 457,
+      "mergeDateUtc": "2026-09-04",
+      "elapsedHours": 31.432,
+      "firstMergeElapsedHours": 31.432,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-242",
+      "pr": 458,
+      "mergeDateUtc": "2026-09-05",
+      "elapsedHours": 35.367,
+      "firstMergeElapsedHours": 35.367,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-261",
+      "pr": 463,
+      "mergeDateUtc": "2026-09-05",
+      "elapsedHours": 0.847,
+      "firstMergeElapsedHours": 0.847,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-245",
+      "pr": 460,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 76.996,
+      "firstMergeElapsedHours": 76.996,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-260",
+      "pr": 464,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 1.978,
+      "firstMergeElapsedHours": 1.978,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-257",
+      "pr": 462,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 3.907,
+      "firstMergeElapsedHours": 3.907,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-125",
+      "pr": 465,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 3.169,
+      "firstMergeElapsedHours": 3.169,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-254",
+      "pr": 461,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 15.69,
+      "firstMergeElapsedHours": 15.69,
+      "mergeEventCount": 1,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-170",
+      "pr": 466,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 3.527,
+      "firstMergeElapsedHours": 3.527,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-265",
+      "pr": 467,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 10.496,
+      "firstMergeElapsedHours": 10.496,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-219",
+      "pr": 468,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 11.299,
+      "firstMergeElapsedHours": 11.299,
+      "mergeEventCount": 1,
+      "sessionCount": 11,
+      "messagedSessionCount": 11,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-262",
+      "pr": 472,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 12.308,
+      "firstMergeElapsedHours": 12.308,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-255",
+      "pr": 459,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 26.559,
+      "firstMergeElapsedHours": 26.559,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-246",
+      "pr": 473,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 94.079,
+      "firstMergeElapsedHours": 94.079,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-239",
+      "pr": 471,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 15.643,
+      "firstMergeElapsedHours": 15.643,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-9",
+      "pr": 470,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 345.933,
+      "firstMergeElapsedHours": 345.933,
+      "mergeEventCount": 1,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-238",
+      "pr": 474,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 17.778,
+      "firstMergeElapsedHours": 17.778,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-6",
+      "pr": 476,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 19.362,
+      "firstMergeElapsedHours": 19.362,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-270",
+      "pr": 475,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 3.468,
+      "firstMergeElapsedHours": 3.468,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-268",
+      "pr": 477,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 3.086,
+      "firstMergeElapsedHours": 3.086,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-269",
+      "pr": 478,
+      "mergeDateUtc": "2026-09-06",
+      "elapsedHours": 2.457,
+      "firstMergeElapsedHours": 2.457,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-263",
+      "pr": 469,
+      "mergeDateUtc": "2026-09-07",
+      "elapsedHours": 24.927,
+      "firstMergeElapsedHours": 24.927,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-273",
+      "pr": 479,
+      "mergeDateUtc": "2026-09-07",
+      "elapsedHours": 7.743,
+      "firstMergeElapsedHours": 7.743,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-259",
+      "pr": 480,
+      "mergeDateUtc": "2026-09-07",
+      "elapsedHours": 27.274,
+      "firstMergeElapsedHours": 27.274,
+      "mergeEventCount": 1,
+      "sessionCount": 12,
+      "messagedSessionCount": 12,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-310",
+      "pr": 508,
+      "mergeDateUtc": "2026-09-10",
+      "elapsedHours": 25.05,
+      "firstMergeElapsedHours": 25.05,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-291",
+      "pr": 507,
+      "mergeDateUtc": "2026-09-10",
+      "elapsedHours": 78.364,
+      "firstMergeElapsedHours": 78.364,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-243",
+      "pr": 510,
+      "mergeDateUtc": "2026-09-10",
+      "elapsedHours": 211.785,
+      "firstMergeElapsedHours": 211.785,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-293",
+      "pr": 511,
+      "mergeDateUtc": "2026-09-10",
+      "elapsedHours": 79.877,
+      "firstMergeElapsedHours": 79.877,
+      "mergeEventCount": 1,
+      "sessionCount": 11,
+      "messagedSessionCount": 11,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-350",
+      "pr": 512,
+      "mergeDateUtc": "2026-09-10",
+      "elapsedHours": 2.102,
+      "firstMergeElapsedHours": 2.102,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-351",
+      "pr": 515,
+      "mergeDateUtc": "2026-09-11",
+      "elapsedHours": 2.96,
+      "firstMergeElapsedHours": 2.96,
+      "mergeEventCount": 1,
+      "sessionCount": 11,
+      "messagedSessionCount": 11,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-329",
+      "pr": 516,
+      "mergeDateUtc": "2026-09-13",
+      "elapsedHours": 95.267,
+      "firstMergeElapsedHours": 95.267,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-352",
+      "pr": 518,
+      "mergeDateUtc": "2026-09-13",
+      "elapsedHours": 1,
+      "firstMergeElapsedHours": 1,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-354",
+      "pr": 519,
+      "mergeDateUtc": "2026-09-13",
+      "elapsedHours": 6.437,
+      "firstMergeElapsedHours": 6.437,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-360",
+      "pr": 520,
+      "mergeDateUtc": "2026-09-13",
+      "elapsedHours": 7.213,
+      "firstMergeElapsedHours": 7.213,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-363",
+      "pr": 521,
+      "mergeDateUtc": "2026-09-13",
+      "elapsedHours": 8.323,
+      "firstMergeElapsedHours": 8.323,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-367",
+      "pr": 522,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 1.545,
+      "firstMergeElapsedHours": 1.545,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-359",
+      "pr": 525,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 11.321,
+      "firstMergeElapsedHours": 11.321,
+      "mergeEventCount": 1,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-357",
+      "pr": 526,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 11.992,
+      "firstMergeElapsedHours": 11.992,
+      "mergeEventCount": 1,
+      "sessionCount": 13,
+      "messagedSessionCount": 13,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-8",
+      "pr": 523,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 12.535,
+      "firstMergeElapsedHours": 12.535,
+      "mergeEventCount": 1,
+      "sessionCount": 14,
+      "messagedSessionCount": 14,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-355",
+      "pr": 529,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 21.601,
+      "firstMergeElapsedHours": 21.601,
+      "mergeEventCount": 1,
+      "sessionCount": 16,
+      "messagedSessionCount": 16,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-356",
+      "pr": 530,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 22.325,
+      "firstMergeElapsedHours": 22.325,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-369",
+      "pr": 531,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 1.667,
+      "firstMergeElapsedHours": 1.667,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-353",
+      "pr": 524,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 29.887,
+      "firstMergeElapsedHours": 29.887,
+      "mergeEventCount": 1,
+      "sessionCount": 21,
+      "messagedSessionCount": 21,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-335",
+      "pr": 532,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 124.252,
+      "firstMergeElapsedHours": 124.252,
+      "mergeEventCount": 1,
+      "sessionCount": 18,
+      "messagedSessionCount": 18,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-358",
+      "pr": 534,
+      "mergeDateUtc": "2026-09-14",
+      "elapsedHours": 33.114,
+      "firstMergeElapsedHours": 33.114,
+      "mergeEventCount": 1,
+      "sessionCount": 28,
+      "messagedSessionCount": 28,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-372",
+      "pr": 535,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 1.047,
+      "firstMergeElapsedHours": 1.047,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-374",
+      "pr": 536,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 1.664,
+      "firstMergeElapsedHours": 1.664,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-373",
+      "pr": 538,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 2.307,
+      "firstMergeElapsedHours": 2.307,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-371",
+      "pr": 537,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 11.364,
+      "firstMergeElapsedHours": 11.364,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-381",
+      "pr": 541,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 1.116,
+      "firstMergeElapsedHours": 1.116,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-382",
+      "pr": 543,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 2.769,
+      "firstMergeElapsedHours": 2.769,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-383",
+      "pr": 542,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 3.622,
+      "firstMergeElapsedHours": 3.622,
+      "mergeEventCount": 1,
+      "sessionCount": 15,
+      "messagedSessionCount": 15,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-384",
+      "pr": 546,
+      "mergeDateUtc": "2026-09-15",
+      "elapsedHours": 2.513,
+      "firstMergeElapsedHours": 2.513,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-387",
+      "pr": 547,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 7.934,
+      "firstMergeElapsedHours": 7.934,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-380",
+      "pr": 548,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 20.6,
+      "firstMergeElapsedHours": 20.6,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-389",
+      "pr": 550,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 18.064,
+      "firstMergeElapsedHours": 18.064,
+      "mergeEventCount": 1,
+      "sessionCount": 10,
+      "messagedSessionCount": 10,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-388",
+      "pr": 551,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 2.888,
+      "firstMergeElapsedHours": 2.888,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-368",
+      "pr": 552,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 20.679,
+      "firstMergeElapsedHours": 20.679,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-385",
+      "pr": 553,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 21.611,
+      "firstMergeElapsedHours": 21.611,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-397",
+      "pr": 556,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 0.679,
+      "firstMergeElapsedHours": 0.679,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-396",
+      "pr": 557,
+      "mergeDateUtc": "2026-09-16",
+      "elapsedHours": 1.023,
+      "firstMergeElapsedHours": 1.023,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "squash-pr-number"
+      ]
+    },
+    {
+      "ticket": "VC-272",
+      "pr": 561,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 2.348,
+      "firstMergeElapsedHours": 2.348,
+      "mergeEventCount": 1,
+      "sessionCount": 3,
+      "messagedSessionCount": 3,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-378",
+      "pr": 563,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 48.306,
+      "firstMergeElapsedHours": 48.306,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-405",
+      "pr": 567,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 2.287,
+      "firstMergeElapsedHours": 2.287,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-393",
+      "pr": 562,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 2.389,
+      "firstMergeElapsedHours": 2.389,
+      "mergeEventCount": 1,
+      "sessionCount": 5,
+      "messagedSessionCount": 5,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-402",
+      "pr": 566,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 1.204,
+      "firstMergeElapsedHours": 1.204,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-141",
+      "pr": 565,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 2.929,
+      "firstMergeElapsedHours": 2.929,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-403",
+      "pr": 564,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 5.068,
+      "firstMergeElapsedHours": 5.068,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-411",
+      "pr": 574,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 0.983,
+      "firstMergeElapsedHours": 0.983,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-408",
+      "pr": 573,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 3.028,
+      "firstMergeElapsedHours": 3.028,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-410",
+      "pr": 572,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 3.052,
+      "firstMergeElapsedHours": 3.052,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-392",
+      "pr": 569,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 5.081,
+      "firstMergeElapsedHours": 5.081,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-414",
+      "pr": 576,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 0.805,
+      "firstMergeElapsedHours": 0.805,
+      "mergeEventCount": 1,
+      "sessionCount": 4,
+      "messagedSessionCount": 4,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-316",
+      "pr": 570,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 5.945,
+      "firstMergeElapsedHours": 5.945,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-407",
+      "pr": 575,
+      "mergeDateUtc": "2026-09-17",
+      "elapsedHours": 4.89,
+      "firstMergeElapsedHours": 4.89,
+      "mergeEventCount": 1,
+      "sessionCount": 12,
+      "messagedSessionCount": 12,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-412",
+      "pr": 577,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 24.496,
+      "firstMergeElapsedHours": 24.496,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-217",
+      "pr": 578,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 123.382,
+      "firstMergeElapsedHours": 123.382,
+      "mergeEventCount": 1,
+      "sessionCount": 33,
+      "messagedSessionCount": 33,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-418",
+      "pr": 583,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 1.151,
+      "firstMergeElapsedHours": 1.151,
+      "mergeEventCount": 1,
+      "sessionCount": 9,
+      "messagedSessionCount": 9,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-409",
+      "pr": 571,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 28.991,
+      "firstMergeElapsedHours": 28.991,
+      "mergeEventCount": 1,
+      "sessionCount": 8,
+      "messagedSessionCount": 8,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-344",
+      "pr": 584,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 2.291,
+      "firstMergeElapsedHours": 2.291,
+      "mergeEventCount": 1,
+      "sessionCount": 7,
+      "messagedSessionCount": 7,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-419",
+      "pr": 585,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 1.921,
+      "firstMergeElapsedHours": 1.921,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-413",
+      "pr": 581,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 26.668,
+      "firstMergeElapsedHours": 26.668,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-416",
+      "pr": 586,
+      "mergeDateUtc": "2026-09-18",
+      "elapsedHours": 3.814,
+      "firstMergeElapsedHours": 3.814,
+      "mergeEventCount": 1,
+      "sessionCount": 2,
+      "messagedSessionCount": 2,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-421",
+      "pr": 588,
+      "mergeDateUtc": "2026-09-27",
+      "elapsedHours": 12.072,
+      "firstMergeElapsedHours": 12.072,
+      "mergeEventCount": 1,
+      "sessionCount": 12,
+      "messagedSessionCount": 12,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-428",
+      "pr": 599,
+      "mergeDateUtc": "2026-09-27",
+      "elapsedHours": 0.729,
+      "firstMergeElapsedHours": 0.729,
+      "mergeEventCount": 1,
+      "sessionCount": 6,
+      "messagedSessionCount": 6,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-297",
+      "pr": 598,
+      "mergeDateUtc": "2026-09-28",
+      "elapsedHours": 40.329,
+      "firstMergeElapsedHours": 40.329,
+      "mergeEventCount": 1,
+      "sessionCount": 14,
+      "messagedSessionCount": 13,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-429",
+      "pr": 601,
+      "mergeDateUtc": "2026-09-28",
+      "elapsedHours": 0.867,
+      "firstMergeElapsedHours": 0.867,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    },
+    {
+      "ticket": "VC-440",
+      "pr": 603,
+      "mergeDateUtc": "2026-09-28",
+      "elapsedHours": 0.398,
+      "firstMergeElapsedHours": 0.398,
+      "mergeEventCount": 1,
+      "sessionCount": 1,
+      "messagedSessionCount": 1,
+      "linkKinds": [
+        "pr-merge-branch"
+      ]
+    }
+  ]
+}
