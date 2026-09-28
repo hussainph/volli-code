@@ -35,6 +35,12 @@ import type { ModelSelection, SessionRole } from "./agent-runtime";
  * A fixed set on purpose. User-defined tiers are a non-goal until asked for,
  * and every surface that names a tier — Settings, the `session_start` tool,
  * `volli model list`, an Automation's Runtime — reads this one list.
+ *
+ * There is no `isModelTier` guard over this set (VC-431). Every door that
+ * reads a tier from outside itself — a stored Automation Runtime, a tool
+ * call, the editor — is deciding what a SESSION may run on, and the answer
+ * there is always {@link AGENT_MODEL_TIERS}. A guard over the wider set only
+ * ever admitted `utility`, the one row none of them may accept.
  */
 export const MODEL_TIERS = ["global", "ticket", "utility", "fast", "deep", "visual"] as const;
 export type ModelTier = (typeof MODEL_TIERS)[number];
@@ -46,10 +52,6 @@ export type ModelTier = (typeof MODEL_TIERS)[number];
  */
 export const MODEL_PURPOSES = MODEL_TIERS;
 export type ModelPurpose = ModelTier;
-
-export function isModelTier(value: unknown): value is ModelTier {
-  return typeof value === "string" && (MODEL_TIERS as readonly string[]).includes(value);
-}
 
 /**
  * The tiers a delegating Session may name in `session_start` and in
