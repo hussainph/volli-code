@@ -1742,6 +1742,14 @@ export interface AttentionObservation {
   state: "raised" | "cleared";
   reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   message: string;
+  /**
+   * On a raised `runtime-failure` only: the instant, epoch ms, at which the
+   * spent provider allowance that stopped the run comes back, when the failure
+   * stated it unambiguously (`quotaResetInstant`). A FIELD rather than a new
+   * `reason`, and optional, for the reason above: the sidecar ignores a field
+   * it does not validate, so markers already on disk still recover.
+   */
+  resetsAt?: number;
   occurredAt?: number;
   recoveryCursor?: string;
 }

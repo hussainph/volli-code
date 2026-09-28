@@ -170,6 +170,7 @@ import {
 } from "@renderer/components/ui/dropdown-menu";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
+import { delayUntil } from "@renderer/lib/boundary-timer";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
@@ -342,6 +343,8 @@ export function ChatPlane({
     selectModel,
     submit,
     dismissError,
+    scheduleResume,
+    cancelScheduledResume,
   } = controller;
   const session = controller.session;
 
@@ -1429,9 +1432,39 @@ export function ChatPlane({
       signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
       dismissError: () => dismissError(),
       dismiss: dismissBlocker,
+      scheduleResume: (request) => void scheduleResume(request),
+      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
     }),
-    [dismissBlocker, dismissError, liveExecutorId, recover, retryRuntime, setSettingsOpen],
+    [
+      cancelScheduledResume,
+      dismissBlocker,
+      dismissError,
+      liveExecutorId,
+      recover,
+      retryRuntime,
+      scheduleResume,
+      setSettingsOpen,
+    ],
   );
+  // The clock the resume offer is read against. It only has to move when an
+  // offered reset passes — then "Resume at" gives way to the plain Retry — so
+  // it wakes once, at the nearest reset, rather than ticking.
+  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
+  const nearestReset = React.useMemo(() => {
+    let nearest: number | null = null;
+    for (const item of activeAttention) {
+      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
+      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
+    }
+    return nearest;
+  }, [activeAttention]);
+  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setResumeNow(Date.now());
+    if (nearestReset === null) return;
+    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
+    return () => window.clearTimeout(timer);
+  }, [nearestReset]);
   // The providers a first-run "Sign in" can offer — the ones with an in-app
   // flow, in the same reachable-first order the Accounts list uses.
   const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
@@ -1453,6 +1486,8 @@ export function ChatPlane({
       catalogError,
       sessionModel,
       signInProviders,
+      scheduledResume: projection?.scheduledResume ?? null,
+      now: resumeNow,
     },
     blockerActs,
     interactions.length > 0,
@@ -1853,6 +1888,11 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+      {blocker.note ? (
+        <span className="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">
+          {blocker.note}
+        </span>
       ) : null}
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>

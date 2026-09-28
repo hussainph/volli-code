@@ -80,6 +80,8 @@ export * from "./session-title";
 export * from "./auto-title";
 export * from "./session-ledger";
 export * from "./session-watchdog";
+export * from "./quota-reset";
+export * from "./scheduled-resume";
 export * from "./performance-observer";
 export * from "./session-usage";
 export * from "./session-usage-report";

@@ -629,6 +629,16 @@ whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
+**Scheduled Resume**:
+A person's choice, made on a run a spent provider allowance stopped, to retry
+that run when the allowance's stated reset arrives. It is three Session
+Commands — schedule, cancel, and the host's settle — whose receipts are the
+whole of its state. At its time the host resumes through the ordinary retry, or
+skips it with a reason when the Session was continued, ended, or overtaken by
+another Session on its Ticket. Never scheduled without being chosen, and never
+re-scheduled on its own.
+_Avoid_: auto-retry, auto-resume, Automation
+
 **SessionInteraction**:
 A decision a Session is waiting on — a permission or a question — held in Volli
 terms: a title, optional detail, declared options, and an opaque runtime

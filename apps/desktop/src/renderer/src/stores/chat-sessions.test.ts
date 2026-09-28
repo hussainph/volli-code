@@ -72,6 +72,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: SESSION.createdAt,
   bornTicketless: SESSION.ticketId === null,
+  scheduledResume: null,
 };
 
 interface CommandAnswer {

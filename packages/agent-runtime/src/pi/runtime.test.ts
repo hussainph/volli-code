@@ -4289,6 +4289,14 @@ describe("startSession", () => {
       { ...activity, descriptor: { ...descriptor, endedAt: "later" } },
       { ...activity, error: 1 },
       { kind: "attention", state: "raised", reason: "auth", message: 1 },
+      // A reset is an instant or nothing; a reset that is neither is corruption.
+      {
+        kind: "attention",
+        state: "raised",
+        reason: "runtime-failure",
+        message: "Usage limit reached",
+        resetsAt: "soon",
+      },
       {
         kind: "command-accepted",
         commandId: 1,
@@ -4539,9 +4547,26 @@ describe("startSession", () => {
         kind: "entry",
         lane: "main",
         type: "custom",
-        id: "attention-clear-marker",
+        id: "attention-quota-marker",
         parentId: "activity-marker",
         seq: 3,
+        timestamp: Date.now(),
+        customType: "volli.observation.v1",
+        data: {
+          kind: "attention",
+          state: "raised",
+          reason: "runtime-failure",
+          message: "Usage limit reached for 5 hour.",
+          resetsAt: 1_800_000_000_000,
+        },
+      },
+      {
+        kind: "entry",
+        lane: "main",
+        type: "custom",
+        id: "attention-clear-marker",
+        parentId: "attention-quota-marker",
+        seq: 4,
         timestamp: Date.now(),
         customType: "volli.observation.v1",
         data: {
@@ -4557,7 +4582,7 @@ describe("startSession", () => {
         type: "custom",
         id: "compaction-failed-marker",
         parentId: "attention-clear-marker",
-        seq: 4,
+        seq: 5,
         timestamp: Date.now(),
         customType: "volli.observation.v1",
         data: {
@@ -4571,7 +4596,12 @@ describe("startSession", () => {
     writeSidecarEntries(recovery.sessionFilePath, entries);
 
     const reopened = await runtime.startSession({ ...attachment.spec, recovery });
-    expect((await reopened.reconcile(null)).observations).toHaveLength(3);
+    const recovered = (await reopened.reconcile(null)).observations;
+    expect(recovered).toHaveLength(4);
+    // A quota reset survives the relaunch with the marker that carried it.
+    expect(recovered).toContainEqual(
+      expect.objectContaining({ kind: "attention", resetsAt: 1_800_000_000_000 }),
+    );
     await reopened.close();
   });
 
@@ -5615,6 +5645,37 @@ describe("settling a submit on the turn opening (VC-324)", () => {
       expect.objectContaining({ reason: "runtime-failure", message: "malformed provider payload" }),
     ]);
     await handle.close();
+  });
+
+  it("carries a spent allowance's stated reset onto the Attention it raises", async () => {
+    const resetsAt = Date.now() + 3_600_000;
+    const stated = new Date(resetsAt).toISOString().replace(/\.\d+Z$/, "Z");
+    for (const usageLimits of [
+      undefined,
+      { holder: new UsageLimitsHolder(), fetch: unusedFetch },
+    ]) {
+      const { spec, observations, sessionDataDir } = fixture();
+      const runtime = createPiAgentRuntime({
+        sessionDataDir,
+        retryBackoffMs: instantBackoff,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => emit.fail(`429: Usage limit reached. Your limit will reset at ${stated}`),
+          ]),
+        ),
+        ...(usageLimits === undefined ? {} : { usageLimits }),
+      });
+      const handle = await runtime.startSession(spec);
+      await handle.submitUserMessage("go");
+      expect(attentions(observations)).toEqual([
+        expect.objectContaining({
+          state: "raised",
+          reason: "runtime-failure",
+          resetsAt: Math.floor(resetsAt / 1000) * 1000,
+        }),
+      ]);
+      await handle.close();
+    }
   });
 
   it("does not charge a detached run failure to the next command", async () => {

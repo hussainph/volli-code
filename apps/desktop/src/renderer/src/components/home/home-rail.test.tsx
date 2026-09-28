@@ -260,6 +260,7 @@ describe("HomeRail", () => {
       turnActive: false,
       lastActivityAt: 1,
       bornTicketless: true,
+      scheduledResume: null,
     };
     useChatSessionsStore.getInitialState().sessions = { s1: slice };
 

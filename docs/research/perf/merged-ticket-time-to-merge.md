@@ -437,7 +437,19 @@ across Sessions and overlap the breakdown's categories (`ask_user` is most of
   4.9 h of worktree-preparation failures were one refusal: an agent had cut a
   narrower branch inside its own ticket's worktree, and every later Session start
   failed. A branch at the ticket's path with the same display id is now adopted.
-<!-- orchestrator: fill (quota resume) -->
+- **Resume at a quota reset, on request** — in this branch. The 49.9 h of
+  quota blocking waited for someone to notice the reset had passed. When a turn
+  stops on a spent allowance whose reset can be read without guessing, the stop
+  row offers **Resume at <time>** beside Retry; nothing is scheduled unless the
+  person chooses it. At the reset the turn resumes through the existing retry
+  path, unless this Session was acted on since or another Session on the same
+  ticket has moved on, in which case the resume is skipped and says why. Quota
+  still needs a person's decision; it just no longer needs them present.
+- **Already fixed, or filed.** The 15.1 h of "Browser host not ready" all
+  predates VC-367, which fixed boot-recovery ordering on 2026-09-14; the last
+  occurrence was 1.5 h before it merged. The 19.9 h of turns stranded by an app
+  exit is VC-450: VC-367 made those Sessions recoverable, but nothing resumes
+  them.
 
 ## What this number is not
 

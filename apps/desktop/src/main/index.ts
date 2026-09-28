@@ -142,10 +142,13 @@ import { createNotificationRuntime } from "./notifications/runtime";
 import {
   chatSessionRecord,
   createDesktopSessionEngine,
+  createScheduledResumeHost,
   createSessionWatchdog,
   createSuspendClock,
   watchSessionActivity,
+  type ScheduledResumeHost,
 } from "./session-control";
+import { listScheduledResumeSessionIds } from "./db/scheduled-resume-repo";
 import {
   createDesktopSessionRuntime,
   createFileTranscriptArtifactStore,
@@ -901,6 +904,10 @@ app.whenReady().then(async () => {
   // real process-local binding list replaces the empty boot answer once the
   // runtime exists. Durable attachments alone never enter this list.
   let listOpenNativeBindings = noOpenNativeBindings;
+  // The scheduled-resume host needs the runtime, which is composed from the
+  // watched engine below — so the watch closes over this indirection and the
+  // host is installed once the runtime exists.
+  let scheduledResumeHost: ScheduledResumeHost | null = null;
   // The Session wake bus (VC-324 item 3) wraps the engine INSIDE the activity
   // watch: a write returns from the engine, the bus fans the committed event
   // out to whichever `session_await` is parked on it, and only then does the
@@ -920,7 +927,11 @@ app.whenReady().then(async () => {
           // the whole row, so a push without provenance would erase the mark.
           provenanceOf: (born) => readSessionProvenance(watchedDb, born),
           listOpenNativeBindings: () => listOpenNativeBindings(),
-          observe: (projection) => runAttention?.observe(projection),
+          observe: (projection) => {
+            runAttention?.observe(projection);
+            // A schedule made (or settled) anywhere reaches the timer here.
+            scheduledResumeHost?.observe(projection);
+          },
           // The baseline for the rule above: a Session minted in this process
           // began with no need, which is what makes its first fold an edge
           // rather than a first sighting (VC-133).
@@ -2146,6 +2157,23 @@ app.whenReady().then(async () => {
         })
       : null;
   sessionWatchdog?.start();
+  // Resumes a person scheduled for a provider's quota reset. Built here, beside
+  // the watchdog, so the quit coordinator below can stop it; STARTED only after
+  // boot recovery, because a schedule that fell due while the app was closed
+  // fires on the first pass and its retry must not race the reconcile of the
+  // very turn it resumes.
+  scheduledResumeHost =
+    sessionRuntime !== null && sessionEngine !== null && dbHandle.ok
+      ? createScheduledResumeHost({
+          candidates: async () => listScheduledResumeSessionIds(dbHandle.db),
+          projection: async (sessionId) =>
+            (await sessionRuntime.projection({ sessionId })).projection,
+          ticketSessions: ({ projectId, ticketId }) =>
+            sessionEngine.listSessions({ projectId, scope: "ticket", ticketId }),
+          command: (request) => sessionRuntime.command(request),
+          notify: (request) => notifications.deliver(request),
+        })
+      : null;
   // From this point onward the native Session control plane exists. Install
   // its quit hold before the first later startup await so a Dock/OS quit cannot
   // reach the socket-only will-quit fallback and strand these resources. The
@@ -2155,6 +2183,7 @@ app.whenReady().then(async () => {
     lifecycle: app,
     shutdownNativeSessions: async () => {
       sessionWatchdog?.stop();
+      scheduledResumeHost?.stop();
       const results = await Promise.allSettled([sessionRpc?.close(), sessionRuntime?.close()]);
       for (const result of results) {
         if (result.status === "rejected") {
@@ -2281,6 +2310,14 @@ app.whenReady().then(async () => {
         console.error("[volli] failed to recover delegations:", errorMessage(error));
       }
     }
+  }
+  // After recovery (see the host's construction above). Not awaited: the first
+  // pass may fire a resume whose run takes minutes, and boot does not wait on
+  // it. A wake from sleep looks again at once rather than on the next tick.
+  if (scheduledResumeHost !== null) {
+    const host = scheduledResumeHost;
+    void host.start();
+    powerMonitor.on("resume", () => void host.pass());
   }
   // Reclaim attachment bytes nothing points at any more (VC-50) — a detached
   // file, or an abandoned new-Ticket composer draft, which attaches eagerly and

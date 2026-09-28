@@ -23,6 +23,7 @@ import type {
   SessionInFlightTool,
   SessionInteractionCancelReason,
   SessionInteractionResolution,
+  ScheduledResumeOutcome,
   SessionNativeDetail,
   SessionNativeReference,
   SessionProjection,
@@ -170,7 +171,15 @@ export type SessionClientCommand =
       interactionId: string;
       resolution: SessionInteractionResolution;
     }
-  | { kind: "adapter.release"; attachmentId: string };
+  | { kind: "adapter.release"; attachmentId: string }
+  /** A person choosing to resume a quota-stopped run at its reset. */
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  | { kind: "resume.cancel"; scheduleId: string }
+  /**
+   * The host recording what became of a schedule. Recorded under SYSTEM
+   * provenance: nobody chose the outcome, and the RPC edge never accepts it.
+   */
+  | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
 
 export type SessionRuntimeCommandRequest =
   | { commandId: string; command: Extract<SessionClientCommand, { kind: "session.create" }> }
@@ -199,6 +208,14 @@ type RetryCommandRequest = ExistingSessionCommandRequest & {
 type CompactCommandRequest = ExistingSessionCommandRequest & {
   command: Extract<SessionClientCommand, { kind: "context.compact" }>;
 };
+type ScheduledResumeCommandRequest = ExistingSessionCommandRequest & {
+  command: Extract<
+    SessionClientCommand,
+    { kind: "resume.schedule" | "resume.cancel" | "resume.settle" }
+  >;
+};
+/** The system source a scheduled resume's settle is recorded under. */
+export const SCHEDULED_RESUME_SOURCE_ID = "scheduled-resume";
 type DeliveryResultKind =
   | "executor.start.requested"
   | "executor.stop.requested"
@@ -786,6 +803,8 @@ class DefaultSessionRuntime implements SessionRuntime {
         kind: "adapter_unrecoverable",
         detail: input.detail,
         diagnostic: null,
+        // A delivery the binding refused spent no provider allowance.
+        resetsAt: null,
       },
     });
     await this.#publish([attention]);
@@ -920,7 +939,38 @@ class DefaultSessionRuntime implements SessionRuntime {
         );
       case "adapter.release":
         return this.#release(request as ReleaseCommandRequest, projection, location, existed);
+      case "resume.schedule":
+      case "resume.cancel":
+      case "resume.settle":
+        return this.#scheduledResume(request as ScheduledResumeCommandRequest, location, existed);
     }
+  }
+
+  /**
+   * A scheduled resume's three commands: accepted or refused in the engine,
+   * with nothing to deliver. Through the runtime rather than straight to the
+   * engine so the frames reach subscribers — an open chat redraws its row the
+   * moment the schedule, the cancel or the settle lands.
+   */
+  async #scheduledResume(
+    request: ScheduledResumeCommandRequest,
+    location: SessionLocation,
+    existed: boolean,
+  ): Promise<SessionRuntimeCommandResult> {
+    const submitted = await this.ports.engine.submit({
+      commandId: request.commandId,
+      sessionId: request.sessionId,
+      intent: request.command,
+      provenance:
+        request.command.kind === "resume.settle"
+          ? {
+              source: { kind: "system", id: SCHEDULED_RESUME_SOURCE_ID, detail: null },
+              venue: location.venue,
+            }
+          : userProvenance(location.venue),
+    });
+    await this.#publishSubmit(submitted, existed);
+    return this.#result(request.sessionId, submitted.command, submitted.receipt);
   }
 
   async #selectModel(
@@ -1272,9 +1322,13 @@ class DefaultSessionRuntime implements SessionRuntime {
         // belongs to the Session until a fresh attach succeeds, rather
         // than pretending a failed binding can receive recovery work.
         attachmentId: null,
-        kind: input.attentionKind,
         detail: input.detail,
         diagnostic: null,
+        // An attach that failed never reached a provider, so no allowance is
+        // spent and there is no reset to resume at.
+        ...(input.attentionKind === "adapter_unrecoverable"
+          ? { kind: input.attentionKind, resetsAt: null }
+          : { kind: input.attentionKind }),
       },
     });
     await this.#publish([failed, attention]);
@@ -1588,6 +1642,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             kind: "adapter_unrecoverable",
             detail,
             diagnostic: null,
+            // Recovery failing is this host's fault, not a spent allowance.
+            resetsAt: null,
           },
         });
         await this.#publish([attention]);
@@ -2049,6 +2105,8 @@ class DefaultSessionRuntime implements SessionRuntime {
             kind: "adapter_unrecoverable",
             detail,
             diagnostic: null,
+            // Recovery failing is this host's fault, not a spent allowance.
+            resetsAt: null,
           },
         });
         await this.#publish([attention]);
@@ -2356,21 +2414,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       // reach, so this arm no longer carries the `retryAt`/`resetAt` shapes they
       // need. Reaching them means widening the runtime's attention `reason` —
       // additive, as `transport` → `transport_retrying` was (VC-443) — and
-      // carrying a provider-stated time through this arm, which is its own
-      // piece of work.
-      case "attention.raised":
+      // carrying a provider-stated time through this arm. A spent allowance
+      // with a stated reset rides `adapter_unrecoverable` instead, as its
+      // `resetsAt`: the run is still retryable, and now schedulable.
+      case "attention.raised": {
+        // The executor may not name another attachment; everything else about
+        // the Attention is the executor's own, reset included.
+        const { id, ...attention } = observation.attention;
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
-          attention: {
-            id: observation.attention.id,
-            attachmentId: spec.attachmentId,
-            kind: observation.attention.kind,
-            detail: observation.attention.detail,
-            diagnostic: observation.attention.diagnostic,
-          },
+          attention: { id, attachmentId: spec.attachmentId, ...attention },
         });
         break;
+      }
     }
     const binding = this.#bindings.get(spec.attachmentId);
     if (binding && observation.cursor !== undefined) binding.cursor = observation.cursor;

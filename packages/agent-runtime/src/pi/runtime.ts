@@ -111,6 +111,7 @@ import {
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { failureResetsAt } from "./quota-reset";
 import { headerUsageUpdate } from "./usage-limits/passive";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
@@ -924,7 +925,8 @@ function isRecoverableObservation(value: unknown): boolean {
           "partial-turn",
           "transport",
         ]) &&
-        typeof value["message"] === "string"
+        typeof value["message"] === "string" &&
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -2897,12 +2899,24 @@ async function attachSession(
               : []),
           ];
           const reason = attentionReasonFor(failure);
+          // A spent allowance whose reset the failure states: carried on the
+          // Attention so a person can schedule the resume (quota-reset.ts).
+          const resetsAt =
+            reason === "runtime-failure"
+              ? failureResetsAt({
+                  failure,
+                  providerId: agent.state.model.provider,
+                  observedAt: host.now(),
+                  holder: host.usageLimits?.holder,
+                })
+              : null;
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
             message:
               spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
+            ...(resetsAt === null ? {} : { resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
