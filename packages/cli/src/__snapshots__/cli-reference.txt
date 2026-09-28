@@ -619,9 +619,10 @@ Tool: session_delegate
 Input:
   task  The delegated task, complete on its own: what to do, where to look, and what the answer should contain.
   title (optional)  A permanent title for the subagent Session. Omit to let Volli name it from the task.
-  model (optional)  Run the subagent on a specific model instead of the utility default.
+  model (optional)  Run the subagent on a specific model instead of the one this Session runs on.
   model.providerId  Provider id, as `model list` prints it.
   model.modelId  Model id, as `model list` prints it.
+  tier (optional)  Run the subagent on one of the user's configured model tiers instead of `model`; pass one or the other, never both. The tier's stored reasoning level comes with it unless `reasoning` is given. fast: Quick, low-cost tasks. deep: Complex reasoning, planning, and review. visual: Images, screenshots, and pages. ticket: One ticket and its optional worktree. global: Planning and coordination across the board. (valid: fast, deep, visual, ticket, global)
   reasoning (optional)  Reasoning level override; the chosen model must support it. (valid: off, minimal, low, medium, high, xhigh, max)
 
 Effects:

@@ -1398,6 +1398,47 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
     expect(h.delegated[0]).toMatchObject({ parent: TICKET_CALLER });
   });
 
+  /**
+   * VC-431. The delegate door offers the same tier list `session_start` does,
+   * and the same refusals — one `readModelOverride`, so a tier means the same
+   * thing at both doors. A delegation that names NEITHER carries no override
+   * at all from here: anchoring it to the parent's own model is the
+   * operation's job, where the parent's projection is in hand.
+   */
+  describe("tier", () => {
+    it("hands a named tier to the operation", async () => {
+      const h = delegateHarness();
+
+      await h.call({ task: "Quick check", tier: "fast" });
+
+      expect(h.delegated[0]).toMatchObject({ modelOverride: { tier: "fast" } });
+    });
+
+    it("refuses the Utility row, naming the tiers a Session may run on", async () => {
+      const h = delegateHarness();
+
+      const result = await h.call({ task: "Quick check", tier: "utility" });
+
+      expect(result.text).toBe("`tier` must be one of: fast, deep, visual, ticket, global.");
+      expect(h.delegated).toEqual([]);
+    });
+
+    it("refuses a tier beside an exact model, and passes no override when neither is named", async () => {
+      const h = delegateHarness();
+
+      const both = await h.call({
+        task: "Quick check",
+        tier: "deep",
+        model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" },
+      });
+      expect(both.text).toBe("`tier` and `model` are alternatives; pass one.");
+
+      await h.call({ task: "Quick check" }, CALLER, "tc-bare");
+      expect(h.delegated).toHaveLength(1);
+      expect(h.delegated[0]).not.toHaveProperty("modelOverride");
+    });
+  });
+
   it("refuses a missing task, an operation refusal, and a host without a runtime in words", async () => {
     const h = delegateHarness();
 

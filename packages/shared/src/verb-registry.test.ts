@@ -697,6 +697,33 @@ describe("the registry table", () => {
     ]);
   });
 
+  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
+  // gave — "it gives a working session an anchor to the user's preferences for
+  // models and effort". A delegation that names neither a tier nor a model is
+  // anchored to its parent's own, which is why `model` no longer speaks of a
+  // utility default: nothing on a chat path resolves that row.
+  it("lets session_delegate name the same model tiers, and never the Utility row", () => {
+    const tool = verbEntry("session.delegate")?.tool;
+    const tier = tool?.input.find((field) => field.name === "tier");
+    expect(tier).toBeDefined();
+    expect(tier?.required).toBeUndefined();
+    expect(tier?.type === "enum" ? tier.values : []).toEqual(AGENT_MODEL_TIERS);
+    for (const name of AGENT_MODEL_TIERS) {
+      expect(tier?.description).toContain(`${name}: ${modelTierRow(name).hint}`);
+    }
+    expect(tier?.description).toMatch(/instead of `model`/);
+    expect(tool?.input.find((field) => field.name === "model")?.description).not.toMatch(
+      /utility/i,
+    );
+    expect(tool?.input.map((field) => field.name)).toEqual([
+      "task",
+      "title",
+      "model",
+      "tier",
+      "reasoning",
+    ]);
+  });
+
   // Documentation parity only: `session.start` has had no shell door since
   // VC-163, so the option table is what the reference prints beside the tool
   // schema, never argv the shell would parse.

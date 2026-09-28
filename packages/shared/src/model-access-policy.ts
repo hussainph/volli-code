@@ -52,12 +52,14 @@ export function isModelTier(value: unknown): value is ModelTier {
 }
 
 /**
- * The tiers a delegating Session may name in `session_start`, most useful
- * first — the order the tool description lists them in.
+ * The tiers a delegating Session may name in `session_start` and in
+ * `session_delegate`, most useful first — the order the tool descriptions
+ * list them in.
  *
- * `utility` is not here. It is the slot for work nobody asked for (naming a
- * chat, a summary), and a Session started under it would be a Session whose
- * bill is filed under background work.
+ * `utility` is not here, and not in {@link MODEL_PURPOSE_FOR_ROLE} either. It
+ * is the slot for work nobody asked for (naming a chat, a summary), and a
+ * Session started under it would be a Session whose bill is filed under
+ * background work. Every door that offers a rung offers exactly this set.
  */
 export const AGENT_MODEL_TIERS = ["fast", "deep", "visual", "ticket", "global"] as const;
 export type AgentModelTier = (typeof AGENT_MODEL_TIERS)[number];
@@ -242,12 +244,21 @@ export function visualModelProblem(
 }
 
 /**
- * Which tier's default a Role reads when nothing NAMES one (VC-53, VC-9):
- * orchestration for a Board Session, execution for a Ticket Session, and the
- * cost-efficient `utility` rung for a Subagent Session — a bounded delegation
- * is exactly the background work that tier was named for. Total over
- * {@link SessionRole}, so the next Role is a decision here rather than a
- * silent `global`.
+ * Which tier's default a Role reads when nothing NAMES one (VC-53, VC-259,
+ * VC-431): orchestration for a Board Session, execution for a Ticket Session,
+ * and the ladder root for a Subagent Session. Total over {@link SessionRole},
+ * so the next Role is a decision here rather than a silent `global`.
+ *
+ * `utility` is on no Role's row, and no door may name it
+ * ({@link AGENT_MODEL_TIERS}). It is the slot for work NOBODY ASKED FOR — chat
+ * names, summaries, background processing — and a chat Session is never that,
+ * whoever opened it. A delegation is work its parent asked for.
+ *
+ * For a Subagent Session this rung is therefore the LAST RESORT rather than
+ * the usual answer: a delegation anchors to its parent's own anchor — the tier
+ * the parent resolved through, or the model and level it was pinned to — and
+ * only a parent that recorded neither falls to `global`, the root every other
+ * rung already falls back to.
  *
  * The Role's rung is the FLOOR, not the ceiling: since VC-259 a start may name
  * any tier itself, and this is only what it resolves through when it does not.
@@ -259,7 +270,7 @@ export function modelPurposeForRole(role: SessionRole): ModelPurpose {
 const MODEL_PURPOSE_FOR_ROLE: Readonly<Record<SessionRole, ModelPurpose>> = Object.freeze({
   project: "global",
   ticket: "ticket",
-  subagent: "utility",
+  subagent: "global",
 });
 
 /**

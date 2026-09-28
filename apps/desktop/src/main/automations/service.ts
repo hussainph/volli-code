@@ -1,12 +1,12 @@
 import {
+  AGENT_MODEL_TIERS,
   automationDraftProblem,
   automationPinProblem,
   automationScheduleProblem,
   automationTriggerSchedule,
   automationTriggersColumn,
+  isAgentModelTier,
   isAutomationRuntimeTier,
-  isModelTier,
-  MODEL_TIERS,
   NO_AUTOMATION_TRIGGER,
   parseAutomationTrigger,
 } from "@volli/shared";
@@ -160,10 +160,16 @@ export function createAutomationService(deps: AutomationServiceDeps) {
     // Access, and no reason to need it. What IS checked is the word: the IPC
     // guard judges wire shape only, and a tier this build does not know must
     // never reach the record, where it would read back as the invalid row.
+    //
+    // The set is the AGENT-facing one (VC-431), which is what the editor
+    // offers: `utility` is the slot for work nobody asked for, so no Session —
+    // and therefore no Run — may be started on it. Checking the wider
+    // `MODEL_TIERS` here would let a door that bypassed the editor write the
+    // one row a Run must never resolve.
     if (isAutomationRuntimeTier(input.runtime)) {
-      return isModelTier(input.runtime.tier)
+      return isAgentModelTier(input.runtime.tier)
         ? null
-        : `Unknown model tier ${JSON.stringify(input.runtime.tier)} (valid: ${MODEL_TIERS.join(", ")}).`;
+        : `Unknown model tier ${JSON.stringify(input.runtime.tier)} (valid: ${AGENT_MODEL_TIERS.join(", ")}).`;
     }
     if (deps.inspectModelAccess === undefined) {
       return "Model Access is unavailable, so a pinned model cannot be validated. Save without a pin, or retry after relaunch.";

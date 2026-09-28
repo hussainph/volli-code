@@ -355,10 +355,11 @@ export interface SessionAttachInput {
  * Which Role's default a resolution wants.
  *
  * The Role is this module's own vocabulary. Since VC-9 it is the whole
- * {@link SessionRole}: a Subagent Session reads the `utility` rung, because a
- * bounded delegation is the cost-efficient background work that rung was named
- * for. The map from a Role to the tier it reads is shared
- * (`modelPurposeForRole`), stated once for every process.
+ * {@link SessionRole}. The map from a Role to the tier it reads is shared
+ * (`modelPurposeForRole`), stated once for every process — and since VC-431 a
+ * Subagent Session's row is the ladder root rather than `utility`, the rung no
+ * Session may run on: a delegation normally arrives carrying its parent's own
+ * anchor as an override, and this row is what stands when it carries none.
  *
  * The PORT, though, speaks tiers rather than Roles: since VC-259 an override
  * can name any rung, and the Role's tier is just the rung nobody named. So the

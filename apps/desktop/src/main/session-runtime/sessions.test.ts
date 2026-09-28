@@ -492,7 +492,7 @@ describe("Sessions", () => {
     expect(roles).toEqual(["project", "ticket"]);
   });
 
-  it("mints a Subagent Session as its own Role: stated on create, on the utility model, bounded by its parent (VC-9)", async () => {
+  it("mints a Subagent Session as its own Role: stated on create, on the ladder root, bounded by its parent (VC-9, VC-431)", async () => {
     const modelTiers: string[] = [];
     const surfaceAsks: { role: string; within: readonly string[] | undefined }[] = [];
     const births: { role: string; parentSessionId: string | null }[] = [];
@@ -545,11 +545,14 @@ describe("Sessions", () => {
         parentSessionId: "parent-session",
       },
     });
-    // Cost-efficient background work: the `utility` rung, not the Ticket's.
+    // The LAST RESORT rung, and never `utility` (VC-431): a delegation is work
+    // its parent asked for, so it normally arrives carrying the parent's own
+    // anchor as an override (`delegate-session.ts`), and this is only what a
+    // parent that recorded no anchor leaves standing.
     // The port is asked in TIERS since VC-259 — a Role names no rung of its
     // own once a start may name one — so what arrives is the rung, mapped by
     // `modelPurposeForRole` at the one moment both facts are in hand.
-    expect(modelTiers).toEqual(["utility"]);
+    expect(modelTiers).toEqual(["global"]);
     expect(surfaceAsks).toEqual([
       {
         role: "subagent",

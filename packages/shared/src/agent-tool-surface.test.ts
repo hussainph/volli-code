@@ -8,6 +8,7 @@ import {
   AgentToolSurfaceError,
 } from "./agent-tool-surface";
 import { CODING_TOOL_IDS, NON_CODING_TOOL_IDS } from "./authority";
+import { AGENT_MODEL_TIERS } from "./model-access-policy";
 import { VERB_REGISTRY, VERB_TOOL_KEYS, verbEntry, verbTier, verbToolsFrom } from "./verb-registry";
 import type { VerbEntry } from "./verb-registry";
 
@@ -298,8 +299,19 @@ describe("session.delegate is the working Roles' verb, and never the helper's (V
       "task",
       "title",
       "model",
+      "tier",
       "reasoning",
     ]);
+  });
+
+  it("offers the same tier list session_start does, and never Utility (VC-431)", () => {
+    const input = verbEntry("session.delegate")?.tool?.input ?? [];
+    const tier = input.find((field) => field.name === "tier");
+    expect(tier?.type === "enum" ? tier.values : []).toEqual(AGENT_MODEL_TIERS);
+    // A delegation that names neither a tier nor a model is anchored to its
+    // parent's own model, which is what `model`'s description now says it
+    // replaces — the Utility row is named by no door.
+    expect(input.find((field) => field.name === "model")?.description).not.toContain("utility");
   });
 
   it("is in both working bundles and absent from the subagent's", () => {

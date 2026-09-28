@@ -191,10 +191,22 @@ describe("the visual tier", () => {
 });
 
 describe("modelPurposeForRole", () => {
-  it("reads a Subagent Session off the utility rung — cost-efficient background work (VC-9)", () => {
+  it("reads a Subagent Session off the ladder root — its last resort, not Utility (VC-431)", () => {
     expect(modelPurposeForRole("project")).toBe("global");
     expect(modelPurposeForRole("ticket")).toBe("ticket");
-    expect(modelPurposeForRole("subagent")).toBe("utility");
+    // A delegation normally anchors to its PARENT's tier or pinned model,
+    // passed as an override. This rung is what stands when the parent
+    // recorded no anchor at all, so it is the ladder root and nothing cheaper.
+    expect(modelPurposeForRole("subagent")).toBe("global");
+  });
+
+  it("puts no Role on the Utility rung: it is the slot for work nobody asked for", () => {
+    // The rule this map and `AGENT_MODEL_TIERS` state together: no Role reads
+    // `utility`, and no door may name it. A chat Session is never background
+    // work, whoever opened it.
+    const roles = ["project", "ticket", "subagent"] as const;
+    expect(roles.map(modelPurposeForRole)).not.toContain("utility");
+    for (const role of roles) expect(isAgentModelTier(modelPurposeForRole(role))).toBe(true);
   });
 
   it("is the rung a start resolves through only when it names no tier of its own", () => {
