@@ -86,6 +86,7 @@ import {
   type ConversationReader,
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
+import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -1931,12 +1932,11 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = contextTokenProjector(
-        context.messages,
-        requestModel,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The whole normalized transcript, prefix included: since Pi 0.86 the
+      // system prompt and tool declarations ARE messages (the leading system
+      // one), and the projector prices them there rather than off fields the
+      // context no longer has.
+      const occupied = contextTokenProjector(context.messages, requestModel);
       return Math.max(
         floor,
         Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
@@ -1961,17 +1961,31 @@ async function attachSession(
       });
     };
 
+    // The prompt and the declarations, as the one leading system message Pi's
+    // transcript now carries them in (0.86). Built here rather than left to
+    // the `Agent`, which seeds one only when the array it is handed does not
+    // already start with a system message: a sidecar whose first replayable
+    // entry is a tool-change system message Pi emitted ahead of the first
+    // prompt would otherwise be taken for a transcript that already has its
+    // prompt, and the composed one would never be sent. The same object is put
+    // back at the head of every array this runtime rebuilds from the sidecar
+    // (compaction, model switch), so the prefix is the same bytes on every
+    // request of the attachment and the projector's memo hits on it.
+    const head = systemHead(
+      composeSystemPrompt({
+        role: spec.identity.role,
+        tools: spec.tools,
+        promptResources: spec.promptResources,
+      }),
+      tools,
+    );
+
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt({
-          role: spec.identity.role,
-          tools: spec.tools,
-          promptResources: spec.promptResources,
-        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
-        messages: recoveredMessages,
+        messages: withSystemHead(head, recoveredMessages),
       },
       onPayload: (payload) => {
         if (nativeCompactionState === undefined) return undefined;
@@ -2327,8 +2341,9 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
-          // turns without their reasoning, all read off the entry just written.
-          agent.state.messages = outcome.messages;
+          // turns without their reasoning, all read off the entry just written
+          // — behind the head, which the entry never holds.
+          agent.state.messages = withSystemHead(head, outcome.messages);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -2402,11 +2417,13 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
+        // The live array already leads with the system message that carries
+        // the prompt and tools; handing the projector the prompt as well would
+        // count it twice. (Tools would not — the estimator prices each
+        // declaration once over the transcript — but there is nothing to add.)
         const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,
-          agent.state.systemPrompt,
-          agent.state.tools,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
         const path = await conversationBranch();
@@ -2771,17 +2788,18 @@ async function attachSession(
         await rewritingTheContext(() =>
           compactBeforeTurn([
             queuedUserMessage(
-              agent.state.messages.length === 0
+              conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
           ]),
         );
-        const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec, framedText)
-            : framedText;
+        // Asked of the conversation, not of the array: the array is never empty
+        // now that the system head lives in it (see `transcript-context.ts`).
+        const delivered = conversationIsEmpty(agent.state.messages)
+          ? composeFirstUserMessage(spec, framedText)
+          : framedText;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,
@@ -2917,7 +2935,7 @@ async function attachSession(
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = contextMessages(path);
+          agent.state.messages = withSystemHead(head, contextMessages(path));
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });

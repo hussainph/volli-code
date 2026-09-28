@@ -363,7 +363,7 @@ const MCP_SERVER_ID_FIELD: VerbToolField = {
   name: "server",
   type: "string",
   required: true,
-  description: "The server's id, as mcp_list prints it.",
+  description: "The server's id, as server_list prints it.",
 };
 
 /**
@@ -2355,7 +2355,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_list",
+      name: "server_list",
       description: [
         "List the MCP servers configured for this project: each server's transport, whether it is on, which of its tools are selected, whether its catalog went stale, and the provenance recorded when it was installed.",
         "Read this before installing anything, so an install that already exists becomes a refresh instead of a duplicate.",
@@ -2395,7 +2395,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_preview",
+      name: "server_preview",
       description: [
         "Connect to one MCP server you already have the configuration for, read its tool list, and save nothing.",
         "Use it to see what a server offers before deciding what to install and which of its tools to turn on.",
@@ -2453,7 +2453,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_install",
+      name: "server_install",
       description: [
         "Add or update one MCP server for this project.",
         'Called plainly it PREVIEWS: it connects, reports the tools it found and the exact warning for this kind of server, and writes nothing. Call it again with confirm="apply" to perform it.',
@@ -2467,7 +2467,7 @@ export const VERB_REGISTRY = [
           name: "tools",
           type: "string",
           description:
-            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.",
+            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use server_tools. A name the server did not offer is refused rather than ignored.",
         },
         {
           name: "source",
@@ -2530,7 +2530,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_refresh",
+      name: "server_refresh",
       description: [
         "Reconnect to a server this project already has and re-read its tools, keeping the current selection.",
         "Use it after a server is upgraded, or to clear a stale marker left by an earlier failure.",
@@ -2564,7 +2564,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_enable",
+      name: "server_enable",
       description: [
         "Turn a configured MCP server on, so its selected tools are offered to Sessions created after this call.",
         "It connects to nothing, and it does not change any Session that already exists.",
@@ -2605,11 +2605,11 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_disable",
+      name: "server_disable",
       description: [
         "Turn a configured MCP server off, keeping its configuration.",
         "Sessions created after this call are not offered its tools; Sessions that already exist keep the tools they were born with and can still reattach.",
-        "Prefer this to mcp_remove whenever the intent is only to stop offering the tools.",
+        "Prefer this to server_remove whenever the intent is only to stop offering the tools.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD],
     },
@@ -2643,7 +2643,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_tools",
+      name: "server_tools",
       description: [
         "Set exactly which of a configured server's tools are on, replacing the current selection.",
         "Anything the server offers that you do not name is turned off. Sessions created after this call get the new selection; existing Sessions are unchanged.",
@@ -2705,13 +2705,13 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_remove",
+      name: "server_remove",
       description: [
         "Delete one MCP server's configuration from this project.",
         'Called plainly it PREVIEWS: it reports what would be deleted and what that breaks, and removes nothing. Call it again with confirm="apply" to perform it.',
         "This is more destructive than it looks. Any older Session that was born holding one of this server's tools will fail to reattach afterwards, because the transport its frozen tool needs is gone.",
         "Re-adding the server under the SAME id restores those Sessions; re-adding it under a different id does not.",
-        "If the intent is only to stop offering the tools to new Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+        "If the intent is only to stop offering the tools to new Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD, MCP_CONFIRM_FIELD],
     },
@@ -2950,6 +2950,23 @@ const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
 /** One verb's entry, or undefined for a key this build does not declare. */
 export function verbEntry(key: string): VerbEntry | undefined {
   return ENTRY_BY_KEY.get(key);
+}
+
+/**
+ * The provider spelling for a frozen Session, not the durable verb key.
+ * Historical surfaces have no naming marker and must keep their mcp_* names;
+ * new Sessions carry "server" and avoid Anthropic OAuth's single-underscore
+ * mcp_ extra-usage classifier. Real MCP tools use mcp__ and are unaffected.
+ */
+export function verbToolWireName(
+  key: VerbToolKey,
+  mcpManagementNames?: "server",
+): string | undefined {
+  const name = verbEntry(key)?.tool?.name;
+  if (name === undefined) return undefined;
+  return key.startsWith("mcp.") && mcpManagementNames === undefined
+    ? name.replace(/^server_/, "mcp_")
+    : name;
 }
 
 /** Every listed registry verb, including a tool-only or app-only door. */

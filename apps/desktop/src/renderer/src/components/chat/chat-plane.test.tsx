@@ -58,7 +58,7 @@ describe("the desktop transcript-row mapping", () => {
       <ChatTranscriptRow row={row} context={context} live={false} />,
     );
     expect(html).toContain("Review tests");
-    expect(html).toContain("Finished its task");
+    expect(html).toContain("done");
     expect(html).not.toContain(modelText);
     expect(html).not.toContain("is-user");
     expect(html).not.toContain('aria-label="Copy"');

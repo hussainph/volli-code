@@ -275,23 +275,16 @@
   --border: #312623;
   --border-strong: #423632;
   --sidebar-border: #2d241f;
-  /* The accent, derived from the canvas's primary stop on the SAME vibrancy
-   curve the gradient rides — a near-neutral wash still yields near-neutral
-   chrome — but with neither the per-mode gain nor the per-mode cap, which
-   exist to stop a backdrop fighting the ink and have no business holding
-   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly
-   (ember #e8652a for the shipped canvas); the default ships at 0.6, which
-   is why this is a quieter ember rather than the brand hex itself. It is
-   the same hex in BOTH blocks: the accent carries no mode, so a light/dark
-   flip repaints every surface and leaves it exactly where it is. */
-  --primary: #d37550;
+  /* The canvas accent fill and label solved together for APCA Lc 60 AND
+   WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
+   to legibility. The pair is shared by both appearances. */
+  --primary: #b85d38;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
-   `--primary` is below the floor as copy and cannot simply be brightened —
-   its lightness is what makes it work as a fill. Fills and icons take
-   `--primary`; anything you read takes this. */
+  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
   --primary-text: #fc9a74;
-  --ring: #d37550;
+  /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
+   dilute focus indicators: the shipped control surfaces require 3:1. */
+  --ring: #fc9a74;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.
@@ -367,23 +360,16 @@
   --border: #d8b6a9;
   --border-strong: #d5b2a5;
   --sidebar-border: #ddbbad;
-  /* The accent, derived from the canvas's primary stop on the SAME vibrancy
-   curve the gradient rides — a near-neutral wash still yields near-neutral
-   chrome — but with neither the per-mode gain nor the per-mode cap, which
-   exist to stop a backdrop fighting the ink and have no business holding
-   down a button fill. So vibrancy 1 lands on the AUTHORED color exactly
-   (ember #e8652a for the shipped canvas); the default ships at 0.6, which
-   is why this is a quieter ember rather than the brand hex itself. It is
-   the same hex in BOTH blocks: the accent carries no mode, so a light/dark
-   flip repaints every surface and leaves it exactly where it is. */
-  --primary: #d37550;
+  /* The canvas accent fill and label solved together for APCA Lc 60 AND
+   WCAG AA 4.5:1. Vibrancy still supplies hue/chroma; lightness yields
+   to legibility. The pair is shared by both appearances. */
+  --primary: #b85d38;
   --primary-foreground: #ffffff;
-  /* The accent solved to APCA Lc 60 on the card, for body-sized accent TEXT.
-   `--primary` is below the floor as copy and cannot simply be brightened —
-   its lightness is what makes it work as a fill. Fills and icons take
-   `--primary`; anything you read takes this. */
+  /* The accent solved to APCA Lc 60 on the card for body-sized accent text. */
   --primary-text: #9c441e;
-  --ring: #d37550;
+  /* Opaque surface-legible accent ink, re-solved in each appearance. Do not
+   dilute focus indicators: the shipped control surfaces require 3:1. */
+  --ring: #9c441e;
   /* The hue-locked family: green/amber/blue/red mean working, waiting, moved
    and gone by convention, so their HUE never follows the canvas — a red
    canvas would otherwise make “delete” indistinguishable from “primary”.

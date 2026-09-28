@@ -11,15 +11,13 @@
  * function that can flatten two surfaces together or dim body text, because
  * no input touches the axis those depend on.
  *
- * Contrast floors are APCA, not WCAG 2. WCAG 2's contrast ratio badly
- * misjudges dark themes — it rates near-black pairs as far more separable
- * than they look — and this ladder lives almost entirely below L 0.35.
- * Borders are the exception: APCA low-clips below Lc ~10 and literally cannot
- * see a 1px edge at all, so edges are asserted in OKLCH ΔL instead.
+ * Copy uses APCA perceptual floors, with WCAG AA additionally required for
+ * small primary-button labels. Neither metric substitutes for the other.
+ * Borders use OKLCH ΔL because APCA low-clips below Lc ~10.
  */
 
 import type { ThemeDefinition } from "./definition";
-import { apcaLc, clamp, hexToOklch, oklchToHex } from "./color";
+import { apcaLc, clamp, hexToOklch, oklchToHex, wcagContrast } from "./color";
 import type { ThemeTokenName, ThemeTokens } from "./tokens";
 
 /** Below this seed chroma the neutrals go fully grey — the muddy-black guard. */
@@ -45,20 +43,16 @@ export const NEUTRAL_CHROMA_RANGE = { min: 0.004, max: 0.014 } as const;
 /** How much of the seed's chroma survives into the neutrals. */
 const NEUTRAL_CHROMA_RATIO = 0.06;
 
-/** The accent's fixed lightness. Ember `#e8652a` is an exact fixed point of
- * `oklch(0.661 C h)` — the brand color falls out of the math rather than
- * being pinned by hand. */
+/** The accent's preferred lightness, before its fill/label contrast solve.
+ * Brand hue/chroma survive; an exact brand hex must not outrank legibility. */
 const PRIMARY_LIGHTNESS = 0.661;
 
 /**
  * Lc floor for the accent used as *text* on `--background`.
  *
  * `--primary` cannot simply be brightened to meet this: its lightness is
- * pinned at {@link PRIMARY_LIGHTNESS} because that is what it takes to read as
- * a button fill and to keep ember an exact fixed point of the accent math. At
- * that lightness it scores Lc 41 as body copy — fine for an icon, below the
- * floor for a paragraph link. So the accent gets a *second* lightness rather
- * than a compromised single one, and body-sized accent text uses that. The
+ * constrained by its label's APCA and WCAG floors. That fill is too quiet as
+ * body copy, so links get a second, independently solved lightness. The
  * floor matches `--muted-foreground`'s, because these are the same job.
  */
 const PRIMARY_TEXT_LC = MUTED_LC;
@@ -439,8 +433,8 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     // The two names that still resolve to a value another name carries, and the
     // reason each survived the collapse. The sidebar panel IS a card — same rung,
     // and the two-tier depth is expressed by `--rail` sitting below it, not by a
-    // third fill. `--ring` is the accent, and stays a separate name because it
-    // answers a separate question (see `tokens.ts`).
+    // third fill. `--ring` uses surface-legible accent ink, not the button fill:
+    // focus must contrast with the surface surrounding the control.
     //
     // Everything else that used to be here is gone. `--popover-foreground`,
     // `--secondary-foreground` and `--accent-foreground` were `--foreground`
@@ -451,7 +445,7 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
     // divergent popover ink gets the token back, with the evidence that it
     // diverged.
     "--sidebar": sidebar,
-    "--ring": primary,
+    "--ring": primaryText,
   };
 
   // 9. Overrides land last — after generation and after every floor above —
@@ -462,15 +456,14 @@ export function generateThemeTokens(theme: ThemeDefinition): ThemeTokens {
 }
 
 /**
- * The accent family and nothing else: `--primary`, its label, and the one
- * surviving alias of the two.
+ * The accent fill and its label. Focus, like accent text, needs a surface.
  *
  * `--primary-text` is deliberately NOT a member. It is the accent solved as
  * *copy*, which means solved against the surface it is read on — `--background`
  * here, `--card` in the canvas layer — so it belongs to whoever knows that
  * surface, and a value in this record would be one solved against neither.
  */
-export type AccentTokens = Pick<ThemeTokens, "--primary" | "--primary-foreground" | "--ring">;
+export type AccentTokens = Pick<ThemeTokens, "--primary" | "--primary-foreground">;
 
 /**
  * Step 6–7 on its own: a seed hex in, the accent family out, at the seed's
@@ -500,7 +493,6 @@ export function generateAccentTokens(seed: string): AccentTokens {
   return {
     "--primary": primary,
     "--primary-foreground": primaryForeground,
-    "--ring": primary,
   };
 }
 
@@ -530,25 +522,16 @@ export function pickAccentLabel(primaryHex: string, hue: number): { hex: string;
  *
  * The label comes from {@link pickAccentLabel}.
  *
- * The awkward case is a saturated mid-green: at L 0.661 white reaches Lc ~60
- * and a dark label tops out near Lc 49, so *no* label clears the floor. The
- * only axis left is the button's own lightness, and step 9 of the spec says
- * exactly that — on failure adjust lightness, never chroma. So the accent is
- * nudged the smallest distance from PRIMARY_LIGHTNESS that makes its label
- * legible. Hue and chroma, the two things the user actually chose, are
- * untouched; the extremes (L 0 with white, L 1 with dark) always clear, so
- * the search always terminates on a legible pair.
+ * At the preferred L 0.661, white can clear APCA while failing WCAG AA
+ * (the shipped canvas was 3.27:1). Search toward black for the nearest fill
+ * whose label clears BOTH Lc 60 and 4.5:1. Adjust lightness, never authored
+ * hue or chroma; gamut mapping alone may reduce unrepresentable chroma.
+ * Black with white is a known passing bound, so the search always terminates.
  */
 function solveAccentPair(
   chroma: number,
   hue: number,
 ): { primary: string; primaryForeground: string } {
-  const ideal = oklchToHex(PRIMARY_LIGHTNESS, chroma, hue);
-  const idealLabel = pickAccentLabel(ideal, hue);
-  if (idealLabel.lc >= PRIMARY_FOREGROUND_LC) {
-    return { primary: ideal, primaryForeground: idealLabel.hex };
-  }
-
   // The repair always searches DOWNWARD. PRIMARY_LIGHTNESS (0.661) sits below
   // the white/dark label crossover (L ≈ 0.72), so white is the better label at
   // every hue and chroma the accent can take — measured across 360 hues × 5
@@ -558,7 +541,11 @@ function solveAccentPair(
   let illegible = PRIMARY_LIGHTNESS;
   for (let i = 0; i < 40; i += 1) {
     const mid = (legible + illegible) / 2;
-    if (pickAccentLabel(oklchToHex(mid, chroma, hue), hue).lc >= PRIMARY_FOREGROUND_LC)
+    const fill = oklchToHex(mid, chroma, hue);
+    const label = pickAccentLabel(fill, hue);
+    // Keep the perceptual floor AND the normative small-text AA floor.
+    // Measure rounded hexes, so quantization cannot undo the guarantee.
+    if (Math.min(label.lc / PRIMARY_FOREGROUND_LC, wcagContrast(label.hex, fill) / 4.5) >= 1)
       legible = mid;
     else illegible = mid;
   }

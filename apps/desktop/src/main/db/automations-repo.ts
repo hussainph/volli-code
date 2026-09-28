@@ -684,6 +684,34 @@ export function listSkippedOccurrencesForProject(
   return rows.map(mapSkip);
 }
 
+/**
+ * One Automation's Skipped occurrences inside one project, newest due first
+ * (VC-297).
+ *
+ * The editor's half of the history, beside {@link listProjectRunsForAutomation}
+ * and scoped the same way. A skip carries its own `project_id`, so it needs no
+ * join to answer where it happened — but the project still bounds the read,
+ * because a global Automation is listable in every project and its missed
+ * occurrences belong to the one whose schedule owed them.
+ *
+ * Narrowed as its own read rather than filtered from the project's list for
+ * the reason `runsByTicket` already states in the store: main answers each
+ * question with its own indexed read. `idx_automation_skips_automation`
+ * (migration 033) is that index.
+ */
+export function listSkippedOccurrencesForAutomation(
+  db: Database.Database,
+  input: { automationId: string; projectId: string },
+): AutomationSkippedOccurrence[] {
+  const rows = prepared<[string, string], AutomationSkipRow>(
+    db,
+    `SELECT * FROM automation_skipped_occurrences
+      WHERE automation_id = ? AND project_id = ?
+      ORDER BY due_at DESC, id DESC`,
+  ).all(input.automationId, input.projectId);
+  return rows.map(mapSkip);
+}
+
 /** One recorded skip by id — the ledger's read-back after it writes one. */
 export function getSkippedOccurrence(
   db: Database.Database,

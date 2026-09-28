@@ -59,6 +59,10 @@ export function chatSessionRecord(
     bornTicketless: projection.bornTicketless,
     role: projection.session.role,
     parentSessionId: projection.session.parentSessionId,
+    // Verbatim from the fold, like `outcome` above (VC-416). The policy is
+    // durable across attachment and relaunch, so a row carries the model a
+    // Session is pinned to whether or not anything is attached to it now.
+    model: projection.modelSelection,
   };
 }
 

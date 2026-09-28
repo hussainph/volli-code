@@ -2164,6 +2164,19 @@ export type AutomationResult = Result<{
   receipt: AutomationCommandReceipt;
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
+/**
+ * One Automation's history inside one project (VC-297).
+ *
+ * Both ids, because neither answers alone: a global Automation is listable in
+ * every project but each Run it produced happened in ONE, so the pair is the
+ * whole question. A read, so it carries no `commandId` — unlike
+ * {@link AutomationIdInput}, which is a command's.
+ */
+export interface AutomationHistoryScopeInput {
+  projectId: string;
+  automationId: string;
+}
+
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
 /** One project's Skipped occurrences — the other half of its Run history (VC-130). */
 export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
@@ -2284,6 +2297,24 @@ export interface VolliAutomationIpcContract {
   "volli:automation-runs-for-project": {
     args: [input: ProjectIdInput];
     result: AutomationRunsResult;
+  };
+  /**
+   * ONE Automation's Runs in one project, newest first — what the editor's
+   * history shows (VC-297).
+   *
+   * Narrower than the project read above it, and a separate door rather than a
+   * filter the client applies: a caller that is not this process should ask for
+   * the list it draws, not download a project's whole history to find it. Main
+   * has the index for both questions (`idx_automation_runs_automation`).
+   */
+  "volli:automation-runs-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationRunsResult;
+  };
+  /** The same Automation's Skipped occurrences, read beside its Runs (VC-297). */
+  "volli:automation-skips-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationSkipsResult;
   };
   /** Which Automations are switched on on this machine. */
   "volli:automation-enablement": { args: []; result: AutomationEnablementResult };

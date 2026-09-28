@@ -324,7 +324,7 @@ function SearchResults({
  * line number is the fact that makes a result a place rather than a string.
  */
 function MatchRow({ match, onActivate }: { match: FileSearchMatch; onActivate(): void }) {
-  const { before, hit, after } = searchHighlight(match);
+  const { before, hit, after } = React.useMemo(() => searchHighlight(match), [match]);
   return (
     <ListRow
       data-testid="file-search-match"
@@ -336,10 +336,10 @@ function MatchRow({ match, onActivate }: { match: FileSearchMatch; onActivate():
         </span>
       }
       primary={
-        <span className="min-w-0 flex-1 truncate font-mono text-ui">
-          <span className="text-muted-foreground">{before}</span>
-          <mark className="rounded-xs bg-attention/25 text-foreground">{hit}</mark>
-          <span className="text-muted-foreground">{after}</span>
+        <span className="flex min-w-0 flex-1 overflow-hidden whitespace-nowrap font-mono text-ui">
+          <span className="min-w-0 shrink truncate text-muted-foreground">{before}</span>
+          <mark className="shrink-0 rounded-xs bg-attention/25 text-foreground">{hit}</mark>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{after}</span>
         </span>
       }
     />

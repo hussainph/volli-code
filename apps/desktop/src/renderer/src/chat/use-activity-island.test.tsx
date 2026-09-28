@@ -288,6 +288,7 @@ describe("useActivityIsland", () => {
               bornTicketless: true,
               role: "subagent",
               parentSessionId: SESSION,
+              model: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
             },
           ],
         },
@@ -300,7 +301,16 @@ describe("useActivityIsland", () => {
     const { model, actions } = probe.latest();
     expect(islandEmpty(model)).toBe(false);
     expect(model.agents).toEqual([
-      { id: "child", label: "Grep the tests", progress: 0, state: "working", promoted: false },
+      {
+        id: "child",
+        label: "Grep the tests",
+        progress: 0,
+        state: "working",
+        promoted: false,
+        // The policy the parent picked for this child (VC-416), carried from
+        // the listing row to the island's model without a lookup.
+        model: { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" },
+      },
     ]);
     actions.peekAgent("child");
     expect(peekSession).toHaveBeenCalledWith("child");

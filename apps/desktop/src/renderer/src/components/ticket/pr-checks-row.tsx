@@ -148,7 +148,7 @@ function CheckLine({ check }: { check: PrCheck }) {
       onClick={() => openExternal(url)}
       title={`${label} · ${word}`}
       aria-label={`${label}, ${word}. Open the run on GitHub`}
-      className="group/check flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
+      className="group/check flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       {body}
       <ArrowSquareOutIcon
@@ -202,7 +202,7 @@ export function ChecksDetail({ view }: { view: PrChecksView }) {
         <button
           type="button"
           onClick={() => openExternal(view.checksUrl)}
-          className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/45"
+          className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-left text-ui text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowSquareOutIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           All checks on GitHub

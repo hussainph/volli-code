@@ -95,7 +95,7 @@ export function RailSectionHeadingRow({
  * neighbours are fixed.
  */
 export const RAIL_CARD_ROW =
-  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/45";
+  "flex w-full items-center gap-2 px-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * The framed card those rows sit in, and the hairline between them.

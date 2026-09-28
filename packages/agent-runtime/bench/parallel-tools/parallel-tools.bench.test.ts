@@ -15,7 +15,14 @@
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { peakConcurrency, runOnce, runRepeated, sleep, type ToolSample } from "./harness";
+import {
+  peakConcurrency,
+  runOnce,
+  runRepeated,
+  sleep,
+  type ScriptedReply,
+  type ToolSample,
+} from "./harness";
 import { buildReport } from "./report";
 
 describe("Pi tool execution modes", () => {
@@ -102,7 +109,7 @@ describe("Pi tool execution modes", () => {
     // the obvious safety lever, and Pi applies it to the whole batch, not to
     // the marked call. Three fast reads batched beside one guarded call lose
     // all of their overlap.
-    const replies = [
+    const replies: ScriptedReply[] = [
       {
         toolCalls: [
           { name: "browser_navigate", args: { n: 0 } },

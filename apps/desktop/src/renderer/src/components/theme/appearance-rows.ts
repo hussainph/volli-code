@@ -1,27 +1,36 @@
 /**
  * What the two Appearance surfaces — app-wide Settings and a project's
- * Configure — offer and open.
+ * Configure — say about the terminal, and how they open the files behind it.
  *
- * It lives beside the picker rather than inside either page so neither page has
+ * It lives beside the rows rather than inside either page so neither page has
  * to import the other, and so the global and per-project rows cannot end up
- * listing different catalogs.
+ * describing the terminal differently.
  *
- * The EDITOR is not offered here any more (VC-123): it has one light theme and
+ * NEITHER SURFACE LISTS THEMES ANY MORE (VC-413), which is why this file is no
+ * longer called `appearance-catalog.ts`. It used to hand both pages a picker's
+ * worth of items — 463 names read out of a theme catalog vendored from
+ * Ghostty.app, whose individual provenance was never verified. The catalog is
+ * gone and the picker with it: the terminal's theme is whatever the user's own
+ * ghostty config chain names, which is what decision #67 always said the file,
+ * not this panel, was for. The rows still SAY what is in force and where it came
+ * from, and still revert Volli's own overlay key.
+ *
+ * The EDITOR is not offered here either (VC-123): it has one light theme and
  * one dark theme, chosen by the resolved appearance, so there is nothing to
  * list and nothing to open.
  */
 
-import { errorMessage, listGhosttyThemeNames } from "@volli/shared";
+import { errorMessage } from "@volli/shared";
 import type { ResolvedAppearance } from "@volli/shared";
 
-import type { ThemeComboBoxItem } from "@renderer/components/theme/theme-combo-box";
 import { toastError } from "@renderer/lib/toast";
 import { TOKEN_THEME_NAMES } from "@renderer/terminal/appearance";
 
 /**
- * What the terminal wears when no layer names a theme: the palette derived from
- * the app's own tokens (terminal/appearance.ts), which has no catalog entry to
- * check-mark — so it is a LABEL, never a value anything writes.
+ * What the terminal wears when no layer names a theme — and, since VC-413, also
+ * when a layer names one no file on this machine answers to: the palette derived
+ * from the app's own tokens (terminal/appearance.ts). It is a LABEL, never a
+ * value anything writes.
  *
  * Takes the appearance because that palette has two names, one per mode, and a
  * constant here could only ever be right about one of them: under light the row
@@ -31,15 +40,6 @@ import { TOKEN_THEME_NAMES } from "@renderer/terminal/appearance";
  */
 export function fallbackTerminalThemeLabel(resolved: ResolvedAppearance): string {
   return TOKEN_THEME_NAMES[resolved];
-}
-
-/**
- * Ghostty's own theme collection, vendored into the app bundle
- * (`ghostty-theme.ts`), so the terminal picker needs no network and no disk
- * read.
- */
-export function terminalThemeItems(): ThemeComboBoxItem[] {
-  return listGhosttyThemeNames().map((name) => ({ value: name, label: name }));
 }
 
 /**
