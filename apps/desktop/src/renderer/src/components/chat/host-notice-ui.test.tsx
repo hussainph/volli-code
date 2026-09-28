@@ -35,12 +35,12 @@ afterEach(async () => {
 });
 
 describe("a Subagent Session notice row", () => {
-  it("draws the child, outcome, and receipt without message-bubble controls", () => {
+  it("draws the child and outcome without a redundant detail row or message-bubble controls", () => {
     const html = renderToStaticMarkup(<SubagentNoticeRow notice={completed} />);
 
     expect(html).toContain("Find artifact conventions");
     expect(html).toContain("done");
-    expect(html).toContain("Finished its task; its answer is in its own Session.");
+    expect(html).not.toContain('<p class="truncate text-ui text-muted-foreground/70">');
     expect(html).toContain('data-slot="separator"');
     expect(html).not.toContain('aria-label="Copy"');
   });
@@ -51,7 +51,7 @@ describe("a Subagent Session notice row", () => {
       <SubagentNoticeRow notice={{ ...completed, title: longTitle }} />,
     );
 
-    expect(html).toContain(`title="${longTitle} — done. Finished its task`);
+    expect(html).toContain(`title="${longTitle} — done"`);
   });
 
   it("opens the durable child id from its real button", async () => {
