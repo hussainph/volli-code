@@ -8,14 +8,15 @@ import {
   automationHistory,
   duplicateName,
   groupByOwnership,
-  historyForAutomation,
   laneDropRank,
   laneRowId,
   listingRunTarget,
   parseLaneRowId,
   ownershipLabel,
+  historyEmptyCopy,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -131,6 +132,33 @@ describe("a Run prints its own evidence", () => {
   it("keeps the Automation name a deleted record left behind", () => {
     expect(runAutomationLabel(run())).toBe("Review");
     expect(runAutomationLabel(run({ automationId: null, automationName: null }))).toBe("Run once");
+  });
+
+  it("says how it started, from its own attendance (VC-297)", () => {
+    expect(runStartLabel(run({ attendance: "attended" }))).toBe("By hand");
+    expect(runStartLabel(run({ attendance: "unattended" }))).toBe("Automatic");
+  });
+
+  it("says nothing about an empty history until the read has landed (VC-297)", () => {
+    // "Nothing has run" is a claim about the past, and an unread cache cannot
+    // make it. A cold cache is the ordinary state on every record the reader
+    // picks, so this is the difference between silence and a false sentence.
+    expect(historyEmptyCopy("automation-1", false)).toBeNull();
+    expect(historyEmptyCopy(null, false)).toBeNull();
+  });
+
+  it("names the scope once it knows the answer is empty", () => {
+    expect(historyEmptyCopy("automation-1", true)).toBe("Nothing has run this Automation yet.");
+    expect(historyEmptyCopy(null, true)).toBe("Nothing has run in this project yet.");
+  });
+
+  it("never names a schedule for an unattended Run", () => {
+    // `unattended` is the schedule timer AND the agent's own Run verb, so a
+    // Run another Session started has no schedule to name. One word covers
+    // both, or the row would be false for half of them.
+    expect(runStartLabel(run({ attendance: "unattended" })).toLowerCase()).not.toContain(
+      "schedule",
+    );
   });
 });
 
@@ -358,58 +386,6 @@ describe("automationHistory", () => {
 
   it("is empty when nothing has happened at all", () => {
     expect(automationHistory([], [])).toEqual([]);
-  });
-});
-
-describe("historyForAutomation", () => {
-  // The two records the editor must never confuse (VC-297), with their Runs
-  // and skips interleaved in time so a filter that merely truncated the list
-  // could not pass.
-  const mineEarly = run({ id: "mine-early", createdAt: 100 });
-  const theirs = run({
-    id: "theirs",
-    automationId: "automation-2",
-    automationName: "Nightly sweep",
-    createdAt: 400,
-  });
-  const mineLate = run({ id: "mine-late", createdAt: 900 });
-  const mySkip = skip({ id: "skip-mine", dueAt: 300 });
-  const theirSkip = skip({ id: "skip-theirs", automationId: "automation-2", dueAt: 600 });
-
-  it("keeps only the named definition's Runs and skips, still newest first", () => {
-    expect(
-      historyForAutomation("automation-1", [mineLate, theirs, mineEarly], [mySkip, theirSkip]).map(
-        (entry) => (entry.kind === "run" ? entry.run.id : entry.skip.id),
-      ),
-    ).toEqual(["mine-late", "skip-mine", "mine-early"]);
-  });
-
-  it("answers the other definition with its own rows, not the first one's", () => {
-    // The same call from the neighbour's editor: two automations with
-    // interleaved history never masquerade as each other's.
-    expect(
-      historyForAutomation("automation-2", [mineLate, theirs, mineEarly], [mySkip, theirSkip]).map(
-        (entry) => (entry.kind === "run" ? entry.run.id : entry.skip.id),
-      ),
-    ).toEqual(["skip-theirs", "theirs"]);
-  });
-
-  it("leaves an Unbound Run to the project's own activity", () => {
-    // It belongs to no record, so no record's editor may claim it.
-    const unbound = run({ id: "unbound", automationId: null, automationName: null });
-    expect(historyForAutomation("automation-1", [unbound, mineEarly], [])).toHaveLength(1);
-    expect(automationHistory([unbound, mineEarly], [])).toHaveLength(2);
-  });
-
-  it("scopes by id rather than by the snapshotted name", () => {
-    // Two records may share a name, and a rename must not move history between
-    // them: the Run's stored name is provenance, never the filter.
-    const sameName = run({ id: "same-name", automationId: "automation-2" });
-    expect(historyForAutomation("automation-1", [sameName], [])).toEqual([]);
-  });
-
-  it("is empty for a definition that has never run", () => {
-    expect(historyForAutomation("automation-3", [mineLate], [mySkip])).toEqual([]);
   });
 });
 

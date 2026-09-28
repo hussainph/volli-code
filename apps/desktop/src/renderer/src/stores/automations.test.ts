@@ -81,6 +81,8 @@ function stubApi(impl: {
   delete?: () => Promise<unknown>;
   runsForProject?: () => Promise<unknown>;
   skipsForProject?: () => Promise<unknown>;
+  runsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
+  skipsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
   runsForTicket?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
@@ -103,6 +105,12 @@ function stubApi(impl: {
         ),
         skipsForProject: vi.fn(
           impl.skipsForProject ?? (() => Promise.resolve({ ok: true, skips: [] })),
+        ),
+        runsForAutomation: vi.fn(
+          impl.runsForAutomation ?? (() => Promise.resolve({ ok: true, runs: [] })),
+        ),
+        skipsForAutomation: vi.fn(
+          impl.skipsForAutomation ?? (() => Promise.resolve({ ok: true, skips: [] })),
         ),
         runsForTicket: vi.fn(impl.runsForTicket ?? (() => Promise.resolve({ ok: true, runs: [] }))),
         // The stored set is the ENABLED one (`automations/enablement.ts`), so
@@ -750,6 +758,105 @@ describe("run history", () => {
 
     await store.getState().refreshRuns("p1");
 
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load run history: ipc gone",
+      expect.anything(),
+    );
+  });
+});
+
+describe("one Automation's history (VC-297)", () => {
+  const SCOPED_SKIP: AutomationSkippedOccurrence = {
+    id: "skip-1",
+    automationId: "automation-1",
+    automationName: "Review sweep",
+    projectId: "p1",
+    dueAt: 500,
+    missedCount: 1,
+    reason: { kind: "app-closed" },
+    recordedAt: 900,
+  };
+
+  it("caches both halves under the project AND Automation pair", async () => {
+    const listed = [run({ id: "run-2", createdAt: 20 }), run()];
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: true, runs: listed }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [SCOPED_SKIP] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toEqual(listed);
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toEqual([SCOPED_SKIP]);
+    // The PAIR, never the Automation alone: a global Automation is listable in
+    // every project, and its Runs there are not its Runs here.
+    expect(store.getState().runsByAutomation["automation-1"]).toBeUndefined();
+  });
+
+  it("keeps one project's cache clear of another's answer for the same record", async () => {
+    const here = [run({ id: "run-here" })];
+    const there = [run({ id: "run-there" })];
+    stubApi({
+      runsForAutomation: (input: { projectId: string }) =>
+        Promise.resolve({ ok: true, runs: input.projectId === "p1" ? here : there }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+    await store.getState().refreshAutomationHistory("p2", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toEqual(here);
+    expect(store.getState().runsByAutomation["p2:automation-1"]).toEqual(there);
+  });
+
+  it("toasts a refused Run read and writes NEITHER half", async () => {
+    // One write for both halves, so a refusal leaves the pair untouched rather
+    // than caching a list that was never true beside a missing one.
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [SCOPED_SKIP] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load run history: Unknown project",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a refused skip read, and still writes neither", async () => {
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: true, runs: [run()] }),
+      skipsForAutomation: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load skipped occurrences: Unknown project",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a transport failure the same way", async () => {
+    stubApi({
+      runsForAutomation: () => Promise.reject(new Error("ipc gone")),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
     expect(toast.error).toHaveBeenCalledWith(
       "Couldn't load run history: ipc gone",
       expect.anything(),
