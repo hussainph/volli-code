@@ -1,11 +1,11 @@
 {
   "snapshot": {
-    "takenAt": "2026-09-28T19:04:18.546Z",
-    "gitRef": "origin/main",
+    "takenAt": "2026-09-28T21:03:50.463Z",
+    "gitRef": "1ecfac17",
     "gitHead": "1ecfac17bb7a004fdaebdad4d6cf5d187938f025",
-    "analysisCheckout": "349f3d2da673f10105e20942b1c2cbb29c6f050b",
+    "analysisCheckout": "b6cd02c8c956d6783be1a3fadf51ff0f57d23a3e",
     "firstParentCommits": 531,
-    "ledgerInputEventsConsidered": 4889,
+    "ledgerInputEventsConsidered": 4943,
     "ledgerOccurredRecordedMaxSkewMs": 1,
     "earliestMergeInWindow": "2026-08-15",
     "latestMergeInWindow": "2026-09-28"
@@ -23,7 +23,7 @@
     "unlinkedMergeEvents": 212
   },
   "linkAudit": {
-    "ledgerPrLinks": 242,
+    "ledgerPrLinks": 244,
     "ledgerPrCollisions": [],
     "branchVsLedgerAgree": 186,
     "branchVsLedgerDisagree": [],
@@ -36,16 +36,16 @@
     "orphanedDelegatedSessions": 58
   },
   "coverage": {
-    "ticketsInProject": 444,
-    "ticketsMarkedDone": 332,
+    "ticketsInProject": 449,
+    "ticketsMarkedDone": 333,
     "ticketsWithStrongMergeEvidence": 234,
     "ticketsWithAnyMergeEvidence": 253,
     "primaryCohort": 227,
     "extendedCohort": 246,
     "coverageOfStrongEvidence": 0.9700854700854701,
-    "doneWithoutPrimaryCohortMembership": 105,
+    "doneWithoutPrimaryCohortMembership": 106,
     "exclusions": {
-      "noMergeEvidence": 210,
+      "noMergeEvidence": 215,
       "noSession": 6,
       "noFirstMessage": 1,
       "nonPositiveElapsed": 0
@@ -352,6 +352,874 @@
       "suppressed": []
     }
   },
+  "breakdown": {
+    "definitions": {
+      "categoriesInPriorityOrder": [
+        "working",
+        "silentInTurn",
+        "askingUser",
+        "failureBlocked",
+        "prOpenIdle",
+        "idle"
+      ],
+      "silenceMinutes": 5,
+      "failureClasses": [
+        "transientNetwork",
+        "quotaOrRateLimit",
+        "auth",
+        "policyRefusal",
+        "appRestart",
+        "worktreeOrConfig",
+        "volliRequest",
+        "volliHost",
+        "other"
+      ],
+      "failureOrigin": {
+        "transientNetwork": "external",
+        "quotaOrRateLimit": "external",
+        "auth": "external",
+        "policyRefusal": "external",
+        "appRestart": "volli",
+        "worktreeOrConfig": "volli",
+        "volliRequest": "volli",
+        "volliHost": "volli",
+        "other": "unclassified"
+      },
+      "prOpenSource": "gh capture",
+      "prCapture": {
+        "command": "gh pr list --state merged --limit 1000 --json number,createdAt,mergedAt,headRefName",
+        "capturedAt": "2026-09-28T20:38:42Z",
+        "mergedPrsInCapture": 481
+      }
+    },
+    "cohortTickets": 227,
+    "cohortHours": 4324.3,
+    "byCategory": {
+      "working": {
+        "hours": 375.3,
+        "share": 0.0868
+      },
+      "silentInTurn": {
+        "hours": 191.2,
+        "share": 0.0442
+      },
+      "askingUser": {
+        "hours": 138.8,
+        "share": 0.0321
+      },
+      "failureBlocked": {
+        "hours": 201,
+        "share": 0.0465
+      },
+      "prOpenIdle": {
+        "hours": 594.9,
+        "share": 0.1376
+      },
+      "idle": {
+        "hours": 2823.1,
+        "share": 0.6528
+      }
+    },
+    "failureBlockedByClass": {
+      "transientNetwork": {
+        "hours": 96.46,
+        "shareOfFailureBlocked": 0.4798,
+        "origin": "external"
+      },
+      "quotaOrRateLimit": {
+        "hours": 49.85,
+        "shareOfFailureBlocked": 0.248,
+        "origin": "external"
+      },
+      "auth": {
+        "hours": 0.8,
+        "shareOfFailureBlocked": 0.004,
+        "origin": "external"
+      },
+      "policyRefusal": {
+        "hours": 1.52,
+        "shareOfFailureBlocked": 0.0076,
+        "origin": "external"
+      },
+      "appRestart": {
+        "hours": 19.91,
+        "shareOfFailureBlocked": 0.099,
+        "origin": "volli"
+      },
+      "worktreeOrConfig": {
+        "hours": 4.87,
+        "shareOfFailureBlocked": 0.0242,
+        "origin": "volli"
+      },
+      "volliRequest": {
+        "hours": 12.51,
+        "shareOfFailureBlocked": 0.0622,
+        "origin": "volli"
+      },
+      "volliHost": {
+        "hours": 15.11,
+        "shareOfFailureBlocked": 0.0752,
+        "origin": "volli"
+      }
+    },
+    "failureBlockedByOrigin": {
+      "external": 148.62,
+      "volli": 52.4
+    },
+    "failureBlockedByWhatEndedIt": {
+      "input": 87.42,
+      "turnStarted": 107.6,
+      "windowEnd": 6
+    },
+    "failureBlocks": {
+      "raisedInWindows": 190,
+      "byClass": {
+        "appRestart": 1,
+        "auth": 16,
+        "policyRefusal": 4,
+        "quotaOrRateLimit": 57,
+        "transientNetwork": 81,
+        "volliHost": 13,
+        "volliRequest": 6,
+        "worktreeOrConfig": 12
+      },
+      "ticketsWithAnyFailureBlock": 80
+    },
+    "idleByTicketStatus": {
+      "backlog": 323.16,
+      "doing": 805.2,
+      "done": 424.1,
+      "needs_review": 406.95,
+      "todo": 863.71
+    },
+    "ticketsWithIdleInStatus": {
+      "backlog": 26,
+      "doing": 143,
+      "done": 7,
+      "needs_review": 97,
+      "todo": 125
+    },
+    "idleWhileAnotherSessionRanHours": 2050.1,
+    "byMergeMonthUtc": {
+      "2026-08": {
+        "n": 128,
+        "elapsedHoursPerTicket": 12.3,
+        "hoursPerTicket": {
+          "working": 1.41,
+          "silentInTurn": 0.08,
+          "askingUser": 0.45,
+          "failureBlocked": 0.22,
+          "prOpenIdle": 1.38,
+          "idle": 8.75
+        },
+        "failureBlockedHoursPerTicketByClass": {
+          "transientNetwork": 0.202,
+          "quotaOrRateLimit": 0.004,
+          "auth": 0.002,
+          "policyRefusal": 0.012,
+          "volliRequest": 0.004
+        },
+        "ticketsWithAnyFailureBlock": 23,
+        "ticketsWithNoTurnInWindow": 0,
+        "shareOfHours": {
+          "working": 0.1148,
+          "silentInTurn": 0.0069,
+          "askingUser": 0.0366,
+          "failureBlocked": 0.0183,
+          "prOpenIdle": 0.1119,
+          "idle": 0.7116
+        }
+      },
+      "2026-09": {
+        "n": 99,
+        "elapsedHoursPerTicket": 27.77,
+        "hoursPerTicket": {
+          "working": 1.97,
+          "silentInTurn": 1.82,
+          "askingUser": 0.82,
+          "failureBlocked": 1.74,
+          "prOpenIdle": 4.23,
+          "idle": 17.2
+        },
+        "failureBlockedHoursPerTicketByClass": {
+          "transientNetwork": 0.713,
+          "quotaOrRateLimit": 0.498,
+          "auth": 0.005,
+          "policyRefusal": 0,
+          "appRestart": 0.201,
+          "worktreeOrConfig": 0.049,
+          "volliRequest": 0.121,
+          "volliHost": 0.153
+        },
+        "ticketsWithAnyFailureBlock": 57,
+        "ticketsWithNoTurnInWindow": 0,
+        "shareOfHours": {
+          "working": 0.0707,
+          "silentInTurn": 0.0656,
+          "askingUser": 0.0295,
+          "failureBlocked": 0.0626,
+          "prOpenIdle": 0.1523,
+          "idle": 0.6192
+        }
+      }
+    },
+    "byElapsedBand": {
+      ">24 h": {
+        "n": 44,
+        "elapsedHoursPerTicket": 72.15,
+        "hoursPerTicket": {
+          "working": 2.99,
+          "silentInTurn": 1.7,
+          "askingUser": 1.22,
+          "failureBlocked": 2.84,
+          "prOpenIdle": 10.72,
+          "idle": 52.68
+        },
+        "failureBlockedHoursPerTicketByClass": {
+          "transientNetwork": 1.476,
+          "quotaOrRateLimit": 0.237,
+          "auth": 0.009,
+          "appRestart": 0.452,
+          "worktreeOrConfig": 0.058,
+          "volliRequest": 0.273,
+          "volliHost": 0.333
+        },
+        "ticketsWithAnyFailureBlock": 27,
+        "ticketsWithNoTurnInWindow": 0,
+        "shareOfHours": {
+          "working": 0.0414,
+          "silentInTurn": 0.0236,
+          "askingUser": 0.017,
+          "failureBlocked": 0.0393,
+          "prOpenIdle": 0.1486,
+          "idle": 0.7301
+        },
+        "shareOfCohortHours": 0.7341
+      },
+      "≤24 h": {
+        "n": 183,
+        "elapsedHoursPerTicket": 6.28,
+        "hoursPerTicket": {
+          "working": 1.33,
+          "silentInTurn": 0.64,
+          "askingUser": 0.46,
+          "failureBlocked": 0.42,
+          "prOpenIdle": 0.67,
+          "idle": 2.76
+        },
+        "failureBlockedHoursPerTicketByClass": {
+          "transientNetwork": 0.172,
+          "quotaOrRateLimit": 0.215,
+          "auth": 0.002,
+          "policyRefusal": 0.008,
+          "worktreeOrConfig": 0.013,
+          "volliRequest": 0.003,
+          "volliHost": 0.003
+        },
+        "ticketsWithAnyFailureBlock": 53,
+        "ticketsWithNoTurnInWindow": 0,
+        "shareOfHours": {
+          "working": 0.212,
+          "silentInTurn": 0.1011,
+          "askingUser": 0.0739,
+          "failureBlocked": 0.0662,
+          "prOpenIdle": 0.1073,
+          "idle": 0.4395
+        },
+        "shareOfCohortHours": 0.2659
+      }
+    },
+    "silenceSensitivity": [
+      {
+        "silenceMinutes": 2,
+        "working": 318.9,
+        "silentInTurn": 247.6,
+        "askingUser": 138.8,
+        "failureBlocked": 201,
+        "prOpenIdle": 594.9,
+        "idle": 2823.1
+      },
+      {
+        "silenceMinutes": 5,
+        "working": 375.3,
+        "silentInTurn": 191.2,
+        "askingUser": 138.8,
+        "failureBlocked": 201,
+        "prOpenIdle": 594.9,
+        "idle": 2823.1
+      },
+      {
+        "silenceMinutes": 10,
+        "working": 426.7,
+        "silentInTurn": 139.8,
+        "askingUser": 138.8,
+        "failureBlocked": 201,
+        "prOpenIdle": 594.9,
+        "idle": 2823.1
+      }
+    ],
+    "prSourceSensitivity": {
+      "ticketsWithPrFromCapture": 221,
+      "ticketsWithPrFromLedger": 206,
+      "ledger": {
+        "prOpenIdle": 499.6,
+        "idle": 2918.5
+      },
+      "ledgerRecordedMinusCaptureOpenedMinutes": {
+        "n": 206,
+        "p50": 2.3,
+        "p90": 6311.3,
+        "max": 8605.7
+      }
+    },
+    "inTurnSilences": {
+      "count": 820,
+      "hours": 216.9,
+      "byWhatEndedIt": {
+        "resumed": {
+          "count": 794,
+          "hours": 182
+        },
+        "failure": {
+          "count": 25,
+          "hours": 34.6
+        },
+        "interrupted": {
+          "count": 1,
+          "hours": 0.3
+        }
+      },
+      "endedByFailureOfClass": {
+        "transientNetwork": {
+          "count": 12,
+          "hours": 5.9
+        },
+        "volliHost": {
+          "count": 12,
+          "hours": 3.6
+        },
+        "appRestart": {
+          "count": 1,
+          "hours": 25.1
+        }
+      },
+      "ticketsWithToolRecord": 227,
+      "hoursByToolInFlight": {
+        "bash:ciWatch": 16.35,
+        "bash:coverage": 18.33,
+        "bash:e2eSmoke": 9.08,
+        "bash:fileRead": 0.4,
+        "bash:gitNetwork": 0.1,
+        "bash:nodeOther": 1.34,
+        "bash:other": 1.04,
+        "bash:search": 0.41,
+        "bash:sleepPoll": 61.54,
+        "bash:unitTests": 15.43,
+        "browser_screenshot": 20.12,
+        "session_await": 4.72,
+        "ticket_await": 30
+      },
+      "hoursWithNoToolInFlight": 38,
+      "resumedOnTheirOwn": 794,
+      "watchdogTripped": 166,
+      "watchdogTrippedThenResumedOnTheirOwn": 150
+    },
+    "unterminatedTurnsInCohortSessions": 12,
+    "prOpenToFinalMerge": {
+      "n": 220,
+      "min": 0,
+      "p25": 0.1,
+      "median": 0.39,
+      "p75": 2.2,
+      "p90": 8.72,
+      "p95": 20.84,
+      "max": 71.58,
+      "mean": 3.78,
+      "trimmedMean10": 1.26
+    },
+    "doingToFinalMerge": {
+      "n": 184,
+      "min": 0.07,
+      "p25": 1.65,
+      "median": 4.28,
+      "p75": 12.09,
+      "p90": 28.14,
+      "p95": 68.81,
+      "max": 195.37,
+      "mean": 13,
+      "trimmedMean10": 7.15,
+      "excluded": {
+        "neverInDoing": 43,
+        "doingAfterFinalMerge": 0
+      },
+      "primaryClockSameTickets": {
+        "n": 184,
+        "min": 0.4,
+        "p25": 1.81,
+        "median": 5.29,
+        "p75": 13.9,
+        "p90": 35.36,
+        "p95": 79.65,
+        "max": 345.93,
+        "mean": 17.17,
+        "trimmedMean10": 8.69
+      },
+      "doingAtOrBeforeFirstMessage": 84,
+      "medianHoursDoingPrecededFirstMessage": 0,
+      "doingAfterFirstMessage": 100,
+      "medianHoursFirstMessagePrecededDoing": 0.27
+    },
+    "toolCalls": {
+      "available": true,
+      "scope": "Pi session files of cohort Sessions; calls that returned inside the ticket's window",
+      "files": 1086,
+      "calls": 106758,
+      "unansweredCalls": 49,
+      "hours": 473.6,
+      "byCategory": {
+        "ask_user": {
+          "calls": 264,
+          "hours": 137.48,
+          "p50Seconds": 145.6,
+          "p90Seconds": 2071.4,
+          "p99Seconds": 30903.4,
+          "callsOverFiveMinutes": 85,
+          "hoursOverFiveMinutes": 132.72
+        },
+        "bash:build": {
+          "calls": 595,
+          "hours": 1.74,
+          "p50Seconds": 7,
+          "p90Seconds": 23.3,
+          "p99Seconds": 64.7,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:ciWatch": {
+          "calls": 241,
+          "hours": 21.96,
+          "p50Seconds": 300.2,
+          "p90Seconds": 555.1,
+          "p99Seconds": 832,
+          "callsOverFiveMinutes": 122,
+          "hoursOverFiveMinutes": 16.35
+        },
+        "bash:coverage": {
+          "calls": 2317,
+          "hours": 48.94,
+          "p50Seconds": 33.6,
+          "p90Seconds": 166.8,
+          "p99Seconds": 779.8,
+          "callsOverFiveMinutes": 105,
+          "hoursOverFiveMinutes": 18.33
+        },
+        "bash:e2eSmoke": {
+          "calls": 5418,
+          "hours": 25.67,
+          "p50Seconds": 0.3,
+          "p90Seconds": 35.7,
+          "p99Seconds": 217.1,
+          "callsOverFiveMinutes": 37,
+          "hoursOverFiveMinutes": 9.09
+        },
+        "bash:fileRead": {
+          "calls": 14269,
+          "hours": 1.56,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.3,
+          "p99Seconds": 3.1,
+          "callsOverFiveMinutes": 3,
+          "hoursOverFiveMinutes": 0.4
+        },
+        "bash:find": {
+          "calls": 864,
+          "hours": 0.76,
+          "p50Seconds": 0.1,
+          "p90Seconds": 4.5,
+          "p99Seconds": 47.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:ghOther": {
+          "calls": 920,
+          "hours": 0.62,
+          "p50Seconds": 1.6,
+          "p90Seconds": 4.2,
+          "p99Seconds": 9.2,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:gitLocal": {
+          "calls": 8399,
+          "hours": 1.07,
+          "p50Seconds": 0.1,
+          "p90Seconds": 1,
+          "p99Seconds": 4.7,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:gitNetwork": {
+          "calls": 527,
+          "hours": 0.57,
+          "p50Seconds": 2.1,
+          "p90Seconds": 4.5,
+          "p99Seconds": 41.1,
+          "callsOverFiveMinutes": 1,
+          "hoursOverFiveMinutes": 0.1
+        },
+        "bash:install": {
+          "calls": 330,
+          "hours": 2.38,
+          "p50Seconds": 20.2,
+          "p90Seconds": 57.3,
+          "p99Seconds": 126.2,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:lintFormat": {
+          "calls": 1284,
+          "hours": 1.25,
+          "p50Seconds": 2.2,
+          "p90Seconds": 6.4,
+          "p99Seconds": 18,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:nativeRebuild": {
+          "calls": 11,
+          "hours": 0.08,
+          "p50Seconds": 20.9,
+          "p90Seconds": 80.9,
+          "p99Seconds": 91.5,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:nodeOther": {
+          "calls": 1331,
+          "hours": 3.58,
+          "p50Seconds": 1.3,
+          "p90Seconds": 9.1,
+          "p99Seconds": 244,
+          "callsOverFiveMinutes": 10,
+          "hoursOverFiveMinutes": 1.34
+        },
+        "bash:other": {
+          "calls": 10964,
+          "hours": 6.61,
+          "p50Seconds": 0.5,
+          "p90Seconds": 3.3,
+          "p99Seconds": 25.3,
+          "callsOverFiveMinutes": 7,
+          "hoursOverFiveMinutes": 1.04
+        },
+        "bash:search": {
+          "calls": 13223,
+          "hours": 2.52,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.6,
+          "p99Seconds": 8.6,
+          "callsOverFiveMinutes": 1,
+          "hoursOverFiveMinutes": 0.41
+        },
+        "bash:sleepPoll": {
+          "calls": 1303,
+          "hours": 83.7,
+          "p50Seconds": 89.7,
+          "p90Seconds": 500.9,
+          "p99Seconds": 1201.8,
+          "callsOverFiveMinutes": 298,
+          "hoursOverFiveMinutes": 61.46
+        },
+        "bash:typecheck": {
+          "calls": 2875,
+          "hours": 6.87,
+          "p50Seconds": 5.3,
+          "p90Seconds": 18.5,
+          "p99Seconds": 52.1,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "bash:unitTests": {
+          "calls": 6810,
+          "hours": 52.78,
+          "p50Seconds": 5,
+          "p90Seconds": 63.1,
+          "p99Seconds": 343,
+          "callsOverFiveMinutes": 93,
+          "hoursOverFiveMinutes": 15.43
+        },
+        "browser_acquire": {
+          "calls": 1,
+          "hours": 0,
+          "p50Seconds": 0,
+          "p90Seconds": 0,
+          "p99Seconds": 0,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_act": {
+          "calls": 297,
+          "hours": 0.11,
+          "p50Seconds": 0.3,
+          "p90Seconds": 4.1,
+          "p99Seconds": 16,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_console": {
+          "calls": 46,
+          "hours": 0,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.4,
+          "p99Seconds": 1.2,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_navigate": {
+          "calls": 173,
+          "hours": 0.16,
+          "p50Seconds": 1.7,
+          "p90Seconds": 10.4,
+          "p99Seconds": 15.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_release": {
+          "calls": 28,
+          "hours": 0,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.2,
+          "p99Seconds": 0.6,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_screenshot": {
+          "calls": 179,
+          "hours": 20.4,
+          "p50Seconds": 0.3,
+          "p90Seconds": 15.2,
+          "p99Seconds": 101.6,
+          "callsOverFiveMinutes": 1,
+          "hoursOverFiveMinutes": 20.12
+        },
+        "browser_snapshot": {
+          "calls": 54,
+          "hours": 0.01,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.9,
+          "p99Seconds": 10.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "browser_tabs": {
+          "calls": 19,
+          "hours": 0,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.4,
+          "p99Seconds": 1,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "edit": {
+          "calls": 11567,
+          "hours": 0.43,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.2,
+          "p99Seconds": 1,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "read": {
+          "calls": 15330,
+          "hours": 0.5,
+          "p50Seconds": 0,
+          "p90Seconds": 0.2,
+          "p99Seconds": 1.6,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "session_await": {
+          "calls": 188,
+          "hours": 8.9,
+          "p50Seconds": 121.9,
+          "p90Seconds": 352,
+          "p99Seconds": 1117.8,
+          "callsOverFiveMinutes": 33,
+          "hoursOverFiveMinutes": 4.73
+        },
+        "session_delegate": {
+          "calls": 312,
+          "hours": 0.3,
+          "p50Seconds": 2.5,
+          "p90Seconds": 6.7,
+          "p99Seconds": 18.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "session_start": {
+          "calls": 160,
+          "hours": 7.66,
+          "p50Seconds": 0.8,
+          "p90Seconds": 2.5,
+          "p99Seconds": 1843,
+          "callsOverFiveMinutes": 3,
+          "hoursOverFiveMinutes": 7.61
+        },
+        "shell_kill": {
+          "calls": 118,
+          "hours": 0.05,
+          "p50Seconds": 0.4,
+          "p90Seconds": 5.2,
+          "p99Seconds": 9.9,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "shell_output": {
+          "calls": 1641,
+          "hours": 0.15,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.5,
+          "p99Seconds": 4.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "shell_start": {
+          "calls": 621,
+          "hours": 0.63,
+          "p50Seconds": 3.1,
+          "p90Seconds": 5.2,
+          "p99Seconds": 17,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "ticket_await": {
+          "calls": 210,
+          "hours": 33.53,
+          "p50Seconds": 128.1,
+          "p90Seconds": 1500.1,
+          "p99Seconds": 3600.2,
+          "callsOverFiveMinutes": 69,
+          "hoursOverFiveMinutes": 30
+        },
+        "todo_write": {
+          "calls": 654,
+          "hours": 0.07,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.4,
+          "p99Seconds": 4.6,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "web_fetch": {
+          "calls": 963,
+          "hours": 0.31,
+          "p50Seconds": 0.8,
+          "p90Seconds": 2.2,
+          "p99Seconds": 5.5,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "web_search": {
+          "calls": 405,
+          "hours": 0.2,
+          "p50Seconds": 1.6,
+          "p90Seconds": 2.6,
+          "p99Seconds": 4.6,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "write": {
+          "calls": 1847,
+          "hours": 0.07,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.2,
+          "p99Seconds": 1.5,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        }
+      },
+      "hoursPerTicketByMergeMonth": {
+        "2026-08": {
+          "ask_user": 0.453,
+          "bash:coverage": 0.166,
+          "bash:unitTests": 0.13,
+          "bash:sleepPoll": 0.129,
+          "bash:e2eSmoke": 0.065,
+          "bash:ciWatch": 0.058,
+          "bash:other": 0.021,
+          "bash:typecheck": 0.02,
+          "bash:install": 0.012,
+          "bash:search": 0.009,
+          "ticket_await": 0.008,
+          "bash:build": 0.007,
+          "bash:fileRead": 0.006,
+          "bash:nodeOther": 0.003,
+          "bash:lintFormat": 0.003,
+          "bash:gitLocal": 0.003,
+          "session_start": 0
+        },
+        "2026-09": {
+          "ask_user": 0.803,
+          "bash:sleepPoll": 0.679,
+          "bash:unitTests": 0.365,
+          "ticket_await": 0.328,
+          "bash:coverage": 0.28,
+          "browser_screenshot": 0.206,
+          "bash:e2eSmoke": 0.175,
+          "bash:ciWatch": 0.147,
+          "session_await": 0.09,
+          "session_start": 0.077,
+          "bash:typecheck": 0.043,
+          "bash:other": 0.039,
+          "bash:nodeOther": 0.032,
+          "bash:search": 0.014,
+          "bash:lintFormat": 0.009,
+          "bash:install": 0.008,
+          "bash:build": 0.008,
+          "bash:fileRead": 0.008,
+          "bash:gitLocal": 0.007
+        }
+      },
+      "searchAndFindByMonth": {
+        "2026-08 bash:find": {
+          "calls": 402,
+          "hours": 0.29,
+          "p50Seconds": 0.1,
+          "p90Seconds": 2.7,
+          "p99Seconds": 50.6,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "2026-08 bash:search": {
+          "calls": 6666,
+          "hours": 1.13,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.3,
+          "p99Seconds": 6.6,
+          "callsOverFiveMinutes": 1,
+          "hoursOverFiveMinutes": 0.41
+        },
+        "2026-09 bash:find": {
+          "calls": 462,
+          "hours": 0.48,
+          "p50Seconds": 0.2,
+          "p90Seconds": 9.2,
+          "p99Seconds": 40.3,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        },
+        "2026-09 bash:search": {
+          "calls": 6557,
+          "hours": 1.39,
+          "p50Seconds": 0.1,
+          "p90Seconds": 0.9,
+          "p99Seconds": 11.2,
+          "callsOverFiveMinutes": 0,
+          "hoursOverFiveMinutes": 0
+        }
+      }
+    }
+  },
   "tickets": [
     {
       "ticket": "VC-10",
@@ -364,7 +1232,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.732,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.286
+      }
     },
     {
       "ticket": "VC-11",
@@ -377,7 +1253,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.571,
+        "silentInTurn": 0,
+        "askingUser": 0.176,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.223
+      },
+      "doingToMergeHours": 0.832
     },
     {
       "ticket": "VC-4",
@@ -390,7 +1275,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.257,
+        "silentInTurn": 0,
+        "askingUser": 0.219,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.386,
+        "idle": 0.203
+      }
     },
     {
       "ticket": "VC-16",
@@ -403,7 +1296,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.613,
+        "silentInTurn": 0.117,
+        "askingUser": 0.036,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 2.776
+      },
+      "doingToMergeHours": 4.326
     },
     {
       "ticket": "VC-19",
@@ -416,7 +1318,15 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.145,
+        "silentInTurn": 0.085,
+        "askingUser": 0.462,
+        "failureBlocked": 0.017,
+        "prOpenIdle": 0.542,
+        "idle": 0.284
+      }
     },
     {
       "ticket": "VC-5",
@@ -429,7 +1339,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.804,
+        "silentInTurn": 0,
+        "askingUser": 0.573,
+        "failureBlocked": 0,
+        "prOpenIdle": 6.966,
+        "idle": 2.306
+      },
+      "doingToMergeHours": 10.237
     },
     {
       "ticket": "VC-24",
@@ -442,7 +1361,16 @@
       "linkKinds": [
         "branch-merge",
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.753,
+        "silentInTurn": 0.243,
+        "askingUser": 0.021,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 6.719
+      },
+      "doingToMergeHours": 7.746
     },
     {
       "ticket": "VC-25",
@@ -454,7 +1382,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.221,
+        "silentInTurn": 0,
+        "askingUser": 0.632,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.307
+      },
+      "doingToMergeHours": 0.401
     },
     {
       "ticket": "VC-47",
@@ -466,7 +1403,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.363,
+        "silentInTurn": 0,
+        "askingUser": 0.247,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 14.505
+      }
     },
     {
       "ticket": "VC-33",
@@ -478,7 +1423,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.548,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 4.299
+      }
     },
     {
       "ticket": "VC-13",
@@ -490,7 +1443,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.83,
+        "silentInTurn": 0,
+        "askingUser": 0.288,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 16.072
+      },
+      "doingToMergeHours": 16.373
     },
     {
       "ticket": "VC-20",
@@ -503,7 +1465,15 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.942,
+        "silentInTurn": 0,
+        "askingUser": 0.048,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 19.789
+      }
     },
     {
       "ticket": "VC-66",
@@ -516,7 +1486,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.878,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.325
+      },
+      "doingToMergeHours": 1.071
     },
     {
       "ticket": "VC-78",
@@ -529,7 +1508,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.961,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.262
+      },
+      "doingToMergeHours": 1.044
     },
     {
       "ticket": "VC-46",
@@ -542,7 +1530,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.448,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.448
     },
     {
       "ticket": "VC-27",
@@ -555,7 +1552,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.464,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.464
     },
     {
       "ticket": "VC-14",
@@ -568,7 +1574,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.706,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.175
+      },
+      "doingToMergeHours": 0.611
     },
     {
       "ticket": "VC-49",
@@ -581,7 +1596,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.144,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.266
+      },
+      "doingToMergeHours": 2.224
     },
     {
       "ticket": "VC-51",
@@ -594,7 +1618,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.725,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.073,
+        "idle": 0.836
+      },
+      "doingToMergeHours": 1.443
     },
     {
       "ticket": "VC-76",
@@ -607,7 +1640,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.457,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.074,
+        "idle": 0.992
+      },
+      "doingToMergeHours": 1.346
     },
     {
       "ticket": "VC-71",
@@ -620,7 +1662,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.353,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.11,
+        "idle": 1.171
+      },
+      "doingToMergeHours": 1.457
     },
     {
       "ticket": "VC-79",
@@ -633,7 +1684,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.518,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.519
     },
     {
       "ticket": "VC-72",
@@ -646,7 +1706,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.647,
+        "silentInTurn": 0.1,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 5.572,
+        "idle": 1.899
+      },
+      "doingToMergeHours": 8.22
     },
     {
       "ticket": "VC-67",
@@ -659,7 +1728,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.724,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 5.747,
+        "idle": 1.877
+      },
+      "doingToMergeHours": 8.349
     },
     {
       "ticket": "VC-62",
@@ -672,7 +1750,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.46,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.074,
+        "idle": 11.807
+      },
+      "doingToMergeHours": 12.212
     },
     {
       "ticket": "VC-61",
@@ -685,7 +1772,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.061,
+        "silentInTurn": 0.499,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 13.425
+      },
+      "doingToMergeHours": 12.295
     },
     {
       "ticket": "VC-57",
@@ -698,7 +1794,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.146,
+        "silentInTurn": 0.173,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.074,
+        "idle": 11.117
+      },
+      "doingToMergeHours": 12.381
     },
     {
       "ticket": "VC-52",
@@ -711,7 +1816,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.65,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.057,
+        "idle": 11.133
+      },
+      "doingToMergeHours": 12.709
     },
     {
       "ticket": "VC-32",
@@ -724,7 +1838,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.64,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 11.143
+      },
+      "doingToMergeHours": 11.605
     },
     {
       "ticket": "VC-65",
@@ -737,7 +1860,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.589,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.318,
+        "idle": 9.005
+      },
+      "doingToMergeHours": 9.913
     },
     {
       "ticket": "VC-68",
@@ -750,7 +1882,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.962,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.607,
+        "idle": 8.799
+      },
+      "doingToMergeHours": 10.37
     },
     {
       "ticket": "VC-53",
@@ -763,7 +1904,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.629,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 2.421,
+        "prOpenIdle": 0.922,
+        "idle": 9.393
+      },
+      "doingToMergeHours": 14.236
     },
     {
       "ticket": "VC-84",
@@ -776,7 +1926,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.744,
+        "silentInTurn": 0,
+        "askingUser": 0.128,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.994,
+        "idle": 0.008
+      }
     },
     {
       "ticket": "VC-97",
@@ -789,7 +1947,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.843,
+        "silentInTurn": 0,
+        "askingUser": 0.164,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.524
+      },
+      "doingToMergeHours": 1.517
     },
     {
       "ticket": "VC-98",
@@ -802,7 +1969,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.921,
+        "silentInTurn": 0,
+        "askingUser": 0.189,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.829,
+        "idle": 0.008
+      }
     },
     {
       "ticket": "VC-56",
@@ -815,7 +1990,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.895,
+        "silentInTurn": 0.142,
+        "askingUser": 0.358,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.311,
+        "idle": 0.098
+      },
+      "doingToMergeHours": 2.664
     },
     {
       "ticket": "VC-60",
@@ -828,7 +2012,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.941,
+        "silentInTurn": 0,
+        "askingUser": 0.117,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.109,
+        "idle": 0.692
+      },
+      "doingToMergeHours": 1.869
     },
     {
       "ticket": "VC-100",
@@ -841,7 +2034,15 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.854,
+        "silentInTurn": 0.27,
+        "askingUser": 0.198,
+        "failureBlocked": 0.496,
+        "prOpenIdle": 1.556,
+        "idle": 0.711
+      }
     },
     {
       "ticket": "VC-99",
@@ -854,7 +2055,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.857,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.003,
+        "prOpenIdle": 0,
+        "idle": 0.133
+      },
+      "doingToMergeHours": 0.845
     },
     {
       "ticket": "VC-37",
@@ -867,7 +2077,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.384,
+        "silentInTurn": 0.106,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.585
+      }
     },
     {
       "ticket": "VC-50",
@@ -880,7 +2098,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.853,
+        "silentInTurn": 0,
+        "askingUser": 0.106,
+        "failureBlocked": 2.019,
+        "prOpenIdle": 0,
+        "idle": 1.277
+      },
+      "doingToMergeHours": 6.453
     },
     {
       "ticket": "VC-106",
@@ -892,7 +2119,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.718,
+        "silentInTurn": 0,
+        "askingUser": 0.122,
+        "failureBlocked": 0.207,
+        "prOpenIdle": 0,
+        "idle": 3.191
+      },
+      "doingToMergeHours": 4.239
     },
     {
       "ticket": "VC-54",
@@ -904,7 +2140,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.623,
+        "silentInTurn": 0,
+        "askingUser": 0.078,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 12.014
+      },
+      "doingToMergeHours": 12.838
     },
     {
       "ticket": "VC-69",
@@ -916,7 +2161,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "branch-merge"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.277,
+        "silentInTurn": 0,
+        "askingUser": 6.428,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 9.438
+      }
     },
     {
       "ticket": "VC-31",
@@ -929,7 +2182,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.819,
+        "silentInTurn": 0.504,
+        "askingUser": 6.358,
+        "failureBlocked": 0.814,
+        "prOpenIdle": 0,
+        "idle": 10.029
+      },
+      "doingToMergeHours": 21.564
     },
     {
       "ticket": "VC-55",
@@ -942,7 +2204,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.058,
+        "silentInTurn": 0,
+        "askingUser": 0.17,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 28.713
+      },
+      "doingToMergeHours": 31.743
     },
     {
       "ticket": "VC-113",
@@ -955,7 +2226,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.356,
+        "silentInTurn": 0,
+        "askingUser": 0.056,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.643
+      },
+      "doingToMergeHours": 2.216
     },
     {
       "ticket": "VC-7",
@@ -969,7 +2249,16 @@
       "linkKinds": [
         "branch-merge",
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.199,
+        "silentInTurn": 0,
+        "askingUser": 0.24,
+        "failureBlocked": 0.015,
+        "prOpenIdle": 22.661,
+        "idle": 8.425
+      },
+      "doingToMergeHours": 34.099
     },
     {
       "ticket": "VC-114",
@@ -982,7 +2271,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.386,
+        "silentInTurn": 0.753,
+        "askingUser": 0,
+        "failureBlocked": 0.931,
+        "prOpenIdle": 0,
+        "idle": 6.479
+      },
+      "doingToMergeHours": 10.527
     },
     {
       "ticket": "VC-94",
@@ -995,7 +2293,16 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 5.077,
+        "silentInTurn": 0.783,
+        "askingUser": 0,
+        "failureBlocked": 5.295,
+        "prOpenIdle": 0,
+        "idle": 17.943
+      },
+      "doingToMergeHours": 29.109
     },
     {
       "ticket": "VC-120",
@@ -1008,7 +2315,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.808,
+        "silentInTurn": 0,
+        "askingUser": 0.015,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.042
+      },
+      "doingToMergeHours": 0.865
     },
     {
       "ticket": "VC-115",
@@ -1021,7 +2337,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.863,
+        "silentInTurn": 0,
+        "askingUser": 0.012,
+        "failureBlocked": 0.929,
+        "prOpenIdle": 0,
+        "idle": 40.42
+      }
     },
     {
       "ticket": "VC-123",
@@ -1034,7 +2358,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.773,
+        "silentInTurn": 0.084,
+        "askingUser": 0.018,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 9.851
+      },
+      "doingToMergeHours": 0.806
     },
     {
       "ticket": "VC-121",
@@ -1047,7 +2380,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.089,
+        "silentInTurn": 0,
+        "askingUser": 0.362,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.058
+      },
+      "doingToMergeHours": 3.038
     },
     {
       "ticket": "VC-124",
@@ -1060,7 +2402,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.113,
+        "silentInTurn": 0.201,
+        "askingUser": 0.009,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 11.419
+      },
+      "doingToMergeHours": 13.607
     },
     {
       "ticket": "VC-81",
@@ -1073,7 +2424,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.33,
+        "silentInTurn": 0,
+        "askingUser": 2.298,
+        "failureBlocked": 0.707,
+        "prOpenIdle": 44.052,
+        "idle": 42.453
+      },
+      "doingToMergeHours": 93.782
     },
     {
       "ticket": "VC-136",
@@ -1086,7 +2446,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.645,
+        "silentInTurn": 0,
+        "askingUser": 0.028,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.996
+      },
+      "doingToMergeHours": 1.669
     },
     {
       "ticket": "VC-138",
@@ -1099,7 +2468,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.833,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.148,
+        "prOpenIdle": 0.019,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 1.001
     },
     {
       "ticket": "VC-140",
@@ -1112,7 +2490,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.301,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.23
+      },
+      "doingToMergeHours": 0.531
     },
     {
       "ticket": "VC-139",
@@ -1125,7 +2512,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.08,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.144,
+        "prOpenIdle": 0,
+        "idle": 0.281
+      },
+      "doingToMergeHours": 1.506
     },
     {
       "ticket": "VC-137",
@@ -1138,7 +2534,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.892,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.487,
+        "prOpenIdle": 0.016,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 2.396
     },
     {
       "ticket": "VC-122",
@@ -1151,7 +2556,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.357,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.222,
+        "prOpenIdle": 0.419,
+        "idle": 0.013
+      },
+      "doingToMergeHours": 2.994
     },
     {
       "ticket": "VC-64",
@@ -1164,7 +2578,16 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.556,
+        "silentInTurn": 0,
+        "askingUser": 0.718,
+        "failureBlocked": 0.244,
+        "prOpenIdle": 0,
+        "idle": 2.759
+      },
+      "doingToMergeHours": 7.279
     },
     {
       "ticket": "VC-22",
@@ -1177,7 +2600,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.007,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.081,
+        "idle": 140.378
+      }
     },
     {
       "ticket": "VC-155",
@@ -1190,7 +2621,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.116,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 5.869
+      },
+      "doingToMergeHours": 6.984
     },
     {
       "ticket": "VC-92",
@@ -1203,7 +2643,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.992,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 87.115
+      },
+      "doingToMergeHours": 87.827
     },
     {
       "ticket": "VC-158",
@@ -1216,7 +2665,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.002,
+        "silentInTurn": 0,
+        "askingUser": 0.004,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 5.778
+      },
+      "doingToMergeHours": 6.594
     },
     {
       "ticket": "VC-157",
@@ -1229,7 +2687,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.154,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 5.728
+      },
+      "doingToMergeHours": 6.692
     },
     {
       "ticket": "VC-160",
@@ -1242,7 +2709,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.89,
+        "silentInTurn": 0,
+        "askingUser": 5.489,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.379,
+        "idle": 0.001
+      }
     },
     {
       "ticket": "VC-111",
@@ -1255,7 +2730,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 6.55,
+        "silentInTurn": 0.091,
+        "askingUser": 6.717,
+        "failureBlocked": 0.012,
+        "prOpenIdle": 0.001,
+        "idle": 22.311
+      },
+      "doingToMergeHours": 34.518
     },
     {
       "ticket": "VC-156",
@@ -1268,7 +2752,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.941,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.086,
+        "idle": 6.374
+      },
+      "doingToMergeHours": 7.207
     },
     {
       "ticket": "VC-159",
@@ -1281,7 +2774,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.251,
+        "silentInTurn": 0,
+        "askingUser": 0.011,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.073,
+        "idle": 6.296
+      }
     },
     {
       "ticket": "VC-142",
@@ -1294,7 +2795,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.585,
+        "silentInTurn": 0.084,
+        "askingUser": 0.047,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.34
+      },
+      "doingToMergeHours": 2.056
     },
     {
       "ticket": "VC-3",
@@ -1307,7 +2817,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.84,
+        "silentInTurn": 0,
+        "askingUser": 0.173,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 5.495
+      },
+      "doingToMergeHours": 6.509
     },
     {
       "ticket": "VC-161",
@@ -1320,7 +2839,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.675,
+        "silentInTurn": 0.162,
+        "askingUser": 0.019,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.877,
+        "idle": 6.468
+      },
+      "doingToMergeHours": 7.708
     },
     {
       "ticket": "VC-164",
@@ -1333,7 +2861,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.953,
+        "silentInTurn": 0,
+        "askingUser": 0.046,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 6.281
+      },
+      "doingToMergeHours": 2.12
     },
     {
       "ticket": "VC-119",
@@ -1346,7 +2883,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.385,
+        "silentInTurn": 0.034,
+        "askingUser": 0.503,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 30.022
+      },
+      "doingToMergeHours": 10.294
     },
     {
       "ticket": "VC-112",
@@ -1359,7 +2905,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.605,
+        "silentInTurn": 0,
+        "askingUser": 0.008,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 96.12
+      }
     },
     {
       "ticket": "VC-173",
@@ -1372,7 +2926,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.415,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.388
     },
     {
       "ticket": "VC-44",
@@ -1385,7 +2948,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.032,
+        "silentInTurn": 0.104,
+        "askingUser": 0.395,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.859,
+        "idle": 2.494
+      },
+      "doingToMergeHours": 3.252
     },
     {
       "ticket": "VC-91",
@@ -1398,7 +2970,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.17,
+        "silentInTurn": 0,
+        "askingUser": 0.017,
+        "failureBlocked": 0.667,
+        "prOpenIdle": 0,
+        "idle": 1.313
+      },
+      "doingToMergeHours": 4.17
     },
     {
       "ticket": "VC-172",
@@ -1411,7 +2992,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.862,
+        "silentInTurn": 0.092,
+        "askingUser": 0.056,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.576
+      },
+      "doingToMergeHours": 1.58
     },
     {
       "ticket": "VC-126",
@@ -1424,7 +3014,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.675,
+        "silentInTurn": 0.25,
+        "askingUser": 0.03,
+        "failureBlocked": 0,
+        "prOpenIdle": 7.048,
+        "idle": 0.024
+      },
+      "doingToMergeHours": 10.005
     },
     {
       "ticket": "VC-167",
@@ -1437,7 +3036,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.366,
+        "silentInTurn": 0,
+        "askingUser": 0.006,
+        "failureBlocked": 0,
+        "prOpenIdle": 8.75,
+        "idle": 0.305
+      },
+      "doingToMergeHours": 10.428
     },
     {
       "ticket": "VC-118",
@@ -1450,7 +3058,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.314,
+        "silentInTurn": 0,
+        "askingUser": 0.205,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 10.564
+      },
+      "doingToMergeHours": 11.354
     },
     {
       "ticket": "VC-87",
@@ -1463,7 +3080,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.063,
+        "silentInTurn": 0,
+        "askingUser": 0.113,
+        "failureBlocked": 0.178,
+        "prOpenIdle": 0,
+        "idle": 72.031
+      },
+      "doingToMergeHours": 15.291
     },
     {
       "ticket": "VC-174",
@@ -1476,7 +3102,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.191,
+        "silentInTurn": 0.083,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.242
+      },
+      "doingToMergeHours": 0.517
     },
     {
       "ticket": "VC-169",
@@ -1489,7 +3124,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.544,
+        "silentInTurn": 0.189,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 16.564
+      },
+      "doingToMergeHours": 9.105
     },
     {
       "ticket": "VC-176",
@@ -1502,7 +3146,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.375,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.019
+      },
+      "doingToMergeHours": 1.394
     },
     {
       "ticket": "VC-162",
@@ -1515,7 +3168,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.112,
+        "silentInTurn": 0.093,
+        "askingUser": 0.708,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.722,
+        "idle": 19.241
+      },
+      "doingToMergeHours": 20.733
     },
     {
       "ticket": "VC-177",
@@ -1528,7 +3190,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.05,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.538
+      },
+      "doingToMergeHours": 1.588
     },
     {
       "ticket": "VC-85",
@@ -1541,7 +3212,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.079,
+        "silentInTurn": 0.006,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 126.583
+      },
+      "doingToMergeHours": 11.517
     },
     {
       "ticket": "VC-175",
@@ -1554,7 +3234,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.383,
+        "silentInTurn": 0,
+        "askingUser": 0.495,
+        "failureBlocked": 0.846,
+        "prOpenIdle": 13.369,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 16.094
     },
     {
       "ticket": "VC-163",
@@ -1567,7 +3256,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.519,
+        "silentInTurn": 0.35,
+        "askingUser": 0.128,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 14.594
+      },
+      "doingToMergeHours": 17.592
     },
     {
       "ticket": "VC-179",
@@ -1580,7 +3278,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.317,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.994
+      },
+      "doingToMergeHours": 2.311
     },
     {
       "ticket": "VC-178",
@@ -1593,7 +3300,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.437,
+        "silentInTurn": 0,
+        "askingUser": 0.014,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 4.769
+      },
+      "doingToMergeHours": 6.223
     },
     {
       "ticket": "VC-180",
@@ -1606,7 +3322,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.397,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.037
+      },
+      "doingToMergeHours": 0.435
     },
     {
       "ticket": "VC-134",
@@ -1619,7 +3344,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.475,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.002,
+        "idle": 6.341
+      },
+      "doingToMergeHours": 19.173
     },
     {
       "ticket": "VC-185",
@@ -1632,7 +3366,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.612,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.002,
+        "idle": 5.595
+      },
+      "doingToMergeHours": 6.533
     },
     {
       "ticket": "VC-183",
@@ -1645,7 +3388,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.497,
+        "silentInTurn": 0,
+        "askingUser": 0.019,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 9.026
+      },
+      "doingToMergeHours": 10.545
     },
     {
       "ticket": "VC-182",
@@ -1658,7 +3410,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.979,
+        "silentInTurn": 0.262,
+        "askingUser": 0.023,
+        "failureBlocked": 0,
+        "prOpenIdle": 9.796,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 11.061
     },
     {
       "ticket": "VC-181",
@@ -1671,7 +3432,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.744,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 9.746
+      },
+      "doingToMergeHours": 11.479
     },
     {
       "ticket": "VC-186",
@@ -1684,7 +3454,15 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.332,
+        "silentInTurn": 0.094,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.536
+      }
     },
     {
       "ticket": "VC-190",
@@ -1697,7 +3475,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.838,
+        "silentInTurn": 0.087,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.004
+      },
+      "doingToMergeHours": 0.934
     },
     {
       "ticket": "VC-187",
@@ -1710,7 +3497,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.878,
+        "silentInTurn": 0.086,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.219
+      },
+      "doingToMergeHours": 1.187
     },
     {
       "ticket": "VC-191",
@@ -1723,7 +3519,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.844,
+        "silentInTurn": 0.092,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.939
     },
     {
       "ticket": "VC-193",
@@ -1736,7 +3541,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.154,
+        "silentInTurn": 0.088,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 1.246
     },
     {
       "ticket": "VC-192",
@@ -1749,7 +3563,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.06,
+        "silentInTurn": 0.086,
+        "askingUser": 2.765,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 3.918
     },
     {
       "ticket": "VC-188",
@@ -1762,7 +3585,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.19,
+        "silentInTurn": 0.182,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 3.049
+      },
+      "doingToMergeHours": 4.427
     },
     {
       "ticket": "VC-189",
@@ -1775,7 +3607,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.059,
+        "silentInTurn": 0.655,
+        "askingUser": 0,
+        "failureBlocked": 0.244,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 1.962
     },
     {
       "ticket": "VC-194",
@@ -1788,7 +3629,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.357,
+        "silentInTurn": 0,
+        "askingUser": 0.024,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.009,
+        "idle": 12.991
+      },
+      "doingToMergeHours": 13.373
     },
     {
       "ticket": "VC-196",
@@ -1801,7 +3651,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.669,
+        "silentInTurn": 0.172,
+        "askingUser": 0.276,
+        "failureBlocked": 0,
+        "prOpenIdle": 4.164,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 5.283
     },
     {
       "ticket": "VC-86",
@@ -1814,7 +3673,15 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.676,
+        "silentInTurn": 0.089,
+        "askingUser": 0.113,
+        "failureBlocked": 11.716,
+        "prOpenIdle": 33.09,
+        "idle": 0.282
+      }
     },
     {
       "ticket": "VC-203",
@@ -1827,7 +3694,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.926,
+        "silentInTurn": 0.109,
+        "askingUser": 0.457,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.364
+      },
+      "doingToMergeHours": 1.856
     },
     {
       "ticket": "VC-127",
@@ -1840,7 +3716,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.439,
+        "silentInTurn": 0.168,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.131,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 2.744
     },
     {
       "ticket": "VC-207",
@@ -1853,7 +3738,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.3,
+        "silentInTurn": 0.118,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.412
     },
     {
       "ticket": "VC-206",
@@ -1866,7 +3760,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.584,
+        "silentInTurn": 0.185,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.762
     },
     {
       "ticket": "VC-128",
@@ -1879,7 +3782,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.501,
+        "silentInTurn": 0.167,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.293,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 4.969
     },
     {
       "ticket": "VC-131",
@@ -1892,7 +3804,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.363,
+        "silentInTurn": 0.094,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.116,
+        "idle": 0
+      },
+      "doingToMergeHours": 2.585
     },
     {
       "ticket": "VC-129",
@@ -1905,7 +3826,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.508,
+        "silentInTurn": 0.195,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.441,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 3.154
     },
     {
       "ticket": "VC-211",
@@ -1918,7 +3848,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.536,
+        "silentInTurn": 0.231,
+        "askingUser": 3.335,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.003,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 4.098
     },
     {
       "ticket": "VC-212",
@@ -1931,7 +3870,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.505,
+        "silentInTurn": 0.167,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 0.665
     },
     {
       "ticket": "VC-213",
@@ -1944,7 +3892,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.401,
+        "silentInTurn": 0.743,
+        "askingUser": 5.745,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.003,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 7.884
     },
     {
       "ticket": "VC-130",
@@ -1957,7 +3914,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.066,
+        "silentInTurn": 0.227,
+        "askingUser": 4.941,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.002,
+        "idle": 0
+      },
+      "doingToMergeHours": 8.246
     },
     {
       "ticket": "VC-133",
@@ -1970,7 +3936,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.663,
+        "silentInTurn": 0.2,
+        "askingUser": 0.49,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0
+      },
+      "doingToMergeHours": 2.361
     },
     {
       "ticket": "VC-132",
@@ -1983,7 +3958,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.139,
+        "silentInTurn": 0.769,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.118,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 4.035
     },
     {
       "ticket": "VC-220",
@@ -1996,7 +3980,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.04,
+        "silentInTurn": 0.005,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.134,
+        "idle": 0
+      },
+      "doingToMergeHours": 1.186
     },
     {
       "ticket": "VC-221",
@@ -2009,7 +4002,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.744,
+        "silentInTurn": 0,
+        "askingUser": 3.425,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.124,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 5.299
     },
     {
       "ticket": "VC-110",
@@ -2022,7 +4024,16 @@
       "messagedSessionCount": 13,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.559,
+        "silentInTurn": 0.818,
+        "askingUser": 1.061,
+        "failureBlocked": 0,
+        "prOpenIdle": 48.181,
+        "idle": 153.366
+      },
+      "doingToMergeHours": 195.373
     },
     {
       "ticket": "VC-166",
@@ -2035,7 +4046,15 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.38,
+        "silentInTurn": 0.407,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 70.064,
+        "idle": 0.013
+      }
     },
     {
       "ticket": "VC-205",
@@ -2048,7 +4067,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.566,
+        "silentInTurn": 0.545,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 65.604,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 67.718
     },
     {
       "ticket": "VC-204",
@@ -2061,7 +4089,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.655,
+        "silentInTurn": 0.456,
+        "askingUser": 0.019,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 66.868
+      },
+      "doingToMergeHours": 68.998
     },
     {
       "ticket": "VC-135",
@@ -2074,7 +4111,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.387,
+        "silentInTurn": 0.41,
+        "askingUser": 0.001,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.657,
+        "idle": 3.292
+      },
+      "doingToMergeHours": 6.374
     },
     {
       "ticket": "VC-202",
@@ -2087,7 +4133,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 6.465,
+        "silentInTurn": 1.423,
+        "askingUser": 6.55,
+        "failureBlocked": 0,
+        "prOpenIdle": 60.468,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 74.909
     },
     {
       "ticket": "VC-184",
@@ -2100,7 +4155,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.372,
+        "silentInTurn": 1.363,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.654,
+        "idle": 77.734
+      },
+      "doingToMergeHours": 79.238
     },
     {
       "ticket": "VC-222",
@@ -2113,7 +4177,16 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.359,
+        "silentInTurn": 1.025,
+        "askingUser": 0.321,
+        "failureBlocked": 5.469,
+        "prOpenIdle": 1.112,
+        "idle": 18.548
+      },
+      "doingToMergeHours": 9.834
     },
     {
       "ticket": "VC-250",
@@ -2126,7 +4199,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.521,
+        "silentInTurn": 20.232,
+        "askingUser": 0.232,
+        "failureBlocked": 0.342,
+        "prOpenIdle": 0,
+        "idle": 0.744
+      },
+      "doingToMergeHours": 22.342
     },
     {
       "ticket": "VC-244",
@@ -2139,7 +4221,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.218,
+        "silentInTurn": 1.04,
+        "askingUser": 0.245,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.417,
+        "idle": 25.33
+      },
+      "doingToMergeHours": 30.251
     },
     {
       "ticket": "VC-251",
@@ -2152,7 +4243,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.801,
+        "silentInTurn": 0.25,
+        "askingUser": 0.114,
+        "failureBlocked": 0,
+        "prOpenIdle": 23.738,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 25.904
     },
     {
       "ticket": "VC-252",
@@ -2165,7 +4265,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.064,
+        "silentInTurn": 0.575,
+        "askingUser": 2.875,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.28,
+        "idle": 26.638
+      },
+      "doingToMergeHours": 31.432
     },
     {
       "ticket": "VC-242",
@@ -2178,7 +4287,15 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.917,
+        "silentInTurn": 0.137,
+        "askingUser": 0.408,
+        "failureBlocked": 9.419,
+        "prOpenIdle": 6.729,
+        "idle": 17.758
+      }
     },
     {
       "ticket": "VC-261",
@@ -2191,7 +4308,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.57,
+        "silentInTurn": 0.214,
+        "askingUser": 0.004,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.06
+      },
+      "doingToMergeHours": 0.848
     },
     {
       "ticket": "VC-245",
@@ -2204,7 +4330,15 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.459,
+        "silentInTurn": 0.354,
+        "askingUser": 19.699,
+        "failureBlocked": 0.249,
+        "prOpenIdle": 0,
+        "idle": 54.234
+      }
     },
     {
       "ticket": "VC-260",
@@ -2217,7 +4351,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.386,
+        "silentInTurn": 0.138,
+        "askingUser": 0,
+        "failureBlocked": 0.163,
+        "prOpenIdle": 0,
+        "idle": 0.292
+      },
+      "doingToMergeHours": 1.979
     },
     {
       "ticket": "VC-257",
@@ -2230,7 +4373,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.898,
+        "silentInTurn": 0.759,
+        "askingUser": 0.025,
+        "failureBlocked": 0.049,
+        "prOpenIdle": 2.175,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 3.907
     },
     {
       "ticket": "VC-125",
@@ -2243,7 +4395,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.131,
+        "silentInTurn": 0.444,
+        "askingUser": 0.085,
+        "failureBlocked": 0.258,
+        "prOpenIdle": 0.117,
+        "idle": 1.134
+      },
+      "doingToMergeHours": 2.814
     },
     {
       "ticket": "VC-254",
@@ -2256,7 +4417,15 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.592,
+        "silentInTurn": 0.767,
+        "askingUser": 10.216,
+        "failureBlocked": 0.121,
+        "prOpenIdle": 0.994,
+        "idle": 0.001
+      }
     },
     {
       "ticket": "VC-170",
@@ -2269,7 +4438,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.64,
+        "silentInTurn": 0.292,
+        "askingUser": 0.977,
+        "failureBlocked": 0.26,
+        "prOpenIdle": 0,
+        "idle": 0.356
+      },
+      "doingToMergeHours": 3.167
     },
     {
       "ticket": "VC-265",
@@ -2282,7 +4460,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.317,
+        "silentInTurn": 0.143,
+        "askingUser": 0,
+        "failureBlocked": 0.175,
+        "prOpenIdle": 7.347,
+        "idle": 1.515
+      },
+      "doingToMergeHours": 10.497
     },
     {
       "ticket": "VC-219",
@@ -2295,7 +4482,16 @@
       "messagedSessionCount": 11,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.165,
+        "silentInTurn": 0.675,
+        "askingUser": 0.064,
+        "failureBlocked": 0.992,
+        "prOpenIdle": 6.505,
+        "idle": 0.899
+      },
+      "doingToMergeHours": 11.061
     },
     {
       "ticket": "VC-262",
@@ -2308,7 +4504,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.725,
+        "silentInTurn": 2.451,
+        "askingUser": 0,
+        "failureBlocked": 0.063,
+        "prOpenIdle": 0,
+        "idle": 8.069
+      },
+      "doingToMergeHours": 12.052
     },
     {
       "ticket": "VC-255",
@@ -2321,7 +4526,15 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.435,
+        "silentInTurn": 1.755,
+        "askingUser": 6.466,
+        "failureBlocked": 13.493,
+        "prOpenIdle": 3.411,
+        "idle": 0.001
+      }
     },
     {
       "ticket": "VC-246",
@@ -2334,7 +4547,15 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.336,
+        "silentInTurn": 1.026,
+        "askingUser": 0,
+        "failureBlocked": 0.071,
+        "prOpenIdle": 0,
+        "idle": 89.647
+      }
     },
     {
       "ticket": "VC-239",
@@ -2347,7 +4568,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.156,
+        "silentInTurn": 0.809,
+        "askingUser": 0.308,
+        "failureBlocked": 6.256,
+        "prOpenIdle": 6.064,
+        "idle": 0.049
+      },
+      "doingToMergeHours": 15.41
     },
     {
       "ticket": "VC-9",
@@ -2360,7 +4590,16 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.045,
+        "silentInTurn": 1.107,
+        "askingUser": 0.059,
+        "failureBlocked": 5.154,
+        "prOpenIdle": 7.251,
+        "idle": 329.317
+      },
+      "doingToMergeHours": 16.291
     },
     {
       "ticket": "VC-238",
@@ -2373,7 +4612,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.283,
+        "silentInTurn": 1.281,
+        "askingUser": 0.19,
+        "failureBlocked": 6.327,
+        "prOpenIdle": 0,
+        "idle": 6.697
+      },
+      "doingToMergeHours": 17.555
     },
     {
       "ticket": "VC-6",
@@ -2386,7 +4634,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.578,
+        "silentInTurn": 2.507,
+        "askingUser": 0.067,
+        "failureBlocked": 14.862,
+        "prOpenIdle": 0.032,
+        "idle": 0.315
+      },
+      "doingToMergeHours": 2.851
     },
     {
       "ticket": "VC-270",
@@ -2399,7 +4656,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.6,
+        "silentInTurn": 0.555,
+        "askingUser": 0.03,
+        "failureBlocked": 1.098,
+        "prOpenIdle": 0.139,
+        "idle": 0.046
+      },
+      "doingToMergeHours": 3.155
     },
     {
       "ticket": "VC-268",
@@ -2412,7 +4678,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.6,
+        "silentInTurn": 0.965,
+        "askingUser": 0.18,
+        "failureBlocked": 0.313,
+        "prOpenIdle": 0.01,
+        "idle": 0.017
+      },
+      "doingToMergeHours": 2.862
     },
     {
       "ticket": "VC-269",
@@ -2425,7 +4700,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.607,
+        "silentInTurn": 0.154,
+        "askingUser": 0.687,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.009
+      },
+      "doingToMergeHours": 2.294
     },
     {
       "ticket": "VC-263",
@@ -2438,7 +4722,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.505,
+        "silentInTurn": 0.755,
+        "askingUser": 0.021,
+        "failureBlocked": 2.492,
+        "prOpenIdle": 19.153,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 21.948
     },
     {
       "ticket": "VC-273",
@@ -2451,7 +4744,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.807,
+        "silentInTurn": 0.347,
+        "askingUser": 0.005,
+        "failureBlocked": 5.54,
+        "prOpenIdle": 0.004,
+        "idle": 0.04
+      },
+      "doingToMergeHours": 7.744
     },
     {
       "ticket": "VC-259",
@@ -2464,7 +4766,16 @@
       "messagedSessionCount": 12,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.49,
+        "silentInTurn": 0.599,
+        "askingUser": 0.002,
+        "failureBlocked": 0.121,
+        "prOpenIdle": 0,
+        "idle": 22.062
+      },
+      "doingToMergeHours": 26.54
     },
     {
       "ticket": "VC-310",
@@ -2477,7 +4788,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.917,
+        "silentInTurn": 0.925,
+        "askingUser": 0.043,
+        "failureBlocked": 12.876,
+        "prOpenIdle": 0,
+        "idle": 7.29
+      },
+      "doingToMergeHours": 25.051
     },
     {
       "ticket": "VC-291",
@@ -2490,7 +4810,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.987,
+        "silentInTurn": 3.262,
+        "askingUser": 0.166,
+        "failureBlocked": 0.597,
+        "prOpenIdle": 4.862,
+        "idle": 65.491
+      },
+      "doingToMergeHours": 28.825
     },
     {
       "ticket": "VC-243",
@@ -2503,7 +4832,15 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.833,
+        "silentInTurn": 0.67,
+        "askingUser": 0,
+        "failureBlocked": 0.122,
+        "prOpenIdle": 0,
+        "idle": 210.161
+      }
     },
     {
       "ticket": "VC-293",
@@ -2516,7 +4853,16 @@
       "messagedSessionCount": 11,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.934,
+        "silentInTurn": 2.551,
+        "askingUser": 0,
+        "failureBlocked": 0.212,
+        "prOpenIdle": 0.344,
+        "idle": 73.836
+      },
+      "doingToMergeHours": 79.803
     },
     {
       "ticket": "VC-350",
@@ -2529,7 +4875,15 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.28,
+        "silentInTurn": 0.384,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.436,
+        "idle": 0.001
+      }
     },
     {
       "ticket": "VC-351",
@@ -2542,7 +4896,16 @@
       "messagedSessionCount": 11,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.776,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.393,
+        "idle": 0.792
+      },
+      "doingToMergeHours": 2.961
     },
     {
       "ticket": "VC-329",
@@ -2555,7 +4918,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.363,
+        "silentInTurn": 0.824,
+        "askingUser": 0.032,
+        "failureBlocked": 0,
+        "prOpenIdle": 6.126,
+        "idle": 83.922
+      },
+      "doingToMergeHours": 95.267
     },
     {
       "ticket": "VC-352",
@@ -2568,7 +4940,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.502,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.498
+      },
+      "doingToMergeHours": 1
     },
     {
       "ticket": "VC-354",
@@ -2581,7 +4962,15 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.948,
+        "silentInTurn": 1.092,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 3.396
+      }
     },
     {
       "ticket": "VC-360",
@@ -2594,7 +4983,15 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.616,
+        "silentInTurn": 1.437,
+        "askingUser": 0,
+        "failureBlocked": 5.158,
+        "prOpenIdle": 0,
+        "idle": 0.002
+      }
     },
     {
       "ticket": "VC-363",
@@ -2607,7 +5004,15 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.122,
+        "silentInTurn": 0.967,
+        "askingUser": 0,
+        "failureBlocked": 1.898,
+        "prOpenIdle": 0,
+        "idle": 2.336
+      }
     },
     {
       "ticket": "VC-367",
@@ -2620,7 +5025,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.762,
+        "silentInTurn": 0.671,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.112
+      },
+      "doingToMergeHours": 0.554
     },
     {
       "ticket": "VC-359",
@@ -2633,7 +5047,15 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.915,
+        "silentInTurn": 3.626,
+        "askingUser": 0,
+        "failureBlocked": 2.26,
+        "prOpenIdle": 0.051,
+        "idle": 0.47
+      }
     },
     {
       "ticket": "VC-357",
@@ -2646,7 +5068,15 @@
       "messagedSessionCount": 13,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 3.946,
+        "silentInTurn": 2.033,
+        "askingUser": 0.058,
+        "failureBlocked": 0.106,
+        "prOpenIdle": 0,
+        "idle": 5.849
+      }
     },
     {
       "ticket": "VC-8",
@@ -2659,7 +5089,16 @@
       "messagedSessionCount": 14,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.903,
+        "silentInTurn": 4.948,
+        "askingUser": 0.041,
+        "failureBlocked": 2.19,
+        "prOpenIdle": 0,
+        "idle": 0.453
+      },
+      "doingToMergeHours": 12.18
     },
     {
       "ticket": "VC-355",
@@ -2672,7 +5111,15 @@
       "messagedSessionCount": 16,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.949,
+        "silentInTurn": 12.13,
+        "askingUser": 0,
+        "failureBlocked": 2.464,
+        "prOpenIdle": 0,
+        "idle": 2.058
+      }
     },
     {
       "ticket": "VC-356",
@@ -2685,7 +5132,15 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.443,
+        "silentInTurn": 12.316,
+        "askingUser": 0.252,
+        "failureBlocked": 6.739,
+        "prOpenIdle": 0,
+        "idle": 0.574
+      }
     },
     {
       "ticket": "VC-369",
@@ -2698,7 +5153,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.716,
+        "silentInTurn": 0.547,
+        "askingUser": 0,
+        "failureBlocked": 0.402,
+        "prOpenIdle": 0,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 1.402
     },
     {
       "ticket": "VC-353",
@@ -2711,7 +5175,15 @@
       "messagedSessionCount": 21,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 5.679,
+        "silentInTurn": 15.51,
+        "askingUser": 1.387,
+        "failureBlocked": 1.601,
+        "prOpenIdle": 1.347,
+        "idle": 4.364
+      }
     },
     {
       "ticket": "VC-335",
@@ -2724,7 +5196,16 @@
       "messagedSessionCount": 18,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 5.199,
+        "silentInTurn": 0.587,
+        "askingUser": 1.794,
+        "failureBlocked": 14.85,
+        "prOpenIdle": 0,
+        "idle": 101.822
+      },
+      "doingToMergeHours": 124.252
     },
     {
       "ticket": "VC-358",
@@ -2737,7 +5218,16 @@
       "messagedSessionCount": 28,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 9.975,
+        "silentInTurn": 3.602,
+        "askingUser": 1.379,
+        "failureBlocked": 2.744,
+        "prOpenIdle": 0,
+        "idle": 15.414
+      },
+      "doingToMergeHours": 24.639
     },
     {
       "ticket": "VC-372",
@@ -2750,7 +5240,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.727,
+        "silentInTurn": 0.318,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 0.069
     },
     {
       "ticket": "VC-374",
@@ -2763,7 +5262,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.262,
+        "silentInTurn": 1.399,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 0.697
     },
     {
       "ticket": "VC-373",
@@ -2776,7 +5284,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.42,
+        "silentInTurn": 0.885,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 1.335
     },
     {
       "ticket": "VC-371",
@@ -2789,7 +5306,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.75,
+        "silentInTurn": 3.635,
+        "askingUser": 4.974,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.003,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 10.381
     },
     {
       "ticket": "VC-381",
@@ -2802,7 +5328,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.281,
+        "silentInTurn": 0.541,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.294
+      },
+      "doingToMergeHours": 0.726
     },
     {
       "ticket": "VC-382",
@@ -2815,7 +5350,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.201,
+        "silentInTurn": 0.167,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 1.401
+      },
+      "doingToMergeHours": 2.769
     },
     {
       "ticket": "VC-383",
@@ -2828,7 +5372,16 @@
       "messagedSessionCount": 15,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.481,
+        "silentInTurn": 0.644,
+        "askingUser": 0.179,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.317,
+        "idle": 0.001
+      },
+      "doingToMergeHours": 3.622
     },
     {
       "ticket": "VC-384",
@@ -2841,7 +5394,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.025,
+        "silentInTurn": 0.235,
+        "askingUser": 0,
+        "failureBlocked": 0.422,
+        "prOpenIdle": 0,
+        "idle": 0.831
+      },
+      "doingToMergeHours": 2.513
     },
     {
       "ticket": "VC-387",
@@ -2854,7 +5416,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.437,
+        "silentInTurn": 1.436,
+        "askingUser": 0.028,
+        "failureBlocked": 3.14,
+        "prOpenIdle": 0,
+        "idle": 1.894
+      },
+      "doingToMergeHours": 7.935
     },
     {
       "ticket": "VC-380",
@@ -2867,7 +5438,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.49,
+        "silentInTurn": 1.785,
+        "askingUser": 9.458,
+        "failureBlocked": 0.081,
+        "prOpenIdle": 0,
+        "idle": 6.786
+      },
+      "doingToMergeHours": 20.295
     },
     {
       "ticket": "VC-389",
@@ -2880,7 +5460,16 @@
       "messagedSessionCount": 10,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.288,
+        "silentInTurn": 0.303,
+        "askingUser": 9.189,
+        "failureBlocked": 0.472,
+        "prOpenIdle": 0,
+        "idle": 5.812
+      },
+      "doingToMergeHours": 17.728
     },
     {
       "ticket": "VC-388",
@@ -2893,7 +5482,16 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.797,
+        "silentInTurn": 0.91,
+        "askingUser": 0.014,
+        "failureBlocked": 0.022,
+        "prOpenIdle": 1.142,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 2.889
     },
     {
       "ticket": "VC-368",
@@ -2906,7 +5504,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.653,
+        "silentInTurn": 0.459,
+        "askingUser": 0.007,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.161,
+        "idle": 18.4
+      },
+      "doingToMergeHours": 2.149
     },
     {
       "ticket": "VC-385",
@@ -2919,7 +5526,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.71,
+        "silentInTurn": 1.277,
+        "askingUser": 0.02,
+        "failureBlocked": 0.382,
+        "prOpenIdle": 0.569,
+        "idle": 17.652
+      },
+      "doingToMergeHours": 3.816
     },
     {
       "ticket": "VC-397",
@@ -2932,7 +5548,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.401,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0.015,
+        "prOpenIdle": 0.174,
+        "idle": 0.09
+      },
+      "doingToMergeHours": 0.236
     },
     {
       "ticket": "VC-396",
@@ -2945,7 +5570,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "squash-pr-number"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.537,
+        "silentInTurn": 0,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.486
+      },
+      "doingToMergeHours": 1.027
     },
     {
       "ticket": "VC-272",
@@ -2958,7 +5592,16 @@
       "messagedSessionCount": 3,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.325,
+        "silentInTurn": 0.129,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.894,
+        "idle": 0
+      },
+      "doingToMergeHours": 3.309
     },
     {
       "ticket": "VC-378",
@@ -2971,7 +5614,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.664,
+        "silentInTurn": 0.318,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 2.223,
+        "idle": 45.101
+      },
+      "doingToMergeHours": 3.309
     },
     {
       "ticket": "VC-405",
@@ -2984,7 +5636,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.778,
+        "silentInTurn": 0.391,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.116,
+        "idle": 0.003
+      },
+      "doingToMergeHours": 2.287
     },
     {
       "ticket": "VC-393",
@@ -2997,7 +5658,16 @@
       "messagedSessionCount": 5,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.743,
+        "silentInTurn": 0.518,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 1.129,
+        "idle": 0
+      },
+      "doingToMergeHours": 3.351
     },
     {
       "ticket": "VC-402",
@@ -3010,7 +5680,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.487,
+        "silentInTurn": 0.707,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.01,
+        "idle": 0
+      },
+      "doingToMergeHours": 3.535
     },
     {
       "ticket": "VC-141",
@@ -3023,7 +5702,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.874,
+        "silentInTurn": 0.913,
+        "askingUser": 0,
+        "failureBlocked": 1.14,
+        "prOpenIdle": 0.001,
+        "idle": 0
+      },
+      "doingToMergeHours": 3.892
     },
     {
       "ticket": "VC-403",
@@ -3036,7 +5724,16 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.069,
+        "silentInTurn": 2.812,
+        "askingUser": 0,
+        "failureBlocked": 1.186,
+        "prOpenIdle": 0.001,
+        "idle": 0
+      },
+      "doingToMergeHours": 6.03
     },
     {
       "ticket": "VC-411",
@@ -3049,7 +5746,15 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.712,
+        "silentInTurn": 0.087,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.008,
+        "idle": 0.177
+      }
     },
     {
       "ticket": "VC-408",
@@ -3062,7 +5767,15 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.881,
+        "silentInTurn": 1.369,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.006,
+        "idle": 0.772
+      }
     },
     {
       "ticket": "VC-410",
@@ -3075,7 +5788,15 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.839,
+        "silentInTurn": 1.446,
+        "askingUser": 0.164,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.009,
+        "idle": 0.593
+      }
     },
     {
       "ticket": "VC-392",
@@ -3088,7 +5809,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.472,
+        "silentInTurn": 3.4,
+        "askingUser": 0,
+        "failureBlocked": 0.032,
+        "prOpenIdle": 0.173,
+        "idle": 0.004
+      },
+      "doingToMergeHours": 5.046
     },
     {
       "ticket": "VC-414",
@@ -3101,7 +5831,15 @@
       "messagedSessionCount": 4,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.368,
+        "silentInTurn": 0.168,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.261,
+        "idle": 0.007
+      }
     },
     {
       "ticket": "VC-316",
@@ -3114,7 +5852,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.751,
+        "silentInTurn": 3.272,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.918,
+        "idle": 0.003
+      },
+      "doingToMergeHours": 5.932
     },
     {
       "ticket": "VC-407",
@@ -3127,7 +5874,16 @@
       "messagedSessionCount": 12,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.766,
+        "silentInTurn": 0.537,
+        "askingUser": 0,
+        "failureBlocked": 0.01,
+        "prOpenIdle": 1.202,
+        "idle": 0.376
+      },
+      "doingToMergeHours": 2.918
     },
     {
       "ticket": "VC-412",
@@ -3140,7 +5896,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.763,
+        "silentInTurn": 0.567,
+        "askingUser": 0.037,
+        "failureBlocked": 0.084,
+        "prOpenIdle": 0,
+        "idle": 23.046
+      }
     },
     {
       "ticket": "VC-217",
@@ -3153,7 +5917,16 @@
       "messagedSessionCount": 33,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 4.496,
+        "silentInTurn": 25.292,
+        "askingUser": 0.326,
+        "failureBlocked": 33.89,
+        "prOpenIdle": 0,
+        "idle": 59.377
+      },
+      "doingToMergeHours": 127.481
     },
     {
       "ticket": "VC-418",
@@ -3166,7 +5939,16 @@
       "messagedSessionCount": 9,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.577,
+        "silentInTurn": 0.386,
+        "askingUser": 0,
+        "failureBlocked": 0.043,
+        "prOpenIdle": 0.145,
+        "idle": 0
+      },
+      "doingToMergeHours": 1.108
     },
     {
       "ticket": "VC-409",
@@ -3179,7 +5961,15 @@
       "messagedSessionCount": 8,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 2.726,
+        "silentInTurn": 1.859,
+        "askingUser": 0,
+        "failureBlocked": 0.085,
+        "prOpenIdle": 23.891,
+        "idle": 0.43
+      }
     },
     {
       "ticket": "VC-344",
@@ -3192,7 +5982,15 @@
       "messagedSessionCount": 7,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.131,
+        "silentInTurn": 0.856,
+        "askingUser": 0,
+        "failureBlocked": 0.002,
+        "prOpenIdle": 0.001,
+        "idle": 0.302
+      }
     },
     {
       "ticket": "VC-419",
@@ -3205,7 +6003,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.471,
+        "silentInTurn": 0.184,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0.426,
+        "idle": 0.84
+      }
     },
     {
       "ticket": "VC-413",
@@ -3218,7 +6024,15 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.975,
+        "silentInTurn": 2.973,
+        "askingUser": 0.023,
+        "failureBlocked": 0.085,
+        "prOpenIdle": 0.002,
+        "idle": 22.611
+      }
     },
     {
       "ticket": "VC-416",
@@ -3231,7 +6045,16 @@
       "messagedSessionCount": 2,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.106,
+        "silentInTurn": 1.21,
+        "askingUser": 0,
+        "failureBlocked": 1.245,
+        "prOpenIdle": 0,
+        "idle": 0.254
+      },
+      "doingToMergeHours": 3.814
     },
     {
       "ticket": "VC-421",
@@ -3244,7 +6067,16 @@
       "messagedSessionCount": 12,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.502,
+        "silentInTurn": 0.086,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 10.482,
+        "idle": 0.002
+      },
+      "doingToMergeHours": 12.063
     },
     {
       "ticket": "VC-428",
@@ -3257,7 +6089,16 @@
       "messagedSessionCount": 6,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.502,
+        "silentInTurn": 0.18,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.047
+      },
+      "doingToMergeHours": 0.705
     },
     {
       "ticket": "VC-297",
@@ -3270,7 +6111,16 @@
       "messagedSessionCount": 13,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 1.434,
+        "silentInTurn": 1.336,
+        "askingUser": 0.63,
+        "failureBlocked": 2.42,
+        "prOpenIdle": 23.861,
+        "idle": 10.648
+      },
+      "doingToMergeHours": 40.326
     },
     {
       "ticket": "VC-429",
@@ -3283,7 +6133,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.162,
+        "silentInTurn": 0.297,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.408
+      },
+      "doingToMergeHours": 0.867
     },
     {
       "ticket": "VC-440",
@@ -3296,7 +6155,16 @@
       "messagedSessionCount": 1,
       "linkKinds": [
         "pr-merge-branch"
-      ]
+      ],
+      "breakdownHours": {
+        "working": 0.152,
+        "silentInTurn": 0.155,
+        "askingUser": 0,
+        "failureBlocked": 0,
+        "prOpenIdle": 0,
+        "idle": 0.091
+      },
+      "doingToMergeHours": 0.398
     }
   ]
 }

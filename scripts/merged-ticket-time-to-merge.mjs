@@ -8,6 +8,14 @@
  *     node scripts/merged-ticket-time-to-merge.mjs --write        # + refresh the data files
  *     node scripts/merged-ticket-time-to-merge.mjs --self-test    # the rules' own tests
  *
+ * The same run also produces the breakdown of where each ticket's time went
+ * (`merged-ticket-time-breakdown.mjs`). Its PR-open times come from a `gh pr
+ * list` capture passed as `--prs <file>` (see `PR_CAPTURE_COMMAND`); without
+ * one they fall back to the ledger's own `pr_opened` events, and the artifact
+ * records which. `--silence-minutes` sets the in-turn silence threshold,
+ * `--pi-sessions` the Pi session directory the tool durations are read from,
+ * `--no-breakdown` skips all of it.
+ *
  * READ-ONLY, BY CONSTRUCTION. The ledger is opened with better-sqlite3's
  * `readonly` flag on the live database — never a copy, never a write, no
  * migration, no settings touched, no Session disturbed — and git is used only
@@ -24,15 +32,19 @@
  * branch name, once through the PR number the ledger recorded. See
  * `merged-ticket-time-to-merge-logic.mjs` for those rules.
  *
- * WHAT IT DELIBERATELY DOES NOT READ. No message text, no prompt, no title, no
- * command line, no file path from any Session. The only ledger columns it
- * touches are identifiers, roles, parent links, statuses, PR urls and
- * timestamps — and the only thing it takes from an input event is its clock.
+ * WHAT IT DELIBERATELY DOES NOT READ. No message text, no prompt, no title
+ * from any Session. The only ledger columns it touches are identifiers, roles,
+ * parent links, statuses, PR urls and timestamps — and the only thing it takes
+ * from an input event is its clock. Two things are read in memory only, to be
+ * classified and dropped before anything is kept: a failure Attention's detail
+ * text (provider error prose, reduced to a failure class) and a Pi tool call's
+ * bash command (reduced to a coarse category). Neither, nor any path or time of
+ * day, reaches a published file; the self-test checks that.
  */
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +63,18 @@ import {
   ticketFromBranch,
   ticketsInText,
   utcMonth,
+  DEFAULT_SILENCE_MINUTES,
+  BREAKDOWN_CATEGORIES,
 } from "./merged-ticket-time-to-merge-logic.mjs";
+import {
+  buildBreakdown,
+  PR_CAPTURE_COMMAND,
+  readPrCapture,
+  readSessionEvents,
+  readTicketEvents,
+  readToolCalls,
+  selfTestBreakdown,
+} from "./merged-ticket-time-breakdown.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(REPO_ROOT, "docs/research/perf/merged-ticket-time-to-merge");
@@ -62,6 +85,9 @@ const OUT_DIR = join(REPO_ROOT, "docs/research/perf/merged-ticket-time-to-merge"
  * machine's home directory.
  */
 const DEFAULT_DB = join(homedir(), "Library/Application Support/Volli Code/volli.db");
+
+/** Where the Pi runtime keeps its session files, beside the ledger. */
+const DEFAULT_PI_SESSIONS = join(homedir(), "Library/Application Support/Volli Code/pi-sessions");
 
 /**
  * WHICH INTEGRATION HISTORY TO READ. A ticket worktree's local `main` is
@@ -90,6 +116,11 @@ function parseArgs(argv) {
     ref: flag("ref", DEFAULT_REF),
     prefix: flag("prefix", "VC"),
     out: flag("out", OUT_DIR),
+    prs: flag("prs", undefined),
+    prsCapturedAt: flag("prs-captured-at", undefined),
+    silenceMinutes: Number(flag("silence-minutes", DEFAULT_SILENCE_MINUTES)),
+    piSessions: flag("pi-sessions", DEFAULT_PI_SESSIONS),
+    breakdown: !argv.includes("--no-breakdown"),
     write: argv.includes("--write"),
     print: argv.includes("--print") || !argv.includes("--write"),
   };
@@ -396,7 +427,20 @@ const CSV_COLUMNS = [
   "session_count",
   "messaged_session_count",
   "link_kinds",
+  // The breakdown, hours per category (blank when it was not run), and the
+  // second clock: first move to Doing → final merge (blank when the ticket was
+  // never in Doing before it merged).
+  "working_hours",
+  "silent_in_turn_hours",
+  "asking_user_hours",
+  "failure_blocked_hours",
+  "pr_open_idle_hours",
+  "idle_hours",
+  "doing_to_merge_hours",
 ];
+
+/** A CSV cell for an optional number: three decimals, blank when absent. */
+const fixed = (value) => (value === undefined ? "" : value.toFixed(3));
 
 function toCsv(rows) {
   const lines = [CSV_COLUMNS.join(",")];
@@ -412,6 +456,8 @@ function toCsv(rows) {
         row.sessionCount,
         row.messagedSessionCount,
         row.linkKinds.join("+"),
+        ...BREAKDOWN_CATEGORIES.map((c) => fixed(row.breakdown?.[c])),
+        fixed(row.breakdown?.doingToMergeHours),
       ].join(","),
     );
   }
@@ -434,6 +480,16 @@ function toJson(result) {
         sessionCount: row.sessionCount,
         messagedSessionCount: row.messagedSessionCount,
         linkKinds: row.linkKinds,
+        breakdownHours:
+          row.breakdown === undefined
+            ? undefined
+            : Object.fromEntries(
+                BREAKDOWN_CATEGORIES.map((c) => [c, Number(row.breakdown[c].toFixed(3))]),
+              ),
+        doingToMergeHours:
+          row.breakdown?.doingToMergeHours === undefined
+            ? undefined
+            : Number(row.breakdown.doingToMergeHours.toFixed(3)),
       })),
     },
     null,
@@ -477,6 +533,67 @@ function printSummary(result) {
       `${name}: ${stratum.reported.length} reported, ${stratum.suppressed.length} suppressed (<${stratum.minimum})`,
     );
   }
+  const b = result.breakdown;
+  if (b === undefined) return;
+  console.log(
+    `breakdown: ${b.cohortTickets} tickets, ${b.cohortHours}h, silence ≥${b.definitions.silenceMinutes}m, PR open from ${b.definitions.prOpenSource}`,
+  );
+  for (const [category, v] of Object.entries(b.byCategory)) {
+    console.log(
+      `  ${category.padEnd(15)} ${String(v.hours).padStart(8)}h ${(v.share * 100).toFixed(1).padStart(5)}%`,
+    );
+  }
+  console.log(`  failure-blocked by class: ${JSON.stringify(b.failureBlockedByClass)}`);
+  console.log(`  idle by status: ${JSON.stringify(b.idleByTicketStatus)}`);
+  console.log(`  idle while another Session ran: ${b.idleWhileAnotherSessionRanHours}h`);
+  console.log(`  silences: ${JSON.stringify(b.inTurnSilences)}`);
+  console.log(`  doing→merge median ${h(b.doingToFinalMerge.median)} n=${b.doingToFinalMerge.n}`);
+  console.log(
+    `  tool calls: ${b.toolCalls.available ? `${b.toolCalls.calls} in ${b.toolCalls.files} files` : "not read"}`,
+  );
+}
+
+/**
+ * Run the breakdown over the cohort `analyse` built and attach it: the
+ * aggregate under `result.breakdown`, the per-ticket hours on each row.
+ */
+function attachBreakdown(result, db, ledger, options) {
+  if (!(options.silenceMinutes > 0)) {
+    throw new Error(`--silence-minutes must be a positive number of minutes`);
+  }
+  let prCapture;
+  let prCaptureMeta;
+  if (options.prs !== undefined) {
+    prCapture = readPrCapture(options.prs);
+    prCaptureMeta = {
+      command: PR_CAPTURE_COMMAND,
+      // When `gh` was run, like `snapshot.takenAt`: the analysis's clock, not
+      // anyone's working hours. Falls back to the file's own mtime.
+      capturedAt: options.prsCapturedAt ?? statSync(options.prs).mtime.toISOString(),
+      mergedPrsInCapture: prCapture.length,
+    };
+  }
+  const windowBySession = new Map();
+  for (const row of result.rows) {
+    for (const id of row.sessionIds) {
+      windowBySession.set(id, {
+        start: row.startAt,
+        end: row.finalMergeAt,
+        mergeMonth: utcMonth(row.finalMergeAt),
+      });
+    }
+  }
+  const { aggregate, perTicket } = buildBreakdown({
+    rows: result.rows,
+    eventsBySession: readSessionEvents(db),
+    ticketEvents: readTicketEvents(db, ledger.project.id, options.prefix),
+    prCapture,
+    prCaptureMeta,
+    silenceMinutes: options.silenceMinutes,
+    toolCalls: readToolCalls(options.piSessions, windowBySession),
+  });
+  result.breakdown = aggregate;
+  for (const row of result.rows) row.breakdown = perTicket.get(row.ticket);
 }
 
 async function main(options) {
@@ -494,6 +611,7 @@ async function main(options) {
       checkoutHash,
       clockSkew: ledger.clockSkew,
     });
+    if (options.breakdown) attachBreakdown(result, db, ledger, options);
     if (options.write) {
       mkdirSync(options.out, { recursive: true });
       writeFileSync(join(options.out, "aggregates.json"), toJson(result));
@@ -963,6 +1081,32 @@ function selfTestOutputPrivacy() {
   const json = toJson({ snapshot: { takenAt: "x" }, rows });
   assert.equal(/startAt/.test(json), false, "the start timestamp is never published");
   assert.equal(/18:30/.test(json), false);
+
+  // With the breakdown attached: per-ticket hours only, still no clock, and
+  // never the Session ids the breakdown was computed from.
+  const withBreakdown = [
+    {
+      ...rows[0],
+      startAt: Date.parse("2026-09-01T09:00:00Z"),
+      sessionIds: ["session-uuid-1"],
+      breakdown: {
+        working: 1.25,
+        silentInTurn: 0.5,
+        askingUser: 0,
+        failureBlocked: 0.25,
+        prOpenIdle: 2,
+        idle: 5.5,
+        doingToMergeHours: 8,
+      },
+    },
+  ];
+  const csvB = toCsv(withBreakdown);
+  assert.match(csvB, /pr-merge-branch,1\.250,0\.500,0\.000,0\.250,2\.000,5\.500,8\.000$/m);
+  const jsonB = toJson({ snapshot: { takenAt: "x" }, rows: withBreakdown });
+  for (const published of [csvB, jsonB]) {
+    assert.equal(/session-uuid|startAt|09:00|18:30/.test(published), false);
+    assert.equal(/\b1\d{12}\b/.test(published), false, "no epoch-millisecond clock");
+  }
 }
 
 function selfTest() {
@@ -971,6 +1115,7 @@ function selfTest() {
   selfTestCohort();
   selfTestStatistics();
   selfTestOutputPrivacy();
+  selfTestBreakdown();
   console.log("merged-ticket-time-to-merge self-test passed");
 }
 
