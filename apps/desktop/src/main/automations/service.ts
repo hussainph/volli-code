@@ -30,7 +30,6 @@ export interface AutomationServiceDeps {
   findProject(projectId: string): boolean;
   findAutomation(automationId: string): Automation | undefined;
   listAutomationsForProject(projectId: string): Automation[];
-  runsForTicket(ticketId: string): AutomationRun[];
   runsForProject(projectId: string): AutomationRun[];
   skipsForProject(projectId: string): AutomationSkippedOccurrence[];
   runsForAutomation(input: { automationId: string; projectId: string }): AutomationRun[];
@@ -182,10 +181,6 @@ export function createAutomationService(deps: AutomationServiceDeps) {
       return { ok: true, automations: deps.listAutomationsForProject(projectId) };
     },
 
-    runsForTicket(ticketId: string) {
-      return deps.runsForTicket(ticketId);
-    },
-
     /**
      * One project's armed columns — machine-local, never part of the record's
      * list. Project-guarded like {@link list}: an unknown id is a refusal
@@ -294,8 +289,8 @@ export function createAutomationService(deps: AutomationServiceDeps) {
 
     /**
      * The Automations page's Run history. Project-guarded like {@link list}
-     * above and unlike `runsForTicket`: this reads a whole project's work,
-     * so an unknown id is a refusal rather than a convincing empty list.
+     * above: this reads a whole project's work, so an unknown id is a refusal
+     * rather than a convincing empty list.
      */
     runsForProject(projectId: string): AutomationRunHistoryOutcome {
       if (!deps.findProject(projectId)) return { ok: false, error: "Unknown project" };

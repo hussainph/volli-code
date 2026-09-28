@@ -94,11 +94,6 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
       return outcome;
     },
 
-    "volli:automation-runs-for-ticket": (input): AutomationRunsResult => ({
-      ok: true,
-      runs: service.runsForTicket(input.ticketId),
-    }),
-
     "volli:automation-arming-list": async (input): Promise<AutomationArmingsResult> =>
       service.armings(input.projectId),
 

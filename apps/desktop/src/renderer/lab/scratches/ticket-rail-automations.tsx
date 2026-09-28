@@ -197,7 +197,6 @@ export const api: ApiOverrides = {
       }),
     enablement: () => Promise.resolve({ ok: true, enabledAutomationIds: ["automation-implement"] }),
     columnOrders: () => Promise.resolve({ ok: true, orders: [] }),
-    runsForTicket: () => Promise.resolve({ ok: true, runs: [] }),
   },
 };
 

@@ -1588,7 +1588,6 @@ app.whenReady().then(async () => {
           findProject: (projectId) => getProjectById(sessionDb, projectId) !== undefined,
           findAutomation: (automationId) => getAutomation(sessionDb, automationId),
           listAutomationsForProject: (projectId) => listAutomationsForProject(sessionDb, projectId),
-          runsForTicket: (ticketId) => listRunsForTicket(sessionDb, ticketId),
           runsForProject: (projectId) => listRunsForProject(sessionDb, projectId),
           skipsForProject: (projectId) => listSkippedOccurrencesForProject(sessionDb, projectId),
           runsForAutomation: (input) => listProjectRunsForAutomation(sessionDb, input),

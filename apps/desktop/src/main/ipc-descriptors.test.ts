@@ -3469,21 +3469,6 @@ describe("AUTOMATION_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:automation-runs-for-ticket", () => {
-    const { guard, invalidError } = AUTOMATION_IPC["volli:automation-runs-for-ticket"];
-
-    it("accepts a ticketId record and refuses everything else", () => {
-      expect(guard([{ ticketId: "t1" }])).toBe(true);
-      expect(guard([])).toBe(false);
-      expect(guard([null])).toBe(false);
-      expect(guard([{ ticketId: 7 }])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid automation runs request");
-    });
-  });
-
   describe("volli:automation-arming-list", () => {
     const { guard, invalidError } = AUTOMATION_IPC["volli:automation-arming-list"];
 

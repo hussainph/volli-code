@@ -53,7 +53,6 @@ import {
   listAutomationsForProject,
   listProjectRunsForAutomation,
   listRunsForProject,
-  listRunsForTicket,
   listSkippedOccurrencesForAutomation,
   listSkippedOccurrencesForProject,
   recordAutomationRun,
@@ -132,7 +131,6 @@ function setup(
     // These projection reads are behind the service; IPC itself never names a
     // database or repository.
     listAutomationsForProject: (id) => listAutomationsForProject(ctx.db, id),
-    runsForTicket: (id) => listRunsForTicket(ctx.db, id),
     runsForProject: (id) => listRunsForProject(ctx.db, id),
     runsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
     skipsForAutomation: (input) => listSkippedOccurrencesForAutomation(ctx.db, input),
@@ -169,7 +167,6 @@ describe("automation IPC", () => {
       "volli:automation-update",
       "volli:automation-delete",
       "volli:automation-run",
-      "volli:automation-runs-for-ticket",
       "volli:automation-arming-list",
       "volli:automation-arm",
       "volli:automation-column-order-list",
@@ -462,30 +459,8 @@ describe("automation IPC", () => {
     expect(seen).toEqual(["attended"]);
   });
 
-  it("lists a Ticket's Runs newest first and rejects malformed command identities", async () => {
-    const { project, ticket } = setup();
-    const session = testSession(project.id, ticket.id);
-    insertSession(ctx.db, session);
-    const automation = createAutomation(
-      ctx.db,
-      {
-        projectId: project.id,
-        name: "Review",
-        instructions: "x",
-        trigger: NO_AUTOMATION_TRIGGER,
-        runtime: null,
-      },
-      1,
-    );
-    recordAutomationRun(
-      ctx.db,
-      { automationId: automation.id, ticketId: ticket.id, sessionId: session.id, model: PIN },
-      1_000,
-    );
-    const runs = await call<AutomationRunsResult>("volli:automation-runs-for-ticket", {
-      ticketId: ticket.id,
-    });
-    expect(runs).toMatchObject({ ok: true, runs: [{ automationName: "Review" }] });
+  it("rejects malformed command identities", async () => {
+    const { project } = setup();
 
     expect(
       await call<Result>("volli:automation-create", {
