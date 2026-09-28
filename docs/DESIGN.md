@@ -399,6 +399,29 @@ Subagent Session and the island lists no sibling chat; the two surfaces split on
 scope rather than overlapping on it. A block that would only be true of the front chat is a block
 in the wrong place.
 
+**Four pages in one pill, and the pill is the only navigation the rail has.** Now, Diffs, Files,
+Search (`TICKET_RAIL_MODES`), in that order, because it is a keyboard order as much as a visual one
+and a page inserted in the middle moves every page after it under a reader's fingers. `Now` is the
+hub; the other three are working surfaces over the worktree. Switching page never opens, closes or
+retargets a main-view tab (`selectRailMode`). **One** of the two pinned footers is outside the
+tabpanel: the worktree, which is true of the Ticket whichever page is up. Cost is Now's own and
+sits inside Now — a spend figure under a folder listing is a fact about neither the folder nor the
+file.
+
+**Properties uses the app's own pickers, not the rail's own.** Status and Priority are the
+dropdowns the board and the ticket header already open (`RAIL_CONTROL` on the trigger: the row's
+**value**, sized to its label, never stretched) — so permissions, ordering, focus return and
+mutation-failure feedback are the app's single implementation rather than a rail-local copy of it.
+The only raised buttons left on Now are those two. **The row is not the target**: it is a glyph and
+the control where the value goes, at 38px (a 28px trigger plus its padding) against the page's 36px
+rows — a retained difference, not drift. **No field caption trails it**: the glyph says which field
+the line is and the value says the rest, so a muted `Status` at the right edge was a third naming of
+one thing, charged to the rail's width. The field name is not dropped, it moves — it rides the
+control's own accessible name (`Status: Todo`), and the glyph goes `aria-hidden` so it is said once.
+Labels are the one place a pill run survives, because a label *is* removable and addable: real
+project labels, additive left to right, each with its own remove target, and a compact **+** door
+(`Add label` for assistive technology) offering unapplied labels or creation of a new name.
+
 **Now is ordered by where attention goes, most often first.** The first pass ordered it by kind —
 what the Ticket *is*, what can be *run* on it, what is *happening* on it — and that put a
 rarely-pressed list of Automations above the roster of live Sessions, which is the one block on the
@@ -407,7 +430,7 @@ frequency; the comparison scratch drew the cost, and the order is by frequency n
 
 | # | Block | What it is | Object kind |
 |---|---|---|---|
-| 1 | Properties | status, priority, labels — three editable facts as rows | section |
+| 1 | Properties | status and priority as the app's own dropdowns, labels as an additive pill run | section |
 | 2 | Sessions | the working set, one row per live Session, `+ Chat ▾` in the eyebrow; the record folded under the eyebrow's own label | section (folds) |
 | 3 | Automations | what this Ticket can be made to run, height-capped | section |
 | — | Usage | what it cost, at one row | pinned footer (folds) |
@@ -418,22 +441,46 @@ status it sets is what decides which Automation the block below marks Armed. Ses
 because it is read most. Automations closes the scroller because it is pressed least, and it is
 still on the page because a Run is how a row *appears* in the roster above it.
 
+**A roster splits on lifecycle, not on attachment.** A Session is durable, so closing its tab ends
+nothing: the live rows are what someone could still go back to, and only what is *over* — stopped,
+exited, a terminal whose PTY is gone — belongs to the record (`sessionActivityIsLive`). The row
+that made the old rule visible was a Session **waiting** on a permission prompt, folded under the
+record's caret because nothing happened to be attached to it. Within the live rows, whatever is
+asking for a person sorts first and recency is the tiebreak (`sessionAttentionRank`); the record
+stays strictly chronological, since nothing in it is asking. Past four rows — counted over both
+halves — the roster earns a filter (`SESSION_ROSTER_FILTER_THRESHOLD`), and the filter reaches the
+record: while there is a query, a match behind the fold is a row on the page. All three rules are
+spelled once and read by both rails, so Home's roster and the Ticket's cannot drift.
+
 **One object kind carries the page**: every block on Now is a *section* — an eyebrow row
 (`RailSectionHeadingRow`: `text-label` caps at the left, at most one control at the right) over
-`ListRow`s at the rows' own `px-2`. Properties was a run of pills, the one block that was neither a
+rows at the rows' own `px-2`. Properties was a run of pills, the one block that was neither a
 section nor a card — unmarked, bordered at rest where every row is borderless until hovered, two
-facts to a line — and it is three rows now, in the roster's own grammar: a glyph, the **value** as
-the thing (what a reader scans for), the field name as the quiet qualifier at the right. *The card*
-(`RAIL_CARD_FRAME`, seamed rows inside one `rounded-xl` frame) is Home's and the Diffs page's
-costume; Now draws none. The page stacks with **one `gap-4`** and no block pays its own top
-padding: an absent block leaves no hole, and no block can drift from its neighbours by carrying a
-different inset.
+facts to a line — and it is three rows now, in the roster's grammar even where the value it carries
+is a control rather than a `ListRow`. *The card* (`RAIL_CARD_FRAME`, seamed rows inside one
+`rounded-xl` frame) is the Diffs page's costume; Now draws none. The page stacks with **one
+`gap-4`**, each block sets `gap-1` under its own eyebrow, and no block pays its own top padding —
+the pill above already pays the page's top inset. An absent block then leaves no hole, and no block
+can drift from its neighbours by carrying a different inset. **Home's rail obeys the same seam**,
+the narrow step included: both rails read `RAIL_NARROW_MAX_WIDTH` (270px) against the one
+`railWidth`, so a column dragged toward its 240px floor tightens to 12px gutters at either scope —
+page blocks and pinned footers together, since the footers inset from the same group attribute.
+
+**Rail scrolling never changes the content width.** Home and Ticket rail scroll containers hide
+the scrollbar and reserve no gutter, while retaining ordinary wheel, touch and keyboard scrolling.
+An accordion crossing the overflow threshold must not shift every row inward. This is scoped to
+the rail, not a global change to editors, the sidebar or portalled menus.
 
 **The rail has one fold, and the trigger never moves.** Three things open and close in place —
 the roster's record under the Sessions eyebrow, the worktree body under its footer row, the cost
-breakdown under its — and they are one object (`RailFold` / `RailFoldBody` / `RailFoldCaret`,
-Radix Collapsible over the `collapsible-down/up` keyframes, 200ms on the strong `--ease-out`,
-`motion-reduce` dropping the height animation outright). A body that opens under an eyebrow grows
+breakdown under its — and they are one object (`RailFold` / `RailFoldBody` / `RailFoldCaret`, a
+measured `height` **transition**, 200ms on the strong `--ease-out`, the caret 150ms on the same
+curve). A transition rather than the `collapsible-down/up` keyframes the accordion runs on because
+a fold is pressed twice in a second: keyframes restart from their own zero, so an interrupted close
+jumped back to full height, while a transition retargets from the height the body is **at**. A
+keyboard press (`detail === 0`) and `prefers-reduced-motion`, read at the moment of the press, drop
+the movement entirely — body and caret both — and a closing body is `inert` for the length of the
+close, handing focus back to the trigger if it held any. A body that opens under an eyebrow grows
 down into the scroller; a body that opens under a pinned row grows **up** into the room the
 scroller gives back. Either way the thing the pointer is on stays under the pointer, and a second
 press lands where the first did. The alternative for a footer — header above body, the row rising
@@ -472,14 +519,56 @@ is not the popover's body**: a popover had no height budget, and the full breakd
 evicted Automations from the scroller. The body keeps what the row does not say: the bar, the
 basis sentence, the cached share, the top model, the per-Session ranking.
 
+**A block says what its read is doing in its own eyebrow, and never with a row.** A blank status
+line is a hole in the page and a spinner over last-good rows is a lie about them, so read state is
+drawn where the block is already named (`rail-read-feedback.ts`, `RailHeadingReadStatus` /
+`RailReadFaultBody`): a first read in flight holds the rows' own box as skeletons, a landed read is
+the only thing that may claim the block is empty, a refresh over rows already on screen marks the
+eyebrow and leaves the rows, and a refresh that failed says so there while keeping the last
+reading. Only a read that has nothing to show takes the body, and it carries the one action that
+changes it — a retry scoped to that block, never to the app.
+
+**Files and Search are one navigator at two scopes.** Files begins with the current directory,
+not a second `Ticket files` / `Project files` title beneath an already-labelled Files tab. The
+root or current path leads a compact row with New File and filter icons alongside; the path is
+the way Up when inside a folder. The filter field appears below only while open, and read/retry
+feedback occupies space only when needed. Below is one flat current-folder listing of one-line
+36px rows: the second line each row used to carry was its parent path, which the header already
+names.
+
+The Ticket adds one **paperclip menu**, not a permanent Attachments heading or pill strip. The
+menu lists attached files and carries attachment/removal actions where this host may mutate them;
+a host-supplied read-only list stays read-only. It remains reachable across directory/filter
+changes and without a worktree, including attachments that have no materialized file path.
+Attachments belong to the Ticket, not the folder. Home has no paperclip because this scope has no
+Ticket attachments. Referenced rows (`@path` from the Body, plus path-backed attachments) still
+follow the listing on a Ticket and keep their folder beside the name. Search is the same page at
+both scopes: find only, results grouped per file with the match quoted on its own line, and a click
+previews the file and lands on the line.
+
+**Diffs lets status icons speak.** Added, modified, deleted and the other change kinds keep their
+semantic glyphs and accessible status names, not a repeated status word beside every filename.
+Counts, rename provenance and the independent Updated marker remain: they say something the
+status glyph does not.
+
+**A navigator remembers where it was, per checkout.** The rail draws one page at a time, so a
+glance at Now used to walk the listing back to the repository root and delete the words typed into
+Search — and the words were the work. The folder, the filter and its query, and the search query
+are remembered per scope for this run of the app (`files/navigator-scope-state.ts`), keyed by
+project and ticket. It is plain data, bounded and ephemeral: nothing about the memory keeps a read,
+a watch or a search alive behind an unmounted page.
+
 **A list bounds itself by height, never by hiding rows.** The Automations block is the case: it
 answers "what can I run here", so it draws every offered Automation as a row, with the current
 column's armed record first and marked, and caps itself at `max-h-40` with its own scroller. A
 project with thirty Automations therefore costs the same vertical space as one with three, and the
 roster above it never moves. The alternative — one name on a button and the rest behind a caret —
-bounds the height too, by refusing to answer the block's own question. While the rail re-reads
-(every planning change) the block holds the list's own height as skeleton rows, so a re-read moves
-nothing.
+bounds the height too, by refusing to answer the block's own question. A **first** read holds the
+list's own height as skeleton rows; a re-read (the rail re-reads on arrival and on every planning
+change) keeps the rows already on screen and puts the caveat in the eyebrow, because rows that were
+true a second ago are worth more than a skeleton over them. What an unconfirmed read costs is the
+*Run*, not the reading: the block never presses what it has not confirmed at the current planning
+version.
 
 **A row's right edge says one thing.** An automation row used to trail `Manual only · Doing`, and
 at 300px the phrase cost the name half its width (`Review every b…`). The name is what a reader
@@ -493,8 +582,14 @@ qualifies.
 border, a `/30` wash, `shadow-raised`) is the recipe for every button a rail page presses — the
 worktree footer's publish split, its `⋯`, its PR link. A control is sized to its label and parked
 at the left, never stretched across the column. Everything else that is pressable is a `ListRow`,
-and a row opens or runs the thing it names. Now itself has no button any more: **Run once is
-gone** from the rail. Stripped to what it did, it minted a chat Session with a typed first
+and a row **opens the thing it names — it does not spend anything**. The Automation row is the case
+that fixed the rule: its press used to *be* the launch, which made it the one place in the app
+where a single click spent a Session on saved instructions that were not on screen. A press now
+opens an anchored inspection beside the row (a non-modal popover: no scrim, light-dismiss, Escape)
+carrying the three things a launch is decided from — the saved instructions, the model this
+invocation runs on, and one explicit, labelled Run. Right-click opens the same inspection rather
+than a second, differently-shaped menu; neither route starts anything by itself. Now itself has no
+button any more: **Run once is gone** from the rail. Stripped to what it did, it minted a chat Session with a typed first
 message, in the background, wearing the bolt — `+ Chat ▾` with a worse text box and a
 Runs-history row named "Run once" — and the rail was its only host. Only saved records are run
 from the rail; a one-off is a chat and typing. (This reverses VC-112's "One-time work" for this
@@ -512,36 +607,53 @@ when wholly provider-reported. The old tilde prefix read as the figure's own pun
 size; the trailing word reads as a qualifier at every size, and `unverified` is never spelled
 `est.` because knowing a number and having computed it are different claims.
 
-## Home's Now page (VC-406)
+## Home's rail (VC-406)
 
-Home's rail is the ticket rail one scope up, and its Now page obeys the same rules. It answers two
-questions mid-session — what is in front, and where does it write — and the answer is **two cards,
-nesting the same two scopes twice**: the Session inside the project, once as identity
-(`home-session-card.tsx`) and once as money (`home-usage-block.tsx`). Same frame, same seam, same
-row inset, because they are *the* rail card rather than two cards that resemble each other.
+Home's rail is the ticket rail one scope up, at the same width (`railWidth`) and in the same
+language: one pill, one list row, one fold, footers pinned under the pages rather than stacked
+inside them. **Three pages** (`HOME_RAIL_MODES`): Now, Files, Search — the Ticket's four minus
+Diffs, which is a worktree's change set and Home has no worktree of its own.
 
-**A read-only fact is a card row, never a key/value line and never a pill.** The Session block was
-a `<dl>` — Model, Effort, Activity, each label parked at the left with its value right-aligned
-against it — beside a hand-rolled venue card with its own radius and its own inset. A string table
-says "here are some fields"; the rail's job is to say "here is a Session". The pill run is not the
-alternative either — the ticket rail retired its own (the Properties rows above), and pills on a
-read-only card would promise an edit that is not there. Facts that are only read wear the card
-row; facts that are edited wear the section row (the ticket rail's Properties: the value as the
-thing, the field name as the qualifier).
+**Now is the project's Board Session roster, and nothing else.** It was two pages — Now described
+the Session in *front* while a Sessions page beside it listed the Sessions there *are*, which is
+one question split across two tabs — and it is one block now, in the ticket roster's own grammar:
+two-line rows (`text-ui` title over a `text-label` line of tone dot, state and age, inside
+`ListRow`'s 52px `two-line` density), whatever is asking for a person first, the record folded
+under `Earlier · N`, and one filter past four rows that searches **both** halves — a match in the
+record is a row on the page rather than a row behind a caret.
 
-**The identity row is a roster row in the card's clothes**: a mark, a name, a quieter line under
-it, and one tone dot plus one short phrase at the right edge — the reading order the ticket rail's
-roster, Home's own Sessions page and the sidebar's bands already share, so a reader who has learned
-a Session row anywhere has learned this one. What is drawn on it is the model, because the
-Session's title is already on the tab in front of the reader; the tier and the effort are the quiet
-line, because both are qualifiers *of* the model, and a qualifier given its own labelled row is a
-qualifier promoted to a subject.
+**Liveness is the record's answer, not the attachment's.** A Board Session whose tab was closed
+this morning is still a Session to go back to, and one blocked on a permission prompt is the first
+row on the page; only what is over — stopped, or a terminal whose PTY is gone — folds into Earlier
+(`sessionActivityIsLive`, `sessionAttentionRank`, shared with the Ticket roster so the two cannot
+drift).
+
+**Two footers under it, one of them under every page.** Cost is Now's alone (`HomeUsageRailFooter`)
+— a spend figure under a folder listing is a fact about neither the folder nor the file. The **Main
+checkout** (`home-rail-footer.tsx`) is under all three: one 42px row, edge-to-edge targets from the
+rail's own gutters, the branch opening the identity and the fact opening the reading, folding
+**upward** into the room the scroller gives back, on the Ticket rail's own `railFolds.worktree`
+preference. It was the bottom half of a card on Now, which put "which tree am I about to change"
+only on the page a reader was not on. It draws two read states rather than the grammar's four,
+because the venue store keeps no pending flag beside its last-good reading: a first read, and a
+read that failed.
+
+**The Session-identity card is retired from the rail.** The model, tier, effort and activity of
+whatever chat is in front were a second answer to what the tab and the composer's own pill already
+say, and the block stood between the page's title and the roster the page exists for; the tree it
+named is the footer above. `home-session-card.tsx` survives as a component with its own tests and
+the `home-rail-now` scratch, mounted by no app surface — and it left two rules behind that every
+rail still keeps.
 
 **A model is drawn, never spelled.** The vendor's mark (`models/model-identity.tsx`, the one the
 composer pill, the picker and Settings wear) leads the catalogue's name for it — "Claude Opus 4.1",
 not `claude-opus-4-1`. A wire id on a product surface is a value nobody proof-read; it survives only
 as the fallback for a selection the catalogue no longer lists, because a model we cannot name is
-still the one a Session will send to.
+still the one a Session will send to. Usage's **By model** and **Top model** rows follow the same
+rule (`UsageRowSubject`): names come from the full cached catalogue, not the available/unhidden
+picker slice, because historical spend does not disappear when an account signs out or a model
+is hidden. An absent catalogue entry keeps its recorded model id; costs, ordering and Session
+labels do not change.
 
 **In a rail, the mark says the account and the text does not.** The roomier surfaces append
 "· Anthropic" where two signed-in providers ship one model name (`needsProvider`). A 240–300px row
@@ -552,9 +664,9 @@ in the reveal, which is also how a rail hands back any value it clipped (`ValueR
 where a picker's rows wrap instead.
 
 **The words belong to the app, not to the surface.** Activity says what `SESSION_ACTIVITY_LABEL`
-says and effort says what `effortLabel` says. A page that keeps its own copy drifts: this one said
-"Ended" where every other surface says "Exited", and printed the wire enum `xhigh` where the
-composer's own chip says "Extra high".
+says and effort says what `effortLabel` says — both rosters' state lines included. A page that
+keeps its own copy drifts: the retired card said "Ended" where every other surface says "Exited",
+and printed the wire enum `xhigh` where the composer's own chip says "Extra high".
 
 ## Vertical rhythm (reading surfaces)
 
