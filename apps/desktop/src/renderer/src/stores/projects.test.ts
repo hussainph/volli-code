@@ -1,4 +1,4 @@
-import type { Canvas, Project, Ticket } from "@volli/shared";
+import type { Canvas, Project, ProjectRelinkAftermath, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { flushPendingAppState } from "@renderer/lib/app-state-storage";
@@ -76,6 +76,14 @@ function project(overrides: Partial<Project> & { id: string; path: string }): Pr
   };
 }
 
+/** A relink that left nothing behind — the shape most tests here do not care about. */
+const SETTLED_MOVE: ProjectRelinkAftermath = {
+  liveSessions: 0,
+  worktrees: 0,
+  worktreesRepaired: true,
+  containerRenamed: false,
+};
+
 /** A resident chat slice, nothing about its content under test — only that it disappears. */
 function chatSlice(): ChatSessionSlice {
   return {
@@ -106,7 +114,12 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
   }));
   const reorder = vi.fn<ProjectsGateway["reorder"]>(async () => ({ ok: true }));
   const setSelection = vi.fn<ProjectsGateway["setSelection"]>(async () => ({ ok: true }));
-  return { create, update, remove, reorder, setSelection, ...overrides };
+  const relink = vi.fn<ProjectsGateway["relink"]>(async ({ id, path }) => ({
+    ok: true,
+    project: project({ id, path }),
+    aftermath: SETTLED_MOVE,
+  }));
+  return { create, update, remove, reorder, setSelection, relink, ...overrides };
 }
 
 /**
@@ -1120,6 +1133,74 @@ describe("updateSetupCommand", () => {
       false,
     );
     expect(store.getState().projects).toEqual([original]);
+  });
+});
+
+describe("relink", () => {
+  it("re-homes the project in place, keeping its id and its position in the rail", async () => {
+    const moved = project({ id: "p1", path: "/Users/me/volli", name: "Volli" });
+    const other = project({ id: "p2", path: "/Users/me/atlas", name: "Atlas" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([moved, other], moved.id);
+
+    const aftermath = await store.getState().relink("p1", "/Users/me/code/volli");
+
+    expect(aftermath).toEqual(SETTLED_MOVE);
+    expect(gateway.relink).toHaveBeenCalledWith({ id: "p1", path: "/Users/me/code/volli" });
+    expect(store.getState().projects.map((row) => [row.id, row.path])).toEqual([
+      ["p1", "/Users/me/code/volli"],
+      ["p2", "/Users/me/atlas"],
+    ]);
+    // The rail's selection is about a project, never about a folder.
+    expect(store.getState().selectedProjectId).toBe("p1");
+  });
+
+  // The whole point of a relink is that it is the SAME project. A refusal must
+  // not leave a half-moved row, and must never add a second one.
+  it("reports a refusal and leaves every row exactly as it was", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async () => ({
+        ok: false,
+        error: "Atlas already tracks that folder.",
+        refusal: "claimed",
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().relink("p1", "/Users/me/atlas")).resolves.toBeNull();
+    expect(store.getState().projects).toEqual([original]);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't relink project: Atlas already tracks that folder.",
+      expect.anything(),
+    );
+  });
+
+  it("carries the aftermath back so the surface can say what did not follow", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async ({ id, path }) => ({
+        ok: true,
+        project: project({ id, path }),
+        aftermath: {
+          liveSessions: 2,
+          worktrees: 1,
+          worktreesRepaired: false,
+          containerRenamed: true,
+        },
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().relink("p1", "/Users/me/code/volli-2")).resolves.toEqual({
+      liveSessions: 2,
+      worktrees: 1,
+      worktreesRepaired: false,
+      containerRenamed: true,
+    });
   });
 });
 

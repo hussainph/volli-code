@@ -58,6 +58,7 @@ import {
 import { BoardEmpty } from "@renderer/components/board/board-empty";
 import { BoardHeader } from "@renderer/components/board/board-header";
 import { BoardListView, TicketRowContent } from "@renderer/components/board/board-list-view";
+import { ProjectFolderBanner } from "@renderer/components/board/project-folder-banner";
 import {
   ticketSelectionAfterClick,
   type TicketSelectionGesture,
@@ -879,6 +880,11 @@ export const Board = React.memo(function Board({
             tickets={storeTickets}
             filter={filter}
           />
+          {/* Under the header and above everything that would fail without a
+              folder: a project whose checkout has moved looks healthy here and
+              breaks everywhere else (VC-430). Renders nothing in the ordinary
+              case. */}
+          <ProjectFolderBanner projectId={projectId} />
           {/* One DndContext drives BOTH views — same handlers, same preview/commit
             machinery, same ticket id space. The view branch lives inside it so the
             list view has full drag parity with the board; only the layout and the

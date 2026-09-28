@@ -167,8 +167,11 @@ import type {
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
@@ -540,6 +543,16 @@ const api = {
     setAuthorityPolicy: (
       input: ProjectAuthorityPolicyInput,
     ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
+    /**
+     * Points an existing project at the folder it moved to (VC-430) — the same
+     * row, so its id, tickets, settings and history come with it. Refused when
+     * the folder is missing, is a file, or is one another project tracks.
+     */
+    relink: (input: ProjectRelinkInput): Promise<ProjectRelinkResult> =>
+      invoke("volli:project-relink", input),
+    /** Whether a project's registered folder is still on disk (VC-430). */
+    checkFolder: (projectId: string): Promise<ProjectFolderResult> =>
+      invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */

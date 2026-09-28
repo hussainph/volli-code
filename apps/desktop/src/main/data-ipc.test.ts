@@ -6,7 +6,9 @@ import type {
   DatabaseResult,
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectMutationResult,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectUpdateResult,
   Result,
@@ -46,12 +48,13 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
@@ -564,6 +567,95 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
     });
+  });
+});
+
+describe("volli:project-relink — a folder that was renamed or moved", () => {
+  /** Renames `from` to a sibling named `leaf`, and tracks the result for cleanup. */
+  function renameProjectDir(from: string, leaf: string): string {
+    const to = join(dirname(from), leaf);
+    renameSync(from, to);
+    createdProjectDirs.push(to);
+    return to;
+  }
+
+  it("reports the registered folder as missing once it has been renamed", () => {
+    const project = createProjectWithPath();
+    renameProjectDir(project.path, "volli-renamed");
+
+    expect(
+      invoke<ProjectFolderResult>("volli:project-folder-check", { projectId: project.id }),
+    ).toEqual({ ok: true, path: project.path, state: "missing" });
+  });
+
+  // The ticket's headline: the SAME project, its tickets still on it, now
+  // pointing at where the folder actually is. Nothing here creates a project.
+  it("reconnects the existing project, keeping its id and its tickets", async () => {
+    const project = createProjectWithPath();
+    const ticket = createTicket(project.id);
+    const moved = renameProjectDir(project.path, "volli-moved");
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    expect(result.ok && result.project.id).toBe(project.id);
+    expect(result.ok && result.project.path).toBe(moved);
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(1);
+    expect(bootstrap.ok && bootstrap.data.projects[0]?.path).toBe(moved);
+    expect(
+      invoke<TicketsResult>("volli:data-project-roster", { projectId: project.id }),
+    ).toMatchObject({ ok: true, tickets: [{ id: ticket.id }] });
+    expect(
+      invoke<ProjectFolderResult>("volli:project-folder-check", { projectId: project.id }),
+    ).toEqual({ ok: true, path: moved, state: "present" });
+  });
+
+  it("refuses a folder another project already tracks rather than duplicating it", async () => {
+    const project = createProjectWithPath();
+    const other = invoke<ProjectCreateResult>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: other.project.path,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(2);
+  });
+
+  it("refuses a replacement folder that is not on disk", async () => {
+    const project = createProjectWithPath();
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: join(project.path, "nowhere-at-all"),
+      }),
+    ).resolves.toEqual({ ok: false, refusal: "missing", error: "That folder doesn't exist." });
+  });
+
+  it("refuses an unknown project", async () => {
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: "ghost",
+        path: freshProjectDir(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
+    expect(
+      invoke<ProjectFolderResult>("volli:project-folder-check", { projectId: "ghost" }),
+    ).toEqual({ ok: false, error: "Unknown project" });
   });
 });
 

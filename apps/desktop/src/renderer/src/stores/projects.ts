@@ -11,11 +11,12 @@
  * persistence is the separate `commitReorder`, which the rail calls once, on
  * drag end/cancel, so a single drag doesn't spam `api.projects.reorder`.
  */
-import { errorMessage, type Project } from "@volli/shared";
+import { errorMessage, type Project, type ProjectRelinkAftermath } from "@volli/shared";
 import type {
   AppStateSetResult,
   ProjectCreateResult,
   ProjectMutationResult,
+  ProjectRelinkResult,
   ProjectUpdateResult,
 } from "../../../ipc/contract";
 import { create } from "zustand";
@@ -77,6 +78,8 @@ export interface ProjectsGateway {
     skillsAutoDisclosure?: boolean;
   }): Promise<ProjectUpdateResult>;
   remove(id: string): Promise<ProjectMutationResult>;
+  /** Points an existing project at the folder it moved to (VC-430). */
+  relink(input: { id: string; path: string }): Promise<ProjectRelinkResult>;
   reorder(orderedIds: string[]): Promise<ProjectMutationResult>;
   /** Fire-and-forget persistence of the current selection under {@link PROJECTS_UI_APP_STATE_KEY}. */
   setSelection(selectedProjectId: string | null): Promise<AppStateSetResult>;
@@ -114,6 +117,7 @@ const defaultGateway: ProjectsGateway = {
   create: (input) => window.api.projects.create(input),
   update: (input) => window.api.projects.update(input),
   remove: (id) => window.api.projects.remove(id),
+  relink: (input) => window.api.projects.relink(input),
   reorder: (orderedIds) => window.api.projects.reorder(orderedIds),
   setSelection: (selectedProjectId) =>
     window.api.appState.set(PROJECTS_UI_APP_STATE_KEY, encodeProjectsUiState(selectedProjectId)),
@@ -141,6 +145,17 @@ interface ProjectsState {
   updateBaseBranch(id: string, baseBranch: string | null): Promise<boolean>;
   /** Settings → Worktrees' setup-command field; leaves `baseBranch` untouched (re-sends the current pinned value). */
   updateSetupCommand(id: string, setupCommand: string | null): Promise<boolean>;
+  /**
+   * Points a project at the folder it moved to (VC-430), resolving with what
+   * the move left behind — or `null` when it was refused, which
+   * `writeThrough` has already surfaced.
+   *
+   * The row is REPLACED in place, never removed and re-added: the id, the
+   * rail position and the selection all survive, because a relink is the same
+   * project in a new location and anything else would be the duplicate this
+   * exists to avoid.
+   */
+  relink(id: string, path: string): Promise<ProjectRelinkAftermath | null>;
   removeProject(id: string): Promise<void>;
   /** Optimistic local reorder for live drag feedback; does not persist — see `commitReorder`. */
   reorder(activeId: string, overId: string): void;
@@ -261,6 +276,22 @@ export function createProjectsStore(
       });
       persistSelection(result.project.id);
       announceSelection(selectedProjectId, result.project.id);
+    },
+
+    async relink(id, path) {
+      const result = await writeThrough("relink project", (): Promise<ProjectRelinkResult> =>
+        gateway.relink({ id, path }),
+      );
+      if (!result) return null;
+      // Re-read FRESH after the await (writeThrough's contract): a project
+      // removed while the relink was in flight must not be resurrected by its
+      // own answer.
+      set({
+        projects: get().projects.map((project) =>
+          project.id === result.project.id ? result.project : project,
+        ),
+      });
+      return result.aftermath;
     },
 
     async updateBaseBranch(id, baseBranch) {
