@@ -95,6 +95,37 @@ const anthropic = (session: number, weekly: number): ModelAccessProvider =>
     ]),
   );
 
+/**
+ * The same 39% left, with the clock in a different place.
+ *
+ * These two exist as a PAIR and are only useful next to each other. Both carry
+ * 61% used, so both draw an arc of exactly 39% — but the first is two thirds
+ * of the way through its five hours (ahead of the clock, amber) and the second
+ * is four fifths through (comfortably under it, normal). `usageTone` separates
+ * them on pace alone, so before the pace mark existed the only difference
+ * between these two drawings was a hue, and any person who could not see it
+ * got no signal at all. They are the test that the fix works.
+ */
+const anthropicAheadOfPace = (): ModelAccessProvider =>
+  provider(
+    "anthropic",
+    "Anthropic",
+    limits([
+      win("five_hour", "session", "Session", 61, 2 * HOUR + 13 * 60_000, SESSION_MINS),
+      win("seven_day", "weekly", "Weekly", 12, 6 * DAY + 23 * HOUR, WEEK_MINS),
+    ]),
+  );
+
+const anthropicUnderPace = (): ModelAccessProvider =>
+  provider(
+    "anthropic",
+    "Anthropic",
+    limits([
+      win("five_hour", "session", "Session", 61, 60 * 60_000, SESSION_MINS),
+      win("seven_day", "weekly", "Weekly", 12, 6 * DAY + 23 * HOUR, WEEK_MINS),
+    ]),
+  );
+
 /** Codex reports a session window and a weekly one. */
 const codex = (session: number, weekly: number): ModelAccessProvider =>
   provider(
@@ -243,8 +274,14 @@ export const STATES: readonly IconState[] = [
   state(
     "ahead-of-pace",
     "Ahead of pace",
-    "39% left with 45% of the window to go: amber from PACE, not from the amount. The arc still looks roomy — the colour is doing the work alone here, which is the accessibility edge to check.",
-    [anthropic(61, 12)],
+    "39% left, but 44% of the window still to run — amber from PACE, not from the amount. The notch in the track is where the arc would end if spending had matched the clock; the gap to the arc's tip is the deficit. Read this one against `Same 39%, under pace`.",
+    [anthropicAheadOfPace()],
+  ),
+  state(
+    "under-pace",
+    "Same 39%, under pace",
+    "The control for the state above: an identical 39% arc, four fifths through its window instead of two thirds, so it is normal rather than amber. No notch. If these two are only distinguishable by hue, the drawing has failed.",
+    [anthropicUnderPace()],
   ),
   state(
     "critical",
@@ -291,6 +328,11 @@ export const WALK: readonly string[] = [
   "three-windows",
   "two-accounts",
   "six-accounts",
+  // The pace pair, adjacent on purpose: the arc holds still at 39% across this
+  // step and only the notch changes, which is the clearest possible proof that
+  // the mark is carrying the state rather than the colour.
+  "under-pace",
+  "ahead-of-pace",
   "attention",
   "critical",
   "spent",

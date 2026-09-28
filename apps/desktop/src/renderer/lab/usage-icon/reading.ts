@@ -22,8 +22,11 @@
  */
 
 import {
+  elapsedShare,
+  paceOf,
   remainingPercent,
   usageTone,
+  type UsagePace,
   type UsageTone,
   type UsageWindow,
   type UsageWindowKind,
@@ -45,7 +48,7 @@ export interface PinnedWindow {
   windowId: string;
 }
 
-/** One window, with the two things a drawing needs and nothing else. */
+/** One window, with the things a drawing needs and nothing else. */
 export interface WindowReading {
   id: string;
   kind: UsageWindowKind;
@@ -53,6 +56,27 @@ export interface WindowReading {
   /** 0–100, whole points — the same rounding the popover's rows print. */
   remaining: number;
   tone: UsageTone;
+  /**
+   * Ahead of, on, or under an even burn across the window; null when the
+   * window cannot be placed in time. Straight from `paceOf`.
+   */
+  pace: UsagePace | null;
+  /**
+   * Where {@link remaining} WOULD be, 0–100, if spending had tracked the clock
+   * exactly — which is just the share of the window still to run.
+   *
+   * This is the number that makes pace drawable instead of merely coloured.
+   * `usageTone` turns amber on pace alone, so a window with 39% left and 45%
+   * of its time still to run is amber while a healthy 39% is not, and the two
+   * draw an IDENTICAL arc. Colour ends up the only difference between them,
+   * which is the one thing this redesign may not do.
+   *
+   * Given `paceOf`'s own definition, whenever pace is `ahead` this figure is
+   * at least `USAGE_PACE_BAND_POINTS` GREATER than `remaining` — so a mark at
+   * this position always falls in the empty track beyond the arc's tip, never
+   * on top of it, and the gap between tip and mark is the deficit itself.
+   */
+  onPace: number | null;
 }
 
 /** One account reduced to what a glyph can carry about it. */
@@ -155,6 +179,7 @@ function accountReading(account: UsageLimitAccount, now: number): AccountReading
 }
 
 function windowReading(window: UsageWindow, now: number): WindowReading {
+  const elapsed = elapsedShare(window, now);
   return {
     id: window.id,
     kind: window.kind,
@@ -164,6 +189,11 @@ function windowReading(window: UsageWindow, now: number): WindowReading {
     // that says 7% is the surface disagreeing with itself by one point.
     remaining: Math.round(remainingPercent(window)),
     tone: usageTone(window, now),
+    // Both from shared, neither re-derived: the mark the glyph draws has to be
+    // the same comparison `usageTone` coloured it from, or the drawing would
+    // contradict its own colour.
+    pace: paceOf(window, now),
+    onPace: elapsed === null ? null : Math.round((1 - elapsed) * 100),
   };
 }
 
@@ -198,6 +228,11 @@ export function iconLabel(reading: IconReading): string {
   if (reading.kind === "failed") return "Usage limits, not read";
   if (reading.reported === null || reading.lead === null) return "Usage limits, none metered";
   const head = `Usage limits, ${reading.reported.remaining}% left on ${reading.lead.label} ${reading.reported.label}`;
-  if (reading.others.length === 0) return head;
-  return `${head}, ${reading.others.length} more metered`;
+  // Pace is named, not implied by the amount. A reader who hears "39% left"
+  // has been told the arc and not the colour, and on this state the colour is
+  // the whole point — the same words would otherwise describe a window that is
+  // comfortably fine. The glyph draws a mark here; this is its equivalent.
+  const paced = reading.reported.pace === "ahead" ? `${head}, ahead of pace` : head;
+  if (reading.others.length === 0) return paced;
+  return `${paced}, ${reading.others.length} more metered`;
 }

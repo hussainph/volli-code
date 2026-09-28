@@ -174,6 +174,73 @@ function Track({
 }
 
 /**
+ * WHERE THE ARC WOULD END IF SPENDING HAD TRACKED THE CLOCK.
+ *
+ * This is the fix for the one state where colour was doing the work alone.
+ * `usageTone` goes amber on PACE as well as on amount, so 39% left with 45% of
+ * the window still to run is amber while a healthy 39% is not — and the two
+ * draw the same arc. A person who cannot separate those two ambers is exactly
+ * the person the colour was for.
+ *
+ * So the comparison gets drawn. The mark stands at the share of the window
+ * still to RUN, which is where the arc's tip would be if the burn had matched
+ * the clock, and the reading is a relation rather than a hue: the tip falls
+ * SHORT of the mark and you are spending faster than time is passing. The gap
+ * between them is the deficit itself, to scale.
+ *
+ * IT IS ONLY DRAWN WHEN PACE IS AHEAD, for three reasons. Everywhere else the
+ * arc's own length already answers the question, so the mark would be ink
+ * without a job. `paceOf` guarantees the mark clears the tip by at least
+ * `USAGE_PACE_BAND_POINTS` when it does appear, so it never lands on the arc
+ * it is being compared to. And its mere presence becomes the second channel —
+ * something is here that is not usually here — which is what carries the state
+ * for a person who sees no colour at all.
+ *
+ * IT IS A GAP IN THE TRACK, NOT A TICK ON IT. Two shapes were tried. A hairline
+ * of ink across the band is the obvious one and it does not survive: at this
+ * size the tick lands under a third of a CSS pixel, so it renders as a grey
+ * smudge that reads as dirt rather than as notation. Worse, painting a notch
+ * by stroking the background colour over the track binds the glyph to one
+ * canvas — `--card` here, but the real chrome band is `--background`, and the
+ * mark would have quietly disappeared the moment it shipped.
+ *
+ * Interrupting the track instead is both resolution-independent and canvas-
+ * independent: there is nothing to paint, only something not drawn. A gap can
+ * be made as wide as it needs to be to read, where a line cannot be made
+ * thinner than a pixel.
+ */
+function TrackWithPaceMark({
+  r,
+  sw,
+  from,
+  span,
+  onPace,
+}: {
+  r: number;
+  sw: number;
+  from: number;
+  span: number;
+  /** 0–100, the share of the window still to run. */
+  onPace: number;
+}) {
+  // Sized against the stroke rather than the box, so the gap stays the same
+  // shape relative to the band it interrupts at every glyph size.
+  const gapDegrees = (Math.max(1.6, sw * 1.2) / circumference(r)) * 360;
+  const at = span * Math.min(1, Math.max(0, onPace / 100));
+  // Clamped so a mark near either end degrades into a shortened track rather
+  // than a negative span. `paceOf`'s own band keeps it clear of the arc's tip;
+  // this only guards the ends of the sweep.
+  const before = Math.max(0, at - gapDegrees / 2);
+  const afterFrom = Math.min(span, at + gapDegrees / 2);
+  return (
+    <>
+      <Track r={r} sw={sw} from={from} span={before} cap="butt" />
+      <Track r={r} sw={sw} from={from + afterFrom} span={span - afterFrom} cap="butt" />
+    </>
+  );
+}
+
+/**
  * What the glyph is when there is no measurement: a hairline ring, dashed when
  * nothing has been read yet.
  *
@@ -600,7 +667,13 @@ export function RingCentre({
         <QuietRing dashed={reading.kind === "unread"} />
       ) : (
         <>
-          <Track r={r} sw={sw} from={from} span={span} />
+          {/* The track carries the pace mark, because the mark IS an absence
+              of track. See {@link TrackWithPaceMark}. */}
+          {reported.pace === "ahead" && reported.onPace !== null ? (
+            <TrackWithPaceMark r={r} sw={sw} from={from} span={span} onPace={reported.onPace} />
+          ) : (
+            <Track r={r} sw={sw} from={from} span={span} />
+          )}
           <Arc
             r={r}
             sw={sw}

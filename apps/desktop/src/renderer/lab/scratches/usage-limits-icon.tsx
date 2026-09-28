@@ -159,7 +159,9 @@ export default function UsageLimitsIconScratch() {
 
       {view === "size" ? <SizeView shape={shape} glyph={glyph} onPick={setShapeId} /> : null}
       {view === "shapes" ? <ShapesView glyph={glyph} active={shape} onPick={setShapeId} /> : null}
-      {view === "states" ? <StatesView shape={shape} glyph={glyph} onPick={setStateId} /> : null}
+      {view === "states" ? (
+        <StatesView shape={shape} glyph={glyph} active={state.id} onPick={setStateId} />
+      ) : null}
       {view === "motion" ? <MotionView shape={shape} glyph={glyph} /> : null}
       {view === "pinning" ? <PinningView shape={shape} glyph={glyph} /> : null}
     </div>
@@ -336,7 +338,10 @@ function Stage({ shape, state, glyph }: { shape: Candidate; state: IconState; gl
       </div>
 
       <div className="flex flex-wrap items-center gap-6">
-        <div className="flex size-16 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+        <div
+          data-testid="loupe"
+          className="flex size-16 shrink-0 items-center justify-center rounded-md border border-border bg-background"
+        >
           {draw(shape, glyph, LOUPE)}
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -696,6 +701,10 @@ function ShapesView({
             type="button"
             onClick={() => onPick(candidate.id)}
             aria-pressed={candidate.id === active.id}
+            // Same reason as the state cards: the two glyphs inside each carry
+            // the full reading as their own label, so without this the card is
+            // named "31% left on… 31% left on… Centre + beads (windows)".
+            aria-label={candidate.name}
             className="flex items-center gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong aria-pressed:border-ring"
           >
             <span className="flex size-10 shrink-0 items-center justify-center">
@@ -724,10 +733,12 @@ function ShapesView({
 function StatesView({
   shape,
   glyph,
+  active,
   onPick,
 }: {
   shape: Candidate;
   glyph: GlyphArgs;
+  active: string;
   onPick(id: string): void;
 }) {
   return (
@@ -740,7 +751,12 @@ function StatesView({
               key={entry.id}
               type="button"
               onClick={() => onPick(entry.id)}
-              className="flex items-start gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong"
+              // Named explicitly: without this the button's accessible name is
+              // both glyph labels plus the whole note read end to end, which
+              // is unusable to a screen reader and unfindable to a test.
+              aria-label={entry.name}
+              aria-pressed={entry.id === active}
+              className="flex items-start gap-3 rounded-md border border-border bg-background p-2 text-left transition-colors hover:border-border-strong aria-pressed:border-ring"
             >
               <span className="flex size-10 shrink-0 items-center justify-center">
                 {draw(shape, args, 30)}
