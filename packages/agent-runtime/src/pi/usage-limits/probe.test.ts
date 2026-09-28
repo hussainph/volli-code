@@ -82,6 +82,33 @@ const OPENCODE_GO_BODY = {
   },
 };
 const goKey: AuthCheck = { type: "api_key", source: "OPENCODE_API_KEY" };
+const ZAI_BODY = {
+  code: 200,
+  success: true,
+  data: {
+    limits: [
+      {
+        type: "TOKENS_LIMIT",
+        unit: 3,
+        number: 5,
+        usage: 800_000_000,
+        currentValue: 127_694_464,
+        percentage: 15,
+        nextResetTime: Date.parse("2026-03-01T14:00:00Z"),
+      },
+      {
+        type: "TOKENS_LIMIT",
+        unit: 6,
+        number: 7,
+        usage: 4_000_000_000,
+        currentValue: 1_200_000_000,
+        percentage: 30,
+      },
+    ],
+  },
+};
+const zaiKey: AuthCheck = { type: "api_key", source: "ZAI_API_KEY" };
+const zaiCnKey: AuthCheck = { type: "api_key", source: "ZAI_CODING_CN_API_KEY" };
 const COPILOT_BODY = {
   copilot_plan: "individual_pro",
   quota_reset_date: "2026-04-01",
@@ -246,6 +273,46 @@ describe("probeUsageLimits", () => {
     ]);
     const limits = (outcome as { limits: UsageLimits }).limits;
     expect(limits.windows.map((window) => window.id)).toEqual(["session", "usage"]);
+  });
+
+  it("reads Z.AI's quota endpoint with the API key its coding plan is driven by", async () => {
+    // pi-ai offers this provider no OAuth at all, so an `acceptsApiKey: false`
+    // reader would report `unsupported` for every subscriber there is.
+    const { fetch, calls } = scripted(() => json(ZAI_BODY));
+    const outcome = await probeUsageLimits(
+      input({
+        providerId: "zai",
+        models: models(zaiKey, { auth: { apiKey: "zai-key" }, source: "ZAI_API_KEY" }),
+        fetch,
+      }),
+    );
+    expect(calls).toEqual([
+      {
+        url: "https://api.z.ai/api/monitor/usage/quota/limit",
+        headers: { authorization: "Bearer zai-key", accept: "application/json" },
+      },
+    ]);
+    const limits = (outcome as { limits: UsageLimits }).limits;
+    expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly"]);
+  });
+
+  it("reads the mainland Z.AI account on the host that issued its key", async () => {
+    // A key from one region is not known to the other, so the host is the
+    // provider's rather than something to fall back across.
+    const { fetch, calls } = scripted(() => json(ZAI_BODY));
+    await probeUsageLimits(
+      input({
+        providerId: "zai-coding-cn",
+        models: models(zaiCnKey, {
+          auth: { apiKey: "cn-key" },
+          source: "ZAI_CODING_CN_API_KEY",
+        }),
+        fetch,
+      }),
+    );
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+    ]);
   });
 
   it("reads Copilot's account endpoint with the GitHub token, not the proxy token turns use", async () => {
