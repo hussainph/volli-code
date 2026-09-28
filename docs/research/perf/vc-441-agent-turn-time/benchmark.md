@@ -1,6 +1,6 @@
 # Agent turn critical path under concurrent Sessions (VC-441)
 
-Fixture: `vc441-turn-critical-path-v1` · generated 2026-09-28T19:22:06.957Z.
+Fixture: `vc441-turn-critical-path-v1` · generated 2026-09-28T19:27:40.467Z.
 
 Reproduction: `pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../docs/research/perf/vc-441-agent-turn-time`.
 
@@ -8,10 +8,10 @@ The runner starts 20 measured waves after one discarded warm-up wave at each con
 
 | Sessions | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Submission → turn start p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Unaccounted gap p50 / p95 | Event-loop delay p95 / max (ms) | Local timer lateness p95 (ms) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 20 | 20 | 143.39 / 145.742 ms (n=20) | 141.989 / 144.966 ms (n=20) | 1.238 / 1.657 ms (n=20) | 30.562 / 34.15 ms (n=60) | 9.321 / 10.605 ms (n=60) | 0.101 / 0.151 ms (n=20) | 0.215 / 0.249 ms (n=20) | 33.298 / 33.659 ms (n=20) | 12.19 / 13.054 ms (n=20) | 8.902 / 9.572 ms (n=20) | 1.791 / 12.435 | 0.134 | 3.377 | 14.601 | 81.656 |
-| 5 | 100 | 20 | 144.605 / 160.191 ms (n=100) | 143.213 / 151.705 ms (n=100) | 1.382 / 2.027 ms (n=100) | 30.954 / 34.493 ms (n=300) | 9.18 / 10.901 ms (n=300) | 0.085 / 0.227 ms (n=100) | 0.214 / 0.432 ms (n=100) | 33.199 / 36.056 ms (n=100) | 12.825 / 14.151 ms (n=100) | 9.203 / 11.668 ms (n=100) | 2.148 / 26.952 | 0.944 | 5.483 | 13.912 | 73.578 |
-| 15 | 300 | 20 | 146.762 / 156.082 ms (n=300) | 145.014 / 154.094 ms (n=300) | 1.398 / 3.376 ms (n=300) | 31.023 / 34.599 ms (n=900) | 9.439 / 12.686 ms (n=900) | 0.083 / 0.148 ms (n=300) | 0.202 / 0.394 ms (n=300) | 33.301 / 34.252 ms (n=300) | 14.376 / 23.5 ms (n=300) | 9.022 / 10.364 ms (n=300) | 2.533 / 35.521 | 1.63 | 8.682 | 13.912 | 79.063 |
-| 20 | 400 | 20 | 150.247 / 170.514 ms (n=400) | 148.418 / 169.073 ms (n=400) | 1.419 / 2.989 ms (n=400) | 31.234 / 35.597 ms (n=1200) | 9.533 / 12.8 ms (n=1200) | 0.084 / 0.304 ms (n=400) | 0.215 / 0.628 ms (n=400) | 33.334 / 35.001 ms (n=400) | 15.751 / 24.474 ms (n=400) | 9.542 / 13.536 ms (n=400) | 3.346 / 28.23 | 2.547 | 9.923 | 13.678 | 76.672 |
+| 1 | 20 | 20 | 141.863 / 143.599 ms (n=20) | 140.624 / 142.433 ms (n=20) | 1.189 / 1.296 ms (n=20) | 30.32 / 33.883 ms (n=60) | 9.198 / 10.451 ms (n=60) | 0.071 / 0.105 ms (n=20) | 0.148 / 0.182 ms (n=20) | 33.205 / 33.999 ms (n=20) | 11.881 / 12.717 ms (n=20) | 8.552 / 9.774 ms (n=20) | 1.349 / 3.125 | 0 | 2.198 | 9.542 | 82.094 |
+| 5 | 100 | 20 | 141.889 / 144.735 ms (n=100) | 140.667 / 143.462 ms (n=100) | 1.194 / 1.527 ms (n=100) | 30.418 / 33.723 ms (n=300) | 9.251 / 10.471 ms (n=300) | 0.057 / 0.09 ms (n=100) | 0.147 / 0.217 ms (n=100) | 33.151 / 34.05 ms (n=100) | 12.335 / 13.72 ms (n=100) | 8.457 / 9.513 ms (n=100) | 1.288 / 3.508 | 0 | 3.576 | 9.499 | 82.172 |
+| 15 | 300 | 20 | 143.862 / 149.431 ms (n=300) | 142.639 / 147.578 ms (n=300) | 1.2 / 1.852 ms (n=300) | 30.455 / 33.887 ms (n=900) | 9.296 / 10.529 ms (n=900) | 0.057 / 0.103 ms (n=300) | 0.147 / 0.233 ms (n=300) | 33.088 / 33.939 ms (n=300) | 14.053 / 17.338 ms (n=300) | 8.568 / 9.508 ms (n=300) | 1.333 / 22.872 | 0 | 6.476 | 9.499 | 81.313 |
+| 20 | 400 | 20 | 144.086 / 146.404 ms (n=400) | 142.858 / 145.124 ms (n=400) | 1.211 / 1.322 ms (n=400) | 30.429 / 33.855 ms (n=1200) | 9.273 / 10.499 ms (n=1200) | 0.057 / 0.087 ms (n=400) | 0.147 / 0.216 ms (n=400) | 33.152 / 33.925 ms (n=400) | 14.208 / 16.59 ms (n=400) | 8.562 / 9.082 ms (n=400) | 1.309 / 6.55 | 0 | 6.408 | 8.898 | 93.172 |
 
 ## Method and limits
 
@@ -23,4 +23,4 @@ The runner starts 20 measured waves after one discarded warm-up wave at each con
 - This fixture contains no prompt, transcript, tool arguments/results, Session database, profile settings, or real user content in the output. The telemetry exporter remains untouched/off; no local collector or person’s profile is read.
 - These results describe only this synthetic timer/CPU workload on the recorded host. They cannot establish real provider inference time, remote/provider queueing, quotas/rate limits, network variation, production Session resource costs, or how real tool commands scale. A local delay stand-in cannot reproduce provider quotas. Host load and concurrent samples add uncertainty; no confidence interval is claimed. For real provider/tool breakdown, separately and explicitly opt in to local metadata collection—never infer it from this run.
 
-Environment: Node v24.18.0 · darwin 25.5.0 · Apple M1 · 8 logical cores · 17179869184 bytes RAM · commit 1ecfac17bb7a004fdaebdad4d6cf5d187938f025 (dirty=true).
+Environment: Node v24.18.0 · darwin 25.5.0 · Apple M1 · 8 logical cores · 17179869184 bytes RAM · commit 80f0fb7a16b5c9b652a70dd0a868b1a4e4085e7e (dirty=false).
