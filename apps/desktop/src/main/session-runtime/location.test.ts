@@ -16,6 +16,13 @@ vi.mock("../worktree", async (importOriginal) => {
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
+// Spied rather than fanned out, so a suite can say which prepares told the
+// ticket's surfaces their identity moved.
+const { dataChanged } = vi.hoisted(() => ({ dataChanged: vi.fn() }));
+vi.mock("../broadcast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../broadcast")>();
+  return { ...actual, broadcastDataChanged: dataChanged };
+});
 // A recreated worktree really does fan out `volli:data-changed`; with no window
 // open that is a loop over nothing, which is all this suite needs it to be.
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
@@ -38,6 +45,7 @@ afterEach(() => {
   if (scratchRoot !== undefined) rmSync(scratchRoot, { recursive: true, force: true });
   scratchRoot = undefined;
   ensureWorktree.mockReset();
+  dataChanged.mockReset();
 });
 
 /** A real directory to delete out from under a Session — `reaffirm`'s only input. */
@@ -233,11 +241,50 @@ describe("desktop Session location resolver", () => {
         value: {
           identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
           created: true,
+          restamped: false,
         },
       };
     });
     await expect(resolver.reaffirm(session, worktreePath)).resolves.toBeUndefined();
     expect(ensureWorktree).toHaveBeenCalledWith({ db: testDb.db }, ticket.id);
+  });
+
+  // A reuse that adopted the same-ticket branch actually checked out changed
+  // the ticket's recorded Branch without making a worktree; its rail must hear
+  // about it the way it hears about a creation, and a reuse that changed
+  // nothing must stay quiet.
+  it("tells the ticket's surfaces when a reuse restamped its identity, and only then", async () => {
+    testDb = openTestDb();
+    const root = scratch();
+    const worktreePath = join(root, "VC-3-doing");
+    mkdirSync(worktreePath);
+    const project = testProject({ id: "project-1", path: join(root, "main") });
+    const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
+    insertProject(testDb.db, project);
+    insertTicket(testDb.db, ticket);
+    const resolver = createDesktopSessionLocationResolver(testDb.db);
+    const session = ticketSession(project.id, ticket.id);
+    const reuse = (restamped: boolean) => ({
+      ok: true,
+      value: {
+        identity: { worktreePath, branch: "volli/VC-3-narrower", baseBranch: "main" },
+        created: false,
+        restamped,
+      },
+    });
+
+    ensureWorktree.mockResolvedValueOnce(reuse(true));
+    await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
+    expect(dataChanged).toHaveBeenCalledTimes(1);
+    expect(dataChanged).toHaveBeenCalledWith({
+      ticketId: ticket.id,
+      projectId: project.id,
+      kind: "worktree",
+    });
+
+    ensureWorktree.mockResolvedValueOnce(reuse(false));
+    await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: worktreePath });
+    expect(dataChanged).toHaveBeenCalledTimes(1);
   });
 
   it("names the path when the worktree cannot be put back", async () => {
@@ -265,6 +312,7 @@ describe("desktop Session location resolver", () => {
       value: {
         identity: { worktreePath, branch: "volli/VC-3-doing", baseBranch: "main" },
         created: false,
+        restamped: false,
       },
     });
     await expect(resolver.reaffirm(session, worktreePath)).rejects.toThrow(
@@ -376,6 +424,7 @@ describe("desktop Session location resolver", () => {
           value: {
             identity: { worktreePath, branch: "volli/VC-10", baseBranch: "main" },
             created: false,
+            restamped: false,
           },
         };
       });

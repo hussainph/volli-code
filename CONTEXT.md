@@ -773,7 +773,7 @@ A tracked codebase folder: name, path, ticket prefix, rail position. Removing on
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
 
 **Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes.
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
 _Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:
