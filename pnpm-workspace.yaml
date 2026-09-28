@@ -2,6 +2,10 @@ packages:
   - apps/*
   - packages/*
 
+# Share dependency graph installations across local worktrees. pnpm 11.23 adds
+# the ESM resolver hook needed to preserve hoisted dependency resolution here.
+virtualStoreType: global
+
 # Hard-fail `pnpm install` when the running Node is outside the root
 # `engines.node` pin (^24.13.0). Without this, an install under a stray older
 # Node (a machine's /usr/local/bin/node beside Homebrew's current, say)
