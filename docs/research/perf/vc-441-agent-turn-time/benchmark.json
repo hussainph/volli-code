@@ -1,0 +1,886 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "vc441-turn-critical-path-v1",
+  "generatedAt": "2026-09-28T19:22:06.957Z",
+  "methodology": "One script-controlled in-process local stream stand-in and deterministic CPU fixture tools; no provider/network/app profile access.",
+  "environment": {
+    "nodeVersion": "v24.18.0",
+    "platform": "darwin",
+    "osRelease": "25.5.0",
+    "architecture": "arm64",
+    "cpuModel": "Apple M1",
+    "logicalCores": 8,
+    "availableParallelism": 8,
+    "totalMemoryBytes": 17179869184,
+    "gitSha": "1ecfac17bb7a004fdaebdad4d6cf5d187938f025",
+    "dirty": true,
+    "initialLoadAverage": [
+      14.601,
+      12.978,
+      12.311
+    ],
+    "initialFreeMemoryBytes": 319995904
+  },
+  "parameters": {
+    "concurrencies": [
+      1,
+      5,
+      15,
+      20
+    ],
+    "repetitions": 20,
+    "warmupWaves": 1,
+    "expectedModelAttemptsPerTurn": 3,
+    "expectedToolRoundsPerTurn": 1,
+    "expectedToolCallsPerTurn": 3,
+    "expectedAuthorityWaitsPerTurn": 1,
+    "expectedCompactionsPerTurn": 1,
+    "expectedRetriesPerTurn": 1,
+    "dispatchDelayMs": 2,
+    "standInAuthorityWaitMs": 12,
+    "standInRetryBackoffMs": 6,
+    "mcpLikeConcurrentChildLatenciesMs": [
+      18,
+      26,
+      34
+    ],
+    "attemptPlan": [
+      {
+        "stopReason": "toolUse",
+        "serviceMs": 34,
+        "ttftMs": 11,
+        "errorClass": null
+      },
+      {
+        "stopReason": "error",
+        "serviceMs": 23,
+        "ttftMs": 9,
+        "errorClass": "invalid-request"
+      },
+      {
+        "stopReason": "stop",
+        "serviceMs": 31,
+        "ttftMs": 10,
+        "errorClass": null
+      }
+    ]
+  },
+  "arms": [
+    {
+      "concurrency": 1,
+      "warmupWavesDiscarded": 1,
+      "wavesMeasured": 20,
+      "turnSampleCount": 20,
+      "firstMessageToCompletionMs": {
+        "n": 20,
+        "min": 141.103,
+        "p50": 143.39,
+        "p95": 145.742,
+        "max": 147.111,
+        "mean": 143.557
+      },
+      "submissionToTurnStartMs": {
+        "n": 20,
+        "min": 0.416,
+        "p50": 1.238,
+        "p95": 1.657,
+        "max": 2.494,
+        "mean": 1.273
+      },
+      "runtimeTurnMs": {
+        "n": 20,
+        "min": 139.9,
+        "p50": 141.989,
+        "p95": 144.966,
+        "max": 145.89,
+        "mean": 142.272
+      },
+      "modelAttemptsPerTurn": {
+        "n": 20,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "providerAttemptDurationMs": {
+        "n": 60,
+        "min": 21.513,
+        "p50": 30.562,
+        "p95": 34.15,
+        "max": 38.376,
+        "mean": 29.137
+      },
+      "ttftMs": {
+        "n": 60,
+        "min": 7.32,
+        "p50": 9.321,
+        "p95": 10.605,
+        "max": 22.972,
+        "mean": 9.387
+      },
+      "toolRoundsPerTurn": {
+        "n": 20,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "toolCallsPerTurn": {
+        "n": 20,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "toolsByName": {
+        "read": {
+          "calls": {
+            "n": 20,
+            "min": 0.067,
+            "p50": 0.101,
+            "p95": 0.151,
+            "max": 0.286,
+            "mean": 0.114
+          },
+          "perTurnTotal": {
+            "n": 20,
+            "min": 0.067,
+            "p50": 0.101,
+            "p95": 0.151,
+            "max": 0.286,
+            "mean": 0.114
+          }
+        },
+        "bash": {
+          "calls": {
+            "n": 20,
+            "min": 0.148,
+            "p50": 0.215,
+            "p95": 0.249,
+            "max": 0.257,
+            "mean": 0.207
+          },
+          "perTurnTotal": {
+            "n": 20,
+            "min": 0.148,
+            "p50": 0.215,
+            "p95": 0.249,
+            "max": 0.257,
+            "mean": 0.207
+          }
+        },
+        "fetch-url": {
+          "calls": {
+            "n": 20,
+            "min": 32.606,
+            "p50": 33.298,
+            "p95": 33.659,
+            "max": 33.809,
+            "mean": 33.271
+          },
+          "perTurnTotal": {
+            "n": 20,
+            "min": 32.606,
+            "p50": 33.298,
+            "p95": 33.659,
+            "max": 33.809,
+            "mean": 33.271
+          }
+        }
+      },
+      "authorityWaitsPerTurn": {
+        "n": 20,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "authorityWaitMs": {
+        "n": 20,
+        "min": 11.297,
+        "p50": 12.19,
+        "p95": 13.054,
+        "max": 13.109,
+        "mean": 12.241
+      },
+      "compactionsPerTurn": {
+        "n": 20,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "retriesPerTurn": {
+        "n": 20,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "unaccountedGapMs": {
+        "n": 20,
+        "min": 8.272,
+        "p50": 8.902,
+        "p95": 9.572,
+        "max": 12.211,
+        "mean": 9.032
+      },
+      "completeTurnAccountingCount": 20,
+      "orderViolationCount": 0,
+      "localTimerLatenessMs": {
+        "n": 200,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.134,
+        "max": 4.373,
+        "mean": 0.057
+      },
+      "host": {
+        "processCpuPercentOfOneCore": 3.377,
+        "wallMs": 2875.178,
+        "rssBeforeBytes": 85508096,
+        "rssPeakBytes": 85622784,
+        "rssAfterBytes": 82624512,
+        "heapUsedBeforeBytes": 14217648,
+        "heapUsedAfterBytes": 15954920,
+        "freeMemoryBeforeBytes": 251232256,
+        "freeMemoryAfterBytes": 159088640,
+        "loadAverageBefore": [
+          14.601,
+          12.978,
+          12.311
+        ],
+        "loadAverageAfter": [
+          14.601,
+          12.978,
+          12.311
+        ],
+        "eventLoopDelayMs": {
+          "sampleCount": 2289,
+          "p50Ms": 1.175,
+          "p95Ms": 1.791,
+          "maxMs": 12.435,
+          "meanMs": 1.255
+        }
+      }
+    },
+    {
+      "concurrency": 5,
+      "warmupWavesDiscarded": 1,
+      "wavesMeasured": 20,
+      "turnSampleCount": 100,
+      "firstMessageToCompletionMs": {
+        "n": 100,
+        "min": 142.106,
+        "p50": 144.605,
+        "p95": 160.191,
+        "max": 163.534,
+        "mean": 146.304
+      },
+      "submissionToTurnStartMs": {
+        "n": 100,
+        "min": 0.216,
+        "p50": 1.382,
+        "p95": 2.027,
+        "max": 8.481,
+        "mean": 1.716
+      },
+      "runtimeTurnMs": {
+        "n": 100,
+        "min": 140.731,
+        "p50": 143.213,
+        "p95": 151.705,
+        "max": 162.006,
+        "mean": 144.583
+      },
+      "modelAttemptsPerTurn": {
+        "n": 100,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "providerAttemptDurationMs": {
+        "n": 300,
+        "min": 21.976,
+        "p50": 30.954,
+        "p95": 34.493,
+        "max": 38.668,
+        "mean": 29.334
+      },
+      "ttftMs": {
+        "n": 300,
+        "min": 7.161,
+        "p50": 9.18,
+        "p95": 10.901,
+        "max": 16.472,
+        "mean": 9.285
+      },
+      "toolRoundsPerTurn": {
+        "n": 100,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "toolCallsPerTurn": {
+        "n": 100,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "toolsByName": {
+        "read": {
+          "calls": {
+            "n": 100,
+            "min": 0.057,
+            "p50": 0.085,
+            "p95": 0.227,
+            "max": 1.169,
+            "mean": 0.116
+          },
+          "perTurnTotal": {
+            "n": 100,
+            "min": 0.057,
+            "p50": 0.085,
+            "p95": 0.227,
+            "max": 1.169,
+            "mean": 0.116
+          }
+        },
+        "bash": {
+          "calls": {
+            "n": 100,
+            "min": 0.147,
+            "p50": 0.214,
+            "p95": 0.432,
+            "max": 2.073,
+            "mean": 0.24
+          },
+          "perTurnTotal": {
+            "n": 100,
+            "min": 0.147,
+            "p50": 0.214,
+            "p95": 0.432,
+            "max": 2.073,
+            "mean": 0.24
+          }
+        },
+        "fetch-url": {
+          "calls": {
+            "n": 100,
+            "min": 32.205,
+            "p50": 33.199,
+            "p95": 36.056,
+            "max": 48.687,
+            "mean": 34.075
+          },
+          "perTurnTotal": {
+            "n": 100,
+            "min": 32.205,
+            "p50": 33.199,
+            "p95": 36.056,
+            "max": 48.687,
+            "mean": 34.075
+          }
+        }
+      },
+      "authorityWaitsPerTurn": {
+        "n": 100,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "authorityWaitMs": {
+        "n": 100,
+        "min": 11.403,
+        "p50": 12.825,
+        "p95": 14.151,
+        "max": 15.052,
+        "mean": 12.897
+      },
+      "compactionsPerTurn": {
+        "n": 100,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "retriesPerTurn": {
+        "n": 100,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "unaccountedGapMs": {
+        "n": 100,
+        "min": 7.667,
+        "p50": 9.203,
+        "p95": 11.668,
+        "max": 13.626,
+        "mean": 9.255
+      },
+      "completeTurnAccountingCount": 100,
+      "orderViolationCount": 0,
+      "localTimerLatenessMs": {
+        "n": 1000,
+        "min": 0,
+        "p50": 0,
+        "p95": 0.944,
+        "max": 22.574,
+        "mean": 0.363
+      },
+      "host": {
+        "processCpuPercentOfOneCore": 5.483,
+        "wallMs": 2953.261,
+        "rssBeforeBytes": 75268096,
+        "rssPeakBytes": 77152256,
+        "rssAfterBytes": 77135872,
+        "heapUsedBeforeBytes": 16513752,
+        "heapUsedAfterBytes": 17574000,
+        "freeMemoryBeforeBytes": 162201600,
+        "freeMemoryAfterBytes": 170852352,
+        "loadAverageBefore": [
+          14.601,
+          12.978,
+          12.311
+        ],
+        "loadAverageAfter": [
+          13.912,
+          12.861,
+          12.273
+        ],
+        "eventLoopDelayMs": {
+          "sampleCount": 2221,
+          "p50Ms": 1.203,
+          "p95Ms": 2.148,
+          "maxMs": 26.952,
+          "meanMs": 1.325
+        }
+      }
+    },
+    {
+      "concurrency": 15,
+      "warmupWavesDiscarded": 1,
+      "wavesMeasured": 20,
+      "turnSampleCount": 300,
+      "firstMessageToCompletionMs": {
+        "n": 300,
+        "min": 140.324,
+        "p50": 146.762,
+        "p95": 156.082,
+        "max": 192.95,
+        "mean": 149.129
+      },
+      "submissionToTurnStartMs": {
+        "n": 300,
+        "min": 0.066,
+        "p50": 1.398,
+        "p95": 3.376,
+        "max": 5.941,
+        "mean": 1.624
+      },
+      "runtimeTurnMs": {
+        "n": 300,
+        "min": 140.035,
+        "p50": 145.014,
+        "p95": 154.094,
+        "max": 191.517,
+        "mean": 147.502
+      },
+      "modelAttemptsPerTurn": {
+        "n": 300,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "providerAttemptDurationMs": {
+        "n": 900,
+        "min": 21.463,
+        "p50": 31.023,
+        "p95": 34.599,
+        "max": 60.211,
+        "mean": 29.824
+      },
+      "ttftMs": {
+        "n": 900,
+        "min": 7.052,
+        "p50": 9.439,
+        "p95": 12.686,
+        "max": 18.919,
+        "mean": 9.711
+      },
+      "toolRoundsPerTurn": {
+        "n": 300,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "toolCallsPerTurn": {
+        "n": 300,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "toolsByName": {
+        "read": {
+          "calls": {
+            "n": 300,
+            "min": 0.057,
+            "p50": 0.083,
+            "p95": 0.148,
+            "max": 1.101,
+            "mean": 0.089
+          },
+          "perTurnTotal": {
+            "n": 300,
+            "min": 0.057,
+            "p50": 0.083,
+            "p95": 0.148,
+            "max": 1.101,
+            "mean": 0.089
+          }
+        },
+        "bash": {
+          "calls": {
+            "n": 300,
+            "min": 0.147,
+            "p50": 0.202,
+            "p95": 0.394,
+            "max": 2.839,
+            "mean": 0.23
+          },
+          "perTurnTotal": {
+            "n": 300,
+            "min": 0.147,
+            "p50": 0.202,
+            "p95": 0.394,
+            "max": 2.839,
+            "mean": 0.23
+          }
+        },
+        "fetch-url": {
+          "calls": {
+            "n": 300,
+            "min": 32.163,
+            "p50": 33.301,
+            "p95": 34.252,
+            "max": 37.768,
+            "mean": 33.352
+          },
+          "perTurnTotal": {
+            "n": 300,
+            "min": 32.163,
+            "p50": 33.301,
+            "p95": 34.252,
+            "max": 37.768,
+            "mean": 33.352
+          }
+        }
+      },
+      "authorityWaitsPerTurn": {
+        "n": 300,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "authorityWaitMs": {
+        "n": 300,
+        "min": 11.293,
+        "p50": 14.376,
+        "p95": 23.5,
+        "max": 32.318,
+        "mean": 15.211
+      },
+      "compactionsPerTurn": {
+        "n": 300,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "retriesPerTurn": {
+        "n": 300,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "unaccountedGapMs": {
+        "n": 300,
+        "min": 7.588,
+        "p50": 9.022,
+        "p95": 10.364,
+        "max": 13.564,
+        "mean": 9.151
+      },
+      "completeTurnAccountingCount": 300,
+      "orderViolationCount": 0,
+      "localTimerLatenessMs": {
+        "n": 3000,
+        "min": 0,
+        "p50": 0,
+        "p95": 1.63,
+        "max": 26.206,
+        "mean": 0.355
+      },
+      "host": {
+        "processCpuPercentOfOneCore": 8.682,
+        "wallMs": 3043.856,
+        "rssBeforeBytes": 77905920,
+        "rssPeakBytes": 82903040,
+        "rssAfterBytes": 59441152,
+        "heapUsedBeforeBytes": 19275216,
+        "heapUsedAfterBytes": 25462440,
+        "freeMemoryBeforeBytes": 161792000,
+        "freeMemoryAfterBytes": 218726400,
+        "loadAverageBefore": [
+          13.912,
+          12.861,
+          12.273
+        ],
+        "loadAverageAfter": [
+          13.912,
+          12.861,
+          12.273
+        ],
+        "eventLoopDelayMs": {
+          "sampleCount": 2131,
+          "p50Ms": 1.238,
+          "p95Ms": 2.533,
+          "maxMs": 35.521,
+          "meanMs": 1.427
+        }
+      }
+    },
+    {
+      "concurrency": 20,
+      "warmupWavesDiscarded": 1,
+      "wavesMeasured": 20,
+      "turnSampleCount": 400,
+      "firstMessageToCompletionMs": {
+        "n": 400,
+        "min": 142.473,
+        "p50": 150.247,
+        "p95": 170.514,
+        "max": 173.561,
+        "mean": 152.633
+      },
+      "submissionToTurnStartMs": {
+        "n": 400,
+        "min": 0.113,
+        "p50": 1.419,
+        "p95": 2.989,
+        "max": 7.144,
+        "mean": 1.511
+      },
+      "runtimeTurnMs": {
+        "n": 400,
+        "min": 141.983,
+        "p50": 148.418,
+        "p95": 169.073,
+        "max": 172.162,
+        "mean": 151.119
+      },
+      "modelAttemptsPerTurn": {
+        "n": 400,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "providerAttemptDurationMs": {
+        "n": 1200,
+        "min": 21.473,
+        "p50": 31.234,
+        "p95": 35.597,
+        "max": 54.193,
+        "mean": 30.128
+      },
+      "ttftMs": {
+        "n": 1200,
+        "min": 7.204,
+        "p50": 9.533,
+        "p95": 12.8,
+        "max": 15.731,
+        "mean": 9.633
+      },
+      "toolRoundsPerTurn": {
+        "n": 400,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "toolCallsPerTurn": {
+        "n": 400,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "max": 3,
+        "mean": 3
+      },
+      "toolsByName": {
+        "read": {
+          "calls": {
+            "n": 400,
+            "min": 0.057,
+            "p50": 0.084,
+            "p95": 0.304,
+            "max": 2.487,
+            "mean": 0.119
+          },
+          "perTurnTotal": {
+            "n": 400,
+            "min": 0.057,
+            "p50": 0.084,
+            "p95": 0.304,
+            "max": 2.487,
+            "mean": 0.119
+          }
+        },
+        "bash": {
+          "calls": {
+            "n": 400,
+            "min": 0.147,
+            "p50": 0.215,
+            "p95": 0.628,
+            "max": 6.917,
+            "mean": 0.295
+          },
+          "perTurnTotal": {
+            "n": 400,
+            "min": 0.147,
+            "p50": 0.215,
+            "p95": 0.628,
+            "max": 6.917,
+            "mean": 0.295
+          }
+        },
+        "fetch-url": {
+          "calls": {
+            "n": 400,
+            "min": 32.169,
+            "p50": 33.334,
+            "p95": 35.001,
+            "max": 40.531,
+            "mean": 33.524
+          },
+          "perTurnTotal": {
+            "n": 400,
+            "min": 32.169,
+            "p50": 33.334,
+            "p95": 35.001,
+            "max": 40.531,
+            "mean": 33.524
+          }
+        }
+      },
+      "authorityWaitsPerTurn": {
+        "n": 400,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "authorityWaitMs": {
+        "n": 400,
+        "min": 11.432,
+        "p50": 15.751,
+        "p95": 24.474,
+        "max": 39.38,
+        "mean": 16.754
+      },
+      "compactionsPerTurn": {
+        "n": 400,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "retriesPerTurn": {
+        "n": 400,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      },
+      "unaccountedGapMs": {
+        "n": 400,
+        "min": 6.803,
+        "p50": 9.542,
+        "p95": 13.536,
+        "max": 20.735,
+        "mean": 10.046
+      },
+      "completeTurnAccountingCount": 400,
+      "orderViolationCount": 0,
+      "localTimerLatenessMs": {
+        "n": 4000,
+        "min": 0,
+        "p50": 0,
+        "p95": 2.547,
+        "max": 20.112,
+        "mean": 0.587
+      },
+      "host": {
+        "processCpuPercentOfOneCore": 9.923,
+        "wallMs": 3149.281,
+        "rssBeforeBytes": 73973760,
+        "rssPeakBytes": 80396288,
+        "rssAfterBytes": 76103680,
+        "heapUsedBeforeBytes": 17673432,
+        "heapUsedAfterBytes": 22176056,
+        "freeMemoryBeforeBytes": 226099200,
+        "freeMemoryAfterBytes": 152813568,
+        "loadAverageBefore": [
+          13.912,
+          12.861,
+          12.273
+        ],
+        "loadAverageAfter": [
+          13.678,
+          12.83,
+          12.266
+        ],
+        "eventLoopDelayMs": {
+          "sampleCount": 1984,
+          "p50Ms": 1.278,
+          "p95Ms": 3.346,
+          "maxMs": 28.23,
+          "meanMs": 1.587
+        }
+      }
+    }
+  ]
+}

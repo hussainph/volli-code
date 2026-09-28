@@ -1,0 +1,8 @@
+{
+  "fixtureVersion": "vc441-turn-critical-path-v1",
+  "artifacts": [
+    "benchmark.json",
+    "benchmark.md",
+    "run-manifest.json"
+  ]
+}
