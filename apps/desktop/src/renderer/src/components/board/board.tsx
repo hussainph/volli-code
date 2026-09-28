@@ -88,7 +88,11 @@ import {
   useAutomationsStore,
 } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
-import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import {
+  DEFAULT_WORKSPACE_UI,
+  useWorkspaceStore,
+  type BoardView,
+} from "@renderer/stores/workspace";
 
 /**
  * Everything alive only while a card is mid-drag. The ticket snapshot and
@@ -97,9 +101,11 @@ import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/worksp
  * The store is written exactly once on drop, and cancel discards the state.
  *
  * The snapshot is taken at the SUBSCRIPTION (see {@link FrozenReads}), not
- * only here: freezing the ticket array while the board still read a live
- * filter, sort, view or label slice left four doors a store write could
- * re-render the drag machinery through.
+ * here: freezing the ticket array while the board still read a live filter,
+ * sort, view or label slice left four doors a store write could re-render the
+ * drag machinery through. `FrozenReads` is the ONLY home for those — this
+ * state deliberately does not carry its own copy, because two snapshots of one
+ * invariant is two things to keep in step.
  */
 interface DragState {
   activeTicket: Ticket;
@@ -107,12 +113,6 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
-  /** Frozen with the gesture, not read live — see {@link FrozenReads}. The
-   * arrays this render derived its columns from, so every child memoizing on
-   * them keeps its identity for the whole gesture. */
-  filter: TicketFilter;
-  sort: TicketSort;
-  labels: readonly Label[];
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
@@ -150,13 +150,28 @@ interface DragState {
  * Nothing is LOST by freezing: every one of these is re-read on the render
  * that ends the gesture, because clearing the snapshot and clearing `drag`
  * happen in the same handler.
+ *
+ * ── THE ONE UNSOUNDNESS, STATED ───────────────────────────────────────────
+ * Consulting this ref inside a selector makes that selector impure: a
+ * `useSyncExternalStore` snapshot is contractually a function of store state
+ * alone, and this one also reads a ref. It is sound in the only ordering that
+ * occurs — the ref is written and cleared in drag handlers, and every write to
+ * it is followed by the `setDrag` that renders it — but React owes us nothing
+ * here, so an abandoned or replayed render under StrictMode (React 19, on in
+ * `main.tsx`) could in principle read a snapshot this commit never used. It is
+ * unsound rather than broken, and it is the cheapest mechanism that keeps a
+ * mid-gesture store write from re-measuring the whole board. Anything stronger
+ * belongs at the store, by making `hydrateProjectRoster` identity-stable so no
+ * consumer has to look away (VC-447).
  */
 interface FrozenReads {
   tickets: Ticket[];
   labels: readonly Label[];
   filter: TicketFilter;
   sort: TicketSort;
-  view: string;
+  /** The union, not `string`: widening it here would silently widen the
+   * `boardView` every comparison below is checked against. */
+  view: BoardView;
   countdownOpen: boolean;
 }
 
@@ -647,21 +662,19 @@ export const Board = React.memo(function Board({
   );
 
   const tickets = drag?.preview ?? storeTickets;
-  // …and the three other live reads the frozen topology is derived from. A
-  // gesture that froze the tickets but kept reading a live filter, a live sort
-  // or a live label slice would still re-render (and so re-measure) the whole
-  // DnD subtree the moment any of them moved — see `DragState`.
-  const activeFilter = drag?.filter ?? filter;
-  const activeSort = drag?.sort ?? boardSort;
-  const activeLabels = drag?.labels ?? projectLabels;
+  // The other reads need no `drag?.` fallback of their own: during a gesture
+  // their selectors already answer from `frozen` (see `FrozenReads`), so
+  // `filter`, `boardSort`, `projectLabels` and `boardView` ARE the gesture's
+  // snapshot for as long as it lasts. `preview` above is the one exception,
+  // because a drag rewrites it on every drag-over rather than holding it still.
   // `tickets` may be the drag preview snapshot — filtering it is correct and
   // expected here; `filterTickets` returns the same reference when inactive.
   // The whole derived pipeline is memoized: the board re-renders on every
   // drag-over event and on selection changes, and none of those should re-run
   // a filter pass plus five column sorts.
   const visible = React.useMemo(
-    () => filterTickets(tickets, activeFilter, ticketPrefix),
-    [tickets, activeFilter, ticketPrefix],
+    () => filterTickets(tickets, filter, ticketPrefix),
+    [tickets, filter, ticketPrefix],
   );
   const groups = React.useMemo(() => groupTicketsByStatus(visible), [visible]);
   // One sort pass shared by BOTH views (the columns and the list sections
@@ -695,13 +708,13 @@ export const Board = React.memo(function Board({
     const previous = previousSorted.current;
     const sorted = {} as Record<TicketStatus, Ticket[]>;
     for (const status of TICKET_STATUSES) {
-      const next = sortTickets(groups[status], activeSort);
+      const next = sortTickets(groups[status], boardSort);
       const before = previous?.[status];
       sorted[status] = before !== undefined && sameColumn(before, next) ? before : next;
     }
     previousSorted.current = sorted;
     return sorted;
-  }, [groups, activeSort]);
+  }, [groups, boardSort]);
   const selectionOrder = React.useMemo(
     () => TICKET_STATUSES.flatMap((status) => sortedGroups[status].map((ticket) => ticket.id)),
     [sortedGroups],
@@ -881,12 +894,6 @@ export const Board = React.memo(function Board({
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
-      // Frozen with the preview, not read live — see `DragState`. These are the
-      // arrays the current render already derived its columns from, so freezing
-      // them keeps every identity the children memoize on exactly as it is.
-      filter: activeFilter,
-      sort: activeSort,
-      labels: activeLabels,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
@@ -1068,7 +1075,7 @@ export const Board = React.memo(function Board({
               <BoardListView
                 projectId={projectId}
                 ticketPrefix={ticketPrefix}
-                projectLabels={activeLabels}
+                projectLabels={projectLabels}
                 groups={sortedGroups}
                 shownStatuses={shown}
                 emptyDropStatuses={emptyDropStatuses}
@@ -1125,7 +1132,7 @@ export const Board = React.memo(function Board({
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}
-                    projectLabels={activeLabels}
+                    projectLabels={projectLabels}
                     selectedIds={selectedIds}
                     draggingIds={draggingIds}
                     groupDragIds={groupDragIds}
@@ -1190,7 +1197,7 @@ export const Board = React.memo(function Board({
                     activeTicket={drag.activeTicket}
                     tickets={drag.selectedTickets}
                     ticketPrefix={ticketPrefix}
-                    projectLabels={activeLabels}
+                    projectLabels={projectLabels}
                     listView={boardView === "list"}
                     reducedMotion={reducedMotion}
                   />

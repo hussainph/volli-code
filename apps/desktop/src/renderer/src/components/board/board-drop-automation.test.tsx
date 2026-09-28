@@ -42,9 +42,49 @@ import type { Automation, Ticket, TicketStatus } from "@volli/shared";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
+import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { Board } from "./board";
 import { BoardBoundary } from "./board-boundary";
+
+/* ------------------------------------------------- the churn instrument */
+
+/**
+ * How many droppable and sortable shells re-rendered, counted at the hooks
+ * themselves. This is THE measurement that distinguishes the fixed board from
+ * the broken one, because it measures the mechanism rather than its worst
+ * outcome: a mid-gesture store write used to re-render `Board`, and a `Board`
+ * render rebuilds every shell under `DndContext` and feeds dnd-kit's
+ * measurement loop. On the pre-fix board a single roster replacement scores 4
+ * sortables and 5 droppables; frozen, it scores nothing at all.
+ *
+ * jsdom cannot reach the runaway itself (React's nested-update limiter needs
+ * real layout and real scroll feedback), so asserting zero churn is how this
+ * environment can still fail when the freeze is removed. Wrapping the package
+ * entry catches the board's own calls; dnd-kit's internals import these
+ * directly and are unaffected.
+ */
+const renders = vi.hoisted(() => ({ sortable: 0, droppable: 0 }));
+vi.mock("@dnd-kit/sortable", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/sortable")>();
+  return {
+    ...actual,
+    useSortable: (...args: Parameters<typeof actual.useSortable>) => {
+      renders.sortable += 1;
+      return actual.useSortable(...args);
+    },
+  };
+});
+vi.mock("@dnd-kit/core", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    useDroppable: (...args: Parameters<typeof actual.useDroppable>) => {
+      renders.droppable += 1;
+      return actual.useDroppable(...args);
+    },
+  };
+});
 
 /* --------------------------------------------------------- the layout shim */
 
@@ -406,6 +446,60 @@ async function dragTodoCardIntoDoing(): Promise<void> {
   });
 }
 
+/**
+ * Lift the Todo card, travel until dnd-kit has settled over Doing, and zero the
+ * churn counters — so whatever a test does next is the only thing they count.
+ * The gesture is left LIVE and un-released on purpose: mid-air is the state in
+ * which a store write used to take the board out.
+ */
+async function liftTodoCardAndSettle(): Promise<Point> {
+  const card = columnNamed("todo").querySelector("article");
+  if (card === null) throw new Error("no card in Todo");
+  const grip = card.parentElement;
+  if (grip === null) throw new Error("no sortable wrapper around the card");
+  const from = centre(card);
+  await act(async () => {
+    grip.dispatchEvent(pointerEvent("pointerdown", from));
+  });
+  await move({ x: from.x, y: from.y + 6 });
+  const target = columnNamed("doing").querySelector("article");
+  if (target === null) throw new Error("no card in Doing");
+  const onCard = centre(target);
+  await move(onCard);
+  await move({ x: onCard.x, y: 500 });
+  // One more pixel so any measurement the previous move provoked has landed
+  // before the counters are zeroed.
+  await move({ x: onCard.x, y: 501 });
+  expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+    DRAGGED,
+  );
+  renders.sortable = 0;
+  renders.droppable = 0;
+  return { x: onCard.x, y: 501 };
+}
+
+/**
+ * A Run's `data:changed`, as the renderer receives it: every ticket object and
+ * the label slice replaced, nothing a person can see changed. `mutate` lets a
+ * caller also move a row, which is the harsher case because it changes column
+ * topology rather than only identities.
+ */
+function replaceRoster(mutate: (row: Ticket) => Ticket = (row) => Object.assign({}, row)): void {
+  const slice = useBoardStore.getState().ticketsByProject["p1"] ?? [];
+  useBoardStore
+    .getState()
+    .hydrateProjectRoster("p1", slice.map(mutate), [
+      { id: "l1", projectId: "p1", name: "running", color: null },
+    ]);
+}
+
+/** The counters since they were last zeroed, as one comparable object. */
+function churn(): { sortable: number; droppable: number } {
+  return { sortable: renders.sortable, droppable: renders.droppable };
+}
+
+const NO_CHURN = { sortable: 0, droppable: 0 };
+
 /* ------------------------------------------------------------------ setup */
 
 /** Every Automation trigger the drop caused, in order. */
@@ -458,6 +552,8 @@ function moveGateway(input: {
 beforeEach(() => {
   triggered = [];
   reactErrors = [];
+  renders.sortable = 0;
+  renders.droppable = 0;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -511,6 +607,9 @@ beforeEach(() => {
     enablementRead: false,
     railReadAt: {},
   });
+  // The board reads view and sort from here, so a test that writes them
+  // mid-gesture needs a known starting point.
+  useWorkspaceStore.setState({ byProject: { p1: { ...DEFAULT_WORKSPACE_UI } } });
   restoreLayout = installLayout();
 });
 
@@ -553,6 +652,143 @@ describe("a released card whose landing column runs an automation", () => {
       expect(ticketSlots("todo")).not.toContain(DRAGGED);
       // One release is one Run. A re-entrant drop path would raise this.
       expect(triggered).toEqual([{ ticketId: DRAGGED, toStatus: "doing" }]);
+    },
+    BUDGET,
+  );
+});
+
+/**
+ * The freeze itself, measured rather than inferred.
+ *
+ * Every test here fails on the pre-fix board — that is the point of them. The
+ * test above passes with or without the freeze, because jsdom cannot reach the
+ * runaway the freeze prevents; these assert the MECHANISM the freeze removes,
+ * which jsdom reproduces exactly.
+ */
+describe("a store write that lands while a card is in the air", () => {
+  it(
+    "re-renders no droppable and no sortable when an automation replaces the whole roster",
+    async () => {
+      await mountBoard();
+      await liftTodoCardAndSettle();
+
+      await act(async () => {
+        replaceRoster();
+      });
+
+      // Pre-fix: 4 sortables and 5 droppables, every one of them feeding
+      // dnd-kit a fresh rect mid-gesture.
+      expect(churn()).toEqual(NO_CHURN);
+      // And the gesture is untouched: same card in the air, same topology.
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+
+  it(
+    "re-renders nothing when the automation also moves a ticket to another column",
+    async () => {
+      await mountBoard();
+      await liftTodoCardAndSettle();
+
+      // The harsher roster: a row LEAVES a column. Column topology is the input
+      // dnd-kit's droppable set is built from, so this is the write most likely
+      // to reach the measurement loop.
+      await act(async () => {
+        replaceRoster((row) =>
+          row.id === "t2"
+            ? Object.assign({}, row, { status: "needs_review" as TicketStatus })
+            : row,
+        );
+      });
+
+      expect(churn()).toEqual(NO_CHURN);
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+
+  it(
+    "re-renders nothing for a label, filter, sort or view write",
+    async () => {
+      await mountBoard();
+      await liftTodoCardAndSettle();
+
+      // Each of these is a read the board holds ABOVE `DndContext`, and each was
+      // its own open door before VC-446 froze it.
+      await act(async () => {
+        useBoardStore.setState({
+          labelsByProject: { p1: [{ id: "l9", projectId: "p1", name: "fresh", color: null }] },
+        });
+      });
+      expect(churn()).toEqual(NO_CHURN);
+
+      // A filter that would hide every card on the board, if it were read.
+      await act(async () => {
+        useBoardStore.setState({
+          filterByProject: { p1: { search: "nothing-matches", priorities: [], labels: [] } },
+        });
+      });
+      expect(churn()).toEqual(NO_CHURN);
+      // Still four cards' worth of columns, because the filter is frozen out.
+      expect(ticketSlots("doing")).not.toEqual([]);
+
+      await act(async () => {
+        useWorkspaceStore.setState({
+          byProject: {
+            p1: { ...DEFAULT_WORKSPACE_UI, boardSort: { key: "title", direction: "asc" } },
+          },
+        });
+      });
+      expect(churn()).toEqual(NO_CHURN);
+
+      // The view switch is the one that does not merely re-render but UNMOUNTS
+      // the active sortable under dnd-kit. A keyboard drag leaves the pointer
+      // free to press the toggle, so it is reachable rather than theoretical.
+      await act(async () => {
+        useWorkspaceStore.setState({
+          byProject: { p1: { ...DEFAULT_WORKSPACE_UI, boardView: "list" } },
+        });
+      });
+      expect(churn()).toEqual(NO_CHURN);
+      // Still the board view, still holding the card.
+      expect(document.querySelector('[data-board-column="doing"]')).not.toBeNull();
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+
+  it(
+    "reads the store live again once the gesture has ended",
+    async () => {
+      await mountBoard();
+
+      // The counterpart to every test above: a freeze that is never released is
+      // a board that stops updating. Drive the whole gesture to completion, then
+      // prove the reads came back.
+      await dragTodoCardIntoDoing();
+      expect(ticketSlots("doing")).toContain(DRAGGED);
+      renders.sortable = 0;
+      renders.droppable = 0;
+
+      await act(async () => {
+        replaceRoster((row) =>
+          row.id === "t4" ? Object.assign({}, row, { status: "todo" as TicketStatus }) : row,
+        );
+      });
+
+      // At rest a roster replacement SHOULD re-render — that is the board doing
+      // its job. If this reads zero, the snapshot leaked past the gesture.
+      expect(renders.sortable).toBeGreaterThan(0);
+      // And the moved ticket actually arrived, which only a live read can show.
+      expect(ticketSlots("todo")).toContain("t4");
+      expect(loopErrors()).toEqual([]);
     },
     BUDGET,
   );

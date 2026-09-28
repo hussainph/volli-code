@@ -30,12 +30,20 @@
  *      row-stride measurement machinery is live; 0 keeps the scratch's own
  *      fixture of ~15 tickets).
  *
- * NEGATIVE CONTROL — `VOLLI_STRESS_CONTROL=<git-rev>` (e.g. HEAD) swaps the
- * board module for that revision's `board.tsx` WITHOUT touching the working
- * tree: the file is materialized under e2e/.control/, Vite serves it over
- * `/@fs/` (its `@renderer/*` imports resolve to the same module instances the
- * live app uses), and Playwright routes the `board.tsx` request to it. A
- * stress test that cannot fail against the pre-fix board proves nothing.
+ * NEGATIVE CONTROL — `VOLLI_STRESS_CONTROL=<git-rev>` swaps the board module
+ * for that revision's `board.tsx` WITHOUT touching the working tree: the file
+ * is materialized under e2e/.control/, Vite serves it over `/@fs/` (its
+ * `@renderer/*` imports resolve to the same module instances the live app
+ * uses), and Playwright routes the `board.tsx` request to it. A stress test
+ * that cannot fail against the pre-fix board proves nothing.
+ *
+ * The revision must be one that PREDATES the freeze. On this branch `HEAD` is
+ * the fix, so `VOLLI_STRESS_CONTROL=HEAD` is not a control at all — it serves
+ * the very board under test. Name the merge-base instead:
+ *   VOLLI_STRESS_CONTROL=$(git merge-base HEAD origin/main) \
+ *     VOLLI_LAB_PORT=5191 node apps/desktop/e2e/board-drop-automation-stress.mjs
+ * The run announces which it got (`HAS` / `lacks` the frozen-reads fix) on the
+ * first two lines; read them before trusting a control number.
  * Fixture IPC only; no real tickets, Automations, or Sessions are started.
  */
 import assert from "node:assert/strict";
