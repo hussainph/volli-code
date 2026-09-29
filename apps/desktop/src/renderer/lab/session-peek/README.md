@@ -23,6 +23,16 @@ The simulated transcript is a display string assembled from prompt labels, selec
 - `conversation.tsx` is the **lab-only adapter**: source-message fixtures rendered through `ChatTurn`, plus the real controlled `SessionComposer`. It never adopts a Session or sends IPC. Successful simulated messages append only to that fixture's local conversation; failure keeps the text for retry. Drafts and in-flight sends survive closing/reopening and remain keyed to the recipient. Ordinary messages do not resolve a pending question, and the card's answer draft remains separate.
 - The lab's Send outcome control applies to both answer sends and conversation messages. Its fixed model/disabled attachment supply intentionally does not pretend to simulate production model selection, queueing or attachments.
 
+## Both sidebars, with ticket folders (`#session-peek-sidebars`)
+
+The v2 wireframe drew the peek over a flat list of four fixture rows. `scratches/session-peek-sidebars.tsx` puts it in the sidebar it has to live in: the Active band, the Previous band grouped into ticket folders (VC-69), and the in-ticket rail's Sessions block with its record folded under the eyebrow (VC-406), all in the VC-402 row language (the vendor's mark carries the state; PR #568, closed unmerged).
+
+- Band membership, order and grouping come from the shipped `buildActiveSessionListing` and `groupPreviousByTicket` over `sidebar-corpus.ts`. The rows (`sidebar-rows.tsx`) are lab rows on the shipped primitives and geometry; their module comment lists the three places they differ.
+- `use-peek-controller.ts` is the v2 controller, lifted out of the wireframe so both scratches run on one. Its extensions (`canPeek`, `canPin`, `warmDwell`, `onRowKey`, `layoutKey`) are opt-in; the wireframe passes none and its tests are unchanged.
+- A folder's peek is the question this scratch adds, as a control: the ticket with a line per Session (`ticket-card.tsx`, proposed), the newest Session with a pager, or nothing. Folder peeks are read-only, and expanding a folder closes its card. The rules are pure and tested in `sidebar-model.ts`.
+- `row-mark.tsx` draws the mark three ways for comparison. Its status→ink map is a LAB COPY of #568's `ink` column; production reads it from `ui/status-dot.tsx`.
+- `card.tsx` gained opt-in props (`glyph`, `accessory`, `canReply`, `canViewConversation`, `showTicket`); every default is the v2 card.
+
 ## Attach the production peek to VC-406, do not replace its roster
 
 - `components/ticket/ticket-sessions-panel.tsx` owns the ticket scope, attention ordering, filter and Earlier/history fold. `components/sidebar/active-sessions.tsx` and `active-session-listing.ts` own the project bands. The lab's right-hand **state gallery** intentionally exercises different states; it is not the production ticket query.

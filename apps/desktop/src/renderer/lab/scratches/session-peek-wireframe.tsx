@@ -5,7 +5,8 @@
  * and reveal the reply form; "pin" is only the controller's internal name.
  * The original sketch remains available at #session-peek.
  *
- * This scratch owns timers and geometry. session-peek/card.tsx owns the card;
+ * session-peek/use-peek-controller.ts owns timers, wiring and geometry (shared
+ * with the sidebar-integration scratch); session-peek/card.tsx owns the card;
  * the pure reducer next door owns dwell, persistence, send and dismissal rules.
  * The conversation overlay reads separate source-message fixtures, never the
  * generated summary. Opening it preserves an unfinished reply and closing it
@@ -17,11 +18,11 @@
  * still needs freshness, cancellation and delivery guarantees from the runtime.
  */
 import * as React from "react";
-import { clamp, positionPeek, type PeekPosition } from "../session-peek/geometry";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 
 import { PeekConversation } from "../session-peek/conversation";
+import { usePeekController } from "../session-peek/use-peek-controller";
 import {
   SessionPeekCard,
   SessionGlyph,
@@ -48,13 +49,8 @@ import {
 import { cn } from "@renderer/lib/utils";
 
 import {
-  CONFIRMATION_MS,
   DEFAULT_DWELL,
   DWELL_CHOICES,
-  GRACE_MS,
-  initialPeekState,
-  peekReducer,
-  UNDO_MS,
   type DwellMs,
   type PeekSurface,
   type PeekTarget,
@@ -421,7 +417,6 @@ function Bullets({ heading, items }: { heading: string; items: readonly string[]
 /* ----------------------------------------------------------------- the stage */
 
 export default function SessionPeekWireframeScratch() {
-  const [state, dispatch] = React.useReducer(peekReducer, initialPeekState);
   const [dwell, setDwell] = React.useState<DwellMs>(DEFAULT_DWELL);
   const [density, setDensity] = React.useState<RowDensity>("full");
   const [hoverEnabled, setHoverEnabled] = React.useState(true);
@@ -431,7 +426,6 @@ export default function SessionPeekWireframeScratch() {
   const [questionCase, setQuestionCase] = React.useState<QuestionCase>("custom");
   const [cardWidth, setCardWidth] = React.useState(PEEK_WIDTH);
   const [provider, setProvider] = React.useState("mixed");
-  const [looking, setLooking] = React.useState<string | null>(null);
   const fixtures = React.useMemo(
     () =>
       FIXTURES.map((fixture) =>
@@ -451,371 +445,15 @@ export default function SessionPeekWireframeScratch() {
     () => new Map(fixtures.map((fixture) => [fixture.rowId, fixture])),
     [fixtures],
   );
-  const [position, setPosition] = React.useState<PeekPosition | null>(null);
-  const [cardHeight, setCardHeight] = React.useState(0);
-  /** The receipt that outlives the peek, so Undo is reachable for its full window. */
-  const [receipt, setReceipt] = React.useState<{
-    rowId: string;
-    answer: string;
-    at: number;
-  } | null>(null);
-  const [undoLeft, setUndoLeft] = React.useState(0);
 
-  const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const dwellTimer = React.useRef<number | null>(null);
-  const graceTimer = React.useRef<number | null>(null);
-
+  const peek = usePeekController({ dwell, hoverEnabled, outcome, cardWidth });
+  const { state, dispatch, cardRef, position, looking, receipt, undoLeft, rowProps } = peek;
   const shown = state.shown;
-  const pinnedRowId = state.pinned?.rowId ?? null;
   const shownFixture = shown === null ? null : (fixtureByRow.get(shown.rowId) ?? null);
   const lookingFixture = looking === null ? null : (fixtureByRow.get(looking) ?? null);
 
-  /* ---------------------------------------------------------------- timers */
-
-  const clearDwell = React.useCallback(() => {
-    if (dwellTimer.current !== null) window.clearTimeout(dwellTimer.current);
-    dwellTimer.current = null;
-  }, []);
-
-  const clearGrace = React.useCallback(() => {
-    if (graceTimer.current !== null) window.clearTimeout(graceTimer.current);
-    graceTimer.current = null;
-  }, []);
-
-  /**
-   * Arm the dwell for one row, cancelling whatever was armed.
-   *
-   * This is "passing through a row never opens it": the sweep re-arms on every
-   * new row, so only the row the pointer comes to rest on ever fires.
-   */
-  const armDwell = React.useCallback(
-    (target: PeekTarget, delay: number = dwell) => {
-      clearDwell();
-      dwellTimer.current = window.setTimeout(() => {
-        dispatch({ type: "dwell-elapsed", target, now: Date.now() });
-      }, delay);
-    },
-    [clearDwell, dwell],
-  );
-
-  /** The bridge: closing waits out the gap between row and card. */
-  const armGrace = React.useCallback(() => {
-    clearGrace();
-    graceTimer.current = window.setTimeout(() => {
-      dispatch({ type: "grace-elapsed" });
-    }, GRACE_MS);
-  }, [clearGrace]);
-
-  React.useEffect(
-    () => () => {
-      clearDwell();
-      clearGrace();
-    },
-    [clearDwell, clearGrace],
-  );
-
-  /* ------------------------------------------------------- pointer handlers */
-
-  const rowPointerMove = React.useCallback(
-    (surface: PeekSurface) => (event: React.PointerEvent<HTMLElement>) => {
-      if (!hoverEnabled || looking !== null) return;
-      const row = (event.target as HTMLElement).closest<HTMLElement>("[data-peek-row]");
-      const rowId = row?.dataset.peekRow;
-      if (rowId === undefined) return;
-      clearGrace();
-      const target: PeekTarget = { rowId, surface };
-      if (state.hovered?.rowId !== rowId || state.hovered.surface !== surface) {
-        dispatch({ type: "hover-row", target });
-      }
-      // Dwell means pointer AT REST, not merely time spent inside a tall row.
-      if (state.shown?.rowId !== rowId || state.shown.surface !== surface) armDwell(target);
-    },
-    [armDwell, clearGrace, hoverEnabled, state.hovered, state.shown, looking],
-  );
-
-  const rowPointerLeave = React.useCallback(() => {
-    if (looking !== null) return;
-    clearDwell();
-    dispatch({ type: "hover-leave-row" });
-    armGrace();
-  }, [armGrace, clearDwell, looking]);
-
-  /* ------------------------------------------------ dismissal: away & scroll */
-
-  React.useEffect(() => {
-    if (shown === null || looking !== null) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const node = event.target as HTMLElement | null;
-      if (node === null) return;
-      // The lab's own control bar is exempt: fighting the controls that change
-      // the thing under review is not a finding about the design.
-      if (
-        node.closest(
-          '[data-peek-card], [data-peek-row], [data-lab-controls], [data-slot="dialog-overlay"], [data-slot="dialog-content"]',
-        ) !== null
-      )
-        return;
-      dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [shown, looking]);
-
-  const onListScroll = React.useCallback(() => {
-    dispatch({ type: "dismiss", reason: "list-scroll", now: Date.now() });
-  }, []);
-
-  /* ----------------------------------------------------- keyboard: the rules */
-
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (looking !== null) return;
-      if (event.key === "Escape") {
-        clearDwell();
-        clearGrace();
-        // A reducer focus label is not DOM focus. Move out of the field only
-        // on Escape; clicking elsewhere must never pull focus back here.
-        if (state.focus === "field") {
-          cardRef.current?.focus();
-          return;
-        }
-        dispatch({ type: "escape", now: Date.now() });
-        return;
-      }
-      // ⌘. pins whatever the peek is currently showing — the pointer path's
-      // way into answering without moving the hand to a button.
-      if (event.key === "." && (event.metaKey || event.ctrlKey) && shown !== null) {
-        event.preventDefault();
-        dispatch({ type: "pin", target: shown });
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [shown, state.focus, clearDwell, clearGrace, looking]);
-
-  /**
-   * Row stepping, Space, and R — scoped to the list they happen in.
-   *
-   * Space is intercepted rather than allowed through: the row is a `<button>`,
-   * so an un-prevented Space would ALSO activate it and open the session behind
-   * the peek it just asked for.
-   */
-  const onListKeyDown = React.useCallback(
-    (surface: PeekSurface) => (event: React.KeyboardEvent<HTMLElement>) => {
-      const list = event.currentTarget;
-      const rows = [...list.querySelectorAll<HTMLElement>("[data-peek-row]")];
-      const activeRow = (event.target as HTMLElement).closest<HTMLElement>("[data-peek-row]");
-      const index = activeRow === null ? -1 : rows.indexOf(activeRow);
-      const rowId = activeRow?.dataset.peekRow;
-
-      const step = (delta: number) => {
-        event.preventDefault();
-        const next = rows[clamp(index + delta, 0, rows.length - 1)];
-        next?.querySelector<HTMLElement>("button")?.focus();
-        // The list's focus handler arms the keyboard dwell for every route
-        // into a row — Tab, arrow keys, or J/K.
-      };
-
-      if (event.key === "ArrowDown" || event.key === "j") return step(1);
-      if (event.key === "ArrowUp" || event.key === "k") return step(-1);
-      if (rowId === undefined) return;
-      const target: PeekTarget = { rowId, surface };
-
-      if (event.key === " ") {
-        event.preventDefault();
-        clearDwell();
-        // Space opens; Space again on an open peek pins it.
-        if (state.shown?.rowId === rowId && state.shown.surface === surface) {
-          dispatch({ type: "pin", target });
-        } else {
-          dispatch({ type: "hover-row", target });
-          dispatch({ type: "open-now", target, now: Date.now() });
-        }
-        return;
-      }
-      if (event.key === "r" || event.key === "R") {
-        event.preventDefault();
-        clearDwell();
-        dispatch({ type: "hover-row", target });
-        dispatch({ type: "pin", target });
-      }
-    },
-    [clearDwell, state.shown],
-  );
-
-  /* ------------------------------------------------------ focus, in and out */
-
-  /** The row a pin took focus from, so unpinning can hand it back. */
-  const focusReturn = React.useRef<HTMLElement | null>(null);
-
-  React.useEffect(() => {
-    const target = state.pinned;
-    if (target === null) return;
-    // A pointer pin came from a card button, not the row. Resolve the source
-    // explicitly so keyboard and pointer pins have the same return path.
-    focusReturn.current = document.querySelector<HTMLElement>(
-      `[data-peek-row="${target.rowId}"][data-peek-surface="${target.surface}"] button`,
-    );
-    cardRef.current?.focus();
-  }, [state.pinned]);
-
-  React.useEffect(() => {
-    if (pinnedRowId !== null) return;
-    const row = focusReturn.current;
-    focusReturn.current = null;
-    if (row === null) return;
-    if (state.focus === "row" || document.activeElement === document.body) {
-      row.focus();
-      clearDwell();
-    }
-  }, [pinnedRowId, state.focus, clearDwell]);
-
-  /* -------------------------------------------------------- send simulation */
-
-  React.useEffect(() => {
-    if (state.send.kind !== "sending") return;
-    // A plausible round trip, so "Sending…" is visible. No IPC: the outcome is
-    // whatever the lab control says.
-    const timer = window.setTimeout(() => {
-      dispatch({
-        type: "send-settled",
-        outcome,
-        now: Date.now(),
-        reason:
-          outcome === "failure" ? "Couldn’t send. Your reply is saved here; try again." : undefined,
-      });
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [state.send.kind, outcome]);
-
-  const sentAt = state.send.kind === "sent" ? state.send.at : null;
-  const sentAnswer = state.send.kind === "sent" ? state.send.answer : null;
-
-  /** The confirmation holds the peek for ~2s; the receipt then carries Undo. */
-  React.useEffect(() => {
-    if (sentAt === null || sentAnswer === null || pinnedRowId === null) return;
-    setReceipt({ rowId: pinnedRowId, answer: sentAnswer, at: sentAt });
-    const timer = window.setTimeout(
-      () => dispatch({ type: "confirmation-elapsed" }),
-      CONFIRMATION_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [sentAt, sentAnswer, pinnedRowId]);
-
-  React.useEffect(() => {
-    if (receipt === null) return;
-    const tick = () => {
-      const left = Math.ceil((receipt.at + UNDO_MS - Date.now()) / 1000);
-      if (left <= 0) {
-        setReceipt(null);
-        setUndoLeft(0);
-        return;
-      }
-      setUndoLeft(left);
-    };
-    tick();
-    const timer = window.setInterval(tick, 250);
-    return () => window.clearInterval(timer);
-  }, [receipt]);
-
-  /** "Open session" is a simulation; say so and clear it. */
-  React.useEffect(() => {
-    if (state.opened === null) return;
-    const timer = window.setTimeout(() => dispatch({ type: "clear-opened" }), 2400);
-    return () => window.clearTimeout(timer);
-  }, [state.opened]);
-
-  /* ------------------------------------------------------------- geometry */
-
-  const measure = React.useCallback(() => {
-    if (shown === null) {
-      setPosition(null);
-      return;
-    }
-    const row = document.querySelector<HTMLElement>(
-      `[data-peek-row="${shown.rowId}"][data-peek-surface="${shown.surface}"]`,
-    );
-    if (row === null) return;
-    setPosition(
-      positionPeek(
-        row.getBoundingClientRect(),
-        shown.surface,
-        cardHeight,
-        {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        },
-        cardWidth,
-      ),
-    );
-  }, [shown, cardHeight, cardWidth]);
-
-  React.useLayoutEffect(measure, [measure]);
-
-  React.useEffect(() => {
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [measure]);
-
-  /** Measure the border box before paint; observing a clipped content box loses 2px. */
-  const hasCard = shown !== null && position !== null && looking === null;
-  React.useLayoutEffect(() => {
-    const card = cardRef.current;
-    if (card === null) {
-      setCardHeight(0);
-      return;
-    }
-    // Measured once either way, then observed where an observer exists — jsdom
-    // ships none, and `ui/tab-strip.tsx` guards the same call for the same
-    // reason: a surface that threw on mount without one would be untestable.
-    setCardHeight(card.getBoundingClientRect().height);
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(() => {
-      setCardHeight(card.getBoundingClientRect().height);
-    });
-    observer.observe(card);
-    return () => observer.disconnect();
-  }, [shown, pinnedRowId, state.send.kind, hasCard]);
-
-  /* ------------------------------------------------------------------ view */
-
-  const pin = React.useCallback((target: PeekTarget) => {
-    dispatch({ type: "pin", target });
-  }, []);
-
-  const rowProps = (surface: PeekSurface) => ({
-    onPointerMove: rowPointerMove(surface),
-    onPointerLeave: rowPointerLeave,
-    onKeyDown: onListKeyDown(surface),
-    onFocusCapture: (event: React.FocusEvent<HTMLElement>) => {
-      const rowId = (event.target as HTMLElement).closest<HTMLElement>("[data-peek-row]")?.dataset
-        .peekRow;
-      if (rowId === undefined || looking !== null) return;
-      clearGrace();
-      const target: PeekTarget = { rowId, surface };
-      dispatch({ type: "hover-row", target });
-      armDwell(target, 250);
-    },
-    onBlurCapture: (event: React.FocusEvent<HTMLElement>) => {
-      if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))
-        return;
-      clearDwell();
-      dispatch({ type: "hover-leave-row" });
-      armGrace();
-    },
-  });
-
   const deliveredFor = (rowId: string) => state.delivered[rowId] !== undefined;
   const previewFixture = shownFixture ?? fixtures[1]!;
-  const overlayReturn = React.useRef<HTMLElement | null>(null);
-  const look = (rowId: string) => {
-    overlayReturn.current = document.querySelector<HTMLElement>(
-      `[data-peek-row="${rowId}"][data-peek-surface="${shown?.surface ?? "nav"}"] button`,
-    );
-    clearDwell();
-    clearGrace();
-    setLooking(rowId);
-  };
 
   return (
     <div className="flex h-svh w-full flex-col overflow-y-auto bg-background text-foreground lg:flex-row lg:overflow-hidden">
@@ -832,7 +470,7 @@ export default function SessionPeekWireframeScratch() {
             <p className={cn(CAPTION, "px-2 py-1")}>Left nav sidebar</p>
             {/* The scroll container is the list, because a list scroll is one of
                 the three gestures that close an unpinned peek. */}
-            <div className="max-h-[320px] overflow-y-auto" onScroll={onListScroll}>
+            <div className="max-h-[320px] overflow-y-auto" onScroll={peek.onListScroll}>
               <SidebarMenu {...rowProps("nav")}>
                 {fixtures.map((fixture) => (
                   <SessionRow
@@ -898,12 +536,9 @@ export default function SessionPeekWireframeScratch() {
                   ["off", "off (keyboard)"],
                 ]}
                 onChange={(next) => {
-                  clearDwell();
+                  peek.clearDwell();
                   setHoverEnabled(next === "on");
-                  if (next === "off") {
-                    dispatch({ type: "hover-leave-row" });
-                    dispatch({ type: "dismiss", reason: "click-away", now: Date.now() });
-                  }
+                  if (next === "off") peek.disableHover();
                 }}
               />
               <Choice<SendOutcome>
@@ -1042,7 +677,7 @@ export default function SessionPeekWireframeScratch() {
           peek in the right in-ticket sidebar". */}
       <aside className="w-full shrink-0 border-l border-border p-2 lg:w-[280px]">
         <p className={cn(CAPTION, "px-2 py-1")}>Right rail · state gallery</p>
-        <div className="max-h-[320px] overflow-y-auto" onScroll={onListScroll}>
+        <div className="max-h-[320px] overflow-y-auto" onScroll={peek.onListScroll}>
           <ul className="flex flex-col gap-1" {...rowProps("rail")}>
             {fixtures.map((fixture) => (
               <SessionRow
@@ -1069,18 +704,11 @@ export default function SessionPeekWireframeScratch() {
           summaryState={summaryState}
           dispatch={dispatch}
           delivered={deliveredFor(shownFixture.rowId)}
-          onPin={() => pin(shown)}
+          onPin={() => peek.pin(shown)}
           onOpen={() => dispatch({ type: "open-session", rowId: shownFixture.rowId })}
-          onLook={() => look(shownFixture.rowId)}
+          onLook={() => peek.look(shownFixture.rowId)}
           onClose={() => dispatch({ type: "escape", now: Date.now() })}
-          onPointerEnter={() => {
-            clearGrace();
-            dispatch({ type: "card-enter" });
-          }}
-          onPointerLeave={() => {
-            dispatch({ type: "card-leave" });
-            armGrace();
-          }}
+          {...peek.cardProps}
         />
       ) : null}
 
@@ -1088,19 +716,13 @@ export default function SessionPeekWireframeScratch() {
         fixture={lookingFixture}
         answer={lookingFixture === null ? undefined : state.delivered[lookingFixture.rowId]?.answer}
         outcome={outcome}
-        onClose={() => setLooking(null)}
+        onClose={peek.closeLook}
         onOpen={() => {
           if (lookingFixture === null) return;
           dispatch({ type: "open-session", rowId: lookingFixture.rowId });
-          setLooking(null);
+          peek.closeLook();
         }}
-        returnFocus={() => {
-          queueMicrotask(clearDwell);
-          return (
-            cardRef.current?.querySelector<HTMLButtonElement>("[data-view-conversation]") ??
-            overlayReturn.current
-          );
-        }}
+        returnFocus={peek.lookReturn}
       />
 
       {/* ------------------------------------------------- the Undo receipt */}
@@ -1119,15 +741,7 @@ export default function SessionPeekWireframeScratch() {
             title={`Sent to ${FIXTURES.find((fixture) => fixture.rowId === receipt.rowId)?.sessionTitle ?? receipt.rowId}`}
             detail={`Simulation · ${undoLeft}s to undo`}
             actions={
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  dispatch({ type: "undo", rowId: receipt.rowId });
-                  setReceipt(null);
-                }}
-              >
+              <Button type="button" size="sm" variant="secondary" onClick={peek.undo}>
                 Undo
               </Button>
             }

@@ -93,19 +93,21 @@ export function SessionGlyph({ fixture, state }: { fixture: SessionFixture; stat
 function Identity({
   fixture,
   state,
+  glyph,
   pinned,
   onClose,
   onOpen,
 }: {
   fixture: SessionFixture;
   state: FixtureState;
+  glyph?: React.ReactNode;
   pinned: boolean;
   onClose(): void;
   onOpen(): void;
 }) {
   return (
     <header className="flex shrink-0 items-start gap-2 border-b border-border p-4">
-      <SessionGlyph fixture={fixture} state={state} />
+      {glyph ?? <SessionGlyph fixture={fixture} state={state} />}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p
           data-peek-session-title=""
@@ -366,6 +368,16 @@ export const SessionPeekCard = React.forwardRef<
     summaryState: SummaryState;
     dispatch: React.Dispatch<PeekEvent>;
     delivered: boolean;
+    /** Replaces the provider+badge composite — the integration scratch draws the row's own mark. */
+    glyph?: React.ReactNode;
+    /** A strip above the header: a folder's pager, or the way back to its ticket. */
+    accessory?: React.ReactNode;
+    /** `false` where nothing can be sent — a closed terminal has no one to answer. */
+    canReply?: boolean;
+    /** `false` where there is no transcript to show — a terminal companion. */
+    canViewConversation?: boolean;
+    /** `false` where the ticket is already named above — a card reached through its folder. */
+    showTicket?: boolean;
     onPin(): void;
     onOpen(): void;
     onLook(): void;
@@ -382,6 +394,11 @@ export const SessionPeekCard = React.forwardRef<
     summaryState,
     dispatch,
     delivered,
+    glyph,
+    accessory,
+    canReply = true,
+    canViewConversation = true,
+    showTicket = true,
     onPin,
     onOpen,
     onLook,
@@ -432,15 +449,17 @@ export const SessionPeekCard = React.forwardRef<
           onPointerLeave();
       }}
     >
+      {accessory}
       <Identity
         fixture={fixture}
         state={fixtureState}
+        glyph={glyph}
         pinned={pinned}
         onClose={onClose}
         onOpen={onOpen}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-        <TicketContext fixture={fixture} />
+        {showTicket ? <TicketContext fixture={fixture} /> : null}
         {!pinned || !pendingQuestion ? (
           <Summary fixture={fixture} summaryState={summaryState} />
         ) : null}
@@ -490,72 +509,84 @@ export const SessionPeekCard = React.forwardRef<
           Sent
         </div>
       ) : null}
-      <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-4 py-2">
-        <Button data-view-conversation="" type="button" size="sm" variant="ghost" onClick={onLook}>
-          <ChatCircleIcon />
-          View conversation
-        </Button>
-        {pinned ? (
-          <div className="flex items-center gap-2">
-            {pendingQuestion && prompts.length > 1 ? (
-              <>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy || state.questionIndex === 0}
-                  onClick={() =>
-                    dispatch({
-                      type: "question-step",
-                      index: state.questionIndex - 1,
-                      count: prompts.length,
-                    })
-                  }
-                >
-                  Back
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy || state.questionIndex === prompts.length - 1}
-                  onClick={() =>
-                    dispatch({
-                      type: "question-step",
-                      index: state.questionIndex + 1,
-                      count: prompts.length,
-                    })
-                  }
-                >
-                  Next
-                </Button>
-              </>
-            ) : null}
+      {canViewConversation || canReply ? (
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/30 px-4 py-2">
+          {canViewConversation ? (
             <Button
-              type="submit"
-              form="peek-reply-form"
+              data-view-conversation=""
+              type="button"
               size="sm"
-              disabled={
-                answer === null ||
-                busy ||
-                (pendingQuestion && state.questionIndex !== prompts.length - 1)
-              }
+              variant="ghost"
+              onClick={onLook}
             >
-              <PaperPlaneTiltIcon />
-              {state.send.kind === "sending"
-                ? "Sending…"
-                : state.send.kind === "failed"
-                  ? "Try again"
-                  : "Send"}
+              <ChatCircleIcon />
+              View conversation
             </Button>
-          </div>
-        ) : (
-          <Button type="button" size="sm" variant="secondary" onClick={onPin}>
-            {pendingQuestion ? <QuestionIcon /> : <PaperPlaneTiltIcon />}
-            {pendingQuestion ? "Answer" : "Send"}
-          </Button>
-        )}
-      </footer>
+          ) : (
+            <span aria-hidden />
+          )}
+          {!canReply ? null : pinned ? (
+            <div className="flex items-center gap-2">
+              {pendingQuestion && prompts.length > 1 ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || state.questionIndex === 0}
+                    onClick={() =>
+                      dispatch({
+                        type: "question-step",
+                        index: state.questionIndex - 1,
+                        count: prompts.length,
+                      })
+                    }
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || state.questionIndex === prompts.length - 1}
+                    onClick={() =>
+                      dispatch({
+                        type: "question-step",
+                        index: state.questionIndex + 1,
+                        count: prompts.length,
+                      })
+                    }
+                  >
+                    Next
+                  </Button>
+                </>
+              ) : null}
+              <Button
+                type="submit"
+                form="peek-reply-form"
+                size="sm"
+                disabled={
+                  answer === null ||
+                  busy ||
+                  (pendingQuestion && state.questionIndex !== prompts.length - 1)
+                }
+              >
+                <PaperPlaneTiltIcon />
+                {state.send.kind === "sending"
+                  ? "Sending…"
+                  : state.send.kind === "failed"
+                    ? "Try again"
+                    : "Send"}
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" size="sm" variant="secondary" onClick={onPin}>
+              {pendingQuestion ? <QuestionIcon /> : <PaperPlaneTiltIcon />}
+              {pendingQuestion ? "Answer" : "Send"}
+            </Button>
+          )}
+        </footer>
+      ) : null}
     </div>
   );
 });
