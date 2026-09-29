@@ -41,7 +41,7 @@ import {
   teeObservationsToSink,
 } from "../../src/pi/observability";
 
-export const FIXTURE_VERSION = "vc441-turn-critical-path-v1";
+export const FIXTURE_VERSION = "vc441-turn-critical-path-v2";
 const DEFAULT_CONCURRENCIES = [1, 5, 15, 20] as const;
 const DEFAULT_REPETITIONS = 20;
 const WARMUP_WAVES = 1;
@@ -64,7 +64,7 @@ const ATTEMPT_PLAN: readonly {
     stopReason: "error",
     serviceMs: 23,
     ttftMs: 9,
-    errorMessage: "fixture invalid request after synthetic overflow",
+    errorMessage: `fixture invalid request after synthetic overflow: ${PRIVATE_CONTENT_CANARY}`,
   },
   { stopReason: "stop", serviceMs: 31, ttftMs: 10 },
 ];
@@ -124,7 +124,8 @@ export interface TurnSample {
   gapIncludesMissingSpans: boolean;
   eventOrderValid: boolean;
   eventOrderViolations: number;
-  localTimerLatenessMs: number[];
+  /** Signed: negative when Node fired a timer before its performance.now() target. */
+  localTimerLateness: TimerLateness[];
   rawEvents: SafeRawEvent[];
 }
 
@@ -163,8 +164,9 @@ const EXPECTED: TurnExpectations = {
 };
 
 type StreamFunction = NonNullable<AgentOptions["streamFn"]>;
-type LocalTimerKind = "dispatch" | "ttft" | "completion" | "mcp-batch";
-interface TimerLateness {
+const LOCAL_TIMER_KINDS = ["dispatch", "ttft", "completion", "mcp-batch", "authority"] as const;
+type LocalTimerKind = (typeof LOCAL_TIMER_KINDS)[number];
+export interface TimerLateness {
   kind: LocalTimerKind;
   latenessMs: number;
 }
@@ -177,9 +179,16 @@ function finiteNonNegative(value: number | null | undefined): value is number {
   return value !== undefined && value !== null && Number.isFinite(value) && value >= 0;
 }
 
-export function summarize(values: readonly (number | null | undefined)[]): Distribution | null {
+export function summarize(
+  values: readonly (number | null | undefined)[],
+  options: { allowNegative?: boolean } = {},
+): Distribution | null {
   const sorted = values
-    .filter((value): value is number => finiteNonNegative(value))
+    .filter((value): value is number =>
+      options.allowNegative === true
+        ? value !== null && value !== undefined && Number.isFinite(value)
+        : finiteNonNegative(value),
+    )
     .toSorted((left, right) => left - right);
   if (sorted.length === 0) return null;
   const quantile = (q: number): number => sorted[Math.max(0, Math.ceil(sorted.length * q) - 1)]!;
@@ -288,6 +297,46 @@ function safeRawEvent(entry: RecordedFixtureEvent, origin: number): SafeRawEvent
 }
 
 /**
+ * Checks the sink's emission order (by `order`) against the turn's causal
+ * shape: timestamps never go backwards; tool and authority envelopes belong to
+ * a tool round opened by a `toolUse` provider attempt; nothing follows the
+ * terminal turn envelope. Tool rounds are derived from that shape, not assumed.
+ */
+export function checkEventOrder(events: readonly RecordedFixtureEvent[]): {
+  violations: number;
+  toolRoundCount: number;
+} {
+  const byOrder = events.toSorted((left, right) => left.order - right.order);
+  let violations = 0;
+  let toolRoundCount = 0;
+  let inToolRound = false;
+  let roundHasTools = false;
+  let terminalSeen = false;
+  for (const [index, { event, recordedAt }] of byOrder.entries()) {
+    const previous = byOrder[index - 1];
+    if (previous !== undefined && recordedAt < previous.recordedAt) violations += 1;
+    if (terminalSeen) violations += 1;
+    if (event.kind === "provider-attempt") {
+      if (roundHasTools) toolRoundCount += 1;
+      inToolRound = event.stopReason === "toolUse";
+      roundHasTools = false;
+    } else if (event.kind === "tool" || event.kind === "authority") {
+      if (!inToolRound) violations += 1;
+      else if (event.kind === "tool") roundHasTools = true;
+    } else if (event.kind === "turn" && event.outcome !== "interrupted") {
+      if (roundHasTools) toolRoundCount += 1;
+      // A turn that ends inside an unanswered tool round never saw its final attempt.
+      if (inToolRound) violations += 1;
+      inToolRound = false;
+      roundHasTools = false;
+      terminalSeen = true;
+    }
+  }
+  if (roundHasTools) toolRoundCount += 1;
+  return { violations, toolRoundCount };
+}
+
+/**
  * Converts VC-119's safe event envelopes into one fixture-turn accounting row.
  * Absent spans stay null; a missing observation is never interpreted as zero.
  */
@@ -300,7 +349,6 @@ export function analyzeTurn(input: {
   events: readonly RecordedFixtureEvent[];
   localTimerLatenessMs: readonly TimerLateness[];
   expected?: TurnExpectations;
-  toolRoundCount?: number;
 }): TurnSample {
   const expected = input.expected ?? EXPECTED;
   const terminal = input.events.find(
@@ -372,11 +420,7 @@ export function analyzeTurn(input: {
     const knownIntervals = eventIntervalMs(input.events, turnStart, turnEnd);
     unaccountedGapMs = round(Math.max(0, runtimeTurnMs - knownIntervals));
   }
-  const eventOrderViolations = input.events.reduce(
-    (count, entry, index) =>
-      index > 0 && entry.recordedAt < input.events[index - 1]!.recordedAt ? count + 1 : count,
-    0,
-  );
+  const { violations: eventOrderViolations, toolRoundCount } = checkEventOrder(input.events);
   return {
     sampleId: input.sampleId,
     concurrency: input.concurrency,
@@ -396,7 +440,7 @@ export function analyzeTurn(input: {
       stopReason: attempt.stopReason,
       providerErrorClass: attempt.providerErrorClass ?? null,
     })),
-    toolRoundCount: input.toolRoundCount ?? 1,
+    toolRoundCount,
     toolCallCount: tools.length,
     toolsByName,
     authorityWaitCount: authority.length,
@@ -407,7 +451,10 @@ export function analyzeTurn(input: {
     gapIncludesMissingSpans: !allExpectedSpansPresent,
     eventOrderValid: eventOrderViolations === 0,
     eventOrderViolations,
-    localTimerLatenessMs: input.localTimerLatenessMs.map(({ latenessMs }) => round(latenessMs)),
+    localTimerLateness: input.localTimerLatenessMs.map(({ kind, latenessMs }) => ({
+      kind,
+      latenessMs: round(latenessMs),
+    })),
     rawEvents: input.events.map((entry) => safeRawEvent(entry, input.submittedAt)),
   };
 }
@@ -451,7 +498,9 @@ function scheduledTimer(
   return new Promise((resolvePromise) => {
     const delayMs = Math.max(0, targetAt - performance.now());
     setTimeout(() => {
-      lateness.push({ kind, latenessMs: Math.max(0, performance.now() - targetAt) });
+      // Signed on purpose: libuv's cached loop clock can fire a timer before
+      // its performance.now() target, and flooring that at 0 hides lateness.
+      lateness.push({ kind, latenessMs: performance.now() - targetAt });
       resolvePromise();
     }, delayMs);
   });
@@ -510,7 +559,7 @@ async function scriptedTool(input: {
   const startedAt = performance.now();
   if (toolId === "read") {
     const waitStartedAt = performance.now();
-    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, AUTHORITY_WAIT_MS));
+    await scheduledTimer(waitStartedAt + AUTHORITY_WAIT_MS, "authority", timerLateness);
     const waitDurationMs = performance.now() - waitStartedAt;
     recordObservationToSink(reducer, sink, runId, {
       kind: "authority",
@@ -563,6 +612,8 @@ export async function runScriptedTurn(input: {
   wave: number;
   sessionIndex: number;
   sampleId: string;
+  /** Receives the raw envelopes the VC-119 sink recorded, for privacy tests. */
+  captureEvents?: RecordedFixtureEvent[];
 }): Promise<TurnSample> {
   const events: RecordedFixtureEvent[] = [];
   const timerLateness: TimerLateness[] = [];
@@ -580,7 +631,12 @@ export async function runScriptedTurn(input: {
     runId,
     now: () => performance.now(),
   });
-  const context = normalizeContext({ messages: [] });
+  // The request carries private-looking content so tests can prove the
+  // instrumentation drops it; the stand-in never sends it anywhere.
+  const context = normalizeContext({
+    systemPrompt: PRIVATE_CONTENT_CANARY,
+    messages: [{ role: "user", content: PRIVATE_CONTENT_CANARY, timestamp: Date.now() }],
+  });
   const runAttempt = async (attemptIndex: number): Promise<void> => {
     if (attemptIndex !== 0)
       await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 1));
@@ -627,8 +683,8 @@ export async function runScriptedTurn(input: {
     turnStartedAt,
     events,
     localTimerLatenessMs: timerLateness,
-    toolRoundCount: 1,
   });
+  input.captureEvents?.push(...events);
   const expectedToolCalls = Object.values(EXPECTED.toolsByName).reduce(
     (sum, count) => sum + count,
     0,
@@ -740,8 +796,17 @@ function armSummary(
       ({ gapIncludesMissingSpans }) => !gapIncludesMissingSpans,
     ).length,
     orderViolationCount: samples.reduce((sum, sample) => sum + sample.eventOrderViolations, 0),
-    localTimerLatenessMs: summarize(
-      samples.flatMap(({ localTimerLatenessMs }) => localTimerLatenessMs),
+    // Signed lateness per local timer kind; negative values are early fires.
+    localTimerLatenessMsByKind: Object.fromEntries(
+      LOCAL_TIMER_KINDS.map((kind) => [
+        kind,
+        summarize(
+          samples.flatMap(({ localTimerLateness }) =>
+            localTimerLateness.flatMap((entry) => (entry.kind === kind ? [entry.latenessMs] : [])),
+          ),
+          { allowNegative: true },
+        ),
+      ]),
     ),
     host: {
       processCpuPercentOfOneCore: host.cpuPercentOfOneCore,
@@ -766,6 +831,12 @@ function fmt(distribution: Distribution | null): string {
     : `${distribution.p50} / ${distribution.p95} ms (n=${distribution.n})`;
 }
 
+function fmtSigned(distribution: Distribution | null): string {
+  return distribution === null
+    ? "n/a"
+    : `${distribution.min} / ${distribution.p50} / ${distribution.p95}`;
+}
+
 function armReportMarkdown(arm: Record<string, unknown>): string {
   const summary = arm as {
     concurrency: number;
@@ -779,7 +850,7 @@ function armReportMarkdown(arm: Record<string, unknown>): string {
     toolsByName: Record<string, { perTurnTotal: Distribution | null }>;
     authorityWaitMs: Distribution | null;
     unaccountedGapMs: Distribution | null;
-    localTimerLatenessMs: Distribution | null;
+    localTimerLatenessMsByKind: Record<LocalTimerKind, Distribution | null>;
     host: {
       processCpuPercentOfOneCore: number | null;
       rssPeakBytes: number;
@@ -791,7 +862,7 @@ function armReportMarkdown(arm: Record<string, unknown>): string {
   const cpu = summary.host.processCpuPercentOfOneCore;
   const rssMb = round(summary.host.rssPeakBytes / (1024 * 1024));
   return [
-    `| ${summary.concurrency} | ${summary.turnSampleCount} | ${summary.wavesMeasured} | ${fmt(summary.firstMessageToCompletionMs)} | ${fmt(summary.runtimeTurnMs)} | ${fmt(summary.submissionToTurnStartMs)} | ${fmt(summary.providerAttemptDurationMs)} | ${fmt(summary.ttftMs)} | ${fmt(summary.toolsByName.read?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName.bash?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName["fetch-url"]?.perTurnTotal ?? null)} | ${fmt(summary.authorityWaitMs)} | ${fmt(summary.unaccountedGapMs)} | ${summary.host.eventLoopDelayMs.p95Ms ?? "n/a"} / ${summary.host.eventLoopDelayMs.maxMs ?? "n/a"} | ${summary.localTimerLatenessMs?.p95 ?? "n/a"} | ${cpu === null ? "n/a" : round(cpu)} | ${load ?? "n/a"} | ${rssMb} |`,
+    `| ${summary.concurrency} | ${summary.turnSampleCount} | ${summary.wavesMeasured} | ${fmt(summary.firstMessageToCompletionMs)} | ${fmt(summary.runtimeTurnMs)} | ${fmt(summary.submissionToTurnStartMs)} | ${fmt(summary.providerAttemptDurationMs)} | ${fmt(summary.ttftMs)} | ${fmt(summary.toolsByName.read?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName.bash?.perTurnTotal ?? null)} | ${fmt(summary.toolsByName["fetch-url"]?.perTurnTotal ?? null)} | ${fmt(summary.authorityWaitMs)} | ${fmt(summary.unaccountedGapMs)} | ${summary.host.eventLoopDelayMs.p95Ms ?? "n/a"} / ${summary.host.eventLoopDelayMs.maxMs ?? "n/a"} | ${fmtSigned(summary.localTimerLatenessMsByKind.authority)} | ${cpu === null ? "n/a" : round(cpu)} | ${load ?? "n/a"} | ${rssMb} |`,
   ].join("");
 }
 
@@ -799,25 +870,28 @@ function formatMarkdown(report: {
   generatedAt: string;
   fixtureVersion: string;
   environment: Record<string, unknown>;
-  parameters: Record<string, unknown>;
+  parameters: { concurrencies: readonly number[]; repetitions: number };
   arms: Array<Record<string, unknown>>;
 }): string {
   const arms = report.arms.map(armReportMarkdown).join("\n");
+  const { concurrencies, repetitions } = report.parameters;
+  const attemptShape = ATTEMPT_PLAN.map(({ stopReason }) => stopReason).join(" → ");
+  const env = report.environment;
   return (
-    `# Agent turn critical path under concurrent Sessions (VC-441)\n\n` +
-    `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}.\n\n` +
-    `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../docs/research/perf/vc-441-agent-turn-time\`.\n\n` +
-    `The runner starts ${JSON.stringify(report.parameters["repetitions"])} measured waves after one discarded warm-up wave at each concurrency. Summary values use individual completed synthetic turns as samples; turns in a wave share one host interval and are not independent. Percentiles are nearest-rank, using rank ceil(0.95 × n) for p95.\n\n` +
-    `| Sessions | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Submission → turn start p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Unaccounted gap p50 / p95 | Event-loop delay p95 / max (ms) | Local timer lateness p95 (ms) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
+    `# Agent turn critical path under concurrent scripted turns (VC-441)\n\n` +
+    `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}. Findings and interpretation: \`../vc-441-agent-turn-time.md\`.\n\n` +
+    `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../docs/research/perf/vc-441-agent-turn-time --repetitions ${repetitions} --concurrencies ${concurrencies.join(",")}\`.\n\n` +
+    `"Concurrent" is the number of scripted turns in flight at once in one Node process, each standing in for one working Session. No Volli Session, Session runtime queue, ledger, or agent loop is created. The runner starts ${repetitions} measured waves after ${WARMUP_WAVES} discarded warm-up wave(s) at each concurrency. Summary values use individual completed turns as samples; turns in a wave share one host interval and are not independent. Percentiles are nearest-rank, using rank ceil(0.95 × n) for p95.\n\n` +
+    `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Submission → turn start p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Unaccounted gap p50 / p95 | Event-loop delay p95 / max (ms) | Authority timer lateness min / p50 / p95 (ms, signed) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
     `## Method and limits\n\n` +
-    `- One scripted turn per synthetic Session uses the real VC-119 \`instrumentStreamFn\`, \`ObservabilityReducer\`, and \`teeObservationsToSink\`. The provider stand-in is an in-process Pi event stream driven by fixed local timers; it opens no socket and makes no provider request. The same script runs at concurrency 1, 5, 15, and 20.\n` +
-    `- Each turn scripts three model attempts (tool-use, a synthetic invalid-request response, then success), two local CPU-fixture tools (\`read\` and \`bash\`) plus one latency-bound three-child MCP-like batch in one tool round, one 12 ms authority wait, one overflow-compaction event, and one retry. Batch children wait 18/26/34 ms concurrently using in-memory timers, not network traffic; its unknown native name is reported only as the bounded \`fetch-url\` activity class. Attempt, tool, wait, compaction, and retry counts are checked against the script.\n` +
-    `- The MCP-like batch is not a proxy for real MCP/serverless quotas or a browser-backed app tool. Browser navigation/application latency and remote MCP service behavior remain future workload coverage; do not extrapolate the \`read\`/\`bash\` figures to those tools.\n` +
-    `- Provider-attempt duration and TTFT are the runtime instrument's measurements of the stand-in. Timer lateness and Node's event-loop-delay histogram are reported separately as local scheduling/host-delay indicators; they are not subtracted from provider duration. CPU, RSS, and heap are for the benchmark runner process—not Electron or a production Session—and free memory and host load are recorded where the platform exposes them.\n` +
-    `- Unaccounted gap is runtime-turn wall time minus the union of known provider, tool-execution, and authority-wait intervals. The existing VC-119 compaction event has no duration, so compaction work, retry/backoff and runtime/orchestration remain in this gap. Missing spans make it incomplete; absent values are null, never zero.\n` +
-    `- This fixture contains no prompt, transcript, tool arguments/results, Session database, profile settings, or real user content in the output. The telemetry exporter remains untouched/off; no local collector or person’s profile is read.\n` +
-    `- These results describe only this synthetic timer/CPU workload on the recorded host. They cannot establish real provider inference time, remote/provider queueing, quotas/rate limits, network variation, production Session resource costs, or how real tool commands scale. A local delay stand-in cannot reproduce provider quotas. Host load and concurrent samples add uncertainty; no confidence interval is claimed. For real provider/tool breakdown, separately and explicitly opt in to local metadata collection—never infer it from this run.\n\n` +
-    `Environment: Node ${String(report.environment["nodeVersion"])} · ${String(report.environment["platform"])} ${String(report.environment["osRelease"])} · ${String(report.environment["cpuModel"])} · ${String(report.environment["logicalCores"])} logical cores · ${String(report.environment["totalMemoryBytes"])} bytes RAM · commit ${String(report.environment["gitSha"])} (dirty=${String(report.environment["dirty"])}).\n`
+    `- Each scripted turn uses the real VC-119 \`instrumentStreamFn\`, \`ObservabilityReducer\`, and \`teeObservationsToSink\`. The provider stand-in is an in-process Pi event stream driven by fixed local timers; it opens no socket and makes no provider request. The same script runs at concurrency ${concurrencies.join(", ")}.\n` +
+    `- Each turn scripts ${ATTEMPT_PLAN.length} model attempts (${attemptShape}; the error is a synthetic invalid request), ${TOOL_IDS.length} tools in one tool round (CPU-fixture \`read\` and \`bash\`, plus a latency-bound MCP-like batch whose children wait ${MCP_BATCH_LATENCIES_MS.join("/")} ms concurrently on in-memory timers), a ${AUTHORITY_WAIT_MS} ms authority wait, one overflow-compaction event, a ${RETRY_BACKOFF_MS} ms retry backoff, and a ${DISPATCH_DELAY_MS} ms dispatch timer. The batch's unknown native name is reported only as the bounded \`fetch-url\` activity class. Attempt, tool, tool-round, wait, compaction, and retry counts and the causal event order are checked against the script.\n` +
+    `- The MCP-like batch is not a proxy for real MCP/serverless quotas or a browser-backed app tool; do not extrapolate the \`read\`/\`bash\` figures to those tools.\n` +
+    `- Provider-attempt duration and TTFT are the runtime instrument's measurements of the stand-in. Timer lateness is signed per timer (negative = Node fired it before its \`performance.now()\` target) and reported per timer kind in \`benchmark.json\`; it and Node's event-loop-delay histogram are local host-delay indicators and are not subtracted from provider duration. CPU, RSS, and heap are for the benchmark runner process—not Electron or a production Session.\n` +
+    `- Unaccounted gap is runtime-turn wall time minus the union of known provider, tool-execution, and authority-wait intervals. The VC-119 compaction event has no duration, so compaction work, retry backoff and orchestration remain in this gap. Missing spans make it incomplete; absent values are null, never zero.\n` +
+    `- The request context, stream deltas, error message, tool subject, input and output all carry a private-content canary; none of it reaches the output. The telemetry exporter stays off; no Session database, collector, or person’s profile is read.\n` +
+    `- These results describe only this synthetic timer/CPU workload on the recorded host. They cannot establish real provider inference time, remote/provider queueing, quotas/rate limits, network variation, production Session resource costs, or how real tool commands scale.\n\n` +
+    `Environment: Node ${String(env["nodeVersion"])} · ${String(env["platform"])} ${String(env["osRelease"])} · ${String(env["cpuModel"])} · ${String(env["logicalCores"])} logical cores · ${String(env["totalMemoryBytes"])} bytes RAM · initial load avg ${JSON.stringify(env["initialLoadAverage"])} · commit ${String(env["gitSha"])} (dirty=${String(env["dirty"])}).\n`
   );
 }
 
@@ -901,11 +975,7 @@ async function runArm(concurrency: number, repetitions: number): Promise<Record<
   return summary;
 }
 
-async function writeRunOutput(
-  outputPath: string,
-  report: Record<string, unknown>,
-  markdown: string,
-): Promise<void> {
+async function prepareOutputDirectory(outputPath: string): Promise<string> {
   const directory = resolve(outputPath);
   const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
   if (directory === root || directory === resolve("/") || directory === homedir()) {
@@ -921,11 +991,12 @@ async function writeRunOutput(
       `Refusing to write into ${directory}: it contains files not owned by this benchmark.`,
     );
   }
-  const manifestPath = join(directory, "run-manifest.json");
   if (entries.length > 0) {
     let oldManifest: { fixtureVersion?: string } | null = null;
     try {
-      oldManifest = JSON.parse(await readFile(manifestPath, "utf8")) as { fixtureVersion?: string };
+      oldManifest = JSON.parse(await readFile(join(directory, "run-manifest.json"), "utf8")) as {
+        fixtureVersion?: string;
+      };
     } catch {
       throw new Error(
         `Refusing to replace existing output without this fixture's manifest: ${directory}`,
@@ -935,6 +1006,15 @@ async function writeRunOutput(
       throw new Error(`Refusing to replace output from another fixture version in ${directory}.`);
     }
   }
+  return directory;
+}
+
+async function writeRunOutput(
+  directory: string,
+  report: Record<string, unknown>,
+  markdown: string,
+): Promise<void> {
+  const manifestPath = join(directory, "run-manifest.json");
   const manifest = {
     fixtureVersion: FIXTURE_VERSION,
     artifacts: ["benchmark.json", "benchmark.md", "run-manifest.json"],
@@ -971,6 +1051,8 @@ export async function runConcurrencyBenchmark(input: {
   ) {
     throw new Error("--concurrencies accepts unique integers from 1 through 20.");
   }
+  // Validate the destination before spending minutes measuring.
+  const directory = await prepareOutputDirectory(input.output);
   const environment = await hostEnvironment();
   const arms: Array<Record<string, unknown>> = [];
   for (const concurrency of concurrencies) arms.push(await runArm(concurrency, repetitions));
@@ -1009,7 +1091,7 @@ export async function runConcurrencyBenchmark(input: {
     arms,
   };
   const markdown = formatMarkdown(report as Parameters<typeof formatMarkdown>[0]);
-  await writeRunOutput(input.output, report, markdown);
+  await writeRunOutput(directory, report, markdown);
   return report;
 }
 
@@ -1047,5 +1129,7 @@ export async function runConcurrencyCli(argv: readonly string[]): Promise<void> 
   const arms = report["arms"] as Array<{ concurrency: number; turnSampleCount: number }>;
   console.log(`VC-441 fixture report written to ${resolve(args.output)}`);
   for (const arm of arms)
-    console.log(`  ${arm.concurrency} Sessions: ${arm.turnSampleCount} measured turn samples`);
+    console.log(
+      `  ${arm.concurrency} concurrent turns: ${arm.turnSampleCount} measured turn samples`,
+    );
 }
