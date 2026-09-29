@@ -172,6 +172,51 @@ export function runAutomationLabel(
 }
 
 /**
+ * How this Run STARTED — the trigger-facing half of a history row (VC-297).
+ *
+ * VC-297 asks for the originating record and its trigger on every row. The
+ * record is {@link runAutomationLabel} above; the trigger cannot be, because a
+ * Run stores no Trigger. Reading today's record for it would be the mistake
+ * {@link runModelLabel} already refuses next door — a Trigger can be edited
+ * after the Run happened and the record can be deleted outright, so today's
+ * Trigger is not the one that fired.
+ *
+ * What the Run does carry is its ATTENDANCE, and that is this fact: VC-112
+ * rules that nothing declares itself attended, so the answer is decided by
+ * whichever door accepted the invocation — see `AUTOMATION_RUN_ATTENDANCE`.
+ * A person clicking something is attended; the schedule timer and the agent's
+ * own Run verb are not.
+ *
+ * Which is why the unattended word is "Automatic" and never names a schedule:
+ * `unattended` covers the agent's Run verb too, and a Run another Session
+ * started never had a schedule to name. An old row carrying nothing reads as
+ * attended (`parseAutomationRunAttendance`), so there is no third word here.
+ */
+export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
+  return run.attendance === "unattended" ? "Automatic" : "By hand";
+}
+
+/**
+ * What an EMPTY history says — or `null` while it does not yet know (VC-297).
+ *
+ * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * that has never been read cannot make it. Each scope is its own read now, so
+ * a cold cache is the ordinary state every time the reader picks another
+ * record — and answering that with a sentence would state a fact the very next
+ * frame may contradict. The Ticket rail already draws this line for its own
+ * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
+ *
+ * `loaded` therefore means READ, not non-empty. An empty answer that landed is
+ * a real answer and gets its sentence; silence gets silence.
+ */
+export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+  if (!loaded) return null;
+  return automationId === null
+    ? "Nothing has run in this project yet."
+    : "Nothing has run this Automation yet.";
+}
+
+/**
  * One project's Automations, split by Ownership with its own first.
  *
  * The order main already returns (own, then global, name-ordered within each)

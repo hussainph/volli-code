@@ -30,7 +30,9 @@ import type {
   BrowserPictureRecord,
 } from "./picture-store";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The only shape a file name here may take; shared with the trace disk, which is the same door. */
+export const BROWSER_FILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = BROWSER_FILE_ID;
 
 const EXTENSION: Record<BrowserPictureMime, string> = {
   "image/jpeg": "jpg",

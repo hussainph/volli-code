@@ -55,8 +55,9 @@ import {
   sessionToolBindings,
   todoListMarkdown,
   verbEntry,
+  verbToolWireName,
 } from "@volli/shared";
-import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createShellTool } from "./shell-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
@@ -235,6 +236,10 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         // proven present — `sessionToolBindings` offered these names only
         // because the port carries both.
         return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
+      case "browser_find":
+        // Bound to the port with `find` proven present (VC-364), on the hold
+        // pair's terms: a Session frozen before it is handed a port without.
+        return createBrowserFindTool(binding.port, spec.signal);
       case "shell_start":
       case "shell_output":
       case "shell_kill":
@@ -248,7 +253,11 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         // enumerate here. Exhaustiveness is kept by the assignment below —
         // `binding` narrows to the verb arm, and a name added to
         // `SessionToolBinding` with no case above would not satisfy it.
-        return createVerbTool(binding satisfies { verb: VerbToolKey }, spec.signal);
+        return createVerbTool(
+          binding satisfies { verb: VerbToolKey },
+          spec.signal,
+          spec.tools.mcpManagementNames,
+        );
     }
   });
 }
@@ -364,35 +373,36 @@ export function createMcpTool(
  * neutral data in `@volli/shared` instead of a TypeBox value: the registry stays
  * free of a schema library, and exactly one module knows how a field becomes one.
  */
-function verbFieldSchema(field: VerbToolField): TSchema {
+function verbFieldSchema(field: VerbToolField, reword: (text: string) => string): TSchema {
   switch (field.type) {
     case "string":
-      return Type.String({ description: field.description });
+      return Type.String({ description: reword(field.description) });
     case "number":
-      return Type.Number({ description: field.description });
+      return Type.Number({ description: reword(field.description) });
     // A list of strings and nothing else (VC-380). The registry has no shape
     // for an array of anything richer, deliberately: a field that needed one
     // would be a field that wanted to be an `object`.
     case "array":
-      return Type.Array(Type.String(), { description: field.description });
+      return Type.Array(Type.String(), { description: reword(field.description) });
     case "enum":
       return Type.Union(
         field.values.map((value) => Type.Literal(value)),
-        { description: field.description },
+        { description: reword(field.description) },
       );
     case "object":
-      return verbObjectSchema(field.fields, field.description);
+      return verbObjectSchema(field.fields, reword(field.description), reword);
   }
 }
 
 /** A run of fields as one object schema, with the optional ones marked. */
 function verbObjectSchema(
   fields: readonly VerbToolField[],
-  description?: string,
+  description: string | undefined,
+  reword: (text: string) => string,
 ): ReturnType<typeof Type.Object> {
   const properties: Record<string, TSchema> = {};
   for (const field of fields) {
-    const schema = verbFieldSchema(field);
+    const schema = verbFieldSchema(field, reword);
     properties[field.name] = field.required === true ? schema : Type.Optional(schema);
   }
   return Type.Object(properties, description === undefined ? {} : { description });
@@ -415,9 +425,21 @@ function verbObjectSchema(
  * said so, and the model is the party who can act on that. A host that could
  * not answer at all fails the call.
  */
+const SERVER_MANAGEMENT_NAMES =
+  /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g;
+const LEGACY_MANAGEMENT_NAMES =
+  /\bmcp_(list|preview|install|refresh|enable|disable|tools|remove)\b/g;
+
+function managementNamesIn(text: string, prefix: "mcp" | "server"): string {
+  return prefix === "mcp"
+    ? text.replace(SERVER_MANAGEMENT_NAMES, "mcp_$1")
+    : text.replace(LEGACY_MANAGEMENT_NAMES, "server_$1");
+}
+
 export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
+  mcpManagementNames?: "server",
 ): AgentTool<TSchema, RuntimeVerbResult["details"]> {
   const entry = verbEntry(binding.verb);
   if (entry?.tool === undefined) {
@@ -426,11 +448,16 @@ export function createVerbTool(
     // the alternative is a nameless tool reaching a provider.
     throw new Error(`${binding.verb} has no tool projection in this build`);
   }
-  const parameters = verbObjectSchema(entry.tool.input);
+  const legacyManagementName = binding.verb.startsWith("mcp.") && mcpManagementNames === undefined;
+  const reword = legacyManagementName
+    ? (text: string) => managementNamesIn(text, "mcp")
+    : (text: string) => text;
+  const name = verbToolWireName(binding.verb, mcpManagementNames)!;
+  const parameters = verbObjectSchema(entry.tool.input, undefined, reword);
   return {
-    name: entry.tool.name,
-    label: entry.tool.name,
-    description: entry.tool.description,
+    name,
+    label: name,
+    description: reword(entry.tool.description),
     parameters,
     async execute(
       toolCallId,
@@ -458,7 +485,14 @@ export function createVerbTool(
         );
         // `details` is the host's structured aside for the transcript row; the
         // model reads `content` and nothing else.
-        return { content: [{ type: "text", text: result.text }], details: result.details };
+        // The host's canonical verb and legacy result copy remain unchanged.
+        // New Sessions see the name they can actually call; old frozen Sessions
+        // still see exactly the response they were offered before this release.
+        const text =
+          binding.verb.startsWith("mcp.") && mcpManagementNames === "server"
+            ? managementNamesIn(result.text, "server")
+            : result.text;
+        return { content: [{ type: "text", text }], details: result.details };
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }
@@ -482,19 +516,26 @@ const ASK_USER_DESCRIPTION = [
   "Ask the person driving this session a question, and wait for their answer.",
   "Use it only for a decision that genuinely blocks you and is theirs to make: a product or scope choice, an ambiguity in what they asked for, a trade-off with no defensible default.",
   "Do not use it for anything you can find out by reading the workspace, to narrate progress, or to confirm work you were already told to do.",
-  "Keep the question to one or two sentences. Offer 2-5 concrete options when the answer is a choice; omit options entirely when you need them to write something.",
+  "Keep the question to one or two short sentences. Offer 2-5 concrete options when the answer is a choice; omit options entirely when you need them to write something.",
+  "Prefer putting choice-specific context, trade-offs, and consequences in each option's description (the subtitle/body beneath its label) instead of making the question long. Keep only the context needed to understand the decision in the question.",
   "The turn is blocked until they answer.",
 ].join(" ");
 
 const askUserSchema = Type.Object({
-  question: Type.String({ description: "The question to put to them, in one or two sentences." }),
+  question: Type.String({
+    description:
+      "The decision to put to them, in one or two short sentences. Put option-specific detail in options[].description.",
+  }),
   options: Type.Optional(
     Type.Array(
       Type.Object({
         id: Type.String({ description: "Stable id for this option; returned when it is chosen." }),
         label: Type.String({ description: "The answer itself, in a few words." }),
         description: Type.Optional(
-          Type.String({ description: "One line of extra context for this option." }),
+          Type.String({
+            description:
+              "Supporting context, trade-offs, or consequences for this option, shown beneath its label. Prefer this field over a long question.",
+          }),
         ),
       }),
       { description: "2-5 answers to choose between. Omit entirely to ask for free text." },

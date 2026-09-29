@@ -6,6 +6,7 @@ import { ChromeBar } from "@renderer/components/chrome-bar";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
+import { FolderClaimDialog } from "@renderer/components/rail/folder-claim-dialog";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { SessionDetailDialog } from "@renderer/components/sessions/session-detail-dialog";
 import {
@@ -910,6 +911,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           what a terminal did must not cost you the tab you were in. */}
       <SessionDetailDialog />
       <HarnessTrustDialog />
+      {/* Window-level for the same reason, and NOT inside the rail (VC-430):
+          both doors into adding a project raise the same "is this one you
+          already have?" question, the claim that holds it lives in the store,
+          and the rail itself goes inert when it is hidden. Renders nothing
+          until there is a question to answer. */}
+      <FolderClaimDialog />
       <UpdateInstallDialog />
     </SidebarProvider>
   );

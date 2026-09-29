@@ -25,6 +25,15 @@
  * command id carries the same key, so even a restarted host re-tripping the
  * same episode lands on the same command rather than minting a second.
  *
+ * ── WHAT THE HOST ADDS TO THE VERDICT ─────────────────────────────────────
+ * Two facts only the host can know, both handed to the pure verdict as data:
+ * the tool calls each live binding has in flight (so a slow tool is judged by
+ * its own allowance, not the turn's ten minutes), and how long the machine was
+ * suspended inside the silence window (so a laptop opened after a night asleep
+ * does not report the night). The suspended time comes through a port because
+ * sleep is announced by Electron's `powerMonitor`, which this module does not
+ * import.
+ *
  * Failures are swallowed with a diagnostic, never propagated — this is an
  * observer beside the runtime, and a scan that throws must not be able to
  * take the host down with it.
@@ -36,7 +45,7 @@ import {
   sessionWedge,
   shortSessionId,
 } from "@volli/shared";
-import type { SessionProjection } from "@volli/shared";
+import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "../notifications/dispatch";
@@ -44,9 +53,17 @@ import type { NotificationRequest } from "../notifications/dispatch";
 /** How often the scan runs. Coarse on purpose: the verdict is minutes-grained. */
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 
+/** One binding as the scan reads it: whose it is, and the live clock beside it. */
+export interface SessionWatchdogBinding {
+  sessionId: string;
+  lastProgressAt: number;
+  /** The tool calls the binding has in flight. Absent reads as none. */
+  inFlightTools?: readonly SessionInFlightTool[];
+}
+
 export interface SessionWatchdogPorts {
   /** The executors this process holds open — the runtime's own binding list. */
-  listBindings(): readonly { sessionId: string; lastProgressAt: number }[];
+  listBindings(): readonly SessionWatchdogBinding[];
   /** One Session's durable state; live progress comes from the binding above. */
   projection(sessionId: string): Promise<SessionProjection>;
   /** The durable door the blocked signal goes through. */
@@ -64,6 +81,11 @@ export interface SessionWatchdogPorts {
    * carries the acts; the policy that enables it is the caller's.
    */
   stopSession?: (input: { sessionId: string; silentForMs: number }) => Promise<void>;
+  /**
+   * Milliseconds the machine was suspended inside `[from, to]`. Absent means
+   * the host cannot tell, and every wall-clock millisecond counts as silence.
+   */
+  suspendedMsWithin?: (from: number, to: number) => number;
   thresholdMs?: number;
   intervalMs?: number;
   now?: () => number;
@@ -88,10 +110,14 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   const tripped = new Map<string, number>();
   let timer: ReturnType<typeof setInterval> | null = null;
 
-  async function inspect(binding: { sessionId: string; lastProgressAt: number }): Promise<void> {
+  async function inspect(binding: SessionWatchdogBinding): Promise<void> {
     const { sessionId, lastProgressAt } = binding;
     const projection = await ports.projection(sessionId);
-    const verdict = sessionWedge(projection, now(), thresholdMs, lastProgressAt);
+    const at = now();
+    const verdict = sessionWedge(projection, at, thresholdMs, lastProgressAt, {
+      inFlightTools: binding.inFlightTools ?? [],
+      suspendedMs: ports.suspendedMsWithin?.(lastProgressAt, at) ?? 0,
+    });
     if (!verdict.wedged) {
       // Recovery ends the episode; the next wedge is a new progress instant and
       // reports itself afresh.
@@ -104,6 +130,12 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
     if (tripped.get(sessionId) === episode) return;
     tripped.set(sessionId, episode);
     const minutes = Math.round(verdict.silentForMs / 60_000);
+    // Naming the tool is the whole difference between "the model stalled" and
+    // "this command never came back", and they are fixed in different places.
+    const overdue =
+      verdict.overdueTool === null
+        ? ""
+        : `; ${verdict.overdueTool} is still running past its limit`;
     await ports.submit({
       // Deterministic across restarts: the same episode re-tripped lands on
       // the same durable command instead of minting a second.
@@ -112,7 +144,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       intent: {
         kind: "session.signal",
         signal: "blocked",
-        reason: `Watchdog: no runtime progress for ${minutes}m inside an open turn.`,
+        reason: `Watchdog: no runtime progress for ${minutes}m inside an open turn${overdue}.`,
       },
       provenance: {
         source: { kind: "system", id: "session-watchdog", detail: null },
@@ -122,7 +154,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
     ports.notify?.({
       producer: "session-watchdog",
       title: "Session may be wedged",
-      body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m.`,
+      body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m${overdue}.`,
       // The Session, and whatever inside it a person can actually act on
       // (round 2). A wedge is very often a broken transport, and the Attention
       // carrying that failure is the thing worth landing on — sending someone

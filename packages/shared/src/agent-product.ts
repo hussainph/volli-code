@@ -122,7 +122,7 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
-    baseline: "VC-324",
+    baseline: "VC-364",
     build: "VC-457",
     added: [
       "watch, a named tool in the Board and Ticket bundles that arms notices on Sessions and tickets and returns at once. A watched Session reports its next turn ending (with what it said last), its done or blocked signal, and its stop; a watched ticket reports moves, comments and signals made by anyone but the watcher, until action unwatch ends it. Changes that land together arrive as one notice, read mid-turn or opening a new turn.",
@@ -138,6 +138,18 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     removed: [
       "session_await and ticket_await left every Role bundle: waiting inside a tool call left the person's chat unusable until it resolved. Sessions created before this build keep the tools, and calling one now arms the equivalent watch and returns at once.",
     ],
+  },
+  {
+    baseline: "VC-324",
+    build: "VC-364",
+    added: [
+      "browser_find — search one Browser Tab's accessibility tree for literal text, case-insensitive, in accessible names and page text. It answers with only the matching elements, each under its path from the root and marked [match], with ... where Volli left something out, and it reaches past where a full snapshot stops printing. Not a selector, not a pattern, and no page script. It is a read: when it shows matches, act afterwards only on refs it showed; a search that shows nothing leaves the latest snapshot's refs standing. A Session frozen before this build keeps its tool list and is not offered it.",
+    ],
+    changed: [
+      "Browser refs are stable within a generation: the same element keeps the same [ref=eN] from one snapshot or find to the next until the tab navigates, and [new] marks an element no earlier read at that generation showed. Acting is still judged against the latest read that showed anything — a ref that read did not print refuses, whether the element left the page, fell past the bound, or was not matched.",
+    ],
+    fixed: [],
+    removed: [],
   },
   {
     baseline: "VC-6",

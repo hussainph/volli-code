@@ -358,6 +358,11 @@ function chat(
     bornTicketless: overrides.ticketId === null,
     role: overrides.ticketId === null ? "project" : "ticket",
     parentSessionId: null,
+    // The policy every chat in the demo project is running (VC-416). A real
+    // one, not `null`: the surfaces that draw it (the island's agents card,
+    // the peek overlay) would otherwise be exercised only in their absent
+    // case, which is the beat-long newborn state rather than the ordinary one.
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "medium" },
     ...overrides,
   };
 }

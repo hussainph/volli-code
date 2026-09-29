@@ -6,7 +6,9 @@ import type {
   DatabaseResult,
   ProjectAuthorityPolicyResult,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectMutationResult,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectUpdateResult,
   Result,
@@ -46,13 +48,28 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+// Keep the production detector entrypoints observable. Project-create tests
+// usually inject a detector; this seam also verifies the uninjected default.
+const { detectAsync, detectSync } = vi.hoisted(() => ({
+  detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
+  detectSync: vi.fn<(path: string) => string | null>(),
+}));
+
+vi.mock("./project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-base-branch")>()),
+  detectProjectBaseBranchAsync: detectAsync,
+  detectProjectBaseBranch: detectSync,
+}));
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
@@ -304,7 +321,7 @@ beforeEach(() => {
   // not refuse the next test's destructive path.
   resetDeletionLeasesForTest();
   ctx = openTestDb();
-  registerDataIpcHandlers({ ok: true, db: ctx.db });
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch: async () => null });
 });
 
 afterEach(() => {
@@ -323,12 +340,12 @@ function createProject(): string {
 
 /** A project plus the directory it tracks — both needed to name the container it owns. */
 function createProjectWithPath(): { id: string; path: string } {
+  // Most tests exercise other channels and need a synchronous project fixture;
+  // project-create itself is exercised through the async IPC handler below.
   const path = freshProjectDir();
-  const result = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
-    path,
-    name: "Proj",
-  });
-  return { id: result.project.id, path };
+  const project = testProject({ name: "Proj", path, ticketPrefix: "PR" });
+  insertProject(ctx.db, project);
+  return { id: project.id, path };
 }
 
 function createTicket(projectId: string): Ticket {
@@ -532,29 +549,206 @@ describe("volli:project-authority-policy", () => {
   });
 });
 
+function deferredBranch(): {
+  promise: Promise<string | null>;
+  resolve: (branch: string | null) => void;
+} {
+  let resolve!: (branch: string | null) => void;
+  const promise = new Promise<string | null>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("volli:project-create — workspace-unique ticket prefixes", () => {
-  it("pins the repository's detected base branch when a project is added", () => {
+  it("uses the async detector by default without a test override", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    detectAsync.mockReturnValue(branch.promise);
+    detectSync.mockReturnValue("sync-default");
+    registerDataIpcHandlers({ ok: true, db: ctx.db });
+
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
+    expect(detectSync).not.toHaveBeenCalled();
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+
+    branch.resolve("trunk");
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { baseBranch: "trunk" },
+    });
+  });
+
+  it("pins the repository's detected base branch when a project is added", async () => {
     handlers.clear();
     const volliPath = freshProjectDir();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { detectBaseBranch: (path) => (path === volliPath ? "trunk" : null) },
-    );
+    const detectBaseBranch = vi.fn(async (path: string) => (path === volliPath ? "trunk" : null));
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
 
-    const result = invoke<ProjectCreateResult>("volli:project-create", {
+    const result = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: volliPath,
       name: "Volli Code",
     });
 
+    expect(detectBaseBranch).toHaveBeenCalledWith(volliPath);
     expect(result).toMatchObject({ ok: true, project: { baseBranch: "trunk" } });
   });
 
-  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", () => {
-    const first = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+  it("keeps other IPC available while detection is pending", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    const detectBaseBranch = vi.fn(() => branch.promise);
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledWith(path));
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [] },
+    });
+
+    branch.resolve("trunk");
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { baseBranch: "trunk" },
+    });
+  });
+
+  it("returns one project for concurrent creates of the same path", async () => {
+    handlers.clear();
+    const path = freshProjectDir();
+    const branch = deferredBranch();
+    const detectBaseBranch = vi.fn(() => branch.promise);
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Volli Code",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(1));
+    const second = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Different Name",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(2));
+    branch.resolve("main");
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toMatchObject({ ok: true, created: true });
+    expect(b).toMatchObject({ ok: true, created: false });
+    if (!a.ok || !b.ok) return;
+    expect(b.project).toMatchObject(a.project);
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [a.project] },
+    });
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path,
+        name: "Another Name",
+      }),
+    ).resolves.toMatchObject({ ok: true, created: false, project: a.project });
+    expect(detectBaseBranch).toHaveBeenCalledTimes(2);
+  });
+
+  it("allocates prefix, color and order from committed state after concurrent detection", async () => {
+    handlers.clear();
+    const [firstPath, secondPath, collisionPath] = [
+      freshProjectDir(),
+      freshProjectDir(),
+      freshProjectDir(),
+    ];
+    const firstBranch = deferredBranch();
+    const secondBranch = deferredBranch();
+    const collisionBranch = deferredBranch();
+    const branches = new Map([
+      [firstPath, firstBranch],
+      [secondPath, secondBranch],
+      [collisionPath, collisionBranch],
+    ]);
+    const detectBaseBranch = vi.fn((path: string) => {
+      const branch = branches.get(path);
+      if (!branch) throw new Error("Unexpected path");
+      return branch.promise;
+    });
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: firstPath,
+      name: "Volli Code",
+    });
+    const second = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: secondPath,
+      name: "Other Project",
+    });
+    const collision = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: collisionPath,
+      name: "Visual Compiler",
+    });
+    await vi.waitFor(() => expect(detectBaseBranch).toHaveBeenCalledTimes(3));
+    firstBranch.resolve("trunk");
+    const a = await first;
+    expect(a).toMatchObject({ ok: true, created: true, project: { colorIndex: 0, sortOrder: 0 } });
+    collisionBranch.resolve(null);
+    await expect(collision).resolves.toEqual({
+      ok: false,
+      error: 'Ticket prefix "VC" is already used by Volli Code.',
+    });
+    secondBranch.resolve("main");
+    await expect(second).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      project: { colorIndex: 1, sortOrder: 1, baseBranch: "main" },
+    });
+    expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
+      ok: true,
+      data: { projects: [{ path: firstPath }, { path: secondPath }] },
+    });
+  });
+
+  it("refuses missing paths and files without running detection", async () => {
+    handlers.clear();
+    const directory = freshProjectDir();
+    const file = join(directory, "file");
+    writeFileSync(file, "not a directory");
+    const detectBaseBranch = vi.fn(async () => "main");
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path: join(directory, "missing"),
+        name: "Missing",
+      }),
+    ).resolves.toEqual({ ok: false, error: "Project path does not exist" });
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+        path: file,
+        name: "File",
+      }),
+    ).resolves.toEqual({ ok: false, error: "Project path is not a directory" });
+    expect(detectBaseBranch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the colliding project instead of creating an ambiguous display-id namespace", async () => {
+    const first = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Volli Code",
     });
-    const second = invoke<{ ok: boolean; error?: string }>("volli:project-create", {
+    const second = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Visual Compiler",
     });
@@ -564,6 +758,185 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       ok: false,
       error: 'Ticket prefix "VC" is already used by Volli Code.',
     });
+  });
+});
+
+describe("volli:project-relink — a folder that was renamed or moved", () => {
+  /**
+   * Renames `from` to a fresh sibling, and tracks the result for cleanup.
+   *
+   * The target name is MADE rather than fixed: the temp root is shared with
+   * every other test process on the machine, and a `rename` onto a name a
+   * previous run left behind fails with ENOTEMPTY rather than saying so.
+   */
+  function renameProjectDir(from: string, hint: string): string {
+    const to = `${mkdtempSync(join(tmpdir(), `volli-${hint}-`))}/moved`;
+    createdProjectDirs.push(dirname(to));
+    renameSync(from, to);
+    return to;
+  }
+
+  it("reports the registered folder as missing once it has been renamed", async () => {
+    const project = createProjectWithPath();
+    renameProjectDir(project.path, "renamed");
+
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: project.path, state: "missing" });
+  });
+
+  // The ticket's headline: the SAME project, its tickets still on it, now
+  // pointing at where the folder actually is. Nothing here creates a project.
+  it("reconnects the existing project, keeping its id and its tickets", async () => {
+    const project = createProjectWithPath();
+    const ticket = createTicket(project.id);
+    const moved = renameProjectDir(project.path, "moved");
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    expect(result.ok && result.project.id).toBe(project.id);
+    expect(result.ok && result.project.path).toBe(moved);
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(1);
+    expect(bootstrap.ok && bootstrap.data.projects[0]?.path).toBe(moved);
+    expect(
+      invoke<TicketsResult>("volli:data-project-roster", { projectId: project.id }),
+    ).toMatchObject({ ok: true, tickets: [{ id: ticket.id }] });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", {
+        projectId: project.id,
+      }),
+    ).resolves.toEqual({ ok: true, path: moved, state: "present" });
+  });
+
+  // Every surface that reads a project path has to re-read: the rail, the file
+  // browsers, Configure, and the renderer's own root allowlist mirror. Without
+  // the invalidation the relink is committed and invisible.
+  it("announces the change so every surface re-reads the path", async () => {
+    const project = createProjectWithPath();
+    const moved = renameProjectDir(project.path, "announced");
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: moved,
+    });
+
+    // UNTARGETED on purpose (no `ticketId`): the path this relink rewrote is
+    // read by the rail, both file browsers, Configure and the renderer's root
+    // allowlist mirror, and the container move rewrote ticket rows as well. The
+    // conservative arm of the contract is the correct one here.
+    await expectDataChanged({ entity: "tickets", projectId: project.id });
+  });
+
+  it("announces nothing when the relink was refused", async () => {
+    const project = createProjectWithPath();
+
+    await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: join(project.path, "nowhere-at-all"),
+    });
+
+    expectNoDataChange();
+  });
+
+  it("refuses a folder another project already tracks rather than duplicating it", async () => {
+    const project = createProjectWithPath();
+    // AWAITED: `volli:project-create` detects the base branch off the main
+    // thread, so the handler is async and a synchronous read of it would test a
+    // Promise's absent `ok` field rather than the answer.
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+
+    const result = await invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+      id: project.id,
+      path: other.project.path,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(bootstrap.ok && bootstrap.data.projects).toHaveLength(2);
+  });
+
+  // Against the REAL disk, and through a symlink rather than a case difference,
+  // because the two platforms this suite runs on disagree about case and agree
+  // about links. A path that reaches a folder another project tracks is that
+  // folder, however it is spelled — and taking it would leave two rows on one
+  // checkout, which is the duplicate this channel exists to refuse.
+  it("refuses a path that reaches a tracked folder by another route", async () => {
+    const project = createProjectWithPath();
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path: freshProjectDir(),
+      name: "Atlas",
+    });
+    if (!other.ok) throw new Error(other.error);
+    const link = join(mkdtempSync(join(tmpdir(), "volli-link-")), "atlas");
+    createdProjectDirs.push(dirname(link));
+    symlinkSync(other.project.path, link);
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: link,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "Atlas already tracks that folder.",
+    });
+  });
+
+  it("refuses a replacement folder that is not on disk", async () => {
+    const project = createProjectWithPath();
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: join(project.path, "nowhere-at-all"),
+      }),
+    ).resolves.toEqual({ ok: false, refusal: "missing", error: "That folder doesn't exist." });
+  });
+
+  // A project can be any folder, so a path that turns out to be a file is a
+  // refusal with its own sentence rather than a crash.
+  it("refuses a replacement that is a file rather than a folder", async () => {
+    const project = createProjectWithPath();
+    const file = join(freshProjectDir(), "not-a-folder.txt");
+    writeFileSync(file, "");
+
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: project.id,
+        path: file,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: "not-a-directory",
+      error: "That's a file, not a folder.",
+    });
+  });
+
+  it("refuses an unknown project", async () => {
+    await expect(
+      invoke<Promise<ProjectRelinkResult>>("volli:project-relink", {
+        id: "ghost",
+        path: freshProjectDir(),
+      }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
+    await expect(
+      invoke<Promise<ProjectFolderResult>>("volli:project-folder-check", { projectId: "ghost" }),
+    ).resolves.toEqual({ ok: false, error: "Unknown project" });
   });
 });
 
@@ -674,12 +1047,13 @@ describe("ticket-scoped invalidations carry their project (VC-387)", () => {
 });
 
 describe("volli:data-project-roster — the steady-state refresh read (VC-387)", () => {
-  it("answers one project's live board, carrying no ticket bodies", () => {
+  it("answers one project's live board, carrying no ticket bodies", async () => {
     const projectId = createProject();
-    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Other",
     });
+    if (!other.ok) throw new Error(other.error);
     const mine = invoke<TicketResult>("volli:ticket-create", {
       projectId,
       status: "todo",
@@ -1111,6 +1485,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
         value: {
           identity: { worktreePath, branch: "volli/VC-1-a-ticket", baseBranch: "main" },
           created: true,
+          restamped: true,
         },
       };
     });
@@ -1274,6 +1649,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
             baseBranch: "main",
           },
           created: true,
+          restamped: true,
         },
       };
     });
@@ -1318,6 +1694,7 @@ describe("volli:ticket-update — switching worktree scope on (VC-98)", () => {
       value: {
         identity: { worktreePath: null, branch: "volli/VC-1", baseBranch: "main" },
         created: false,
+        restamped: false,
       },
     });
 
@@ -1671,13 +2048,14 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(interrupt).not.toHaveBeenCalled();
   });
 
-  it("does not interrupt when a single-card request names the wrong project", () => {
+  it("does not interrupt when a single-card request names the wrong project", async () => {
     const interrupt = withInterrupt(["s1"]);
     const projectId = createProject();
-    const other = invoke<{ ok: true; project: { id: string } }>("volli:project-create", {
+    const other = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: freshProjectDir(),
       name: "Other",
     });
+    if (!other.ok) throw new Error(other.error);
     const otherProjectId = other.project.id;
     const ticket = createTicket(projectId);
     move(projectId, ticket.id, "doing");
@@ -1915,6 +2293,10 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
         bornTicketless: false,
         role: "ticket",
         parentSessionId: null,
+        // What this Session is pinned to (VC-416). Null here because it has
+        // never recorded a policy — it was minted and never attached, which is
+        // exactly the state a row must not dress up as a reading.
+        model: null,
       },
       // A Session that has run no model reads as unmeasured, not as free
       // (VC-87). It rides on the ROW rather than inside the record, so both
@@ -3226,6 +3608,7 @@ describe("volli:worktree-recreate", () => {
           baseBranch: "main",
         },
         created: true,
+        restamped: true,
       },
     });
 

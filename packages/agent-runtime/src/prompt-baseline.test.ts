@@ -138,7 +138,7 @@ describe("promptBaseline", () => {
     expect(composeSystemPrompt(input())).toBe(sections.map((section) => section.text).join("\n\n"));
   });
 
-  it("keeps a current-sized fresh Board package below 1,500 estimated tokens at the index ceiling", () => {
+  it("keeps a current-sized fresh Board package below 1,700 estimated tokens at the index ceiling", () => {
     const index = skillsIndexResource(
       Array.from({ length: 100 }, (_, position) => ({
         ...skill(`skill-${String(position).padStart(3, "0")}`),
@@ -171,12 +171,18 @@ describe("promptBaseline", () => {
       }),
     );
     expect(measured.brief.chars).toBe(334);
-    expect(measured.toolSurface.chars).toBe(685);
-    // +78 chars over main's measurement: the execution layer's concurrency-budget
-    // line (VC-339), which is one line precisely because of the ceiling this test
-    // guards — 1,498 of the 1,500 estimated tokens are now spent.
-    expect(measured.system).toEqual({ chars: 4_966, tokens: 1_242 });
-    expect(measured.total).toEqual({ chars: 5_985, tokens: 1_498 });
+    // +26 chars: the block now invites use of the verbs it names (VC-459).
+    expect(measured.toolSurface.chars).toBe(711);
+    // The ceiling moved from 1,500 to 1,700 on purpose (VC-459), and this is
+    // the whole of what bought it. VC-339's budget line had left 2 tokens of
+    // headroom; the delegation paragraph needed ~171 and the public-web rule
+    // (web_search/web_fetch over curl, localhost left to the shell) ~24 more.
+    // The rest of the Execution core was reworded shorter to pay part of it;
+    // the net is +725 chars of system prompt, ~181 tokens. All of it is
+    // Role-static, so it is bought once per Role and read from cache by every
+    // Board Session after. 1,685 of the 1,700 estimated tokens are now spent.
+    expect(measured.system).toEqual({ chars: 5_691, tokens: 1_423 });
+    expect(measured.total).toEqual({ chars: 6_736, tokens: 1_685 });
   });
 });
 

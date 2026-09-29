@@ -88,6 +88,7 @@ import {
   type ConversationReader,
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
+import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -112,36 +113,46 @@ import {
   recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+import { failureResetsAt } from "./quota-reset";
 import { headerUsageUpdate } from "./usage-limits/passive";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import { UsageProbeSchedule, type UsageProbeFetch } from "./usage-limits/probe";
 import { OrderedObservationDelivery } from "./ordered-observation-delivery";
 import { piContext, type Context } from "./pi-context";
+import { providerImageGuard, withProviderSafeImages } from "./provider-images";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
+import { applyToolDispatch, SEQUENTIAL_TOOL_DISPATCH, type ToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
   attentionReasonFor,
   classifyAssistantMessage,
   isTransientTransportFailure,
+  isUnreachedAuthFailure,
   recoveryRefFor,
+  retryHintMs,
   sanitizeDiagnostic,
   sessionUsageFrom,
 } from "./transcript";
+import { ALWAYS_ONLINE, type ConnectivityPort } from "./connectivity";
+import {
+  DEFAULT_STREAM_SUPERVISION,
+  superviseStreams,
+  type StreamSupervisionTiming,
+} from "./stream-supervision";
+import {
+  autoRetryDelayMs,
+  planTransportRetry,
+  TRANSPORT_NOTICE_AFTER_ATTEMPTS,
+} from "./transport-retry";
 
 /**
- * How hard a dropped socket is chased before the failure becomes the user's.
- *
- * Behavioral, not durable: nothing derived from these numbers is written to
- * history, so retuning them changes only how long recovery takes and how many
- * attempts the exhaustion message names.
+ * The detail a transport notice carries while the machine has no network. A
+ * noun phrase under the chat's "Reconnecting" row, and nothing more.
  */
-const AUTO_RETRY_LIMIT = 10;
-const AUTO_RETRY_BASE_MS = 500;
-const AUTO_RETRY_CEILING_MS = 8_000;
-const AUTO_RETRY_JITTER_MS = 100;
+const OFFLINE_NOTICE = "Waiting for network";
 const OPENCODE_GO_PROVIDER = "opencode-go";
 const OPENCODE_SESSION_HEADER = "x-opencode-session";
 
@@ -167,12 +178,6 @@ function withOpenCodeGoSessionHeader(
       },
     });
   };
-}
-
-/** Exponential backoff to a ceiling, jittered so ten Sessions do not reconnect in lockstep. */
-export function autoRetryDelayMs(attempt: number): number {
-  const backoff = Math.min(AUTO_RETRY_BASE_MS * 2 ** attempt, AUTO_RETRY_CEILING_MS);
-  return backoff + Math.random() * AUTO_RETRY_JITTER_MS;
 }
 
 /**
@@ -257,6 +262,21 @@ export interface PiRuntimeHostOptions {
    */
   retryBackoffMs?: (attempt: number) => number;
   /**
+   * Whether the machine has a network, and when it woke (VC-443). A transient
+   * failure while offline waits for the network instead of spending the online
+   * retry budget, and a wake cuts any provider request that stays silent past
+   * it. Main implements it over Electron's `net` and `powerMonitor`; absent,
+   * the host is {@link ALWAYS_ONLINE} and nothing ever wakes.
+   */
+  connectivity?: ConnectivityPort;
+  /**
+   * How long a provider request may stay silent before it is cut and retried,
+   * and how long one open across a sleep has to speak after the wake.
+   * Injectable so deterministic tests need not wait nine minutes; see
+   * `stream-supervision.ts` for why the product values are what they are.
+   */
+  streamSupervision?: StreamSupervisionTiming;
+  /**
    * The compaction policy every attachment is run under, read at the moment it
    * is needed rather than captured at attach.
    *
@@ -298,6 +318,7 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  toolDispatch: ToolDispatch;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -308,6 +329,8 @@ interface PiRuntimeHost {
     identity: RuntimeSessionIdentity,
   ) => Promise<ExecutionEnv>;
   retryBackoffMs: (attempt: number) => number;
+  connectivity: ConnectivityPort;
+  streamSupervision: StreamSupervisionTiming;
   compactionPolicy: () => CompactionPolicy;
   observability: ObservabilitySink;
   /**
@@ -338,16 +361,41 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one structured executor port.
- *
- * The models are resolved once, here, rather than per attachment: the credential
- * store behind them serializes this process's writes to Pi's `auth.json`, and a
- * fresh store per attach would serialize nothing.
+ * Build the one production structured executor port. Every Session it attaches
+ * dispatches a model-issued tool batch sequentially.
  */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
+  return createPiAgentRuntimeWithToolDispatch(options, SEQUENTIAL_TOOL_DISPATCH);
+}
+
+/**
+ * Test-only opt-in (VC-444): the same runtime with a fixture-chosen
+ * {@link ToolDispatch}. Parallel dispatch is never a bare flag — only MCP tools
+ * whose exact `serverId:toolName` is on the fixture's allowlist may overlap,
+ * and every built-in or unlisted tool is marked sequential, so a batch that
+ * mixes them runs serially. Deliberately absent from `src/index.ts` and every
+ * `package.json#exports` entry; a runtime test pins that.
+ */
+export function createPiAgentRuntimeForFixture(
+  options: PiRuntimeHostOptions,
+  toolDispatch: ToolDispatch,
+): AgentRuntime {
+  return createPiAgentRuntimeWithToolDispatch(options, toolDispatch);
+}
+
+/**
+ * Build the one structured executor port. The models are resolved once rather
+ * than per attachment: the credential store behind them serializes this
+ * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ */
+function createPiAgentRuntimeWithToolDispatch(
+  options: PiRuntimeHostOptions,
+  toolDispatch: ToolDispatch,
+): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    toolDispatch,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -359,6 +407,8 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
     executionEnvFactory:
       options.executionEnvFactory ?? ((workspacePath) => piExecutionEnv(workspacePath)),
     retryBackoffMs: options.retryBackoffMs ?? autoRetryDelayMs,
+    connectivity: options.connectivity ?? ALWAYS_ONLINE,
+    streamSupervision: options.streamSupervision ?? DEFAULT_STREAM_SUPERVISION,
     compactionPolicy: options.compactionPolicy ?? (() => DEFAULT_COMPACTION_POLICY),
     observability: options.observability ?? NOOP_OBSERVABILITY_SINK,
     ...(options.usageLimits === undefined
@@ -1000,8 +1050,10 @@ function isRecoverableObservation(value: unknown): boolean {
           "context",
           "runtime-failure",
           "partial-turn",
+          "transport",
         ]) &&
-        typeof value["message"] === "string"
+        typeof value["message"] === "string" &&
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -1390,6 +1442,7 @@ async function attachSession(
   let sidecarPath: string | undefined;
   let toolEnv: ExecutionEnv | undefined;
   let unsubscribe: (() => void) | undefined;
+  let stopWatchingResume: (() => void) | undefined;
   let abortListener: (() => void) | undefined;
   let createdSidecar = false;
 
@@ -1785,7 +1838,7 @@ async function attachSession(
     // Durable like the recovery notices above, and ALSO told live once the
     // attachment has started: a fresh attachment is never reconciled from its
     // own sidecar, so a marker alone would reach no one until a relaunch.
-    let carryAttention: Awaited<ReturnType<typeof persistObservation>> | undefined;
+    let carryAttention: AttentionObservation | undefined;
     if (carryFailure !== undefined) {
       carryAttention = await persistObservation({
         kind: "attention",
@@ -1804,6 +1857,18 @@ async function attachSession(
       });
       activeAttentionReasons.add("partial-turn");
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
+    }
+    // A notice that the last process was reconnecting describes a wait no
+    // process is running any more. Retired here rather than left for the next
+    // turn to clear, so a relaunched Session does not claim to be reconnecting
+    // while it sits idle.
+    if (activeAttentionReasons.delete("transport")) {
+      await persistObservation({
+        kind: "attention",
+        state: "cleared",
+        reason: "transport",
+        message: "Runtime recovered.",
+      });
     }
     // An unreadable checkpoint is a recovered Session, not an unattachable one:
     // the history it replaced is still on disk and is what {@link contextMessages}
@@ -1855,7 +1920,14 @@ async function attachSession(
     // bindings: the array Pi resolves against and the list the Snapshot records
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
-    const tools = createSessionTools(spec, ownedToolEnv);
+    // Sequential dispatch hands the array back untouched; the fixture-only
+    // parallel dispatch marks every tool that is not an allowlisted MCP read
+    // sequential. Names and schemas — the provider-visible half — never change.
+    const { tools, toolExecution } = applyToolDispatch(
+      createSessionTools(spec, ownedToolEnv),
+      spec.tools.mcp ?? [],
+      host.toolDispatch,
+    );
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -1888,9 +1960,21 @@ async function attachSession(
      * for its own reason — a new message, a manual Retry — gets a whole one,
      * while a turn resumed in place carries on spending the same one, so a
      * connection that will never hold cannot be chased forever.
+     *
+     * Spent only while ONLINE: a turn waiting for the network to come back is
+     * not failing, and waits as long as it has to (VC-443). `autoRetryWaitedMs`
+     * is the backoff the turn has scheduled, which is what the budget in
+     * `transport-retry.ts` is measured in.
      */
     let autoRetryAttempts = 0;
+    let autoRetryWaitedMs = 0;
     let autoRetryPending = false;
+    /**
+     * The detail of the transport notice this attachment has raised, while it
+     * stands. Re-raised only when the detail changes, so a provider failing the
+     * same way twenty times writes one fact rather than twenty.
+     */
+    let transportNotice: string | undefined;
     let resumingTurn = false;
     /**
      * Whether this turn has already spent its one overflow recovery.
@@ -1943,8 +2027,18 @@ async function attachSession(
      */
     let contextRewrite: Promise<void> = Promise.resolve();
     let rewritingContext = false;
-    /** Set only while a backoff is being waited out; see {@link interruptTurn}. */
+    /**
+     * Set only while a backoff or a network wait is being waited out; see
+     * {@link interruptTurn}.
+     */
     let cancelBackoff: (() => void) | undefined;
+    /**
+     * Set only while a BACKOFF is being waited out: a wake ends it early, since
+     * the timer that was running across the sleep says nothing about the
+     * network now. A network wait is not woken this way — it ends when the
+     * port says the network is back, not when the lid opens.
+     */
+    let wakeBackoff: (() => void) | undefined;
     type PendingMessageDelivery = {
       commandId: string | null;
       operation: "message.submit";
@@ -2130,12 +2224,11 @@ async function attachSession(
       const window = contextWindowOf(requestModel);
       if (window === undefined) return undefined;
       const floor = Math.min(requestModel.maxTokens, MIN_OUTPUT_CEILING_TOKENS);
-      const occupied = contextTokenProjector(
-        context.messages,
-        requestModel,
-        context.systemPrompt,
-        context.tools,
-      );
+      // The whole normalized transcript, prefix included: since Pi 0.86 the
+      // system prompt and tool declarations ARE messages (the leading system
+      // one), and the projector prices them there rather than off fields the
+      // context no longer has.
+      const occupied = contextTokenProjector(context.messages, requestModel);
       return Math.max(
         floor,
         Math.min(requestModel.maxTokens, window - occupied - OUTPUT_CEILING_HEADROOM_TOKENS),
@@ -2159,18 +2252,37 @@ async function attachSession(
           : {}),
       });
     };
+    // A provider request that goes silent — most often a socket that died
+    // while the machine slept — is cut and failed as a transient transport
+    // failure, so it rides the same `continue` retry a dropped socket does
+    // rather than hanging the turn for half an hour (VC-443).
+    const streamSupervisor = superviseStreams(streamWithCompaction, host.streamSupervision);
+
+    // The prompt and the declarations, as the one leading system message Pi's
+    // transcript now carries them in (0.86). Built here rather than left to
+    // the `Agent`, which seeds one only when the array it is handed does not
+    // already start with a system message: a sidecar whose first replayable
+    // entry is a tool-change system message Pi emitted ahead of the first
+    // prompt would otherwise be taken for a transcript that already has its
+    // prompt, and the composed one would never be sent. The same object is put
+    // back at the head of every array this runtime rebuilds from the sidecar
+    // (compaction, model switch), so the prefix is the same bytes on every
+    // request of the attachment and the projector's memo hits on it.
+    const head = systemHead(
+      composeSystemPrompt({
+        role: spec.identity.role,
+        tools: spec.tools,
+        promptResources: spec.promptResources,
+      }),
+      tools,
+    );
 
     const agent = new Agent({
       initialState: {
-        systemPrompt: composeSystemPrompt({
-          role: spec.identity.role,
-          tools: spec.tools,
-          promptResources: spec.promptResources,
-        }),
         model,
         thinkingLevel: spec.model.reasoningLevel,
         tools,
-        messages: recoveredMessages,
+        messages: withSystemHead(head, recoveredMessages),
       },
       onPayload: (payload) => {
         if (nativeCompactionState === undefined) return undefined;
@@ -2184,8 +2296,11 @@ async function attachSession(
           throw new Error("Native compaction checkpoint is missing from the request.");
         return projected;
       },
+      // Every image made legal for the request's model before it is sent
+      // (`provider-images.ts`); the attempt clock starts after, on the stream.
+      // Outside the supervisor, so resize time never counts as provider silence.
       streamFn: withOpenCodeGoSessionHeader(
-        instrumentStreamFn(streamWithCompaction, {
+        instrumentStreamFn(withProviderSafeImages(streamSupervisor.streamFn, providerImageGuard), {
           sink: host.observability,
           runId,
           now: host.now,
@@ -2205,7 +2320,7 @@ async function attachSession(
         sidecarMetadata.id,
       ),
       sessionId: sidecarMetadata.id,
-      toolExecution: "sequential",
+      toolExecution,
       // Pi's harness converter, not the `Agent`'s default, and the difference is
       // exactly one message role. The default keeps `user`, `assistant` and
       // `toolResult` and DROPS everything else — including the
@@ -2237,17 +2352,141 @@ async function attachSession(
     };
     agent.steeringMode = "one-at-a-time";
     agent.followUpMode = "one-at-a-time";
+    // The machine woke: a request open across the sleep is probably talking to
+    // a socket the server dropped, and a backoff timer that ran across it says
+    // nothing about the network now. Both are re-decided rather than waited out.
+    stopWatchingResume = host.connectivity.onResume(() => {
+      streamSupervisor.wake();
+      wakeBackoff?.();
+    });
 
-    /** A wait the turn can be taken out of, rather than one it has to sit through. */
+    /**
+     * A wait the turn can be taken out of, rather than one it has to sit through.
+     *
+     * Both waits begin after an await (the notice they follow is written
+     * first), and a Stop that lands there finds no wait to cancel yet — so each
+     * re-reads `interrupting` before it starts, rather than sitting out a wait
+     * nobody is left to want.
+     */
     const waitBeforeRetry = async (ms: number): Promise<void> => {
+      if (interrupting) return;
       await new Promise<void>((wake) => {
         const timer = setTimeout(wake, ms);
         cancelBackoff = () => {
           clearTimeout(timer);
           wake();
         };
+        wakeBackoff = cancelBackoff;
       });
       cancelBackoff = undefined;
+      wakeBackoff = undefined;
+    };
+
+    /**
+     * Wait for the host to report a network, for as long as that takes.
+     *
+     * Ended early by the same Stop a backoff is, and by the run's own signal.
+     * Answers whether the network actually came back: a wait that ended any
+     * other way is either a Stop — which the caller re-reads `interrupting`
+     * for — or a port that broke its contract, which is not a network and is
+     * charged to the online budget rather than retried for free.
+     */
+    const waitForNetwork = async (runSignal: AbortSignal): Promise<boolean> => {
+      if (interrupting) return false;
+      const waiting = new AbortController();
+      const stop = (): void => waiting.abort();
+      cancelBackoff = stop;
+      runSignal.addEventListener("abort", stop, { once: true });
+      try {
+        await host.connectivity.waitUntilOnline(waiting.signal);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        runSignal.removeEventListener("abort", stop);
+        cancelBackoff = undefined;
+      }
+    };
+
+    /**
+     * Say, in the chat, that the runtime is reconnecting on its own.
+     *
+     * An Attention of the `transport` reason, which the ledger reads as
+     * `transport_retrying`: a waiting row, not an error — no notification, no
+     * red dot — cleared by the first sign the provider is answering again.
+     * Durable like every other Attention, because a notice raised and then
+     * orphaned by a crash would otherwise be one nothing could ever clear; the
+     * next attach retires it.
+     */
+    const raiseTransportNotice = async (detail: string): Promise<void> => {
+      if (transportNotice === detail) return;
+      transportNotice = detail;
+      activeAttentionReasons.add("transport");
+      await commitObservation(
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "transport",
+          message: detail,
+        }),
+      );
+    };
+
+    const clearTransportNotice = async (): Promise<void> => {
+      if (transportNotice === undefined) return;
+      transportNotice = undefined;
+      activeAttentionReasons.delete("transport");
+      await commitObservation(
+        await persistObservation({
+          kind: "attention",
+          state: "cleared",
+          reason: "transport",
+          message: "Runtime recovered.",
+        }),
+      );
+    };
+
+    /**
+     * Wait out a transport failure, and say whether the turn should resume.
+     *
+     * Offline, the wait is for the network and costs nothing: a laptop closed
+     * for three hours comes back to a turn that simply carries on (VC-443).
+     * Online, it is the bounded backoff in `transport-retry.ts` — the provider
+     * is reachable and failing, and that is worth a person's attention once the
+     * budget is spent. A backoff that ends to find the network gone waits for
+     * it too, rather than spending the retry on a request that cannot leave.
+     *
+     * `eligible` is false for a failure only an absent network can excuse — a
+     * credential refresh that never reached its server — which is waited out
+     * offline and handed to the person online.
+     */
+    const recoverFromTransport = async (
+      failed: RuntimeFailure,
+      signal: AbortSignal,
+      eligible: boolean,
+    ): Promise<boolean> => {
+      if (!host.connectivity.isOnline()) {
+        await raiseTransportNotice(OFFLINE_NOTICE);
+        if ((await waitForNetwork(signal)) || interrupting) return true;
+      }
+      if (!eligible) return false;
+      const plan = planTransportRetry(
+        { attempts: autoRetryAttempts, waitedMs: autoRetryWaitedMs },
+        host.retryBackoffMs(autoRetryAttempts),
+        retryHintMs(failed.message),
+      );
+      if (plan.kind === "give-up") return false;
+      autoRetryAttempts += 1;
+      autoRetryWaitedMs += plan.delayMs;
+      if (autoRetryAttempts >= TRANSPORT_NOTICE_AFTER_ATTEMPTS) {
+        await raiseTransportNotice(failed.message);
+      }
+      await waitBeforeRetry(plan.delayMs);
+      if (!interrupting && !host.connectivity.isOnline()) {
+        await raiseTransportNotice(OFFLINE_NOTICE);
+        await waitForNetwork(signal);
+      }
+      return true;
     };
 
     /**
@@ -2526,8 +2765,9 @@ async function attachSession(
           // while both remain in the ledger and on screen.
           //
           // Already whole: the summary, the restored resources and the kept
-          // turns without their reasoning, all read off the entry just written.
-          agent.state.messages = outcome.messages;
+          // turns without their reasoning, all read off the entry just written
+          // — behind the head, which the entry never holds.
+          agent.state.messages = withSystemHead(head, outcome.messages);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -2601,11 +2841,13 @@ async function attachSession(
           ...settings,
           reserveTokens: thresholdHeadroom(settings.reserveTokens, contextWindow),
         };
+        // The live array already leads with the system message that carries
+        // the prompt and tools; handing the projector the prompt as well would
+        // count it twice. (Tools would not — the estimator prices each
+        // declaration once over the transcript — but there is nothing to add.)
         const occupied = contextTokenProjector(
           [...agent.state.messages, ...additional],
           agent.state.model,
-          agent.state.systemPrompt,
-          agent.state.tools,
         );
         if (!compactionDue(occupied, contextWindow, thresholdSettings)) return false;
         const path = await conversationBranch();
@@ -2639,10 +2881,12 @@ async function attachSession(
     /**
      * What this runtime can still do about a failed turn without asking anybody.
      *
-     * Two recoveries, one shape: both spend something the turn is allowed to
-     * spend once, both keep the turn open while they do it, and both hand back
-     * the same answer — that the run may be resumed in place. Everything else is
-     * the user's to decide, and says so by returning false.
+     * Three recoveries, one shape: each spends something the turn has a budget
+     * for, each keeps the turn open while it does it, and each hands back the
+     * same answer — that the run may be resumed in place. Everything else is
+     * the user's to decide, and says so by returning false. The transport one
+     * alone may wait without spending anything: a machine with no network is
+     * waited on, not charged ({@link recoverFromTransport}).
      *
      * Overflow remains a one-shot recovery for provider limits the proactive
      * budget could not predict. It runs only after the failed loop has ended.
@@ -2657,10 +2901,9 @@ async function attachSession(
       failed: RuntimeFailure,
       signal: AbortSignal,
     ): Promise<boolean> => {
-      if (isTransientTransportFailure(failed) && autoRetryAttempts < AUTO_RETRY_LIMIT) {
-        autoRetryAttempts += 1;
-        await waitBeforeRetry(host.retryBackoffMs(autoRetryAttempts - 1));
-        return true;
+      const transient = isTransientTransportFailure(failed);
+      if (transient || isUnreachedAuthFailure(failed)) {
+        return recoverFromTransport(failed, signal, transient);
       }
       // **Refused reasoning is answered by dropping it.** A provider that binds
       // each `thinking` block to everything sent before it has found a block
@@ -2705,6 +2948,7 @@ async function attachSession(
         if (!resumed) {
           turnId = randomUUID();
           autoRetryAttempts = 0;
+          autoRetryWaitedMs = 0;
           overflowRecoveryUsed = false;
           reasoningRecoveryUsed = false;
           await commitObservation(
@@ -2758,6 +3002,9 @@ async function attachSession(
       }
 
       if (event.type === "message_update") {
+        // The provider is answering again, which is the whole of what the
+        // reconnecting notice was waiting to hear.
+        await clearTransportNotice();
         const streamed = event.assistantMessageEvent;
         if (streamed.type === "text_delta") {
           await commitObservation({ kind: "delta", turnId, channel: "text", text: streamed.delta });
@@ -2836,6 +3083,7 @@ async function attachSession(
         await commitObservation(dropped);
       }
       if (failure === undefined) {
+        await clearTransportNotice();
         for (const reason of activeAttentionReasons) {
           const cleared = await persistObservation({
             kind: "attention",
@@ -2871,6 +3119,10 @@ async function attachSession(
             autoRetryPending = true;
             return;
           }
+          // No longer reconnecting: the dead end below is the one standing
+          // claim, and a "Reconnecting" row beside it would be a wait nobody is
+          // running.
+          await clearTransportNotice();
           // Including a context refusal that compaction could not answer — an
           // overflow with nothing left to summarize is still a dead end, and
           // still has to say so.
@@ -2889,17 +3141,31 @@ async function attachSession(
               : []),
           ];
           const reason = attentionReasonFor(failure);
+          // A spent allowance whose reset the failure states: carried on the
+          // Attention so a person can schedule the resume (quota-reset.ts).
+          const resetsAt =
+            reason === "runtime-failure"
+              ? failureResetsAt({
+                  failure,
+                  providerId: agent.state.model.provider,
+                  observedAt: host.now(),
+                  holder: host.usageLimits?.holder,
+                })
+              : null;
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
             message:
               spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
+            ...(resetsAt === null ? {} : { resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
         }
       }
+      // A Stop during a reconnect ends the wait with the turn.
+      await clearTransportNotice();
       await commitObservation(
         await persistObservation({ kind: "turn", state: "interrupted", turnId }),
       );
@@ -2970,17 +3236,18 @@ async function attachSession(
         await rewritingTheContext(() =>
           compactBeforeTurn([
             queuedUserMessage(
-              agent.state.messages.length === 0
+              conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
           ]),
         );
-        const delivered =
-          agent.state.messages.length === 0
-            ? composeFirstUserMessage(spec, framedText)
-            : framedText;
+        // Asked of the conversation, not of the array: the array is never empty
+        // now that the system head lives in it (see `transcript-context.ts`).
+        const delivered = conversationIsEmpty(agent.state.messages)
+          ? composeFirstUserMessage(spec, framedText)
+          : framedText;
         const message = queuedUserMessage(delivered, images);
         pendingRunDelivery = {
           commandId: commandId ?? null,
@@ -3116,7 +3383,7 @@ async function attachSession(
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = contextMessages(path);
+          agent.state.messages = withSystemHead(head, contextMessages(path));
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
@@ -3233,6 +3500,9 @@ async function attachSession(
         await detachedRunSettled;
         unsubscribe?.();
         unsubscribe = undefined;
+        stopWatchingResume?.();
+        stopWatchingResume = undefined;
+        streamSupervisor.dispose();
         // Cleanup runs on an uncancellable context on purpose: this is the
         // path taken precisely when the attachment's own signal has aborted,
         // and cancellation must not be able to stop the release of what it
@@ -3321,6 +3591,7 @@ async function attachSession(
       spec.signal?.removeEventListener("abort", abortListener);
     }
     unsubscribe?.();
+    stopWatchingResume?.();
     await toolEnv?.cleanup(piContext()).catch(
       /* v8 ignore next -- owned-environment cleanup is best effort after a failed attach. */
       () => undefined,

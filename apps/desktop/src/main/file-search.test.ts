@@ -258,6 +258,15 @@ describe("previewForMatch", () => {
     });
   });
 
+  it("returns a whole sub-240-character line with offsets for a late hit", () => {
+    const line = `${"x".repeat(100)}MIN_PANE_PX = 240;`;
+    expect(previewForMatch(line, 100, 111)).toEqual({
+      preview: line,
+      start: 100,
+      end: 111,
+    });
+  });
+
   it("windows a minified line around the match and moves the offsets with it", () => {
     const filler = "x".repeat(2_000);
     const line = `${filler}needle${filler}`;
@@ -270,12 +279,17 @@ describe("previewForMatch", () => {
     expect(result.preview.slice(result.start, result.end)).toBe("needle");
   });
 
-  it("keeps a long line's leading match flush against the start", () => {
-    const line = `needle${"x".repeat(2_000)}`;
-    const result = previewForMatch(line, 0, 6);
-
-    expect(result.preview.startsWith("needle")).toBe(true);
-    expect(result.preview.slice(result.start, result.end)).toBe("needle");
+  it("keeps a long line's leading and trailing hits in the preview", () => {
+    for (const [before, after] of [
+      ["", "x".repeat(2_000)],
+      ["x".repeat(2_000), ""],
+    ]) {
+      const line = `${before}needle${after}`;
+      const result = previewForMatch(line, before.length, before.length + 6);
+      expect(result.preview.slice(result.start, result.end)).toBe("needle");
+      expect(result.preview.startsWith("…")).toBe(before.length > 0);
+      expect(result.preview.endsWith("…")).toBe(after.length > 0);
+    }
   });
 });
 

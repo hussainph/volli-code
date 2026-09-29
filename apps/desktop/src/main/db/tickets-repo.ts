@@ -453,6 +453,28 @@ export function listWorktreePathsByProject(db: Database.Database, projectId: str
 }
 
 /**
+ * The same set with the ticket each path is stamped on — what a caller that has
+ * to REWRITE those paths needs (VC-430's relink moves the container they sit
+ * in, and a directory that moved without its row is a path the app would go on
+ * opening at the location it just left).
+ *
+ * Live AND archived alike, for {@link listWorktreePathsByProject}'s reason: a
+ * retained worktree is still a directory, and one left behind by a move is
+ * exactly the kind nobody would think to look for.
+ */
+export function listWorktreeSitesByProject(
+  db: Database.Database,
+  projectId: string,
+): Array<{ ticketId: string; path: string }> {
+  const rows = prepared<[string], { ticketId: string; worktree_path: string }>(
+    db,
+    `SELECT id AS ticketId, worktree_path FROM tickets
+      WHERE project_id = ? AND worktree_path IS NOT NULL`,
+  ).all(projectId);
+  return rows.map((row) => ({ ticketId: row.ticketId, path: row.worktree_path }));
+}
+
+/**
  * The retention watch's poll set (issue #76): every NON-ARCHIVED ticket that
  * has a worktree path OR a branch — the only tickets a merge-watch / Done-TTL
  * can act on. Archived tickets are already off the board (retention's terminal

@@ -62,6 +62,14 @@
  * key, onto the page that absorbed them, and only the resolved page is written
  * back.
  *
+ * `railFolds` — which of the ticket rail's three folds are open (VC-406): the
+ * roster's record under the Sessions eyebrow, the worktree body under its
+ * footer row, the cost breakdown under its. Persisted app-wide like `railMode`,
+ * and deliberately NOT per ticket: a fold is how a person reads the rail, not
+ * a fact about one Ticket, and a reader who wants the record open wants it
+ * open on the next Ticket too. All three default CLOSED — the folded face is
+ * the resting page, and every body is one press away.
+ *
  * `diffPresentation` — Monaco diff layout (inline vs side-by-side, CONCEPT #51).
  * Persisted app-wide like `railCollapsed` / `railMode`: it is global chrome, not
  * a per-ticket choice, so every diff tab honors the same presentation.
@@ -117,6 +125,11 @@ import {
 } from "@renderer/components/home/home-rail-model";
 import type { SessionEnvironmentFaultKind } from "@renderer/components/session-environment-alert-model";
 import {
+  sanitizeUsagePin,
+  toggleUsagePin,
+  type UsagePin,
+} from "@renderer/components/usage-limits/usage-pin";
+import {
   DEFAULT_TICKET_RAIL_MODE,
   type TicketRailMode,
   resolvePersistedRailMode,
@@ -133,6 +146,22 @@ export const RAIL_DEFAULT_WIDTH = 300;
 // and the History search stay legible without crowding.
 export const RAIL_MIN_WIDTH = 240;
 export const RAIL_MAX_WIDTH = 560;
+
+/**
+ * At or below this width a rail takes the tighter 12px edge inset; above it,
+ * the design's roomy 16px (`RAIL_PANEL_INSET`).
+ *
+ * The scratch offered three fixed widths and drew only its 240px floor narrow,
+ * so the boundary sits between the two it tested (240 and the 300 default) —
+ * the app's rail resizes continuously and has to answer for 260px too.
+ *
+ * It lives HERE, beside the width it is read against, because BOTH rails read
+ * it: the Ticket's and Home's are one panel at two scopes, and Home spent one
+ * revision hardcoding `data-narrow="false"` — a rail that simply did not
+ * respond to its own width, silently, while its footer sat 4px off the gutters
+ * of the page above it. A second copy of the number is how that comes back.
+ */
+export const RAIL_NARROW_MAX_WIDTH = (RAIL_MIN_WIDTH + RAIL_DEFAULT_WIDTH) / 2;
 
 /** Monaco diff layout preference (CONCEPT #51). Default inline; optional side-by-side. */
 export type DiffPresentation = "inline" | "side-by-side";
@@ -236,6 +265,37 @@ function sanitizeSidebarWidth(width: unknown): number {
 function sanitizeRailWidth(width: unknown): number {
   if (typeof width !== "number" || !Number.isFinite(width)) return RAIL_DEFAULT_WIDTH;
   return clampRailWidth(width);
+}
+
+/**
+ * The ticket rail's three folds (VC-406). A key per fold rather than three
+ * booleans so the toggle is one action and the persisted shape is one key.
+ */
+export type RailFold = "sessionsRecord" | "worktree" | "usage";
+export type RailFolds = Readonly<Record<RailFold, boolean>>;
+
+export const RAIL_FOLDS: readonly RailFold[] = ["sessionsRecord", "worktree", "usage"];
+export const DEFAULT_RAIL_FOLDS: RailFolds = {
+  sessionsRecord: false,
+  worktree: false,
+  usage: false,
+};
+
+/**
+ * Persisted folds, sanitized: only an explicit `true` opens a fold, so a
+ * missing key or corrupt JSON lands on the resting page (every fold closed)
+ * rather than on a rail with three bodies unfolded that nobody opened.
+ */
+function sanitizeRailFolds(value: unknown): RailFolds {
+  const stored =
+    typeof value === "object" && value !== null
+      ? (value as Partial<Record<RailFold, unknown>>)
+      : {};
+  return {
+    sessionsRecord: stored.sessionsRecord === true,
+    worktree: stored.worktree === true,
+    usage: stored.usage === true,
+  };
 }
 
 /** A persisted Monaco diff layout; unknown/missing values fall back to inline. */
@@ -348,6 +408,8 @@ interface UiState {
    * copy says so out loud.
    */
   costVisible: boolean;
+  /** Which of the ticket rail's folds are open. Persisted app-wide (see module doc). */
+  railFolds: RailFolds;
   /** Monaco diff presentation. Persisted app-wide (see module doc). */
   diffPresentation: DiffPresentation;
   /** Wrap long lines in the source editor and the diff. Persisted app-wide. */
@@ -362,6 +424,13 @@ interface UiState {
    * and only that kind — a different fault still speaks.
    */
   dismissedEnvironmentFaults: SessionEnvironmentFaultKind[];
+  /**
+   * The windows the window-bar usage glyph is pinned to, or null for its own
+   * rule (VC-452). Persisted app-wide: a pin is set once for the stretch of
+   * work it serves, and one that let go at every relaunch would be a pin that
+   * had to be set again each morning. See `usage-pin.ts`.
+   */
+  usagePin: UsagePin | null;
   /** Session-only terminal focus target; never persisted. */
   terminalFocusTarget: TerminalFocusTarget | null;
   /**
@@ -413,6 +482,9 @@ interface UiState {
   setHomeRailMode(mode: HomeRailMode): void;
   setHomeEmptyVisual(visual: EmptyVisual): void;
   setCostVisible(visible: boolean): void;
+  /** Open or close one of the rail's folds — the eyebrow's and the footer rows' one gesture. */
+  toggleRailFold(fold: RailFold): void;
+  setRailFold(fold: RailFold, open: boolean): void;
   setDiffPresentation(presentation: DiffPresentation): void;
   setWordWrap(wordWrap: boolean): void;
   /** The one gesture every word-wrap control makes — a band button, a menu item. */
@@ -433,6 +505,8 @@ interface UiState {
    * repaired speaks again if it ever comes back.
    */
   retainEnvironmentFaultDismissals(active: readonly SessionEnvironmentFaultKind[]): void;
+  /** Press the pin on one window row: pin it, unpin it, or move the pin to it. */
+  toggleUsagePin(providerId: string, windowId: string): void;
   setTerminalFocusTarget(target: TerminalFocusTarget | null): void;
   /**
    * Clear the focus target if it belongs to `ticketId` — used when that ticket's
@@ -467,10 +541,12 @@ type PersistedUiState = Pick<
   | "homeRailMode"
   | "homeEmptyVisual"
   | "costVisible"
+  | "railFolds"
   | "diffPresentation"
   | "wordWrap"
   | "defaultExternalAppId"
   | "dismissedEnvironmentFaults"
+  | "usagePin"
 > & {
   /** Legacy pre-icon-rail key; read on merge only, never written again. */
   detailsExpanded?: boolean;
@@ -504,10 +580,12 @@ export function createUiStore(storage?: StateStorage) {
         homeRailMode: DEFAULT_HOME_RAIL_MODE,
         homeEmptyVisual: DEFAULT_EMPTY_VISUAL,
         costVisible: true,
+        railFolds: DEFAULT_RAIL_FOLDS,
         diffPresentation: DEFAULT_DIFF_PRESENTATION,
         wordWrap: DEFAULT_WORD_WRAP,
         defaultExternalAppId: DEFAULT_EXTERNAL_APP_ID,
         dismissedEnvironmentFaults: [],
+        usagePin: null,
         terminalFocusTarget: null,
         setSidebarWidth: (width) => set({ sidebarWidth: clampSidebarWidth(width) }),
         setRailWidth: (width) => set({ railWidth: clampRailWidth(width) }),
@@ -535,6 +613,15 @@ export function createUiStore(storage?: StateStorage) {
         setHomeRailMode: (mode) => set({ homeRailMode: mode }),
         setHomeEmptyVisual: (visual) => set({ homeEmptyVisual: visual }),
         setCostVisible: (visible) => set({ costVisible: visible }),
+        toggleRailFold: (fold) =>
+          set((state) => ({ railFolds: { ...state.railFolds, [fold]: !state.railFolds[fold] } })),
+        // Same discipline as the fault dismissals: a fold already in the asked
+        // state writes nothing, so a mount that asserts "closed" on an already
+        // closed fold costs no persist round trip.
+        setRailFold: (fold, open) => {
+          if (get().railFolds[fold] === open) return;
+          set((state) => ({ railFolds: { ...state.railFolds, [fold]: open } }));
+        },
         setDiffPresentation: (presentation) => set({ diffPresentation: presentation }),
         setWordWrap: (wordWrap) => set({ wordWrap }),
         toggleWordWrap: () => set((state) => ({ wordWrap: !state.wordWrap })),
@@ -563,6 +650,8 @@ export function createUiStore(storage?: StateStorage) {
           const kept = current.filter((kind) => active.includes(kind));
           if (kept.length !== current.length) set({ dismissedEnvironmentFaults: kept });
         },
+        toggleUsagePin: (providerId, windowId) =>
+          set((state) => ({ usagePin: toggleUsagePin(state.usagePin, providerId, windowId) })),
         setTerminalFocusTarget: (target) => set({ terminalFocusTarget: target }),
         clearTerminalFocusForTicket: (ticketId) =>
           set((state) =>
@@ -592,10 +681,12 @@ export function createUiStore(storage?: StateStorage) {
           homeRailMode: state.homeRailMode,
           homeEmptyVisual: state.homeEmptyVisual,
           costVisible: state.costVisible,
+          railFolds: state.railFolds,
           diffPresentation: state.diffPresentation,
           wordWrap: state.wordWrap,
           defaultExternalAppId: state.defaultExternalAppId,
           dismissedEnvironmentFaults: state.dismissedEnvironmentFaults,
+          usagePin: state.usagePin,
         }),
         // Rehydrated values come from JSON a past build wrote — sanitize
         // rather than trust (see sanitizeUiScale; a raw `zoom: 0` bricks the UI).
@@ -635,6 +726,8 @@ export function createUiStore(storage?: StateStorage) {
             // silently hiding a feature the reader never turned off — the same
             // discipline `sidebarPinned` above follows.
             costVisible: stored.costVisible !== false,
+            // Only an explicit `true` opens a fold (see `sanitizeRailFolds`).
+            railFolds: sanitizeRailFolds(stored.railFolds),
             // Missing/unknown presentation (older build, corrupt JSON) keeps
             // the CONCEPT #51 default of inline.
             diffPresentation: sanitizeDiffPresentation(stored.diffPresentation),
@@ -644,6 +737,9 @@ export function createUiStore(storage?: StateStorage) {
             dismissedEnvironmentFaults: sanitizeEnvironmentFaults(
               stored.dismissedEnvironmentFaults,
             ),
+            // A malformed pin is no pin: the glyph goes back to reporting the
+            // account nearest to running out rather than drawing from a guess.
+            usagePin: sanitizeUsagePin(stored.usagePin),
           };
         },
       },

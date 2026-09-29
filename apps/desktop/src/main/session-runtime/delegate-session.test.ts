@@ -28,7 +28,10 @@
  *    attachment, dropped (and logged) for a parent that stopped, and a refused
  *    receipt is logged rather than swallowed.
  * 7. Boot recovery folds the child's ledger and notifies the same way.
- * 8. A child a person resumes after its delegation settled notifies again.
+ * 8. The caller's model override reaches the facade untouched; what a
+ *    delegation that names nothing runs on is the facade's answer (VC-431,
+ *    `anchoredOnParent`), tested beside it.
+ * 9. A child a person resumes after its delegation settled notifies again.
  */
 
 import { describe, expect, it } from "vite-plus/test";
@@ -350,12 +353,17 @@ function harness(options: { failStops?: boolean; answers?: Map<string, string> }
         }),
   };
   const delegations = createDelegations(ports);
-  const delegate = (toolCallId = "tc-1", task = "Find where the auth token is refreshed") =>
+  const delegate = (
+    toolCallId = "tc-1",
+    task = "Find where the auth token is refreshed",
+    modelOverride?: SessionStartInput["modelOverride"],
+  ) =>
     delegations.delegate({
       operationId: `${PARENT}:${toolCallId}`,
       parent: PARENT_IDENTITY,
       task,
       actor: { kind: "session", sessionId: PARENT, ticketId: null },
+      ...(modelOverride === undefined ? {} : { modelOverride }),
     });
   /** A live frame, delivered to every active subscriber whose cursor admits it. */
   const emit = async (sessionId: string, sequence: number, payload: SessionEvent["payload"]) => {
@@ -561,6 +569,31 @@ describe("delegate — the child is a real Session, and the parent keeps working
       "Token hunt",
       "Run the flaky test ten times",
       `${"x".repeat(79)}…`,
+    ]);
+  });
+
+  /**
+   * VC-431. Anchoring a child to its parent moved to the facade, beside the
+   * tool surface and MCP a child already inherits there. What is left here is
+   * carriage: whatever the door validated arrives unchanged, and a delegation
+   * that named nothing carries nothing — so the facade, not this module, is
+   * what decides the answer.
+   */
+  it("carries the caller's model override to the facade, and invents none", async () => {
+    const h = harness();
+
+    await h.delegate("tc-tier", "Quick check", { tier: "fast" });
+    await h.delegate("tc-model", "Look at this screenshot", {
+      model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" },
+    });
+    await h.delegate("tc-level", "Think harder", { reasoningLevel: "low" });
+    await h.delegate("tc-bare", "Whatever my parent runs");
+
+    expect(h.starts.map((start) => start.modelOverride)).toEqual([
+      { tier: "fast" },
+      { model: { providerId: "openai-codex", modelId: "gpt-5.6-sol" } },
+      { reasoningLevel: "low" },
+      undefined,
     ]);
   });
 

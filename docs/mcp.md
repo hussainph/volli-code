@@ -51,18 +51,28 @@ them, by design — a same-uid process must not be able to install an MCP server
 
 | Verb | Wire name | What it does |
 | --- | --- | --- |
-| `mcp.list` | `mcp_list` | List configured servers, their tools, provenance, and recent management history. Connects to nothing. |
-| `mcp.preview` | `mcp_preview` | Connect to a server you already have the configuration for, read its tools, save nothing. |
-| `mcp.install` | `mcp_install` | Add or update a server. **Previews by default.** |
-| `mcp.refresh` | `mcp_refresh` | Reconnect and re-read a configured server's catalog, keeping the selection. |
-| `mcp.enable` | `mcp_enable` | Turn a configured server on for Sessions created from now on. |
-| `mcp.disable` | `mcp_disable` | Turn it off, keeping the configuration. |
-| `mcp.tools` | `mcp_tools` | Replace which of a server's tools are on. |
-| `mcp.remove` | `mcp_remove` | Delete a server's configuration. **Previews by default.** |
+| `mcp.list` | `server_list` | List configured servers, their tools, provenance, and recent management history. Connects to nothing. |
+| `mcp.preview` | `server_preview` | Connect to a server you already have the configuration for, read its tools, save nothing. |
+| `mcp.install` | `server_install` | Add or update a server. **Previews by default.** |
+| `mcp.refresh` | `server_refresh` | Reconnect and re-read a configured server's catalog, keeping the selection. |
+| `mcp.enable` | `server_enable` | Turn a configured server on for Sessions created from now on. |
+| `mcp.disable` | `server_disable` | Turn it off, keeping the configuration. |
+| `mcp.tools` | `server_tools` | Replace which of a server's tools are on. |
+| `mcp.remove` | `server_remove` | Delete a server's configuration. **Previews by default.** |
 
 An MCP server's own tools are **not** Volli verbs and are not in the Verb
 Registry. They are dynamic, settings-backed definitions frozen into a Session by
 id. These eight manage the servers; they are not the servers' tools.
+
+The canonical verb keys remain `mcp.*`; the wire names above are separate. New
+Board Sessions use the `server_*` wire names. Historical frozen Sessions retain
+their original `mcp_*` names: their tool surface is replayed, never renamed.
+Single-underscore `mcp_` names can route Anthropic subscription OAuth requests
+to extra-usage billing and a misleading 400 ([controlled name-only reproduction](https://github.com/NousResearch/Hermes-Agent/issues/46675));
+real dynamic tools named `mcp__server__tool` (double underscores) are unaffected.
+After updating the app, start a fresh Board Session to get the new wire names.
+On an old build, use a non-Anthropic model for Board work or use an Anthropic
+Ticket Session instead.
 
 ### Who holds them
 
@@ -84,12 +94,12 @@ place this is decided.
 
 Both destructive verbs confirm **twice**, and the two are independent.
 
-1. **The plain call previews.** `mcp_install` and `mcp_remove` declare
+1. **The plain call previews.** `server_install` and `server_remove` declare
    `previewsByDefault`, so calling either without `confirm: "apply"` reports the
    warning and exactly what would change, and writes nothing. For an install the
    preview also connects to **nothing** — a local MCP server is a process
    started as you, so "warned before anything runs" means before the process,
-   not before the row is written. Use `mcp_preview` when you want to connect and
+   not before the row is written. Use `server_preview` when you want to connect and
    look.
 2. **The apply call asks a person, when there is one.** A second call carrying
    `confirm: "apply"` raises a `confirm.mcp-install` / `confirm.mcp-remove`
@@ -102,11 +112,11 @@ plain words that nobody was asked, rather than implying somebody was.
 
 ### Why the other six verbs do not confirm
 
-`mcp_list`, `mcp_enable`, `mcp_disable`, `mcp_tools` and `mcp_refresh` act only
+`server_list`, `server_enable`, `server_disable`, `server_tools` and `server_refresh` act only
 on a server **already in this project's configuration** — a transport somebody
 has already confirmed through the gate above, or typed into Settings themselves.
 
-`mcp_refresh` is the one worth being explicit about, because it *does* start that
+`server_refresh` is the one worth being explicit about, because it *does* start that
 server's process again. Re-running a command the project already holds lies
 inside the authority the install established, and the rule is that no verb needs
 a higher tier than the ambient authority its effect already lies within. A
@@ -146,7 +156,7 @@ credentials of its own.
 
 ### The MCP verbs refuse a query string
 
-`mcp_preview` and `mcp_install` **refuse** a URL that carries a query string,
+`server_preview` and `server_install` **refuse** a URL that carries a query string,
 before anything is connected:
 
 > *That endpoint carries a query string, and the MCP verbs refuse one. Volli has
@@ -167,7 +177,7 @@ and chose it themselves. That path is unchanged from VC-8.
 
 Where a stored server does carry a query string — because a person added it by
 hand — Volli prints the **origin and path** and marks the rest
-`(query string not shown)`, in previews, confirmations, `mcp_list` and durable
+`(query string not shown)`, in previews, confirmations, `server_list` and durable
 audit records. Those four surfaces travel further than the caller expects.
 
 ## Sources and provenance
@@ -182,7 +192,7 @@ expose it, deliberately — the workspace is the boundary the rest of the produc
 is built on, and a server pointed elsewhere would quietly step outside it.
 
 So a "source" here is **provenance metadata** — a note of where the
-configuration came from and which version was asked for. `mcp_install` accepts
+configuration came from and which version was asked for. `server_install` accepts
 four optional fields, all of them recorded and none of them enforced:
 
 | Field | Meaning |
@@ -194,7 +204,7 @@ four optional fields, all of them recorded and none of them enforced:
 
 A pinned digest is **recorded, not enforced**. Verifying one requires downloading
 the artefact, which Volli does not do; that work belongs to VC-379, which owns
-package format support. `mcp_list` and the Configure pane both label provenance
+package format support. `server_list` and the Configure pane both label provenance
 "recorded, not verified" wherever they show it, because a version and a digest
 displayed plainly read as a guarantee nobody made.
 
@@ -243,7 +253,7 @@ result says so.
 The server keeps its **last working tool list** and is marked **stale**, with
 the failure recorded against it. Nothing that worked has stopped working.
 Sessions born before the failure are unaffected. Fix the cause, then call
-`mcp_refresh` or install again; a success clears the stale marker.
+`server_refresh` or install again; a success clears the stale marker.
 
 ### The install was cancelled, or it timed out
 
@@ -270,7 +280,7 @@ Sessions cannot reattach. **Re-add the server under the same id** — the remova
 audit record contains the transport needed to do it — and reattachment works
 again.
 
-To avoid this entirely, prefer **`mcp_disable`**. It keeps the configuration, so
+To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
 existing Sessions still reattach, while Sessions created afterwards are not
 offered the tools. That is what most callers actually mean.
 
@@ -289,14 +299,14 @@ activity*, which lists the newest operations with what was asked, when, and
 whether a Session or a person did it; an operation that recorded a detail — a
 removal's transport line, a failure's recovery line — carries it behind
 *Detail*. A failed first install writes no server row at all, so that list is
-the only place its configuration and recovery line survive. `mcp_list` shows the same history to an agent.
+the only place its configuration and recovery line survive. `server_list` shows the same history to an agent.
 
 The row's id is derived from the calling Session and the tool call that asked
 (`${sessionId}:${toolCallId}`), not minted fresh per execution. A retried tool
 call — an ordinary outcome when a response is lost — therefore lands as the one
 act it was, rather than as two records of one install.
 
-`mcp_list` prints the recent history beside the servers.
+`server_list` prints the recent history beside the servers.
 
 When the calling Session has a Ticket, the same facts are **also** written as a
 ticket comment, because that is where someone doing the work will look. The
@@ -310,7 +320,7 @@ Session has no Ticket to comment on.
 - SSE and WebSocket transports (see [Transports](#transports)).
 - A per-server working directory; the project root is always used.
 - Authenticated HTTP servers, custom headers, secret environment values.
-- Searching a remote registry for a server to install. `mcp_preview` connects to
+- Searching a remote registry for a server to install. `server_preview` connects to
   a server you already name; it does not go looking for one.
 - MCP resources, prompts, sampling and roots.
 

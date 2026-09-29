@@ -193,6 +193,26 @@ describe("ask_user tool", () => {
     expect(tool.description).toContain("2-5");
   });
 
+  it("guides concise questions with choice-specific detail beneath the answer labels", () => {
+    const tool = createAskUserTool(async () => CHOSE_ONE);
+
+    expect(tool.description).toContain("one or two short sentences");
+    expect(tool.description).toContain(
+      "each option's description (the subtitle/body beneath its label)",
+    );
+    expect(tool.description).toContain(
+      "Keep only the context needed to understand the decision in the question",
+    );
+    expect(tool.parameters.properties.question).toMatchObject({
+      description: expect.stringContaining("options[].description"),
+    });
+    expect(tool.parameters.properties.options.items.properties.description).toMatchObject({
+      description: expect.stringContaining(
+        "Supporting context, trade-offs, or consequences for this option, shown beneath its label",
+      ),
+    });
+  });
+
   it("declares one required question beside optional options and multiplicity", () => {
     const tool = createAskUserTool(async () => CHOSE_ONE);
 
@@ -1104,6 +1124,66 @@ describe("createVerbTool", () => {
     expect(properties.args).toMatchObject({ type: "array", items: { type: "string" } });
     expect((properties.id as { type?: string }).type).toBe("string");
     expect((tool.parameters as { required?: string[] }).required).toEqual(["id", "name"]);
+  });
+
+  it("keeps historical MCP names byte-identical, while new Sessions avoid the single-underscore mcp_ wire prefix", async () => {
+    const calls: string[] = [];
+    const port = async (request: { verb: string }) => {
+      calls.push(request.verb);
+      return {
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      };
+    };
+    const operations = [
+      "list",
+      "preview",
+      "install",
+      "refresh",
+      "enable",
+      "disable",
+      "tools",
+      "remove",
+    ] as const;
+    for (const operation of operations) {
+      const binding = { verb: `mcp.${operation}` as const, port };
+      const oldTool = createVerbTool(binding);
+      const newTool = createVerbTool(binding, undefined, "server");
+      expect(oldTool.name).toBe(`mcp_${operation}`);
+      expect(newTool.name).toBe(`server_${operation}`);
+      expect(newTool.description).not.toMatch(/\bmcp_(?!_)/);
+      expect(JSON.stringify(newTool.parameters)).not.toMatch(/\bmcp_(?!_)/);
+      expect(oldTool.description).toBe(
+        newTool.description.replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+      expect(JSON.stringify(oldTool.parameters)).toBe(
+        JSON.stringify(newTool.parameters).replaceAll(
+          /\bserver_(list|preview|install|refresh|enable|disable|tools|remove)\b/g,
+          "mcp_$1",
+        ),
+      );
+    }
+    const old = createVerbTool({ verb: "mcp.list", port });
+    const current = createVerbTool({ verb: "mcp.list", port }, undefined, "server");
+    const signal = new AbortController().signal;
+    expect((await old.execute("call-1", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call mcp_install, then mcp_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect((await current.execute("call-2", {}, signal)).content).toEqual([
+      {
+        type: "text",
+        text: "Call server_install, then server_tools. A dynamic mcp__paper__read tool is unrelated.",
+      },
+    ]);
+    expect(calls).toEqual(["mcp.list", "mcp.list"]);
+    expect(createVerbTool({ verb: "session.start", port }, undefined, "server").name).toBe(
+      "session_start",
+    );
   });
 
   it("refuses to build a tool for a verb this build does not project", () => {

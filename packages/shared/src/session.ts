@@ -38,7 +38,7 @@
  * they were never the surface that dropped chat Sessions.
  */
 
-import type { SessionRole } from "./agent-runtime";
+import type { ModelSelection, SessionRole } from "./agent-runtime";
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { SessionTurnOutcome } from "./session-ledger";
@@ -221,6 +221,26 @@ export interface ChatSessionRecord {
   role: SessionRole;
   /** The Session that delegated this one (VC-9); a listing names it beside a helper. */
   parentSessionId: string | null;
+  /**
+   * The model policy this Session is running under —
+   * {@link SessionProjection.modelSelection} carried verbatim — or `null`
+   * before one has been recorded.
+   *
+   * It rides the record rather than being looked up per Session because of
+   * who needs it (VC-416): a parent's Activity Island draws a row per Subagent
+   * Session, and a subagent has no listing row of its own (VC-279) and no
+   * resident chat client until someone peeks it. Without this field the only
+   * surface that could say which model an agent picked for its helper was the
+   * helper's own composer, one promotion away — so the two glance surfaces
+   * that exist precisely to save that trip could not answer the question they
+   * are for.
+   *
+   * The full {@link ModelSelection} rather than the two words a row prints:
+   * `providerId` is what tells two catalogs' identically named models apart,
+   * and a record that dropped it would make every reader that cares reach for
+   * a second source.
+   */
+  model: ModelSelection | null;
 }
 
 /**

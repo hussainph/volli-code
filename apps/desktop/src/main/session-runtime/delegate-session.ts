@@ -24,6 +24,16 @@
  *    parent opens a turn on it. The parent is never parked on its helper, and
  *    there is no await tool to park it with (VC-457).
  *
+ * ## The child's model is its parent's anchor (VC-431)
+ *
+ * A delegation that names neither a `model` nor a `tier` runs on what its
+ * PARENT is anchored to, rather than on a rung of the Subagent Role's own.
+ * This module does not decide that: it passes the caller's override through
+ * untouched, and the facade resolves it in `mint`, beside the tool surface and
+ * MCP a child already inherits there (`sessions.ts`, `anchoredOnParent`). One
+ * place answers "what does a subagent inherit from its parent", so a future
+ * start path cannot get half of it.
+ *
  * ## The answer rides the notice, quoted as another author's prose
  *
  * Every harness worth copying (Claude Code's `Agent`, opencode's `task`)

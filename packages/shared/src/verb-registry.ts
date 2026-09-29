@@ -338,12 +338,20 @@ const MODEL_TIER_VALUES = `valid: ${AGENT_MODEL_TIERS.join(", ")}`;
  * model choosing between `fast` and `deep` reads the words the person who
  * filled those rows read. The first sentence is the rule the door enforces:
  * a tier and an exact model are alternatives, never a pair.
+ *
+ * Both doors that offer a rung offer the SAME set (VC-431), so the subject is
+ * the only word that differs between them.
  */
-const MODEL_TIER_DESCRIPTION = [
-  "Run the Session on one of the user's configured model tiers instead of `model`; pass one or the other, never both.",
-  "The tier's stored reasoning level comes with it unless `reasoning` is given.",
-  ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
-].join(" ");
+function modelTierDescription(subject: string): string {
+  return [
+    `Run ${subject} on one of the user's configured model tiers instead of \`model\`; pass one or the other, never both.`,
+    "The tier's stored reasoning level comes with it unless `reasoning` is given.",
+    ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
+  ].join(" ");
+}
+
+const MODEL_TIER_DESCRIPTION = modelTierDescription("the Session");
+const DELEGATE_MODEL_TIER_DESCRIPTION = modelTierDescription("the subagent");
 
 /**
  * The confirmation field the two destructive MCP verbs share (VC-380).
@@ -371,7 +379,7 @@ const MCP_SERVER_ID_FIELD: VerbToolField = {
   name: "server",
   type: "string",
   required: true,
-  description: "The server's id, as mcp_list prints it.",
+  description: "The server's id, as server_list prints it.",
 };
 
 /**
@@ -1359,15 +1367,20 @@ export const VERB_REGISTRY = [
     },
     tool: {
       name: "session_start",
-      // Written for the model, and mostly about restraint: a tool that starts
-      // another agent is a tool that will be used to start another agent
-      // unless the description says when not to. The last line is the one a
+      // Written for the model. It leads with WHEN and what the caller gains
+      // (VC-459) — an owner, a worktree, a reviewable branch — and names its
+      // lighter neighbour, `session_delegate`, as the answer for work that
+      // must come back into this conversation, so the two are chosen between
+      // rather than confused. Restraint follows: a tool that starts another
+      // agent needs to say when not to. The last line is the one a
       // caller cannot learn from the schema — this door binds the caller's
       // identity itself, so there is no project or actor field to supply and
       // nothing to be gained by describing oneself.
       description: [
         "Start an agent chat Session on one Ticket and return as soon as it opens.",
-        "Use it to delegate a scoped piece of work that has a Ticket; the new Session runs on its own.",
+        "Use it for work that deserves its own owner — its own worktree, branch, review and merge — that outlives this conversation, or that the person should follow on the board. From a Board Session this is the default for substantial implementation: create the Ticket first with `volli ticket create` when none exists. For a bounded question or check whose answer you need back in this conversation, use session_delegate instead.",
+        "The new Session knows only its Ticket and your kickoff, so make the kickoff a complete brief: goal, scope, constraints, and what done means. Start independent Tickets together rather than one after another.",
+        "The new Session runs on its own.",
         "When the person names a saved Automation, preserve that workflow rather than copying or rewriting its Instructions into a kickoff. If this Session holds `automation_run`, use that tool instead so the saved definition and Run history stay connected. If it does not, explain the missing tool and ask for a Board Session or a manual Run; do not bypass the missing tool with an improvised kickoff.",
         "A Board Session may choose any Ticket in its project. A Ticket Session granted this tool may choose only its own Ticket, and may start three Sessions on its own authority; starting more needs a slot the person driving has approved, usually by answering the question this call raises — where project policy allows the question at all. The Sessions it starts cannot start any of their own.",
         "This Session watches the one it started: a notice from Volli arrives here when its first turn ends, when it signals done or blocked, or if it is stopped — keep working meanwhile, or end your turn and the notice opens a new one.",
@@ -2178,18 +2191,23 @@ export const VERB_REGISTRY = [
     },
     tool: {
       name: "session_delegate",
-      // Written for the model, and about the protocol facts the schema cannot
-      // carry (VC-457): the answer arrives by itself as a notice (so the model
-      // goes on working rather than waiting or polling), nothing bounds the
-      // child's time, and the child shares the working tree (so two agents
+      // Written for the model. The first two sentences are WHEN (VC-459): the
+      // benefit — context isolation, parallelism, a cheaper tier — and then the
+      // cases that stay inline, because a description that only grants
+      // permission reads as a caveat list and gets used when someone asks.
+      // Everything after is protocol (VC-457), the facts the schema cannot
+      // carry: the answer arrives by itself as a notice (so the model goes on
+      // working rather than waiting or polling), nothing bounds the child's
+      // time, and the child shares the working tree (so two agents
       // editing one file is the model's own coordination problem to avoid).
-      // When-to-delegate guidance belongs to the system prompt, not here.
       // The last line is the same one every control-tier tool ends on.
       description: [
+        "A subagent works in its own context, not yours, and only its answer comes back here. Use it for bounded work when the raw output would crowd this conversation and you will not need it again — a broad codebase search, log or test triage, a diff review, web research — for independent checks to run in parallel, or for a second-opinion review; a cheaper `tier` often fits.",
+        "Stay inline instead for a specific file read, a known-symbol lookup, a small edit, or work that needs what you have already worked out.",
         "Hand one well-defined task to a new subagent Session and return at once; the subagent runs on its own, with no time limit, until it answers.",
-        "Its answer arrives by itself: when it finishes, a notice from Volli lands in this Session carrying its final message — read mid-turn if you are working, or opening a new turn if you have ended yours. Do not poll or wait for it. A very long answer is cut, and `volli session answer <handle>` prints it in full.",
-        "Use it for bounded work you would otherwise do yourself — investigate a question, make a scoped change, run and report a check. Several may run at once.",
-        "The subagent shares this Session's working directory and holds every coding tool, so give it a task that does not collide with edits you are making. It cannot ask a person, so state the task fully: an unclear requirement comes back as an open question, not a guess.",
+        "Its answer arrives by itself: when it finishes, a notice from Volli lands in this Session carrying its final message — read mid-turn if you are working, or opening a new turn if you have ended yours. Keep working meanwhile; do not poll or wait for it. A very long answer is cut, and `volli session answer <handle>` prints it in full. Several may run at once: launch independent tasks in the same turn rather than one after another.",
+        "The subagent starts with none of your context, so brief it as if it knows nothing: the goal, the paths and decisions it needs, its constraints, and what the answer should contain. It cannot ask a person, so an unclear requirement comes back as an open question, not a guess.",
+        "It shares this Session's working directory and holds every coding tool, so give each file one owner and keep it clear of edits you are making.",
         "It cannot start, stop, steer or delegate to other Sessions.",
         "Volli binds the calling Session, its project and its Ticket itself: state the task and nothing about yourself.",
       ].join(" "),
@@ -2210,7 +2228,8 @@ export const VERB_REGISTRY = [
         {
           name: "model",
           type: "object",
-          description: "Run the subagent on a specific model instead of the utility default.",
+          description:
+            "Run the subagent on a specific model instead of the one this Session runs on.",
           fields: [
             {
               name: "providerId",
@@ -2225,6 +2244,12 @@ export const VERB_REGISTRY = [
               description: "Model id, as `model list` prints it.",
             },
           ],
+        },
+        {
+          name: "tier",
+          type: "enum",
+          values: AGENT_MODEL_TIERS,
+          description: DELEGATE_MODEL_TIER_DESCRIPTION,
         },
         {
           name: "reasoning",
@@ -2353,7 +2378,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_list",
+      name: "server_list",
       description: [
         "List the MCP servers configured for this project: each server's transport, whether it is on, which of its tools are selected, whether its catalog went stale, and the provenance recorded when it was installed.",
         "Read this before installing anything, so an install that already exists becomes a refresh instead of a duplicate.",
@@ -2393,7 +2418,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_preview",
+      name: "server_preview",
       description: [
         "Connect to one MCP server you already have the configuration for, read its tool list, and save nothing.",
         "Use it to see what a server offers before deciding what to install and which of its tools to turn on.",
@@ -2451,7 +2476,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_install",
+      name: "server_install",
       description: [
         "Add or update one MCP server for this project.",
         'Called plainly it PREVIEWS: it connects, reports the tools it found and the exact warning for this kind of server, and writes nothing. Call it again with confirm="apply" to perform it.',
@@ -2465,7 +2490,7 @@ export const VERB_REGISTRY = [
           name: "tools",
           type: "string",
           description:
-            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use mcp_tools. A name the server did not offer is refused rather than ignored.",
+            "Which discovered tools to turn on, as names separated by spaces or commas. Omit to install the server with no tool selected, then use server_tools. A name the server did not offer is refused rather than ignored.",
         },
         {
           name: "source",
@@ -2528,7 +2553,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_refresh",
+      name: "server_refresh",
       description: [
         "Reconnect to a server this project already has and re-read its tools, keeping the current selection.",
         "Use it after a server is upgraded, or to clear a stale marker left by an earlier failure.",
@@ -2562,7 +2587,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_enable",
+      name: "server_enable",
       description: [
         "Turn a configured MCP server on, so its selected tools are offered to Sessions created after this call.",
         "It connects to nothing, and it does not change any Session that already exists.",
@@ -2603,11 +2628,11 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_disable",
+      name: "server_disable",
       description: [
         "Turn a configured MCP server off, keeping its configuration.",
         "Sessions created after this call are not offered its tools; Sessions that already exist keep the tools they were born with and can still reattach.",
-        "Prefer this to mcp_remove whenever the intent is only to stop offering the tools.",
+        "Prefer this to server_remove whenever the intent is only to stop offering the tools.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD],
     },
@@ -2641,7 +2666,7 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_tools",
+      name: "server_tools",
       description: [
         "Set exactly which of a configured server's tools are on, replacing the current selection.",
         "Anything the server offers that you do not name is turned off. Sessions created after this call get the new selection; existing Sessions are unchanged.",
@@ -2703,13 +2728,13 @@ export const VERB_REGISTRY = [
       ],
     },
     tool: {
-      name: "mcp_remove",
+      name: "server_remove",
       description: [
         "Delete one MCP server's configuration from this project.",
         'Called plainly it PREVIEWS: it reports what would be deleted and what that breaks, and removes nothing. Call it again with confirm="apply" to perform it.',
         "This is more destructive than it looks. Any older Session that was born holding one of this server's tools will fail to reattach afterwards, because the transport its frozen tool needs is gone.",
         "Re-adding the server under the SAME id restores those Sessions; re-adding it under a different id does not.",
-        "If the intent is only to stop offering the tools to new Sessions, call mcp_disable instead: it leaves every existing Session able to reattach.",
+        "If the intent is only to stop offering the tools to new Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
       ].join(" "),
       input: [MCP_SERVER_ID_FIELD, MCP_CONFIRM_FIELD],
     },
@@ -3021,6 +3046,23 @@ const ENTRY_BY_KEY: ReadonlyMap<string, RegistryEntry> = new Map(
 /** One verb's entry, or undefined for a key this build does not declare. */
 export function verbEntry(key: string): VerbEntry | undefined {
   return ENTRY_BY_KEY.get(key);
+}
+
+/**
+ * The provider spelling for a frozen Session, not the durable verb key.
+ * Historical surfaces have no naming marker and must keep their mcp_* names;
+ * new Sessions carry "server" and avoid Anthropic OAuth's single-underscore
+ * mcp_ extra-usage classifier. Real MCP tools use mcp__ and are unaffected.
+ */
+export function verbToolWireName(
+  key: VerbToolKey,
+  mcpManagementNames?: "server",
+): string | undefined {
+  const name = verbEntry(key)?.tool?.name;
+  if (name === undefined) return undefined;
+  return key.startsWith("mcp.") && mcpManagementNames === undefined
+    ? name.replace(/^server_/, "mcp_")
+    : name;
 }
 
 /** Every listed registry verb, including a tool-only or app-only door. */

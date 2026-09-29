@@ -108,9 +108,11 @@ patchedDependencies:
   # `estimateTokens`. `prepareModelCompaction` passes the model-aware counter,
   # so the cut point is chosen on the same estimate the runtime budgets
   # against; callers that pass nothing keep upstream behavior exactly.
-  # Upstream still ships no such hook — 0.85.1's dist/harness/compaction/* is
-  # byte-identical to 0.85.0's, so this patch regenerated unchanged.
-  "@earendil-works/pi-agent-core@0.85.1": patches/@earendil-works__pi-agent-core@0.85.1.patch
+  # Upstream still ships no such hook — 0.87.1's dist/harness/compaction/* is
+  # byte-identical to 0.85.1's (the transcript-context work of 0.86/0.87 did
+  # not touch the harness compaction module), so this patch rebased unchanged
+  # (VC-421).
+  "@earendil-works/pi-agent-core@0.87.1": patches/@earendil-works__pi-agent-core@0.87.1.patch
 
 peerDependencyRules:
   allowAny:

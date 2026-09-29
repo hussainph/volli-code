@@ -3,14 +3,16 @@
  * VC-112 names, drawn once and hosted twice.
  *
  * Two surfaces mount it, and both obey VC-234's universal landing rule: a Run
- * stays in place and toasts with an "Open session" action. Their only
- * difference is whether they can collect Instructions:
+ * stays in place and toasts with an "Open session" action:
  *
- *  - **The ticket rail's split button** right-clicks onto it (VC-129) and
- *    offers **Run once…** because the rail owns that dialog.
+ *  - **The ticket rail's Automations rows** right-click onto it (VC-129).
  *  - **The board card's context menu** — VC-112's "run one without opening the
- *    Ticket" — hosts it under one `Automations ▸` row and offers no Run once,
- *    because an Unbound Run has to be TYPED and a card has nowhere to type it.
+ *    Ticket" — hosts it under one `Automations ▸` row.
+ *
+ * Neither offers Run once any more (VC-406). The rail was its only host, and
+ * stripped to what it did it minted a chat Session with a typed first
+ * message, in the background, wearing the bolt — `+ Chat ▾` with a worse text
+ * box. Only SAVED records are run from here; a one-off is a chat and typing.
  *
  * Both carry the nested **Run on model ▸**: the per-invocation override on the
  * deliberate surfaces, never on the drag path (VC-112). Model and reasoning
@@ -24,11 +26,9 @@
 import * as React from "react";
 import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
-import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import { SlidersIcon } from "@phosphor-icons/react/dist/csr/Sliders";
 import {
   displayTicketId,
-  UNBOUND_RUN_LABEL,
   type Automation,
   type ModelSelection,
   type Ticket,
@@ -47,9 +47,13 @@ import {
 } from "./ticket-rail-automations-model";
 import { offerableModels, type ComposerModel } from "@renderer/components/chat/composer-ui";
 import {
+  railReadFeedback,
+  type RailReadFeedback,
+  type RailReadState,
+} from "@renderer/components/ticket/rail-read-feedback";
+import {
   ContextMenuItem,
   ContextMenuLabel,
-  ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -133,11 +137,57 @@ export function useOfferableModels(): readonly ComposerModel[] {
  * rail must not press. So the answer stays unread unless all four came back
  * ok: a press whose backing read failed runs nothing, exactly as a press that
  * arrived before the read runs nothing.
+ *
+ * This is the unchanged, launch-safe answer: `ready` is a coherent fresh
+ * snapshot or nothing. A surface that also wants to SHOW what it last read
+ * while a re-read is out asks {@link useAutomationRunOfferRead} for the same
+ * answer plus the read's own state.
  */
 export function useAutomationRunOffer(
   projectId: string,
   status: TicketStatus,
 ): TicketRailAutomations {
+  return useAutomationRunOfferRead(projectId, status).offer;
+}
+
+/**
+ * The same read, with what the block needs to SAY about it (VC-406).
+ *
+ * `offer` is unchanged and still the only thing anything may launch from.
+ * What is added is the part a surface with rows on screen cannot do without:
+ * the last COHERENT offer, so a refresh does not blank rows that were true a
+ * second ago, and the three bits `rail-read-feedback.ts` decides the wording
+ * from. A failed first read used to leave `ready: false` forever with no way
+ * back but a planning change; `retry` is that way back, local to the block.
+ *
+ * RETAINED IS A SNAPSHOT, NOT A RE-READ OF THE SLICES. A refresh that failed
+ * halfway leaves the store holding a new list beside an old arming set, and
+ * recomposing from that would draw a combination no read ever returned — the
+ * exact stale-armed press the rail refuses. So the retained value is the whole
+ * `TicketRailAutomations` captured when a read last landed, kept only for the
+ * project and column it was read for.
+ */
+export interface AutomationRunOfferRead {
+  /** Coherent and fresh, or unread. The only value a launch may name. */
+  offer: TicketRailAutomations;
+  /** The last coherent offer for this project and column, or `null`. */
+  retained: TicketRailAutomations | null;
+  read: RailReadState;
+  feedback: RailReadFeedback;
+  /** Re-runs this block's own read. Local to the block, never app-wide. */
+  retry(): void;
+}
+
+/** What the read is doing, and which project+column it is doing it for. */
+interface ReadScope {
+  key: string;
+  phase: "reading" | "ready" | "failed";
+}
+
+export function useAutomationRunOfferRead(
+  projectId: string,
+  status: TicketStatus,
+): AutomationRunOfferRead {
   const automations = useAutomationsStore((state) => selectAutomations(state, projectId));
   const armings = useAutomationsStore((state) => selectArmings(state, projectId));
   // Every column's rank at once (VC-329 item 5): the cross-column groups are
@@ -150,81 +200,97 @@ export function useAutomationRunOffer(
   const railFresh = useAutomationsStore((state) =>
     selectRailFresh(state, projectId, planningVersion),
   );
+  const [attempt, setAttempt] = React.useState(0);
   // Initialized from the cache, not from false: a warm rail paints as ready in
   // its FIRST frame — otherwise an arrival that spends nothing would still
   // flash the unread label for the render before its effect ran.
-  const [read, setRead] = React.useState(railFresh);
+  const scopeKey = `${projectId}\u0000${status}`;
+  const [scope, setScope] = React.useState<ReadScope>(() => ({
+    key: scopeKey,
+    phase: railFresh ? "ready" : "reading",
+  }));
+  // A project or column switch is a different question, answered from this
+  // render rather than from the effect that follows it: the frame between the
+  // two is exactly where the previous project's ready would have licensed a
+  // press, and where its rows would have been retained under the new heading.
+  const current: ReadScope =
+    scope.key === scopeKey ? scope : { key: scopeKey, phase: railFresh ? "ready" : "reading" };
+  if (scope.key !== scopeKey) setScope(current);
 
   React.useEffect(() => {
-    let current = true;
+    let live = true;
     if (railFresh) {
-      setRead(true);
+      setScope({ key: scopeKey, phase: "ready" });
       return;
     }
     // Every arrival that does need a read re-opens the question, including one
     // caused by a planning change: what is on screen now was decided from what
     // the cache held then.
-    setRead(false);
+    setScope({ key: scopeKey, phase: "reading" });
     void refreshRail(projectId, planningVersion).then((landedNow) => {
       // Every one of them, not just all of them SETTLING. A refresh that
       // failed toasted and returned false, leaving its slice holding whatever
       // was there before — on a warm cache, the stale arming a press would
-      // otherwise spend. One failure keeps the whole rail unread.
-      if (current && landedNow) setRead(true);
+      // otherwise spend. One failure keeps the whole rail unread, and now says
+      // so rather than waiting forever for a planning change.
+      if (live) setScope({ key: scopeKey, phase: landedNow ? "ready" : "failed" });
     });
     return () => {
-      current = false;
+      live = false;
     };
-  }, [railFresh, refreshRail, projectId, planningVersion]);
+  }, [scopeKey, railFresh, refreshRail, projectId, planningVersion, attempt]);
 
   // `landed` adds the cold-cache half of the same rule: a slice that has never
   // been filled is not something to classify from either. The control keeps
   // saying it is reading rather than claiming this project has no Automations.
-  return ticketRailAutomations({
+  const offer = ticketRailAutomations({
     automations,
     armings,
     status,
     orders,
     rankedAutomationIds: orders.find((order) => order.status === status)?.rankedAutomationIds,
-    ready: read && landed,
+    ready: current.phase === "ready" && landed,
   });
+
+  const held = React.useRef<{ key: string; offer: TicketRailAutomations } | null>(null);
+  if (offer.ready) held.current = { key: scopeKey, offer };
+  else if (held.current !== null && held.current.key !== scopeKey) held.current = null;
+  const retained = offer.ready ? null : (held.current?.offer ?? null);
+
+  const read: RailReadState = {
+    hasData: offer.ready || retained !== null,
+    pending: current.phase === "reading",
+    failed: current.phase === "failed",
+  };
+  return {
+    offer,
+    retained,
+    read,
+    feedback: railReadFeedback(read, "Automations"),
+    retry: () => setAttempt((count) => count + 1),
+  };
 }
 
 /**
- * The nested rows themselves: this column's Offered list, optionally Run once…,
- * and the per-invocation override.
- *
- * `onRunOnce` is omitted by hosts that have no dialog to open. That is not a
- * quieter version of the same menu — an Unbound Run is typed, and a surface
- * that cannot take the typing must not pretend to offer one.
+ * The nested rows themselves: every column's Offered list, and the
+ * per-invocation override.
  */
 export function AutomationRunMenuItems({
   rail,
   enabledIds,
   models,
   onRun,
-  onRunOnce,
 }: {
   rail: TicketRailAutomations;
   enabledIds: readonly string[];
   models: readonly ComposerModel[];
   onRun(action: RailRunAction, modelOverride: ModelSelection | null): void;
-  onRunOnce?: (() => void) | undefined;
 }) {
   const overrides = modelOverrideRows(models);
   // An unread rail offers no record, because it knows of none: what it knows is
   // that it has not looked yet, and it says so instead of listing a guess.
   if (!rail.ready) {
-    return (
-      <>
-        <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div>
-        {onRunOnce === undefined ? null : (
-          <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
-            {UNBOUND_RUN_LABEL}…
-          </ContextMenuItem>
-        )}
-      </>
-    );
+    return <div className={EMPTY_INLINE}>{RAIL_UNREAD_LABEL}</div>;
   }
   return (
     <>
@@ -251,28 +317,20 @@ export function AutomationRunMenuItems({
           ))}
         </React.Fragment>
       ))}
-      {rail.offered.length === 0 && onRunOnce === undefined ? (
-        // Nothing offered and nothing to type: say which of the two it is
-        // rather than leaving an empty popover (the Labels submenu's own idiom).
+      {rail.offered.length === 0 ? (
+        // Nothing offered: say so rather than leaving an empty popover (the
+        // Labels submenu's own idiom).
         <div className={EMPTY_INLINE}>No automations offered in this column</div>
       ) : null}
-      {rail.groups.length > 0 && onRunOnce !== undefined ? <ContextMenuSeparator /> : null}
-      {onRunOnce === undefined ? null : (
-        <ContextMenuItem icon={PlayIcon} onSelect={onRunOnce}>
-          {UNBOUND_RUN_LABEL}…
-        </ContextMenuItem>
-      )}
       {/* The nested override item VC-112 names. It spends the pick on THIS
-          menu's default press — the column's Armed automation, or the Run once
-          form, which opens already holding it.
+          menu's default press — the column's Armed automation.
 
           Two things can remove the row, and they are not the same: a profile
-          whose catalog offers no model a Run could name, and a default press
-          this host does not have (`overridePressable`). Either way there is no
-          Run for a model to be chosen FOR, and an item opening onto nothing
-          would be worse than one that is not there. */}
-      {overrides.length === 0 ||
-      !overridePressable(rail.primary, onRunOnce !== undefined) ? null : (
+          whose catalog offers no model a Run could name, and a column that
+          arms nothing (`overridePressable`). Either way there is no Run for a
+          model to be chosen FOR, and an item opening onto nothing would be
+          worse than one that is not there. */}
+      {overrides.length === 0 || !overridePressable(rail.primary) ? null : (
         <ContextMenuSub>
           <ContextMenuSubTrigger icon={CpuIcon}>Run on model</ContextMenuSubTrigger>
           <ContextMenuSubContent>

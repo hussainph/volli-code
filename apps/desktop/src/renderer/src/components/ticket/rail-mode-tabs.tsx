@@ -39,6 +39,24 @@
  * key walks the tablist faster than a 320ms settle, and an animation that is
  * always mid-flight reads as lag rather than motion. Reduced motion removes
  * both the travel and the crossfade.
+ *
+ * THE GATE IS SET PER ACTIVATION, by what the activation WAS. Arrow/Home/End
+ * are not the only keyboard path into a selection: Enter or Space on a focused
+ * tab dispatches a synthetic click, so an `onClick` that assumed "click means
+ * pointer" put the spring and the label fade back on the keystroke the walk had
+ * just refused. A click's `detail` is 0 for that synthetic one and ≥1 for a
+ * real press — the same fact `RailFoldTrigger` reads — and it is read on the
+ * button, so a press that lands on the glyph inside still reports the pointer.
+ *
+ * ONE GATE, AND IT REACHES EVERY DESCENDANT AND EVERY EXIT (VC-406). The gate
+ * used to be spent on the button's own `layout` and on the label's ENTRANCE,
+ * while the glyph inside kept an ungated `layout="position"` and the label's
+ * EXIT kept a 140ms fade — so an arrow-key walk still had two things easing
+ * under it, and the tab that was leaving still faded on a keystroke meant to
+ * be instant. A partial gate is worse than none: it produces a half-animated
+ * frame nobody designed, and it is the shape that survives review because the
+ * parent looks right. `animated` is now the single condition for every moving
+ * part of this pill — travel, glyph, entrance, exit, duration.
  */
 import * as React from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
@@ -47,6 +65,41 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { RAIL_PANEL_INSET } from "@renderer/components/ticket/rail-panel-parts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { cn } from "@renderer/lib/utils";
+
+/**
+ * Everything in the pill that moves, decided once (VC-406).
+ *
+ * Pure and exported so the gate is a thing a test can hold: the defect it
+ * replaces was a gate applied to some moving parts and not others, which is
+ * invisible in a static render and shows up only as a frame nobody designed.
+ * One input, one answer, every consumer below reading the same answer.
+ *
+ * `duration: 0` rather than an absent transition for the ungated case: Motion
+ * treats a missing transition as "use the default", which is precisely the
+ * animation being refused.
+ */
+export interface RailTabMotion {
+  /** Whether this selection animates at all — the one condition. */
+  animated: boolean;
+  /** The pill's own rearrangement: a spring, or nothing. */
+  transition: { type: "spring"; duration: number; bounce: number } | { duration: number };
+  /** The selected label's entrance and exit, in seconds. */
+  labelDuration: number;
+}
+
+export function railTabMotion(input: {
+  /** False for a keyboard walk: a held arrow key outruns a 320ms settle. */
+  animateSelection: boolean;
+  /** The reader's setting or their OS's. */
+  reducedMotion: boolean;
+}): RailTabMotion {
+  const animated = input.animateSelection && !input.reducedMotion;
+  return {
+    animated,
+    transition: animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 },
+    labelDuration: animated ? 0.14 : 0,
+  };
+}
 
 /** One page in the pill: the value it selects, its word, and its glyph. */
 export interface RailModeTab<K extends string> {
@@ -84,7 +137,8 @@ export function RailModeTabs<K extends string>({
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const [animateSelection, setAnimateSelection] = React.useState(true);
   const reducedMotion = useReducedMotion() ?? false;
-  const animated = animateSelection && !reducedMotion;
+  const motionPlan = railTabMotion({ animateSelection, reducedMotion });
+  const animated = motionPlan.animated;
 
   function onKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -112,6 +166,10 @@ export function RailModeTabs<K extends string>({
       <div
         role="tablist"
         aria-label={label}
+        // The gate's one answer, on the DOM: which activation path a selection
+        // came through is otherwise only visible in Motion's props, and the
+        // defect here was the path, not the plan.
+        data-animated={animated}
         // No height of its own: the `h-8` tabs inside it plus `p-1` ARE the
         // height (40px), so the track can never disagree with what it holds.
         className="mx-auto flex w-max max-w-full items-center gap-1 rounded-full border border-sidebar-border bg-background/70 p-1 shadow-raised"
@@ -122,9 +180,7 @@ export function RailModeTabs<K extends string>({
           const tab = (
             <motion.button
               layout={animated}
-              transition={
-                animated ? { type: "spring", duration: 0.32, bounce: 0.1 } : { duration: 0 }
-              }
+              transition={motionPlan.transition}
               key={mode.key}
               ref={(node) => {
                 refs.current[index] = node;
@@ -137,8 +193,8 @@ export function RailModeTabs<K extends string>({
               aria-label={mode.label}
               tabIndex={selected ? 0 : -1}
               data-testid={`${idPrefix}-tab-${mode.key}`}
-              onClick={() => {
-                setAnimateSelection(true);
+              onClick={(event) => {
+                setAnimateSelection(event.detail !== 0);
                 onSelect(mode.key);
               }}
               onKeyDown={(event) => onKeyDown(event, index)}
@@ -149,7 +205,7 @@ export function RailModeTabs<K extends string>({
                 // the transition below only made the depress instant, it never
                 // removed it, and `transform-none` could not have — see the
                 // press note in `ui/button.tsx`.
-                "focus-visible:ring-2 focus-visible:ring-ring/45 active:scale-[0.97] motion-reduce:scale-100!",
+                "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:scale-100!",
                 !reducedMotion &&
                   "transition-[color,background-color,box-shadow,transform,scale] duration-150 ease-out",
                 selected
@@ -157,7 +213,13 @@ export function RailModeTabs<K extends string>({
                   : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               )}
             >
-              <motion.span layout="position" className="flex shrink-0 items-center">
+              {/* The glyph travels with the label that grows beside it — under
+                  the SAME gate as its button, or a keyboard walk keeps one
+                  moving part after the pill itself has stopped. */}
+              <motion.span
+                layout={animated ? "position" : false}
+                className="flex shrink-0 items-center"
+              >
                 <Icon className="size-3.5" />
               </motion.span>
               <AnimatePresence initial={false} mode="popLayout">
@@ -166,8 +228,11 @@ export function RailModeTabs<K extends string>({
                     key={`${mode.key}-label`}
                     initial={animated ? { opacity: 0, transform: "translateX(-4px)" } : false}
                     animate={{ opacity: 1, transform: "translateX(0)" }}
+                    // The EXIT is gated too, and at zero duration it is a cut
+                    // rather than a fade: the word of the tab being left has to
+                    // be gone by the time the next keystroke lands.
                     exit={animated ? { opacity: 0, transform: "translateX(3px)" } : { opacity: 0 }}
-                    transition={{ duration: reducedMotion ? 0 : 0.14, ease: [0.23, 1, 0.32, 1] }}
+                    transition={{ duration: motionPlan.labelDuration, ease: [0.23, 1, 0.32, 1] }}
                     className="whitespace-nowrap"
                   >
                     {mode.label}

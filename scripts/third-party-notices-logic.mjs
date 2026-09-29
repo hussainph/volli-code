@@ -614,12 +614,16 @@ function isNameShipped(name, shippedNames) {
  * THIS REPLACES A MAGIC-STRING GREP (VC-407 review). The first design had the
  * desktop registry name a file owned by another package plus a marker word,
  * and decided by reading every shipped source file looking for that word. The
- * real case walked straight through the hole: the Ghostty theme catalog landed
- * as `ghostty-theme-sources.generated.ts`, 463 entries whose text says
- * "iTerm2 Dark Background" and never the marker `iTerm2-Color-Schemes`. Marker
- * not found, so the rule concluded the material had not shipped, stayed green,
- * and would have packaged 463 vendored themes with no attribution. A grep for
- * a word is a guess about how someone else will spell something.
+ * real case walked straight through the hole: a generated catalog of 463
+ * third-party terminal themes, whose entries named individual themes and never
+ * once carried the marker the grep was looking for. Marker not found, so the
+ * rule concluded the material had not shipped, stayed green, and would have
+ * packaged the whole catalog with no attribution. A grep for a word is a guess
+ * about how someone else will spell something.
+ *
+ * (That catalog was later removed outright — VC-413 — because nobody had
+ * verified the individual themes' licences. The hole it exposed is still the
+ * reason this rule keys on files.)
  *
  * WHAT REPLACES IT IS THE FILE ITSELF. A package declares, in its own
  * `package.json`, which of its files are vendored third-party material and
@@ -803,6 +807,18 @@ export function renderNoticeDocument(model) {
     "",
     "This document reports what each package declares and publishes. It draws no legal",
     "conclusion about any of it — see the final section for declarations that need one.",
+    "",
+    // Stated positively, and emitted here rather than typed into the output,
+    // because the output is generated: an earlier hand-edit of this paragraph
+    // was silently erased by the next regeneration. Volli Code once shipped a
+    // catalog of 463 third-party terminal themes; VC-413 removed all of it
+    // because no individual theme's licence had been verified. An absence is
+    // worth saying out loud in a notice document, since a reader cannot tell
+    // "not bundled" from "forgotten" by looking at what is missing.
+    "No terminal themes are bundled. Volli Code ships no Ghostty or iTerm2 colour",
+    "schemes: the terminal is painted from the user's own Ghostty configuration, read",
+    "from their machine, or from a palette derived from Volli's own design tokens.",
+    "Nothing in that path is redistributed, so nothing in it appears below.",
     "",
   );
 

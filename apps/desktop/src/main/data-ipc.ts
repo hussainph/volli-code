@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { shell } from "electron";
 import type Database from "better-sqlite3";
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
@@ -25,6 +25,7 @@ import {
 } from "./db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
@@ -64,8 +65,11 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -180,7 +184,7 @@ import {
   unarchiveTicketCommand,
   updateTicketFieldsCommand,
 } from "./ticket-commands";
-import { detectProjectBaseBranch } from "./project-base-branch";
+import { detectProjectBaseBranchAsync } from "./project-base-branch";
 import { broadcastDataChanged } from "./broadcast";
 import { withTicketWake } from "./ticket-wake";
 import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
@@ -398,7 +402,7 @@ async function materializeSwitchedOnWorktree(
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
-    detectBaseBranch?: (projectPath: string) => string | null;
+    detectBaseBranch?: (projectPath: string) => Promise<string | null>;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -627,30 +631,39 @@ export function registerDataIpcHandlers(
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": (input: ProjectCreateInput): ProjectCreateResult => {
+    "volli:project-create": async (input: ProjectCreateInput): Promise<ProjectCreateResult> => {
       const existing = findProjectByPath(db, input.path);
       if (existing) {
         return { ok: true, project: existing, created: false };
       }
       let stats;
       try {
-        stats = statSync(input.path);
+        stats = await stat(input.path);
       } catch {
         return { ok: false, error: "Project path does not exist" };
       }
       if (!stats.isDirectory()) {
         return { ok: false, error: "Project path is not a directory" };
       }
-      const now = Date.now();
+      const baseBranch = await (options.detectBaseBranch ?? detectProjectBaseBranchAsync)(
+        input.path,
+      );
+      // Detection yields to other IPC requests. Re-read mutable project state only
+      // after it returns, then validate and insert without another await.
+      const createdWhileDetecting = findProjectByPath(db, input.path);
+      if (createdWhileDetecting) {
+        return { ok: true, project: createdWhileDetecting, created: false };
+      }
       const ticketPrefix = derivePrefix(input.name);
       const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
       if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
+      const now = Date.now();
       const project: Project = {
         id: randomUUID(),
         name: input.name,
         path: input.path,
         ticketPrefix,
-        baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
+        baseBranch,
         colorIndex: countProjects(db) % PROJECT_COLORS.length,
         sortOrder: nextSortOrder(db),
         createdAt: now,
@@ -658,6 +671,42 @@ export function registerDataIpcHandlers(
       };
       insertProject(db, project);
       return { ok: true, project, created: true };
+    },
+
+    /**
+     * Whether one project's registered folder is still there (VC-430) — the
+     * read the recovery path hangs off. Cheap by construction: one row and one
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
+     */
+    "volli:project-folder-check": (input: ProjectIdInput): Promise<ProjectFolderResult> =>
+      inspectProjectFolder(db, input.projectId),
+
+    /**
+     * Points an existing project at the folder it moved to (VC-430).
+     *
+     * The whole judgement lives in `relinkProject`, including the refusal that
+     * matters most: a folder another project already tracks is never taken,
+     * because the alternative a person reaches for — adding the new folder —
+     * is exactly what mints the duplicate this channel exists to avoid.
+     *
+     * `busyWorktreeSites` is threaded through so the answer can warn about
+     * Sessions still running in the folder being left; it is the same supplier
+     * the destructive worktree paths ask, because "what is live in this
+     * directory" must have one answer in this process.
+     */
+    "volli:project-relink": async (input: ProjectRelinkInput): Promise<ProjectRelinkResult> => {
+      const outcome = await relinkProject(
+        { db, busyWorktreeSites: options.busyWorktreeSites },
+        { projectId: input.id, path: input.path },
+      );
+      if (!outcome.ok) return outcome;
+      // Every surface that reads a project path has to re-read: the rail, the
+      // file browsers, Configure, and the renderer's own root allowlist mirror.
+      broadcastDataChanged({ projectId: outcome.project.id });
+      return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
     "volli:project-remove": (id: string): ProjectMutationResult => {

@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
+  normalizeContext,
   type Api,
   type Model,
   type Models,
@@ -26,7 +27,9 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode";
 import type { SessionUsage } from "@volli/shared";
 import { Buffer } from "node:buffer";
+import { providerImageGuard } from "./provider-images";
 import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
+import { withoutSystemMessages } from "./transcript-context";
 
 export const ANTHROPIC_COMPACT_BETA = "compact-2026-01-12";
 export const ANTHROPIC_COMPACT_MIN_TRIGGER_TOKENS = 50_000;
@@ -284,9 +287,16 @@ export async function compactProviderNative(
     ) {
       return { kind: "unsupported", reason: "Native checkpoint belongs to another model." };
     }
+    // This request is built by hand rather than through the live turn's
+    // `streamFn`, so it takes the same image guard explicitly: a checkpoint
+    // request carries the same screenshots, under the same provider limits.
+    const sendable = {
+      ...input,
+      messages: await providerImageGuard.sanitize(input.messages, input.model),
+    };
     return input.model.api === "openai-responses"
-      ? await compactOpenAI(input, auth)
-      : await compactAnthropic(input, auth);
+      ? await compactOpenAI(sendable, auth)
+      : await compactAnthropic(sendable, auth);
   } catch (error) {
     return {
       kind: "failed",
@@ -301,9 +311,14 @@ async function compactOpenAI(
   input: ProviderCompactionInput,
   auth: ResolvedAuth,
 ): Promise<ProviderCompactionOutcome> {
+  // The conversation alone, normalized as pi-ai 0.86 requires of anything
+  // that reaches a provider conversion. The prompt travels as `instructions`
+  // below, so no system message is folded in: a leading one would land in
+  // `input` as a developer item beside it, and a tool-change one from the
+  // sidecar declares tools `/compact` has no field for.
   const converted = convertResponsesMessages(
     input.model,
-    { messages: convertToLlm([...input.messages]) },
+    normalizeContext({ messages: withoutSystemMessages(convertToLlm([...input.messages])) }),
     new Set(["openai"]),
   );
   const body = {
@@ -565,10 +580,13 @@ export function toAnthropicMessages(
   };
   const compat: Record<string, unknown> = record(model.compat) ? model.compat : {};
   const allowEmptySignature = compat["allowEmptySignature"] === true;
-  for (const message of transformMessages(
-    convertToLlm([...messages]),
-    model,
-    normalizeToolCallId,
+  // System messages are dropped after the transform, which treats them as
+  // transparent to tool-call accounting: the prompt and tools ride the
+  // request's own `system` and `tools` fields, and a sidecar tool-change
+  // message would otherwise reach the role switch below, which has no arm for
+  // it and would take it for a tool result with no call id.
+  for (const message of withoutSystemMessages(
+    transformMessages(convertToLlm([...messages]), model, normalizeToolCallId),
   )) {
     if (message.role === "user") {
       const blocks =

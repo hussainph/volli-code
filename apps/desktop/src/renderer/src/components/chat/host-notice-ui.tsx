@@ -59,12 +59,14 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
   const childSessionId = notice.childSessionId;
   const historicalNote =
     childSessionId === null
-      ? `${copy.note} Answer: volli session answer ${notice.sessionHandle}`
+      ? [copy.note, `Answer: volli session answer ${notice.sessionHandle}`]
+          .filter((part) => part.length > 0)
+          .join(" ")
       : copy.note;
   return (
     <div
       className="not-prose flex min-w-0 flex-col gap-1"
-      title={`${copy.headline} — ${copy.state}. ${historicalNote}`}
+      title={`${copy.headline} — ${copy.state}${historicalNote.length > 0 ? `. ${historicalNote}` : ""}`}
     >
       <div className="flex min-w-0 items-center gap-2 text-ui">
         <SubagentNoticeGlyph state={notice.state} />
@@ -85,7 +87,9 @@ export const SubagentNoticeRow = React.memo(function SubagentNoticeRow({
           </Button>
         )}
       </div>
-      <p className="truncate text-ui text-muted-foreground/70">{historicalNote}</p>
+      {historicalNote.length > 0 ? (
+        <p className="truncate text-ui text-muted-foreground/70">{historicalNote}</p>
+      ) : null}
     </div>
   );
 });

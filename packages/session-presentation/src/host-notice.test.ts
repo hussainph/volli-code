@@ -292,7 +292,7 @@ describe("host-notice copy", () => {
     expect(subagentNoticeCopy(projected)).toEqual({
       headline: "Find artifact conventions",
       state: "done",
-      note: "Finished its task; its answer is in its own Session.",
+      note: "",
     });
     expect(subagentNoticeCopy({ ...projected, state: "interrupted" }).note).toBe(
       "Its turn ended before it answered.",

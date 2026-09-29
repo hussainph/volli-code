@@ -65,7 +65,7 @@ describe("agent product guidance", () => {
   it("records the move from awaits to event-driven notices (VC-457)", () => {
     // The newest build heads the record, and this is where that pin lives now.
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-457");
-    expect(entry).toMatchObject({ baseline: "VC-324" });
+    expect(entry).toMatchObject({ baseline: "VC-364" });
     expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
     expect(entry!.added.join("\n")).toContain("watch");
     const changed = entry!.changed.join("\n");
@@ -85,7 +85,6 @@ describe("agent product guidance", () => {
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-324");
     expect(entry).toBeDefined();
     expect(entry).toMatchObject({ baseline: "VC-6" });
-    expect(AGENT_CAPABILITY_CHANGES[1]).toBe(entry);
     const added = entry!.added.join("\n");
     expect(added).toContain("session_await");
     // The wake vocabulary and the cursor rule are what an agent needs to call
@@ -96,6 +95,15 @@ describe("agent product guidance", () => {
     const changed = entry!.changed.join("\n");
     expect(changed).toContain("interrupted");
     expect(changed).toContain("session_send");
+  });
+
+  it("records browser_find and stable Browser refs (VC-364)", () => {
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-364");
+    expect(entry).toMatchObject({ baseline: "VC-324" });
+    expect(AGENT_CAPABILITY_CHANGES[1]).toBe(entry);
+    expect(entry!.added.join("\n")).toContain("browser_find");
+    const changed = entry!.changed.join("\n");
+    for (const word of ["[new]", "generation", "latest read"]) expect(changed).toContain(word);
   });
 
   it("records the Role-scoped tool surface as an agent-facing capability (VC-162)", () => {
