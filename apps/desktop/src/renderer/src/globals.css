@@ -732,10 +732,17 @@
  * (`text-foreground`), so it reads a token this rule never touches; a `color`
  * declaration here would have silently killed it.
  *
- * The class pair names "the row's first line" — the meta line beneath it wears
- * `session-row-dim` too, and `text-ui` against its `text-label` is what tells
- * them apart. The working row's sweeping title is the same line in a different
- * costume, so it carries both classes and lands on the same rung. */
+ * The class pair names "the row's first line", and `text-ui` is half of the
+ * name rather than incidental. The Active row's second line used to be
+ * `text-label` and to wear `session-row-dim` as well, which is what told the
+ * two apart here; since VC-30 that line is `text-ui` (D5) and could no longer
+ * be distinguished by size, so it carries its own `session-row-meta` hook and
+ * this rule matches the title alone. Do not hand the meta line this class back:
+ * the head rung is what the title outranks it BY, and the dim/promote pair
+ * decision #74 measures lives on that hook (`sidebar/session-band-row.tsx`).
+ *
+ * The working row's sweeping title is the same line in a different costume, so
+ * it carries both classes and lands on the same rung. */
 [data-slot="sidebar"] .session-row-dim.text-ui {
   --sidebar-foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink);

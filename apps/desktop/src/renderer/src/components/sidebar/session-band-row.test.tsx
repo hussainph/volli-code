@@ -127,14 +127,28 @@ function renderPrevious(
   );
 }
 
-/** The row's second line — `ListRow` typesets a string `secondary` in this span. */
+/**
+ * The row's second line. The row typesets it itself rather than handing
+ * `ListRow` a string, because the line carries the promotion hook decision #74
+ * measures (`session-row-meta`) — see the ink-tier block at the bottom.
+ */
 function subtitle(markup: string): string {
-  return (
-    /<span class="block truncate text-ui text-muted-foreground\/70">([^<]*)<\/span>/.exec(
-      markup,
-    )?.[1] ?? ""
-  );
+  return /<span class="session-row-meta[^"]*">([^<]*)<\/span>/.exec(markup)?.[1] ?? "";
 }
+
+/**
+ * Whether the row promotes its dimmed second line in the given state.
+ *
+ * The variants are Tailwind's descendant form, and `renderToStaticMarkup`
+ * escapes their `&` into `&amp;` — so the hover one is recognised by its
+ * `:hover_` and the selected one by the `;` the escape ends with.
+ */
+const promotes = (markup: string, on: "hover" | "selected"): boolean =>
+  markup.includes(
+    on === "hover"
+      ? ":hover_.session-row-meta]:text-foreground"
+      : ";_.session-row-meta]:text-foreground",
+  );
 
 /** Every accessible name the row's marks announce. */
 const markNames = (markup: string): string[] =>
@@ -354,6 +368,56 @@ describe("the Previous row", () => {
 });
 
 /**
+ * THE SIDEBAR'S INK TIERS, which the `ListRow` adoption is not allowed to drop.
+ *
+ * This band stands on the translucent canvas, so its tiers are scoped rules in
+ * `globals.css` keyed off two classes: `session-row-dim` + `text-ui` puts the
+ * title on the canvas HEAD rung, and `session-row-meta` is the hook decision
+ * #74's vibrancy rule promotes on hover and on selection — the row's fill is a
+ * veil, so the dimmed line measures under the contrast floor un-promoted.
+ */
+describe("the Active row's ink tiers", () => {
+  it("keeps the title on the canvas head rung, in both of its costumes", () => {
+    // Resting: the tier rule is `.session-row-dim.text-ui`, so both have to be
+    // on the line itself.
+    const resting = render(row({ activity: "idle" }));
+    expect(resting).toMatch(/class="session-row-dim [^"]*text-ui/);
+    // Working: the sweep reads `--sidebar-foreground` through its own
+    // `color-mix`, so it lands on that rung only if the rule reaches it too.
+    expect(render(row())).toMatch(/class="session-row-dim session-title-sweep [^"]*text-ui/);
+  });
+
+  it("gives the second line its own hook, at the dim tier and not the title's", () => {
+    const markup = render(row());
+
+    expect(markup).toMatch(/class="session-row-meta [^"]*text-muted-foreground/);
+    // Never the title's class: both lines are `text-ui` now, so sharing it
+    // would promote the meta line to the head rung and erase the pair.
+    expect(markup).not.toMatch(/class="session-row-meta[^"]*session-row-dim/);
+    expect(markup).not.toMatch(/class="session-row-dim[^"]*session-row-meta/);
+  });
+
+  it("promotes the second line on hover, and with the row's own ink when selected", () => {
+    const resting = render(row());
+    const chosen = render(row(), { selected: true });
+
+    expect(promotes(resting, "hover")).toBe(true);
+    expect(promotes(resting, "selected")).toBe(false);
+    expect(promotes(chosen, "selected")).toBe(true);
+    // The row's own ink promotes WITH it, so the pair reads at one tier rather
+    // than as a bright title over a line still under the floor.
+    expect(chosen).toMatch(/class="[^"]*\btext-foreground\b/);
+  });
+
+  it("publishes selection on the target a pointer presses", () => {
+    // The `SidebarMenuButton` this row replaced said `data-active` out loud, and
+    // the vibrancy rule is only checkable against a row that still does.
+    expect(render(row(), { selected: true })).toContain('data-active="true"');
+    expect(render(row())).toContain('data-active="false"');
+  });
+});
+
+/**
  * VC-402 × A3: a companion leads with its HARNESS'S VENDOR, so a Claude Code
  * pane and a Claude chat read as the same maker. Only a harness nobody
  * publishes a mark for keeps the band's Phosphor mnemonic.
@@ -372,6 +436,22 @@ describe("a companion's mark", () => {
     expect([...byDrawing.values()].map((ids) => ids.join(" + "))).toEqual([
       ...FIRST_CLASS_HARNESS_IDS,
     ]);
+  });
+
+  it("names a companion running no CLI by what the listing resolved, not by its kind", () => {
+    // The mark's accessible name is the only place this row states its source
+    // now that a peekable row has no native `title` (D1), and `Shell` — a
+    // durable record naming no harness — is a different answer from `Terminal`,
+    // a pane nothing has been resolved about yet (`sessionSourceLabel`).
+    expect(markNames(render(row({ harnessId: null, source: "Shell" })))).toContain(
+      "Shell · Working",
+    );
+    expect(markNames(render(row({ harnessId: null, source: "Terminal" })))).toContain(
+      "Terminal · Working",
+    );
+    // Never invented: a row that resolved a harness keeps naming it, and the
+    // band's own richer answer still wins where it passes one.
+    expect(markNames(render(row()))).toContain("Claude Code · Working");
   });
 
   it("keeps the generic terminal for a harness this build does not know", () => {

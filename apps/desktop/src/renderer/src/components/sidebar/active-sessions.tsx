@@ -1032,6 +1032,13 @@ export function ActiveSessions({
       id: string;
       kind: "chat" | "terminal";
       harnessId: HarnessId | null;
+      /**
+       * What the listing resolved a companion to be running (`Shell` for a bare
+       * shell) — the label its mark takes where there is no vendor logo, since
+       * the mark's name is the only place the row still says its source (D1).
+       * Active rows have one; Previous rows carry none.
+       */
+      source?: string;
     }): SessionRowVendor => {
       if (row.kind !== "chat") return sessionRowVendor(row);
       const sessionId = peekSessionId(row.id);
@@ -1057,7 +1064,14 @@ export function ActiveSessions({
     ): void => {
       const sessionId = peekSessionId(row.id);
       if (sessionId === null) return;
-      const vendor = vendorOf({ id: row.id, kind, harnessId: row.harnessId });
+      // …with the row's own source where it has one, so a Session's card and
+      // its row cannot name the same shell two different things.
+      const vendor = vendorOf({
+        id: row.id,
+        kind,
+        harnessId: row.harnessId,
+        ...("source" in row ? { source: row.source } : {}),
+      });
       rows.set(row.id, {
         rowId: row.id,
         sessionId,
@@ -1248,6 +1262,7 @@ export function ActiveSessions({
                 id: row.id,
                 kind: row.target?.kind === "chat" ? "chat" : "terminal",
                 harnessId: row.harnessId,
+                source: row.source,
               })}
               onSelect={openRow}
               // A companion has no turns, so nothing about it is unread (A4 Q2).

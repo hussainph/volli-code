@@ -200,13 +200,27 @@ export interface SessionRowVendor {
  * model its band holds, so it keeps the kind's own glyph and says `Chat`. The
  * default exists so a row is never mark-less: the band's own
  * {@link ActiveSessions} passes the richer answer.
+ *
+ * A COMPANION RUNNING NO CLI IS NAMED BY WHAT THE LISTING RESOLVED, not by the
+ * kind. The mark's accessible name is the only place this row still states its
+ * source — the native `title` that used to carry it is gone (D1) — and
+ * `Terminal` would throw away the distinction `sessionSourceLabel` already
+ * made: `Shell` is a durable record that names no harness, `Terminal` is a pane
+ * whose record has not landed and about which nothing has been resolved at all.
+ * The row knows which; the mark should say the same word the listing did.
  */
 export function sessionRowVendor(row: {
   kind: "chat" | "terminal";
   harnessId: HarnessId | null;
+  /**
+   * What the listing resolved this row to be running
+   * ({@link ActiveSessionRow.source}) — `Shell` for a bare shell. Absent on a
+   * Previous row, which carries no source, and unused for a chat.
+   */
+  source?: string;
 }): SessionRowVendor {
   if (row.kind === "chat") return { providerId: null, providerLabel: "Chat" };
-  if (row.harnessId === null) return { providerId: null, providerLabel: "Terminal" };
+  if (row.harnessId === null) return { providerId: null, providerLabel: row.source ?? "Terminal" };
   const providerId = harnessVendorId(row.harnessId);
   return {
     providerId,
@@ -336,6 +350,26 @@ export function activeSubtitle(row: ActiveSessionRow, ticketPrefix: string, now:
  * title still SWEEPS rather than growing a colour, so a band of running work
  * reads as one list. Unread outranks by WEIGHT alone (semibold), with the blue
  * dot at the row's end: two marks on two axes, neither borrowing the other's.
+ *
+ * THE SIDEBAR'S INK DISCIPLINE RIDES ON TWO CLASSES, and adopting the shipped
+ * {@link ListRow} is not allowed to drop either of them. This band stands on
+ * the translucent canvas rather than on the opaque card, so its tiers are
+ * scoped rules in `globals.css` rather than root tokens:
+ *
+ *   • `session-row-dim` on the TITLE (with `text-ui`) is what puts the first
+ *     line on the canvas HEAD rung — `[data-slot="sidebar"]
+ *     .session-row-dim.text-ui` remaps the two foreground tokens onto
+ *     `--canvas-ink`. Without it a session title paints at the FURNITURE rung,
+ *     level with the nav destinations it is supposed to outrank.
+ *   • `session-row-meta` on the SECOND LINE is decision #74's vibrancy pairing:
+ *     the row's fill is a veil, so at the canvas band's ceiling the dimmed line
+ *     measures under the contrast floor un-promoted and comfortably over it
+ *     promoted — hence `hover` and selection pull it up to the row's own ink.
+ *
+ * The meta line gets its OWN hook rather than sharing the title's: the tier
+ * rule above tells the two lines apart by `text-ui` against `text-label`, and
+ * the approved second line is `text-ui` (D5), so a shared class would silently
+ * promote it to the head rung and erase the dim/promote pair it exists for.
  */
 export const ActiveBandRow = React.memo(function ActiveBandRow({
   row,
@@ -373,7 +407,7 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
   const needsYou = row.attention !== null;
   const working = !needsYou && row.activity === "working";
   const kind = row.target?.kind === "chat" ? "chat" : "terminal";
-  const mark = vendor ?? sessionRowVendor({ kind, harnessId: row.harnessId });
+  const mark = vendor ?? sessionRowVendor({ kind, harnessId: row.harnessId, source: row.source });
   // A Draft stands for no Session, so it has no peek and nothing to read.
   const peekable = canPeekRow(row.id);
   const title = unread ? "font-semibold text-sidebar-foreground" : "font-medium";
@@ -396,6 +430,24 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           density="two-line"
           selected={selected}
           onActivate={() => onSelect(row)}
+          // Selection, on the element a pointer and a test both land on: the
+          // `SidebarMenuButton` this row replaced published `data-active`, and
+          // the vibrancy rule below is only checkable against a row that says
+          // out loud which state it is in. It rides the rest props, so it lands
+          // on `ListRow`'s activation target rather than on its shell.
+          data-active={selected ? "true" : "false"}
+          // DECISION #74's VIBRANCY RULE, restored after the `ListRow` adoption
+          // dropped it. The dimmed second line promotes to the row's ink on
+          // hover and on selection, and the row's own ink promotes with it, so
+          // the pair reads as one line of copy at one tier rather than as a
+          // bright title over a line that stayed under the floor. Descendant
+          // variants rather than a rule in `globals.css`: the promotion belongs
+          // to THIS row's hover/selected states, and the selector it needs is
+          // two classes deep, which is what keeps it over the dim tier's own.
+          className={cn(
+            "hover:text-foreground [&:hover_.session-row-meta]:text-foreground",
+            selected && "text-foreground [&_.session-row-meta]:text-foreground",
+          )}
           // Draggable onto a pane (VC-202): the same door, opened somewhere
           // specific. A row with no live target does not drag. The props land
           // on the activation target, which is what a pointer presses.
@@ -410,16 +462,27 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
               size="card"
             />
           }
+          // `session-row-dim` on BOTH costumes of the first line (see the note
+          // above the component): the sweep reads `--sidebar-foreground` through
+          // its own `color-mix`, so it lands on the canvas head rung only if the
+          // tier rule reaches it too.
           primary={
             working ? (
-              <span className={cn("session-title-sweep min-w-0 flex-1 text-ui", title)}>
+              <span
+                className={cn("session-row-dim session-title-sweep min-w-0 flex-1 text-ui", title)}
+              >
                 {row.title}
                 <span className="session-title-peak" aria-hidden>
                   {row.title}
                 </span>
               </span>
             ) : (
-              <span className={cn("min-w-0 truncate text-ui text-sidebar-foreground", title)}>
+              <span
+                className={cn(
+                  "session-row-dim min-w-0 truncate text-ui text-sidebar-foreground",
+                  title,
+                )}
+              >
                 {row.title}
               </span>
             )
@@ -430,7 +493,17 @@ export const ActiveBandRow = React.memo(function ActiveBandRow({
           primaryTrailing={
             <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
           }
-          secondary={activeSubtitle(row, ticketPrefix, now)}
+          // The same line `ListRow` typesets for a string secondary, in the
+          // row's own span so it can carry the promotion hook — and at the
+          // SOLVED mute rather than at an alpha of it: a percentage of ink
+          // composites against whatever the gradient is doing behind that row,
+          // so one line reads at two contrasts down the band and neither of
+          // them is the measured one (`globals.css`, the section-heading note).
+          secondary={
+            <span className="session-row-meta block truncate text-ui text-muted-foreground transition-colors">
+              {activeSubtitle(row, ticketPrefix, now)}
+            </span>
+          }
           trailing={unread ? <UnreadDot /> : undefined}
         />
       </ReadMenu>
