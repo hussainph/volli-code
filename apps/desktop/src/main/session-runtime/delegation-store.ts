@@ -378,6 +378,57 @@ export class TicketSessionDelegationStore
    * is `DELEGATION_ID_SUFFIXES.notice`'s; both are frozen the way any durable
    * id derivation is, and this SQL spells them because it reads them back.
    */
+  /**
+   * One Subagent Session's delegation, whether or not its parent was already
+   * told (VC-457): what re-arming a child a person resumed needs to name the
+   * parent, the title and the operation its notice ids are keyed on. Null for
+   * a Session that is not a subagent, or whose create command is not spelled
+   * the way the delegate door spells one. `answered` says whether the
+   * delegation's own notice already reached the parent's ledger.
+   */
+  subagentDelegation(childSessionId: string): (DelegationRef & { answered: boolean }) | null {
+    const row = this.db
+      .prepare(
+        `SELECT s.id AS child_session_id,
+                s.parent_session_id,
+                s.project_id,
+                s.title,
+                c.id AS create_command_id,
+                EXISTS (
+                  SELECT 1
+                    FROM session_commands a
+                   WHERE a.session_id = s.parent_session_id
+                     AND a.id = substr(c.id, 1, length(c.id) - length(':create')) || ':answer'
+                ) AS answered
+           FROM sessions s
+           JOIN session_commands c
+             ON c.session_id = s.id
+            AND json_extract(c.intent, '$.kind') = 'session.create'
+          WHERE s.id = ?
+            AND s.role = 'subagent'
+            AND s.parent_session_id IS NOT NULL`,
+      )
+      .get(childSessionId) as
+      | {
+          child_session_id: string;
+          parent_session_id: string;
+          project_id: string;
+          title: string | null;
+          create_command_id: string;
+          answered: number;
+        }
+      | undefined;
+    if (row === undefined || !row.create_command_id.endsWith(":create")) return null;
+    return {
+      childSessionId: row.child_session_id,
+      parentSessionId: row.parent_session_id,
+      projectId: row.project_id,
+      operationId: row.create_command_id.slice(0, -":create".length),
+      title: row.title ?? "Delegated task",
+      answered: row.answered === 1,
+    };
+  }
+
   listUnansweredSubagents(): readonly DelegationRef[] {
     const rows = this.db
       .prepare(

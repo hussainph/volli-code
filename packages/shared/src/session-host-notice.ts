@@ -9,7 +9,13 @@
  * invent private marker strings or outcome lists.
  */
 
-/** The outcomes a Subagent Session completion notice can record. */
+/**
+ * The outcomes a Subagent Session completion notice can record.
+ *
+ * `timed-out` is history only: VC-457 removed the subagent wall clock, so no
+ * writer produces it again, but notices written before then still carry it and
+ * must keep reading as what they were (tolerant on read).
+ */
 export const SUBAGENT_NOTICE_STATES = [
   "completed",
   "interrupted",
@@ -40,8 +46,45 @@ export interface BrowserHoldHostNotice {
   action: "person-took" | "ask-to-leave";
 }
 
+/**
+ * The facts a watch notice can report (VC-457): what replaced `session_await`
+ * and `ticket_await`. Each is a durable fact another Session or a person
+ * produced ON PURPOSE — never bookkeeping — so a watcher is woken only for
+ * something it has a decision to make about.
+ */
+export const WATCH_NOTICE_FACTS = [
+  "turn-completed",
+  "turn-interrupted",
+  "signaled-done",
+  "signaled-blocked",
+  "stopped",
+  "ticket-moved",
+  "ticket-commented",
+  "ticket-signaled",
+] as const;
+
+export type WatchNoticeFact = (typeof WATCH_NOTICE_FACTS)[number];
+
+/** One watched change inside a (possibly coalesced) watch notice. */
+export interface WatchNoticeEvent {
+  subject: "session" | "ticket";
+  /** The durable id of the Session or Ticket that changed. */
+  id: string;
+  /** Host-minted name: a Ticket display id, or a Session's short handle. */
+  label: string;
+  fact: WatchNoticeFact;
+  /** Host-minted qualifier, e.g. the column a Ticket moved to; never another author's prose. */
+  detail: string | null;
+}
+
+/** Changes to watched Sessions and Tickets, delivered together (VC-457). */
+export interface WatchHostNotice {
+  kind: "watch";
+  events: readonly WatchNoticeEvent[];
+}
+
 /** Every host-authored transcript notice understood by this product version. */
-export type SessionHostNotice = SubagentSessionHostNotice | BrowserHoldHostNotice;
+export type SessionHostNotice = SubagentSessionHostNotice | BrowserHoldHostNotice | WatchHostNotice;
 
 /** The durable marker shared by notice writers and Session clients. */
 export const SESSION_HOST_NOTICE_METADATA_KIND = "session-host-notice" as const;

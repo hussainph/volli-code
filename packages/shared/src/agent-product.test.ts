@@ -62,11 +62,26 @@ describe("agent product guidance", () => {
     expect(entry!.changed.join("\n")).toContain("session done");
   });
 
+  it("records the move from awaits to event-driven notices (VC-457)", () => {
+    // The newest build heads the record, and this is where that pin lives now.
+    const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-457");
+    expect(entry).toMatchObject({ baseline: "VC-364" });
+    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    expect(entry!.added.join("\n")).toContain("watch");
+    const changed = entry!.changed.join("\n");
+    for (const word of ["final message", "session_start", "session_send", "automation_run"]) {
+      expect(changed).toContain(word);
+    }
+    expect(entry!.fixed.join("\n")).toContain("no time limit");
+    const removed = entry!.removed.join("\n");
+    expect(removed).toContain("session_await");
+    expect(removed).toContain("ticket_await");
+  });
+
   it("records the Session await, the interrupted state and the steer receipt (VC-324)", () => {
-    // Three agent-facing changes from one audit: a tool an orchestrator can now
-    // park on, a listing word it will now read, and a send that no longer
-    // holds its turn. The newest build heads the record, and this is where
-    // that pin lives now.
+    // Three agent-facing changes from one audit: a tool an orchestrator could
+    // park on (retired again by VC-457), a listing word it will now read, and
+    // a send that no longer holds its turn.
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-324");
     expect(entry).toBeDefined();
     expect(entry).toMatchObject({ baseline: "VC-6" });
@@ -83,10 +98,9 @@ describe("agent product guidance", () => {
   });
 
   it("records browser_find and stable Browser refs (VC-364)", () => {
-    // The newest build heads the record, and this is where that pin lives now.
     const entry = AGENT_CAPABILITY_CHANGES.find((change) => change.build === "VC-364");
     expect(entry).toMatchObject({ baseline: "VC-324" });
-    expect(AGENT_CAPABILITY_CHANGES[0]).toBe(entry);
+    expect(AGENT_CAPABILITY_CHANGES[1]).toBe(entry);
     expect(entry!.added.join("\n")).toContain("browser_find");
     const changed = entry!.changed.join("\n");
     for (const word of ["[new]", "generation", "latest read"]) expect(changed).toContain(word);

@@ -107,6 +107,7 @@ import {
   type RuntimeMcpPort,
   type RuntimeObservation,
   type RuntimeShellPort,
+  type RuntimeContextCarry,
   type RuntimeRecoveryRef,
   type RuntimeSessionIdentity,
   type RuntimeVerbCall,
@@ -656,6 +657,56 @@ function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefin
   };
 }
 
+/**
+ * The earlier attachment a `context_replay` attach continues (VC-457), read
+ * with the same checks a resume applies to its own binding.
+ *
+ * Three answers, kept apart because they are different facts: nothing to
+ * carry (undefined — the attach opens fresh, silently, as a first attach
+ * does), a carry, or an earlier conversation whose binding cannot be read.
+ * The last still opens fresh — a carry is an improvement to a fresh attach,
+ * never a new way for one to fail — but the runtime raises an Attention for
+ * it, because a Session that silently forgot its conversation is the bug this
+ * exists to fix.
+ */
+function piContextCarry(
+  spec: NativeAttachmentSpec,
+): { carry: RuntimeContextCarry } | { carryUnreadable: string } | undefined {
+  if (spec.carryFrom === undefined) return undefined;
+  // Checked before continuity on purpose: the engine records an attach whose
+  // earlier binding it could not read as `fresh` — that is what it IS — and
+  // the reason still has to reach the runtime, or the Attention it raises is
+  // lost between the two layers.
+  if ("unreadable" in spec.carryFrom) return { carryUnreadable: spec.carryFrom.unreadable };
+  if (spec.continuity !== "context_replay") return undefined;
+  const { native, attachmentId, directory } = spec.carryFrom;
+  const detail = native.detail;
+  const record =
+    detail === null || Array.isArray(detail) || typeof detail !== "object"
+      ? null
+      : (detail as { readonly [key: string]: SessionNativeDetail });
+  if (
+    record === null ||
+    record["runtime"] !== "pi" ||
+    typeof record["sessionId"] !== "string" ||
+    typeof record["sessionFilePath"] !== "string" ||
+    native.id !== record["sessionId"]
+  ) {
+    return {
+      carryUnreadable: "the earlier attachment's Pi binding is not one this build can read.",
+    };
+  }
+  return {
+    carry: {
+      runtime: "pi",
+      sessionId: record["sessionId"],
+      sessionFilePath: record["sessionFilePath"],
+      attachmentId,
+      workspacePath: directory ?? spec.directory,
+    },
+  };
+}
+
 function recoveryEntryId(cursor: SessionNativeDetail | null): string | null {
   if (cursor === null || Array.isArray(cursor) || typeof cursor !== "object") return null;
   const entryId = (cursor as { readonly [key: string]: SessionNativeDetail })["entryId"];
@@ -752,6 +803,7 @@ function piNativeAdapter(
         sink,
         context,
         recovery,
+        carry: recovery === undefined ? piContextCarry(spec) : undefined,
         now,
         web: options.resolveWebPorts?.() ?? {},
         browser: options.resolveBrowserPort?.({
@@ -856,6 +908,8 @@ interface PiBindingOptions {
   sink: ObservationSink;
   context: PiRuntimeContext;
   recovery: RuntimeRecoveryRef | undefined;
+  /** The earlier attachment a fresh one continues, or why it cannot be (VC-457). */
+  carry: ReturnType<typeof piContextCarry>;
   now: () => number;
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
@@ -876,6 +930,7 @@ class PiBinding implements BindingHandle {
   readonly #sink: ObservationSink;
   readonly #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
+  readonly #carry: ReturnType<typeof piContextCarry>;
   readonly #now: () => number;
   readonly #web: SessionWebPorts;
   readonly #browser: DesktopBrowserPort | undefined;
@@ -911,6 +966,7 @@ class PiBinding implements BindingHandle {
     this.#sink = options.sink;
     this.#context = options.context;
     this.#recovery = options.recovery;
+    this.#carry = options.carry;
     this.#now = options.now;
     this.#web = options.web;
     this.#browser = options.browser;
@@ -1113,6 +1169,7 @@ class PiBinding implements BindingHandle {
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
+      ...this.#carry,
       signal: this.#abort.signal,
       observer: (observation) => this.#observe(observation),
       ask: (request, signal) => this.#ask(request, signal),

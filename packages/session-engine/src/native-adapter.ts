@@ -44,6 +44,21 @@ export interface NativeAttachmentSpec {
    * made after it opened. Absent means "not a rehydration" — resolve policy.
    */
   pinnedAuthority?: AuthoritySnapshot | null;
+  /**
+   * The earlier, closed attachment this one continues, on a `context_replay`
+   * attach (VC-457): its id, the directory it ran in, and its native binding
+   * as it was recorded. The adapter reads that attachment's conversation into
+   * this one's context; {@link native} stays null, because this attachment's
+   * own native identity is minted fresh.
+   */
+  carryFrom?:
+    | {
+        attachmentId: string;
+        directory: string | null;
+        native: SessionNativeReference;
+      }
+    /** The earlier attachment's binding exists but is not one this build can read. */
+    | { attachmentId: string; unreadable: string };
 }
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";

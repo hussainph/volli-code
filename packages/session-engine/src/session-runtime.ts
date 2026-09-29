@@ -3,6 +3,7 @@ import {
   createSessionProjectionCheckpoint,
   nativeObservationEventId,
   nextInFlightTools,
+  turnQueueEvent,
 } from "@volli/shared";
 import type {
   CommandReceipt,
@@ -10,6 +11,7 @@ import type {
   CompactionWorkReason,
   ModelSelection,
   ModelTier,
+  ObservabilitySink,
   Session,
   SessionAttachment,
   SessionAttachmentContinuity,
@@ -123,6 +125,14 @@ export interface SessionRuntimePorts {
    * the only symptom would be that opening a long chat never got faster.
    */
   onProjectionCheckpointFailure?: (error: unknown) => void | Promise<void>;
+  /**
+   * Where the metadata-only VC-119 side channel goes, for the one measurement
+   * only this layer can make: how long an accepted message queued before the
+   * turn it started opened (VC-455). A side channel, never a participant — a
+   * sink that throws costs the measurement and nothing else. Absent records
+   * nothing; whether anything is exported is the sink's own opt-in.
+   */
+  observability?: ObservabilitySink;
 }
 
 export type SessionClientCommand =
@@ -738,12 +748,37 @@ export const PROJECTION_CACHE_LIMIT = 8;
  */
 const OVERLAY_CACHE_LIMIT = 8;
 
+/**
+ * The message a Session's admission is currently held for.
+ *
+ * `receivedAt` is read when {@link DefaultSessionRuntime.command} first sees
+ * the message — before it waits behind the Session's previous message, before
+ * any attach — and `dispatched` turns true only once this very command is handed
+ * to the executor. A `turn.started` that releases the admission is this
+ * message's turn only when it arrives after that hand-off; the queue time is
+ * then measured on this runtime's one clock (VC-455). "Received", not
+ * "accepted": acceptance is a Receipt outcome, and this is only arrival.
+ *
+ * Known limit: the executor does not say which Command opened a turn. If an
+ * unrelated turn start (an `executor.retry`) releases one message early, the
+ * next message can be dispatched while the first one's own turn is still to
+ * open, and that turn is then measured as the second message's. That needs a
+ * turn start that names its Command, which the runtime port does not carry.
+ */
+interface MessageAdmission {
+  readonly commandId: string;
+  /** Null when no observability sink is attached: nothing to measure for. */
+  readonly receivedAt: number | null;
+  readonly release: () => void;
+  dispatched: boolean;
+}
+
 class DefaultSessionRuntime implements SessionRuntime {
   readonly #bindings = new Map<string, BindingRecord>();
   readonly #rehydratingBindings = new Map<string, Promise<BindingRecord>>();
   readonly #inFlight = new Map<string, InFlightCommand>();
   readonly #sessionAdmissionTails = new Map<string, Promise<void>>();
-  readonly #messageAdmissions = new Map<string, () => void>();
+  readonly #messageAdmissions = new Map<string, MessageAdmission>();
   readonly #subscribers = new Map<string, Set<Subscriber>>();
   /** Insertion-ordered, so the first key is the least recently read Session. */
   readonly #histories = new Map<string, ProjectedHistory>();
@@ -844,13 +879,25 @@ class DefaultSessionRuntime implements SessionRuntime {
       "sessionId" in request && request.command.kind === "message.submit"
         ? Promise.withResolvers<void>()
         : null;
+    // The message's arrival, for the queue measurement: read here, before it
+    // waits behind anything, so that wait is inside the span.
+    const held: MessageAdmission | null =
+      admission === null
+        ? null
+        : {
+            commandId: request.commandId,
+            // Only a runtime with somewhere to send it reads the clock for it.
+            receivedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
+            release: admission.resolve,
+            dispatched: false,
+          };
     const run = () => {
-      if (admission !== null && "sessionId" in request) {
-        this.#messageAdmissions.set(request.sessionId, admission.resolve);
+      if (held !== null && "sessionId" in request) {
+        this.#messageAdmissions.set(request.sessionId, held);
       }
       return this.#command(request).finally(() => {
-        if (admission !== null && "sessionId" in request) {
-          this.#releaseMessageAdmission(request.sessionId, admission.resolve);
+        if (held !== null && "sessionId" in request) {
+          this.#releaseMessageAdmission(request.sessionId, held);
         }
       });
     };
@@ -878,10 +925,32 @@ class DefaultSessionRuntime implements SessionRuntime {
     return promise;
   }
 
-  #releaseMessageAdmission(sessionId: string, release: () => void): void {
-    if (this.#messageAdmissions.get(sessionId) !== release) return;
+  #releaseMessageAdmission(sessionId: string, admission: MessageAdmission): void {
+    if (this.#messageAdmissions.get(sessionId) !== admission) return;
     this.#messageAdmissions.delete(sessionId);
-    release();
+    admission.release();
+  }
+
+  /**
+   * Report how long the held message queued before its turn opened (VC-455).
+   *
+   * Only for a message this runtime has already handed to the executor: a turn
+   * that opened before that is some other turn, and attributing it here would
+   * turn a coincidence into a measurement. Both readings are this runtime's
+   * own clock. Never awaited, never thrown from.
+   */
+  #recordTurnQueue(sessionId: string): void {
+    const admission = this.#messageAdmissions.get(sessionId);
+    if (admission === undefined || !admission.dispatched || admission.receivedAt === null) return;
+    try {
+      const event = turnQueueEvent({
+        receivedAt: admission.receivedAt,
+        turnStartedAt: this.ports.clock.now(),
+      });
+      if (event !== null) this.ports.observability?.record(event);
+    } catch {
+      // A lost measurement, never a lost turn.
+    }
   }
 
   async #command(request: SessionRuntimeCommandRequest): Promise<SessionRuntimeCommandResult> {
@@ -1097,12 +1166,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
 
     const attachmentId = this.#id("attachment");
+    const carryFrom =
+      request.command.continuity === "context_replay"
+        ? priorAttachmentContext(projection, adapter.id)
+        : undefined;
+    // What this attachment actually is, as distinct from what was asked: a
+    // `context_replay` with no earlier conversation to carry is a fresh
+    // attachment, and the attachment record says so (the command keeps the
+    // request). Reattach doors ask for a replay without first reading history,
+    // so a Session's first attach through one lands here.
+    const continuity: SessionAttachmentContinuity =
+      request.command.continuity === "context_replay" &&
+      (carryFrom === undefined || "unreadable" in carryFrom)
+        ? "fresh"
+        : request.command.continuity;
     const spec: NativeAttachmentSpec = {
       sessionId: request.sessionId,
       attachmentId,
       directory: site.directory,
-      continuity: request.command.continuity,
+      continuity,
       native: null,
+      ...(carryFrom === undefined ? {} : { carryFrom }),
     };
     const { translator, sink } = this.#pipeline(adapter, spec, location.venue);
     let handle: BindingHandle;
@@ -1136,7 +1220,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         sessionId: request.sessionId,
         adapterId: adapter.id,
         venue: location.venue,
-        continuity: request.command.continuity,
+        continuity,
         // The directory that was PREPARED, never the one that was resolved. On a
         // worktree ticket with no stamp yet the two differ, and `resolve` names
         // the main checkout — writing that down would hand every later resume
@@ -1402,6 +1486,11 @@ class DefaultSessionRuntime implements SessionRuntime {
     // documented to be.
     if (existed) await this.ports.locations.reaffirm(projection.session, binding.spec.directory);
 
+    // From here a turn that opens can be this message's (VC-455). Matched by
+    // command id, because an admission released early by some other turn's
+    // start may already belong to the next message.
+    const admission = this.#messageAdmissions.get(request.sessionId);
+    if (admission?.commandId === request.commandId) admission.dispatched = true;
     const receipt = await binding.handle.dispatch({
       kind: "message.submit",
       commandId: request.commandId,
@@ -2314,14 +2403,20 @@ class DefaultSessionRuntime implements SessionRuntime {
       case "turn.started":
       case "turn.completed":
       case "turn.interrupted":
+        // Measured before the durable write, so the ledger's latency is not
+        // charged to the queue in front of this turn. Only a live start is a
+        // clock reading: a replayed one may be hours old.
+        if (observation.kind === "turn.started" && source === "live") {
+          this.#recordTurnQueue(spec.sessionId);
+        }
         event = await this.ports.engine.observe({
           ...base,
           kind: observation.kind,
           turnId: observation.turnId,
         });
         if (observation.kind === "turn.started") {
-          const release = this.#messageAdmissions.get(spec.sessionId);
-          if (release !== undefined) this.#releaseMessageAdmission(spec.sessionId, release);
+          const admission = this.#messageAdmissions.get(spec.sessionId);
+          if (admission !== undefined) this.#releaseMessageAdmission(spec.sessionId, admission);
         }
         break;
       case "context.compacted":
@@ -3396,6 +3491,32 @@ function adapterProvenance(
 /** Names an adapter this runtime does not host — a historical attachment's own id. */
 function adapterIdentity(adapterId: string): AdapterIdentity {
   return { id: adapterId, adapterVersion: "unavailable" };
+}
+
+/**
+ * The newest closed attachment of this executor that bound a native identity,
+ * for a `context_replay` attach (VC-457). Undefined when there is none — a
+ * Session that never bound one (a first attach, or only failed ones) has no
+ * conversation to carry, and the attach opens exactly as a fresh one would.
+ * A binding this build cannot read is reported as such rather than skipped:
+ * a conversation that existed and could not be carried is a fact the Session
+ * must be told, where one that never existed is not.
+ */
+function priorAttachmentContext(
+  projection: SessionProjection,
+  adapterId: string,
+): NativeAttachmentSpec["carryFrom"] {
+  for (const attachment of projection.attachments.toReversed()) {
+    if (attachment.adapterId !== adapterId || attachment.status === "open") continue;
+    if (attachment.native === null) continue;
+    try {
+      const binding = unwrapNativeBinding(attachment.native);
+      return { attachmentId: attachment.id, directory: binding.directory, native: binding.native };
+    } catch (error) {
+      return { attachmentId: attachment.id, unreadable: errorMessage(error) };
+    }
+  }
+  return undefined;
 }
 
 function wrapNativeBinding(
