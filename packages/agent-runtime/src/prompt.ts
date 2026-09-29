@@ -73,13 +73,25 @@ const OPERATING_LAYER_WITHOUT_RESOURCES = operatingLayer(false);
  * into the Cache Prefix.
  *
  * VC-459 reworded it to buy room for {@link DELEGATION_PARAGRAPH} and for one
- * routing line the shell fallback kept getting wrong: the web is read through
- * `web_search`/`web_fetch`, which carry Volli's URL policy, and never through
- * curl, wget or an ad-hoc script that performs the same read unchecked. The
- * tools are named with no "if you hold them" because the surrounding sentence
- * already scopes itself to AVAILABLE specialized tools. At 723 characters /
- * ~181 estimated tokens this core stays inside the documented 150–250 token
- * budget on its own; the delegation paragraph is budgeted separately below.
+ * routing rule the shell fallback kept getting wrong: public web content is
+ * read through `web_search`/`web_fetch`, which carry Volli's URL policy, and
+ * never through curl, wget or an ad-hoc script that performs the same read
+ * unchecked. Local requests — localhost, a dev server the Session started —
+ * are named as fine from the shell, because the URL policy refuses exactly
+ * those and a rule that forbade them would push a Session to skip verifying
+ * its own server.
+ *
+ * The rule is qualified in words ("when … are available") rather than by
+ * composition, and that is forced, not chosen. The web tools are port-gated:
+ * whether a Session holds them is decided by host ports on the runtime spec,
+ * which {@link SystemPromptInput} deliberately cannot see (VC-164), and the
+ * bundle this layer does see does not name them. The sentence therefore has to
+ * read true for a Session that lacks both tools — which it does: it points
+ * such a Session at nothing it cannot call.
+ *
+ * At 820 characters / ~205 estimated tokens this core stays inside the
+ * documented 150–250 token budget on its own; the delegation paragraph is
+ * budgeted separately below.
  */
 const EXECUTION_CORE = [
   "# Execution",
@@ -87,12 +99,14 @@ const EXECUTION_CORE = [
   "Answer or review requests by investigating and reporting; edit only when a",
   "change is requested or authorized. Before editing, inspect the relevant workspace",
   "state and repository instructions. Prefer available specialized tools to shell",
-  "substitutes (for the web, web_search and web_fetch over curl, wget or scripts),",
-  "and parallelize independent calls. Preserve user and concurrent-agent changes;",
-  "never discard work you did not create. Carry each requested change through",
-  "focused implementation and proportional verification; do not stop at analysis",
-  "when action is authorized. Ask only for a genuine blocking decision. Finish with",
-  "the outcome, the exact checks run and their results, and any unresolved blockers.",
+  "substitutes, and parallelize independent calls. When web_search and web_fetch",
+  "are available, read public web content with them, not curl, wget or scripts;",
+  "localhost and local dev servers are fine from the shell. Preserve user and",
+  "concurrent-agent changes; never discard work you did not create. Carry each",
+  "requested change through focused implementation and proportional",
+  "verification; do not stop at analysis when action is authorized. Ask only for",
+  "a genuine blocking decision. Finish with the outcome, the exact checks run and",
+  "their results, and any unresolved blockers.",
 ].join("\n");
 
 /**
@@ -128,7 +142,7 @@ const EXECUTION_CORE = [
  *
  * Budgeted on its own, beside the core's 150–250: the Board paragraph is 681
  * characters / ~171 estimated tokens and the Ticket one 538 / ~135, so the
- * whole Board layer is ~352 and is held under 360 by `prompt.test.ts`. The
+ * whole Board layer is ~376 and is held under 380 by `prompt.test.ts`. The
  * fresh Board package ceiling in `prompt-baseline.test.ts` moved to 1,700 to
  * make room for exactly this paragraph.
  *

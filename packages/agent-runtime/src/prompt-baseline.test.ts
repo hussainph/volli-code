@@ -175,14 +175,14 @@ describe("promptBaseline", () => {
     expect(measured.toolSurface.chars).toBe(711);
     // The ceiling moved from 1,500 to 1,700 on purpose (VC-459), and this is
     // the whole of what bought it. VC-339's budget line had left 2 tokens of
-    // headroom; the delegation paragraph needed ~170. The Execution core was
-    // reworded 55 chars shorter to pay part of it, and the rest — +628 chars of
-    // system prompt, ~157 tokens — is the paragraph that teaches inline vs
-    // subagent vs Ticket + Session vs Automation. It is Role-static, so it is
-    // bought once per Role and read from cache by every Board Session after.
-    // 1,661 of the 1,700 estimated tokens are now spent.
-    expect(measured.system).toEqual({ chars: 5_594, tokens: 1_399 });
-    expect(measured.total).toEqual({ chars: 6_639, tokens: 1_661 });
+    // headroom; the delegation paragraph needed ~171 and the public-web rule
+    // (web_search/web_fetch over curl, localhost left to the shell) ~24 more.
+    // The rest of the Execution core was reworded shorter to pay part of it;
+    // the net is +725 chars of system prompt, ~181 tokens. All of it is
+    // Role-static, so it is bought once per Role and read from cache by every
+    // Board Session after. 1,685 of the 1,700 estimated tokens are now spent.
+    expect(measured.system).toEqual({ chars: 5_691, tokens: 1_423 });
+    expect(measured.total).toEqual({ chars: 6_736, tokens: 1_685 });
   });
 });
 

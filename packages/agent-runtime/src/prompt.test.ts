@@ -95,12 +95,14 @@ describe("composeSystemPrompt", () => {
       Answer or review requests by investigating and reporting; edit only when a
       change is requested or authorized. Before editing, inspect the relevant workspace
       state and repository instructions. Prefer available specialized tools to shell
-      substitutes (for the web, web_search and web_fetch over curl, wget or scripts),
-      and parallelize independent calls. Preserve user and concurrent-agent changes;
-      never discard work you did not create. Carry each requested change through
-      focused implementation and proportional verification; do not stop at analysis
-      when action is authorized. Ask only for a genuine blocking decision. Finish with
-      the outcome, the exact checks run and their results, and any unresolved blockers.
+      substitutes, and parallelize independent calls. When web_search and web_fetch
+      are available, read public web content with them, not curl, wget or scripts;
+      localhost and local dev servers are fine from the shell. Preserve user and
+      concurrent-agent changes; never discard work you did not create. Carry each
+      requested change through focused implementation and proportional
+      verification; do not stop at analysis when action is authorized. Ask only for
+      a genuine blocking decision. Finish with the outcome, the exact checks run and
+      their results, and any unresolved blockers.
 
       # Role and trust
 
@@ -170,12 +172,14 @@ describe("composeSystemPrompt", () => {
       Answer or review requests by investigating and reporting; edit only when a
       change is requested or authorized. Before editing, inspect the relevant workspace
       state and repository instructions. Prefer available specialized tools to shell
-      substitutes (for the web, web_search and web_fetch over curl, wget or scripts),
-      and parallelize independent calls. Preserve user and concurrent-agent changes;
-      never discard work you did not create. Carry each requested change through
-      focused implementation and proportional verification; do not stop at analysis
-      when action is authorized. Ask only for a genuine blocking decision. Finish with
-      the outcome, the exact checks run and their results, and any unresolved blockers.
+      substitutes, and parallelize independent calls. When web_search and web_fetch
+      are available, read public web content with them, not curl, wget or scripts;
+      localhost and local dev servers are fine from the shell. Preserve user and
+      concurrent-agent changes; never discard work you did not create. Carry each
+      requested change through focused implementation and proportional
+      verification; do not stop at analysis when action is authorized. Ask only for
+      a genuine blocking decision. Finish with the outcome, the exact checks run and
+      their results, and any unresolved blockers.
 
       # Role and trust
 
@@ -392,10 +396,11 @@ describe("composeSystemPrompt", () => {
     }).find((section) => section.id === "execution");
     if (execution === undefined) throw new Error("expected the Execution layer");
 
-    // The core's own budget (VC-332), held after VC-459 reworded it to make
-    // room for the delegation paragraph, which is budgeted separately below.
+    // The core's own budget (VC-332): still inside 150–250 after VC-459 added
+    // the web rule, and capped tighter so the delegation paragraph, budgeted
+    // separately below, keeps its room.
     expect(Math.ceil(execution.text.length / 4)).toBeGreaterThanOrEqual(150);
-    expect(Math.ceil(execution.text.length / 4)).toBeLessThanOrEqual(200);
+    expect(Math.ceil(execution.text.length / 4)).toBeLessThanOrEqual(210);
     expect(execution.text).toContain("Answer or review requests");
     expect(execution.text).toContain("edit only when a\nchange is requested or authorized");
     expect(execution.text).toContain(
@@ -403,24 +408,38 @@ describe("composeSystemPrompt", () => {
     );
     expect(execution.text).toContain("available specialized tools to shell");
     expect(execution.text).toContain("parallelize independent calls");
-    expect(execution.text).toContain("Preserve user and concurrent-agent");
-    expect(execution.text).toContain("focused implementation and proportional verification");
+    expect(execution.text).toContain("Preserve user and\nconcurrent-agent changes");
+    expect(execution.text).toContain("focused implementation and proportional\nverification");
     expect(execution.text).toContain("genuine blocking decision");
-    expect(execution.text).toContain("the exact checks run and their results");
+    expect(execution.text).toContain("the exact checks run and\ntheir results");
     expect(execution.text).toContain("unresolved blockers");
   });
 
-  // VC-459: the web goes through the tools that carry Volli's URL policy, not a
-  // shell fetch that performs the same read with none of its checks.
-  it("routes web reads to web_search and web_fetch rather than curl, wget or scripts", () => {
+  // VC-459: public web content goes through the tools that carry Volli's URL
+  // policy, not a shell fetch that performs the same read with none of its
+  // checks — while local requests, which that policy refuses, stay the shell's.
+  it("routes public web reads to web_search and web_fetch, and leaves localhost to the shell", () => {
     for (const role of ["ticket", "project", "subagent"] as const) {
       const execution = systemPromptSections({ role, tools: { tools: ["read"] } }).find(
         (section) => section.id === "execution",
       );
       expect(execution?.text).toContain(
-        "(for the web, web_search and web_fetch over curl, wget or scripts)",
+        "read public web content with them, not curl, wget or scripts",
       );
+      expect(execution?.text).toContain("localhost and local dev servers are fine from the shell");
     }
+  });
+
+  // The web tools are port-gated and the prompt cannot see ports (VC-164), so
+  // a surface without them composes the same bytes. The rule must therefore be
+  // qualified by availability rather than state that the Session holds them.
+  it("qualifies the web rule by availability, since a surface may lack both tools", () => {
+    const withoutWeb = systemPromptSections({
+      role: "ticket",
+      tools: { tools: ["read", "edit", "write", "execute"] },
+    }).find((section) => section.id === "execution");
+    expect(withoutWeb?.text).toContain("When web_search and web_fetch\nare available,");
+    expect(withoutWeb?.text).not.toMatch(/(?<!When )web_search and web_fetch over/);
   });
 
   it("is deterministic", () => {
@@ -492,7 +511,7 @@ describe("the delegation paragraph", () => {
       const text = execution(role, roleVerbBundle(role));
       const paragraph = text.length - core.length - 2;
       expect(Math.ceil(paragraph / 4)).toBeLessThanOrEqual(175);
-      expect(Math.ceil(text.length / 4)).toBeLessThanOrEqual(360);
+      expect(Math.ceil(text.length / 4)).toBeLessThanOrEqual(380);
     }
   });
 
