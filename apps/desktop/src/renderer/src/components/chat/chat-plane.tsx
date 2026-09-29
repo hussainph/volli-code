@@ -1889,11 +1889,6 @@ export function SessionBlocker({ blocker }: { blocker: SessionBlockerState }) {
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-      {blocker.note ? (
-        <span className="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">
-          {blocker.note}
-        </span>
-      ) : null}
       {blocker.action ? (
         <Button size="xs" variant="ghost" className="shrink-0" onClick={blocker.action.act}>
           {blocker.action.label}

@@ -671,11 +671,6 @@ export interface SessionBlockerState {
    */
   action: SessionBlockerAction | null;
   secondaryAction?: SessionBlockerAction | null;
-  /**
-   * A short state label drawn before the actions — "Scheduled 04:24" — for a
-   * row whose recovery is already arranged and only waiting on its time.
-   */
-  note?: string | null;
   /** Present only on the unconfigured first-run row; see {@link SessionBlockerSignInMenu}. */
   signInMenu?: SessionBlockerSignInMenu;
   /**
@@ -1104,9 +1099,9 @@ interface ResumeContext {
  * Beside it, a reset the failure stated is offered as "Resume at …" — nothing
  * is scheduled unless it is chosen (CLAUDE.md: quota needs explicit recovery,
  * and this is that recovery made once instead of remembered). Once chosen the
- * row stops being an error: it is waiting on a time, says which, and offers
- * the Cancel, with Retry still beside it for a person who would rather not
- * wait. A schedule for a different Attention than the one drawn is not this
+ * row stops being an error and stops saying "stopped": its headline is the
+ * time it resumes, the failure stays as the line under it, and it offers the
+ * Cancel, with Retry still beside it for a person who would rather not wait. A schedule for a different Attention than the one drawn is not this
  * row's, and a reset already behind is not offered — Retry is the answer.
  */
 function stoppedRunBlocker(
@@ -1120,10 +1115,9 @@ function stoppedRunBlocker(
   const scheduled = resume.scheduled?.attentionId === attention.id ? resume.scheduled : null;
   if (scheduled !== null) {
     return {
-      message: "Session stopped",
+      message: `Resumes at ${resumeClock(scheduled.resumeAt, resume.now)}`,
       detail,
       tone: "waiting",
-      note: `Scheduled ${resumeClock(scheduled.resumeAt, resume.now)}`,
       action: { label: "Cancel", act: () => resume.cancel(scheduled.id) },
       secondaryAction: retryRuntime,
     };
