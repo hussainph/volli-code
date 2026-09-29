@@ -51,8 +51,8 @@ path; and record any policy or API divergence here before bumping the pin.
 
 ## Local patches
 
-One, declared in `pnpm-workspace.yaml` under `patchedDependencies` and stored
-in `patches/` at the repo root.
+One patch file, declared in `pnpm-workspace.yaml` under `patchedDependencies`
+and stored in `patches/` at the repo root. It carries two independent changes.
 
 - `@earendil-works/pi-agent-core@0.87.1` — adds an optional `estimateMessage`
   parameter to `prepareCompaction` and `findCutPoint` in
@@ -67,6 +67,20 @@ in `patches/` at the repo root.
   `dist/harness/compaction/compaction.{js,d.ts}` are byte-identical between
   0.85.1 and 0.87.1 apart from the patched hunks; the 0.86/0.87
   transcript-context work did not touch the harness compaction module.
+- `@earendil-works/pi-agent-core@0.87.1` (VC-462) — re-opening a JSONL sidecar
+  (`JsonlStorage.openV4` in `dist/harness/session/jsonl/storage.js`) no longer
+  holds the event loop for the whole file. Upstream reads the file as one
+  string, splits it, then parses and replays every line in one synchronous
+  pass: about 190 ms of blocked Electron main for a 47 MB sidecar (VC-445). The
+  patch reads the bytes (`readBinaryFile`, already on Pi's `FileSystem`),
+  decodes newline-terminated batches of at most 256 KiB, and parses and replays
+  line by line, yielding (`setImmediate`, else `setTimeout(0)`) whenever a slice
+  has run 8 ms. Recovered state, torn-tail repair and the `line N` error are
+  unchanged; `src/pi/sidecar-load.test.ts` pins that against a large sidecar
+  and runs Pi's `SessionRepo` conformance on the patched repo. The write-up
+  that could go upstream as-is is in
+  `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`. Upstream ships no
+  equivalent as of 0.87.1; drop the hunk once it does.
 
 Dropped at the 0.85.1 bump: the `pi-ai` Claude Code identity patch
 (`claudeCodeVersion`) added in `a1ce395c`, when pi-ai hardcoded a ~6-month-stale

@@ -65,3 +65,90 @@ index d430a3f966cc9624cc2e78638fd207a83a75b312..fbfc5f5cce15cc93de1dbfbca940e775
      const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
      const messagesToSummarize = [];
      for (let i = 0; i < historyEnd; i++) {
+diff --git a/dist/harness/session/jsonl/storage.js b/dist/harness/session/jsonl/storage.js
+index 1309f66a8fbdd1400ed557e1128028fe677c9575..a2231799d6ae130884f036411d26edb83026f31f 100644
+--- a/dist/harness/session/jsonl/storage.js
++++ b/dist/harness/session/jsonl/storage.js
+@@ -4,13 +4,41 @@ import { InMemoryStorageState } from "../in-memory-storage-state.js";
+ import { fileValue, parseJsonlTransaction, publishFileAtomically, publishJsonl, readJsonlHeader, serializeJsonlTransaction, } from "./io.js";
+ import { LegacyV3Source } from "./legacy-v3.js";
+ import { JSONL_STORAGE_VERSION } from "./types.js";
+-function splitCompleteLines(content) {
+-    if (content.endsWith("\n"))
+-        return { lines: content.slice(0, -1).split("\n"), torn: false };
+-    const lastNewline = content.lastIndexOf("\n");
+-    if (lastNewline === -1)
+-        return { lines: [], torn: true };
+-    return { lines: content.slice(0, lastNewline).split("\n"), torn: true };
++const NEWLINE = 0x0a;
++/** Bytes of complete lines decoded at a time; each batch ends on a newline. */
++const REPLAY_DECODE_BATCH_BYTES = 256 * 1024;
++/** Longest stretch of replay work between two yields to the event loop. */
++const REPLAY_SLICE_MS = 8;
++/** Let queued tasks (timers, I/O, IPC) run between replay slices. */
++function yieldToEventLoop() {
++    return new Promise((resolve) => (typeof setImmediate === "function" ? setImmediate(resolve) : setTimeout(resolve, 0)));
++}
++/**
++ * Yield every complete line of a UTF-8 JSONL file, in order, in time-bounded slices.
++ *
++ * Equivalent to decoding the whole file and splitting it on "\n", without holding
++ * the event loop for the whole file: a newline byte never occurs inside a UTF-8
++ * sequence, so decoding newline-terminated batches separately yields the same text,
++ * and `ignoreBOM` keeps a leading U+FEFF exactly as a whole-file decode does. The
++ * caller's own per-line work counts toward the slice, because the generator resumes
++ * only after the caller asks for the next line.
++ */
++async function* completeLinesInSlices(bytes, completeLength) {
++    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
++    let sliceStart = performance.now();
++    for (let start = 0; start < completeLength;) {
++        const end = bytes.indexOf(NEWLINE, Math.min(start + REPLAY_DECODE_BATCH_BYTES, completeLength) - 1) + 1;
++        const lines = decoder.decode(bytes.subarray(start, end)).split("\n");
++        lines.pop();
++        start = end;
++        for (const line of lines) {
++            yield line;
++            if (performance.now() - sliceStart >= REPLAY_SLICE_MS) {
++                await yieldToEventLoop();
++                sliceStart = performance.now();
++            }
++        }
++    }
+ }
+ /** JSONL storage backed by an injected filesystem capability. */
+ export class JsonlStorage {
+@@ -48,19 +76,28 @@ export class JsonlStorage {
+             : JsonlStorage.openV4(options, parsed.header, context);
+     }
+     static async openV4(options, header, context) {
+-        const content = fileValue(await options.fileSystem.readTextFile(options.path, context), `Failed to read JSONL storage ${options.path}`);
+-        const { lines, torn } = splitCompleteLines(content);
++        const bytes = fileValue(await options.fileSystem.readBinaryFile(options.path, context), `Failed to read JSONL storage ${options.path}`);
++        // Everything after the last newline is a torn tail from an interrupted append.
++        const completeLength = bytes.lastIndexOf(NEWLINE) + 1;
++        const torn = bytes[bytes.length - 1] !== NEWLINE;
+         if (header.storageVersion !== JSONL_STORAGE_VERSION) {
+             throw new Error(`Session ${header.id} uses unsupported storage version ${header.storageVersion}`);
+         }
+         const storage = new JsonlStorage(options, header, { kind: "v4" });
+-        for (let index = 1; index < lines.length; index++) {
+-            const line = lines[index];
++        // Kept only to rewrite a torn file without its tail.
++        const lines = torn ? [] : undefined;
++        let lineNumber = 0;
++        for await (const line of completeLinesInSlices(bytes, completeLength)) {
++            lineNumber++;
++            lines?.push(line);
++            // Line 1 is the header, already parsed by `open`.
++            if (lineNumber === 1)
++                continue;
+             try {
+                 storage.replayCommitted(parseJsonlTransaction(line));
+             }
+             catch (error) {
+-                throw new Error(`Invalid JSONL storage ${options.path}: line ${index + 1}`, { cause: error });
++                throw new Error(`Invalid JSONL storage ${options.path}: line ${lineNumber}`, { cause: error });
+             }
+         }
+         if (header.nextSeq !== undefined)

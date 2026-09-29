@@ -33,7 +33,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
-  '@earendil-works/pi-agent-core@0.87.1': 3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b
+  '@earendil-works/pi-agent-core@0.87.1': 78618d25a32c8088085efe2918e5ba0ca6c0c67e81c326a59627919b5fc8523f
 
 importers:
 
@@ -384,7 +384,7 @@ importers:
         version: 0.0.74
       '@earendil-works/pi-agent-core':
         specifier: 0.87.1
-        version: 0.87.1(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)
+        version: 0.87.1(patch_hash=78618d25a32c8088085efe2918e5ba0ca6c0c67e81c326a59627919b5fc8523f)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-ai':
         specifier: 0.87.1
         version: 0.87.1(ws@8.21.3)(zod@4.4.3)
@@ -8556,7 +8556,7 @@ snapshots:
     dependencies:
       esbuild: 0.28.2
 
-  '@earendil-works/pi-agent-core@0.87.1(patch_hash=3ee86497e0430887e1ca7facee4875c76b0010fa76920c1f8c31a43071e7708b)(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-agent-core@0.87.1(patch_hash=78618d25a32c8088085efe2918e5ba0ca6c0c67e81c326a59627919b5fc8523f)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@earendil-works/chord': 0.87.1
       '@earendil-works/pi-ai': 0.87.1(ws@8.21.3)(zod@4.4.3)
