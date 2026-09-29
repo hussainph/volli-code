@@ -156,6 +156,32 @@ const PROVIDER_MARK: Record<string, Mark> = {
     viewBox: "0 0 24 24",
     tint: MODEL_MARK_TINTS.monochrome,
   },
+  "kimi-coding": {
+    // Kimi's k (simple-icons `kimi`). Black in Moonshot's own rendering, so it
+    // takes the neutral rather than a colour invented for it.
+    paths: [
+      "M21.765.351C22.998.351 24 1.353 24 2.586S22.998 4.82 21.765 4.82h-1.974c-.15 0-.26-.12-.26-.26V2.586A2.237 2.237 0 0 1 21.765.35M9.41 13.388l8.447-8.377c.16-.16.07-.471-.14-.471h-4.55s-.1.02-.14.06l-9.099 9.029c-.14.14-.35.02-.35-.21V4.81c0-.15-.1-.27-.221-.27H.22c-.12 0-.22.12-.22.27v18.57c0 .15.1.27.22.27h3.137c.12 0 .22-.12.22-.27v-3.79c0-.08.03-.16.08-.21l2.826-2.796c.07-.07.16-.08.241-.03l7.546 5.551a8.9 8.9 0 0 0 4.018 1.493c.12.01.23-.11.23-.27V19.76c0-.14-.08-.25-.19-.26a5.8 5.8 0 0 1-2.355-.942l-6.533-4.73c-.14-.09-.15-.32-.03-.441",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.monochrome,
+  },
+  "opencode-go": {
+    // OpenCode's square counter (simple-icons `opencode`), the same mark the
+    // automations lab draws for the harness. One path, two windings: the inner
+    // rectangle is wound the other way, so the nonzero rule cuts the hole
+    // without a `fill-rule` the source does not carry.
+    paths: ["M22 24H2V0h20zM17 4.8H7v14.4h10z"],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.monochrome,
+  },
+  zai: {
+    // Z.ai's slash (simple-icons `zdotai`, from the vendor's published logo).
+    paths: [
+      "M12.606 1.806l-1.677 2.388c-0.258 0.374-0.697 0.606-1.161 0.606h-9.162V1.794C0.594 1.806 12.606 1.806 12.606 1.806zM24 1.806L9.6 22.206 0 22.206 14.4 1.806zM11.394 22.206l1.69-2.4c0.258-0.374 0.697-0.606 1.161-0.606h9.149v3.006H11.394z",
+    ],
+    viewBox: "0 0 24 24",
+    tint: MODEL_MARK_TINTS.monochrome,
+  },
   google: {
     // Google's G (simple-icons `google`) — the account, not the Gemini family. Thin; reads a shade lighter.
     paths: [
@@ -218,6 +244,8 @@ Object.assign(PROVIDER_MARK, {
   "xiaomi-token-plan-ams": PROVIDER_MARK.xiaomi,
   "xiaomi-token-plan-cn": PROVIDER_MARK.xiaomi,
   "xiaomi-token-plan-sgp": PROVIDER_MARK.xiaomi,
+  // The mainland host is the same plan issued in another region.
+  "zai-coding-cn": PROVIDER_MARK.zai,
 } satisfies Record<string, Mark>);
 
 /**
@@ -254,9 +282,12 @@ export function modelFamily(model: Pick<ModelAccessModel, "modelId" | "label">):
  *
  * So this exposes the registry and nothing else. Callers that want the
  * standard treatment must keep using `ModelMark`; callers drawing their own
- * must handle `null` themselves, which is not rare — of the six providers that
- * report usage today only `anthropic`, `openai-codex` and `github-copilot`
- * have a mark here.
+ * must handle `null` themselves. That is now rare among the metered accounts
+ * — every one of them has a mark except `xai`, which simple-icons does not
+ * carry and will not, since its forbidden-brands rule reaches X Corp and its
+ * subsidiaries. A hand-drawn approximation would be someone else's logo redrawn
+ * by us, so xAI keeps the lettermark: a capital X is legible at any size here
+ * and is close to what the vendor's own wordmark shows anyway.
  */
 export function providerMark(providerId: string): Mark | null {
   return PROVIDER_MARK[providerId] ?? null;

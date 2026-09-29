@@ -80,13 +80,16 @@ const copilot = (monthly: number): ModelAccessProvider =>
     limits(win("premium", "monthly", "Premium requests", monthly, 20 * DAY, 44_640)),
   );
 
-/** An account with no mark of its own — half the metered providers. */
 const opencode = (weekly: number): ModelAccessProvider =>
   provider(
     "opencode-go",
     "OpenCode Go",
     limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)),
   );
+
+/** The one metered account with no mark of its own. */
+const xai = (weekly: number): ModelAccessProvider =>
+  provider("xai", "xAI", limits(win("weekly", "weekly", "Weekly", weekly, 4 * DAY, 10_080)));
 
 let container: HTMLElement | null = null;
 let root: Root | null = null;
@@ -198,9 +201,17 @@ describe("UsageLimitsIcon", () => {
     expect(quietRing(host).present).toBe(false);
   });
 
-  it("falls back to a bare letter for a provider with no mark", async () => {
+  it("falls back to a bare letter for the one provider with no mark", async () => {
+    const host = await read(xai(53));
+    expect(figures(host)).toContain("X");
+  });
+
+  it("draws OpenCode's own mark, which a round letter could not stand in for", async () => {
+    // `O` between two arcs reads as a second ring, which is the whole reason
+    // this registry entry exists.
     const host = await read(opencode(53));
-    expect(figures(host)).toContain("O");
+    expect(figures(host)).toEqual(["47"]);
+    expect(host.querySelector("g.text-muted-foreground path")).not.toBeNull();
   });
 
   it("gives each window its own bar, and mirrors a lone window onto both", async () => {
@@ -263,9 +274,8 @@ describe("UsageLimitsIcon", () => {
       ),
     );
     // The monthly binds at 42%; the session keeps the top slot because the
-    // stack is ordered by family and never by value. The letter is drawn
-    // before the figures, so it leads the list.
-    expect(figures(host)).toEqual(["O", "78", "42"]);
+    // stack is ordered by family and never by value.
+    expect(figures(host)).toEqual(["78", "42"]);
   });
 
   it("ignores an account that answered 429 rather than drawing it as empty", async () => {
