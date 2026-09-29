@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   askChoice,
   askOffer,
+  browserFindPort,
   browserHoldPort,
   REASONING_LEVELS,
   sessionToolBindings,
@@ -166,6 +167,7 @@ const browserPort: RuntimeBrowserPort = {
 
 /** The same port with its hold pair: what every Session born since VC-239 is handed. */
 const browserHoldPortFixture: RuntimeBrowserPort = { ...browserPort, acquire: port, release: port };
+const browserEveryPortFixture: RuntimeBrowserPort = { ...browserHoldPortFixture, find: port };
 
 /**
  * Stands in for a wired background shell port (VC-270). Presence only, like
@@ -256,11 +258,44 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-3)).toEqual(["shell_start", "shell_output", "shell_kill"]);
+    expect(NON_CODING_TOOL_IDS.slice(-4, -1)).toEqual([
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+    ]);
     // The binding carries the port, so the runtime never null-checks one.
     for (const binding of sessionToolBindings({ tools: { tools: [] }, shell: shellPort })) {
       expect(binding).toMatchObject({ port: shellPort });
     }
+  });
+
+  it("appends browser_find last, exactly when the port carries find (VC-364)", () => {
+    // Appended after the shell tools, never beside the other browser names:
+    // a Session frozen before it existed keeps every position and its Cache
+    // Prefix, and is handed a port without `find`.
+    expect(
+      sessionToolIds({ tools: { tools: [] }, browser: browserEveryPortFixture, shell: shellPort }),
+    ).toEqual([
+      "browser_tabs",
+      "browser_navigate",
+      "browser_snapshot",
+      "browser_act",
+      "browser_screenshot",
+      "browser_console",
+      "browser_acquire",
+      "browser_release",
+      "shell_start",
+      "shell_output",
+      "shell_kill",
+      "browser_find",
+    ]);
+    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("browser_find");
+    expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).not.toContain(
+      "browser_find",
+    );
+    expect(browserFindPort(undefined)).toBeUndefined();
+    expect(browserFindPort(browserPort)).toBeUndefined();
+    expect(browserFindPort(browserEveryPortFixture)).toBe(browserEveryPortFixture);
   });
 
   it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
@@ -331,7 +366,7 @@ describe("sessionToolIds", () => {
       askUser: port,
       webFetch: port,
       webSearch: port,
-      browser: browserHoldPortFixture,
+      browser: browserEveryPortFixture,
       shell: shellPort,
     });
 

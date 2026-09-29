@@ -954,6 +954,75 @@ describe("createAgentBrowserPort", () => {
   });
 });
 
+describe("createAgentBrowserPort find (VC-364)", () => {
+  it("searches a visible tab and answers with its page facts, and the found ref acts", async () => {
+    const harness = portWithHost({
+      tabs: [state({ tabId: "user-1", createdBy: "user", generation: 3 })],
+    });
+
+    const found = await harness.port.find({ tabId: "user-1", query: "SAVE", signal });
+
+    expect(found).toEqual({
+      tabId: "user-1",
+      url: "https://example.com/",
+      title: "Example",
+      ownerSessionId: null,
+      error: null,
+      query: "SAVE",
+      findText: '- button "Save" [ref=e1] [match]',
+      generation: 3,
+      matches: 1,
+      shown: 1,
+      truncated: false,
+      empty: false,
+    });
+    // It waited and kept the tab awake like any read, and took no picture.
+    expect(harness.wakeEvents).toEqual(["hold user-1", "wait user-1"]);
+    expect(harness.captures).toEqual([]);
+    await expect(
+      harness.port.act({
+        tabId: "user-1",
+        generation: found.generation,
+        kind: "click",
+        ref: "e1",
+        signal,
+      }),
+    ).resolves.toMatchObject({ target: { ref: "e1", name: "Save" } });
+  });
+
+  it("is a read: it needs no hold, and works on a tab somebody else holds", async () => {
+    const harness = portWithHost({ tabs: [state({ tabId: "shared", createdBy: "user" })] });
+    await clickSave(harness.portFor(OTHER), "shared");
+
+    await expect(
+      harness.port.find({ tabId: "shared", query: "save", signal }),
+    ).resolves.toMatchObject({ tabId: "shared", matches: 1 });
+    expect(harness.holds.get("shared")).toMatchObject({
+      kind: "session",
+      holder: { sessionId: "ses-other" },
+    });
+  });
+
+  it("refuses a tab outside the Session's scope as unknown, and an empty query by its rule", async () => {
+    const harness = portWithHost({
+      tabs: [
+        state({ tabId: "theirs", createdBy: "session", ownerSessionId: "s9" }),
+        state({ tabId: "user-1", createdBy: "user" }),
+      ],
+    });
+
+    await expect(
+      harness.port.find({ tabId: "theirs", query: "save", signal }),
+    ).rejects.toMatchObject({ rule: "browser.unknown-tab" });
+    const refused = await harness.port
+      .find({ tabId: "user-1", query: "  ", signal })
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(BrowserRefusal);
+    // A refusal raised in the controller still names the page it was aimed at.
+    expect(refused).toMatchObject({ rule: "browser.find-query", page: { tabId: "user-1" } });
+  });
+});
+
 describe("Browser port concurrent calls and teardown", () => {
   function harness() {
     const host = fakeHost([state({ tabId: "one" }), state({ tabId: "two" })]).host;
@@ -978,7 +1047,7 @@ describe("Browser port concurrent calls and teardown", () => {
     return { port: browser, ready, disposed, createTransport, send, host };
   }
 
-  it("serializes one tab's snapshots without duplicating controllers or reusing refs", async () => {
+  it("serializes one tab's snapshots through one controller and one ref ledger", async () => {
     const h = harness();
     const first = h.port.snapshot({ tabId: "one", signal });
     const second = h.port.snapshot({ tabId: "one", signal });
@@ -986,7 +1055,8 @@ describe("Browser port concurrent calls and teardown", () => {
     h.ready.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(h.createTransport).toHaveBeenCalledTimes(1);
-    expect(refIn(a.snapshotText)).not.toBe(refIn(b.snapshotText));
+    // One ledger (VC-364): the same element reads under the same ref.
+    expect(refIn(a.snapshotText)).toBe(refIn(b.snapshotText));
     h.port.dispose();
     expect(h.disposed).toHaveBeenCalledTimes(1);
   });
@@ -1013,7 +1083,7 @@ describe("Browser port concurrent calls and teardown", () => {
     h.ready.resolve();
     const [a, c] = await Promise.all([first, third]);
     expect(h.createTransport).toHaveBeenCalledTimes(1);
-    expect(refIn(a.snapshotText)).not.toBe(refIn(c.snapshotText));
+    expect(refIn(a.snapshotText)).toBe(refIn(c.snapshotText));
     expect(
       h.send.mock.calls.filter(([method]) => method === "Accessibility.getFullAXTree"),
     ).toHaveLength(2);

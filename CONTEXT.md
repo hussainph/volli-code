@@ -290,9 +290,11 @@ BrowserTabHost — never loaded into the app's own renderer. A tab has a
 product-owned opaque id, a mode-scoped session partition isolated from the app
 renderer and from every other mode, and a per-tab generation that advances on
 navigation. People browse in them; Sessions reach them only through the Browser
-port's eight `browser_*` tools, which speak the accessibility-snapshot/ref
-dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
-remote debugging port ever opens. Everything a page contributes — title,
+port's `browser_*` tools, which speak the accessibility-snapshot/ref dialect
+over `webContents.debugger` — Electron's app-private CDP wire, so no remote
+debugging port ever opens. A ref names one element for as long as the tab
+stays at its generation (VC-364), but only the latest snapshot or
+`browser_find` decides which refs may act. Everything a page contributes — title,
 snapshot, console, pixels — is untrusted third-party content in the same
 envelope discipline Web Access established. A tab is not Web Access: reading
 the public web through `web_fetch` and rendering a page a person can also see

@@ -57,7 +57,7 @@ import {
   verbEntry,
   verbToolWireName,
 } from "@volli/shared";
-import { createBrowserHoldTool, createBrowserTool } from "./browser-tools";
+import { createBrowserFindTool, createBrowserHoldTool, createBrowserTool } from "./browser-tools";
 import { createShellTool } from "./shell-tools";
 import { piContext } from "./pi-context";
 import { processReadImage } from "./read-image-processor";
@@ -236,6 +236,10 @@ export function createSessionTools(spec: SessionToolInput, env: ExecutionEnv): A
         // proven present — `sessionToolBindings` offered these names only
         // because the port carries both.
         return createBrowserHoldTool(binding.tool, binding.port, spec.signal);
+      case "browser_find":
+        // Bound to the port with `find` proven present (VC-364), on the hold
+        // pair's terms: a Session frozen before it is handed a port without.
+        return createBrowserFindTool(binding.port, spec.signal);
       case "shell_start":
       case "shell_output":
       case "shell_kill":

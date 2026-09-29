@@ -1234,6 +1234,17 @@ describe("browse presenter", () => {
     expect(describeActivity(browse("wait"))).toMatchObject({ verb: "Waited", object: null });
   });
 
+  it("reads a search by the model's query, always quoted, with the page as its meta (VC-364)", () => {
+    expect(describeActivity(browse("find", { target: "Delete account" }))).toMatchObject({
+      verb: "Searched for",
+      object: "“Delete account”",
+      meta: "example.com/sign-in",
+    });
+    // A query that looks like a ref is still the model's words, not a handle.
+    expect(describeActivity(browse("find", { target: "e5" })).object).toBe("“e5”");
+    expect(describeActivity(browse("find")).object).toBeNull();
+  });
+
   it("reads the reads: page, screenshot, console with its error count, and a tab listing", () => {
     expect(describeActivity(browse("read"))).toMatchObject({
       verb: "Read page",

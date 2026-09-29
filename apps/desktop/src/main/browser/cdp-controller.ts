@@ -10,14 +10,24 @@
  * (or, far worse, the app's own privileged renderer). See
  * docs/research/browser-tooling-vc-110.md and the VC-110 decision comment.
  *
- * Acting is by handle, never by selector: a snapshot mints `eN → backendDOMNodeId`
+ * Acting is by handle, never by selector: a read prints `eN → backendDOMNodeId`
  * and an action resolves through that map, so what gets clicked is the element
  * the model was shown — or nothing. Two facts gate every action: the ref must
- * have been minted by the LAST snapshot, and that snapshot must belong to the
- * tab's CURRENT generation. The host bumps the generation on navigation, so a
- * ref from before the page changed refuses rather than acts on whatever now
- * occupies the coordinates. Refusals are {@link BrowserRefusal}s — policy
- * working, translated to readable text upstream — and never dispatch input.
+ * have been printed by the LAST read (a snapshot or a find), and that read must
+ * belong to the tab's CURRENT generation. The host bumps the generation on
+ * navigation, so a ref from before the page changed refuses rather than acts
+ * on whatever now occupies the coordinates. Refusals are {@link BrowserRefusal}s
+ * — policy working, translated to readable text upstream — and never dispatch
+ * input.
+ *
+ * Identity is not the gate (VC-364). Within one generation the controller
+ * keeps a ledger of which `eN` each backend node was printed as, so the same
+ * element reads under the same ref from one read to the next and the model
+ * does not have to re-learn the page; the ledger is cleared when the
+ * generation moves. What the ledger never does is make a ref actionable: an
+ * element the latest read did not print — removed from the page, cut by the
+ * bound, or not matched by a find — refuses, however well the ledger remembers
+ * its number.
  *
  * Deliberately absent, mirroring the tool surface: no page-supplied
  * JavaScript, no cookie or storage domains, no network interception. `select`
@@ -28,7 +38,17 @@
 
 import { BrowserRefusal } from "@volli/agent-runtime";
 
-import { formatAXSnapshot, SNAPSHOT_MAX_CHARS, type AXNodeLike } from "./snapshot-format";
+import {
+  FIND_MAX_CHARS,
+  FIND_MAX_QUERY_CHARS,
+  formatAXFind,
+  formatAXSnapshot,
+  normalizeFindQuery,
+  SNAPSHOT_MAX_CHARS,
+  type AXNodeLike,
+  type BrowserSnapshotFormat,
+  type RefLedger,
+} from "./snapshot-format";
 
 /** One CDP wire. Production may re-establish and initialize its attachment. */
 export interface CdpTransport {
@@ -77,6 +97,19 @@ export interface TabSnapshot {
 }
 
 /**
+ * One bounded search of the tab's accessibility tree (VC-364): the matching
+ * subtrees, stamped like a snapshot, with the counts Volli states beside them.
+ */
+export interface TabFind extends TabSnapshot {
+  /** Every match in the tree the search walked. */
+  matches: number;
+  /** The matches the text shows. */
+  shown: number;
+  /** The tree exposed nothing at all — which is not the same as no match. */
+  empty: boolean;
+}
+
+/**
  * What one action touched (VC-238): the ref the model named and the accessible
  * name the last snapshot printed for it, so the transcript can read
  * `Clicked "Sign in"`. Null for page-level actions — press, scroll, wait —
@@ -97,6 +130,14 @@ export interface ControllerLimits {
 const MAX_WAIT_MS = 5_000;
 
 /**
+ * How many elements one generation's ledger remembers. A long-lived single
+ * page app can churn through far more nodes than any read prints; past the
+ * bound the ledger keeps only what the latest read showed, and a forgotten
+ * element simply gets a fresh number if it is ever printed again.
+ */
+const MAX_KNOWN_REFS = 10_000;
+
+/**
  * How long one CDP command may go unanswered before its call fails. A crashed
  * renderer or an engine starved of frames can leave `webContents.debugger`
  * waiting forever, and an unbounded wait wedges the whole Session behind one
@@ -112,7 +153,7 @@ function isTimeout(error: unknown): boolean {
   return error instanceof CommandTimeoutError;
 }
 
-type TimeoutOperation = "readiness" | "snapshot" | "screenshot" | "action";
+type TimeoutOperation = "readiness" | "snapshot" | "find" | "screenshot" | "action";
 
 function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string {
   switch (operation) {
@@ -120,6 +161,8 @@ function timeoutMessage(operation: TimeoutOperation, timeoutMs: number): string 
       return `The Browser Tab did not become ready within ${timeoutMs}ms. Try the Browser Tab command again.`;
     case "snapshot":
       return `The Browser Tab did not finish taking a snapshot within ${timeoutMs}ms. Wait for the page to settle, then try the snapshot again.`;
+    case "find":
+      return `The Browser Tab did not finish searching its accessibility tree within ${timeoutMs}ms. Wait for the page to settle, then try the search again.`;
     case "screenshot":
       return `The Browser Tab did not finish taking a screenshot within ${timeoutMs}ms. The page may still be busy or too heavy to capture in time. Take a snapshot to check its current state, then try the screenshot again.`;
     case "action":
@@ -235,8 +278,14 @@ export class BrowserTabController {
   readonly #limits: Required<ControllerLimits>;
   readonly #cursor: TabCursorDriver | undefined;
   #generation = 0;
+  /** The refs the latest read printed — the only ones an action may name. */
   #refs: ReadonlyMap<string, number> = new Map();
   #names: ReadonlyMap<string, string> = new Map();
+  /** This generation's ledger: backend node to the ref it was printed as, and back. */
+  #known = new Map<number, string>();
+  #knownRefs = new Map<string, number>();
+  /** Every backend node the latest read's tree held, printed or not. */
+  #present: ReadonlySet<number> = new Set();
   #snapshotGeneration = -1;
   #nextRef = 1;
 
@@ -388,8 +437,16 @@ export class BrowserTabController {
   syncGeneration(generation: number): void {
     if (generation <= this.#generation) return;
     this.#generation = generation;
+    this.#forget();
+  }
+
+  /** Drop every ref and the whole ledger: nothing printed before names anything now. */
+  #forget(): void {
     this.#refs = new Map();
     this.#names = new Map();
+    this.#known = new Map();
+    this.#knownRefs = new Map();
+    this.#present = new Set();
     this.#snapshotGeneration = -1;
     this.#nextRef = 1;
   }
@@ -400,31 +457,98 @@ export class BrowserTabController {
 
   dispose(): void {
     this.#disposeTransport?.();
-    this.#refs = new Map();
-    this.#names = new Map();
-    this.#snapshotGeneration = -1;
+    this.#forget();
   }
 
-  async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
-    signal?.throwIfAborted();
+  /** One fresh read of the page's accessibility tree, as CDP answers it. */
+  async #readTree(operation: "snapshot" | "find", signal?: AbortSignal): Promise<AXNodeLike[]> {
     const answer = (await this.#command(
       "Accessibility.getFullAXTree",
       undefined,
       signal,
-      "snapshot",
+      operation,
     )) as {
       nodes?: AXNodeLike[];
     };
     signal?.throwIfAborted();
-    const printed = formatAXSnapshot(answer.nodes ?? [], {
-      maxChars: this.#limits.maxSnapshotChars,
-      refStart: this.#nextRef,
-    });
+    return answer.nodes ?? [];
+  }
+
+  /** What the next print may draw on: this generation's ledger, if it has one. */
+  #ledger(): RefLedger {
+    // Only an earlier read that SHOWED something makes an element new to the
+    // reader; the ledger is cleared with the generation, so it is exactly that.
+    return { known: this.#known, nextRef: this.#nextRef, markNew: this.#known.size > 0 };
+  }
+
+  /**
+   * Make one print the latest read: its refs become the only actionable ones,
+   * and the ledger learns every element it showed.
+   */
+  #adopt(printed: BrowserSnapshotFormat, nodes: readonly AXNodeLike[]): void {
     this.#refs = printed.refs;
     this.#names = printed.names;
     this.#snapshotGeneration = this.#generation;
     this.#nextRef = printed.nextRef;
+    this.#present = new Set(nodes.flatMap((node) => node.backendDOMNodeId ?? []));
+    for (const [ref, backendNodeId] of printed.refs) {
+      this.#known.set(backendNodeId, ref);
+      this.#knownRefs.set(ref, backendNodeId);
+    }
+    if (this.#known.size > MAX_KNOWN_REFS) {
+      // Past the bound, keep what this read showed. `#nextRef` is untouched,
+      // so a forgotten number is never handed to a different element.
+      this.#known = new Map([...printed.refs].map(([ref, backendNodeId]) => [backendNodeId, ref]));
+      this.#knownRefs = new Map(printed.refs);
+    }
+  }
+
+  async snapshot(signal?: AbortSignal): Promise<TabSnapshot> {
+    signal?.throwIfAborted();
+    const nodes = await this.#readTree("snapshot", signal);
+    const printed = formatAXSnapshot(nodes, {
+      maxChars: this.#limits.maxSnapshotChars,
+      ledger: this.#ledger(),
+    });
+    this.#adopt(printed, nodes);
     return { text: printed.text, generation: this.#generation, truncated: printed.truncated };
+  }
+
+  /**
+   * Search a fresh read of the tree for a literal, case-insensitive query and
+   * print only what answers it (VC-364). It is a read like a snapshot: its
+   * refs come from the same ledger, and — whenever it printed anything — they
+   * REPLACE the actionable set, so after a find the model acts on what the
+   * find showed or reads again.
+   * Nothing here is a selector, a pattern or page script — the query is
+   * compared against names Chromium already computed.
+   */
+  async find(query: string, signal?: AbortSignal): Promise<TabFind> {
+    signal?.throwIfAborted();
+    const needle = normalizeFindQuery(query);
+    if (needle === null) {
+      throw new BrowserRefusal(
+        "browser.find-query",
+        `browser_find needs literal text to search for, between 1 and ${FIND_MAX_QUERY_CHARS} characters.`,
+      );
+    }
+    const nodes = await this.#readTree("find", signal);
+    const found = formatAXFind(nodes, needle, {
+      maxChars: Math.min(FIND_MAX_CHARS, this.#limits.maxSnapshotChars),
+      ledger: this.#ledger(),
+    });
+    // A find that printed nothing showed the reader nothing, so it replaces
+    // nothing: the latest read that showed something stays the one refs are
+    // judged by, exactly as if this search had not happened.
+    if (found.text !== "") this.#adopt(found, nodes);
+    return {
+      text: found.text,
+      generation: this.#generation,
+      truncated: found.truncated,
+      matches: found.matches,
+      shown: found.shown,
+      empty: found.empty,
+    };
   }
 
   /**
@@ -587,13 +711,25 @@ export class BrowserTabController {
 
   #resolve(ref: string | undefined): number {
     const backendNodeId = ref === undefined ? undefined : this.#refs.get(ref);
-    if (backendNodeId === undefined) {
+    if (backendNodeId !== undefined) return backendNodeId;
+    // The ledger only words the refusal; it never lets a ref act.
+    const remembered = ref === undefined ? undefined : this.#knownRefs.get(ref);
+    if (remembered !== undefined && !this.#present.has(remembered)) {
       throw new BrowserRefusal(
         "browser.unknown-ref",
-        `No current snapshot minted a ref ${JSON.stringify(ref ?? "")}: act on a ref the latest snapshot shows.`,
+        `The element ${ref} named is no longer on the page: take a fresh snapshot.`,
       );
     }
-    return backendNodeId;
+    if (remembered !== undefined) {
+      throw new BrowserRefusal(
+        "browser.unknown-ref",
+        `${ref} still names an element on this page, but the latest snapshot or find did not show it: take a snapshot or find that shows it, then act.`,
+      );
+    }
+    throw new BrowserRefusal(
+      "browser.unknown-ref",
+      `No current snapshot minted a ref ${JSON.stringify(ref ?? "")}: act on a ref the latest snapshot or find shows.`,
+    );
   }
 
   /**
