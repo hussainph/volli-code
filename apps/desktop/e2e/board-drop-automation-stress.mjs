@@ -28,9 +28,10 @@
  *      VOLLI_STRESS_ALT_AIMS (default "0.9,0.35,none") — where ⌥ goes down,
  *      as a fraction of the target column's VISIBLE height, one entry per
  *      block of 6 gestures (a block covers every column × phase pair); `none`
- *      is a block of plain drops. The default presses ⌥ low (where the app's
- *      countdown sits), then high, then not at all: 18 of 24 gestures open the
- *      picker. VOLLI_STRESS_ALT_AIMS=0.9 hammers the low aim alone.
+ *      is a block of plain drops. The default presses ⌥ low (down where the
+ *      countdown stack sits), then high, then not at all: 18 of 24 gestures
+ *      open the picker. VOLLI_STRESS_ALT_AIMS=0.9 hammers the low aim alone.
+ *      Blocks cycle, so entries past ITERATIONS/6 never run; the run warns.
  *      VOLLI_STRESS_SCALE (tickets per column, default 60 — above the 40-row
  *      threshold at which columns window (VC-316), so the ResizeObserver /
  *      row-stride measurement machinery is live; 0 keeps the scratch's own
@@ -43,6 +44,13 @@
  * uses), and Playwright routes the `board.tsx` request to it. A stress test
  * that cannot fail against the pre-fix board proves nothing.
  *
+ * NOT A VC-446 CONTROL ANY MORE. Only `board.tsx` is swapped. Since VC-451 the
+ * #185 this harness used to hit turned out to be the windowed column's own
+ * measure/anchoring loop (`board-column.tsx`, fixed there), not the drag path
+ * VC-446 froze — so a pre-freeze `board.tsx` (1ecfac17) over today's column
+ * passes 24/24. A regression of the frozen reads is guarded by the jsdom
+ * churn counts in board-drop-automation.test.tsx, not by this run.
+ *
  * The revision must be one that PREDATES the freeze. On this branch `HEAD` is
  * the fix, so `VOLLI_STRESS_CONTROL=HEAD` is not a control at all — it serves
  * the very board under test. Name the merge-base instead:
@@ -52,11 +60,15 @@
  * first two lines; read them before trusting a control number.
  * Fixture IPC only; no real tickets, Automations, or Sessions are started.
  *
- * The lab's board preview does NOT mount `ArmedRunWindows` (only app-shell
- * does), so the pending runs this pumps drive the store and the board's
- * `countdownOpen` read but never paint a countdown card. A picker that fails
- * to open here is not the countdown in the way; the pointer-over-countdown
- * case is pinned in board-drop-automation.test.tsx instead (VC-451).
+ * The countdown is REAL here: the scratch mounts `ArmedRunWindows` as
+ * app-shell does, so the pending runs this pumps paint countdown cards over
+ * the bottom-centre of the board. Main closes a countdown after 3.5s; this
+ * keeps the newest COUNTDOWN_STACK open instead, so the stack stays the height
+ * a quick run of drops really leaves. A low ⌥ aim then lands on a countdown
+ * card whenever the target column runs under it, and the picker has to look
+ * through it (VC-451) — the SUMMARY counts how many did. A lift whose grab
+ * point a countdown covers is re-aimed first: a covered card cannot be
+ * picked up in the app either, by design, and that is not what is under test.
  *
  * Every aim is a fraction of the target column's VISIBLE list — its
  * `[data-column-scroller]` clipped by the window. The dropzone's own box is
@@ -87,6 +99,22 @@ const ALT_AIMS = (process.env.VOLLI_STRESS_ALT_AIMS ?? "0.9,0.35,none").split(",
   );
   return fraction;
 });
+if (ALT_AIMS.length > Math.ceil(ITERATIONS / 6)) {
+  console.warn(
+    `WARNING: VOLLI_STRESS_ALT_AIMS has ${ALT_AIMS.length} entries but ${ITERATIONS} iterations ` +
+      `run only ${Math.ceil(ITERATIONS / 6)} blocks of 6 — entries past that never run.`,
+  );
+}
+/**
+ * Countdown cards left open at once. Five is more than 3.5s of drops usually
+ * leaves, and deliberately so: the lab's columns stop ~170px short of the
+ * window's bottom edge (the preview has its own header), and it takes five
+ * cards for the stack to reach up over the bottom of the `doing` list, where
+ * the low ⌥ aim lands — as three do over the app's full-height columns.
+ */
+const COUNTDOWN_STACK = 5;
+/** An aim at or below this fraction of the list is a LOW aim — countdown country. */
+const LOW_AIM = 0.85;
 const E2E_DIR = dirname(fileURLToPath(import.meta.url));
 const BOARD_MODULE = "apps/desktop/src/renderer/src/components/board/board.tsx";
 const CONTROL_DIR = resolve(E2E_DIR, ".control");
@@ -110,8 +138,22 @@ assert.ok(executablePath, "Set VOLLI_CHROME to an installed Chromium browser");
 const url = `http://localhost:${process.env.VOLLI_LAB_PORT ?? "5174"}/lab/?preview=board#automation-improvements`;
 const browser = await chromium.launch({ executablePath, headless: true });
 
-/** `pickers`: passing gestures whose ⌥ really grew the target column's picker. */
-const results = { passed: 0, failed: 0, pickers: 0, failures: [] };
+/**
+ * `pickers`: passing gestures whose ⌥ really grew the target column's picker.
+ * `throughCountdown`: those whose ⌥ went down with a countdown card on top.
+ * `regrabs`: lifts re-aimed because a countdown covered the grab point.
+ * `lowAimsUnderFullStack`: passing low-aim ⌥ gestures made with the whole
+ *   stack open — the ones that COULD meet a countdown, whichever column.
+ */
+const results = {
+  passed: 0,
+  failed: 0,
+  pickers: 0,
+  throughCountdown: 0,
+  regrabs: 0,
+  lowAimsUnderFullStack: 0,
+  failures: [],
+};
 
 if (CONTROL_REV) {
   const repoRoot = resolve(E2E_DIR, "../../..");
@@ -176,7 +218,7 @@ try {
 
   // ---- in-page harness: churn pump, main's arming stand-in, move recorder ----
   await page.evaluate(
-    async ({ projectId, armed, scale, mutate }) => {
+    async ({ projectId, armed, scale, mutate, countdownStack }) => {
       const { useBoardStore } = await import("/src/stores/board.ts");
       const { useArmedRunStore, receivePendingArmedRuns } =
         await import("/src/components/automations/armed-run.ts");
@@ -272,6 +314,9 @@ try {
           };
         },
         now: () => performance.now(),
+        /** Whether a countdown card is the topmost thing at (x, y). */
+        countdownAt: (x, y) =>
+          document.elementFromPoint(x, y)?.closest("[data-armed-run-window]") != null,
         /**
          * What the picker's hit test sees at (x, y). "In column" is read the way
          * `board.tsx#pointerLanding` reads it — `closest("[data-board-column]")`,
@@ -407,8 +452,15 @@ try {
               openedAt: Date.now(),
               startAt: Date.now() + 10_000,
             };
+            lab.pendingByTicket.delete(ticketId);
             lab.pendingByTicket.set(ticketId, row);
             lab.armings.push({ ticketId, status: input.toStatus, automationId });
+          }
+          // Main closes each countdown after 3.5s; keep the newest few open
+          // instead (a Map iterates in insertion order, oldest first).
+          for (const ticketId of lab.pendingByTicket.keys()) {
+            if (lab.pendingByTicket.size <= countdownStack) break;
+            lab.pendingByTicket.delete(ticketId);
           }
           broadcastPending();
           // The Run's `data:changed` → hydrateProjectRoster, a tick later, with
@@ -435,7 +487,13 @@ try {
         },
       });
     },
-    { projectId: PROJECT_ID, armed: ARMED, scale: SCALE, mutate: MUTATE },
+    {
+      projectId: PROJECT_ID,
+      armed: ARMED,
+      scale: SCALE,
+      mutate: MUTATE,
+      countdownStack: COUNTDOWN_STACK,
+    },
   );
   // Let the scaled roster paint (and window) before the first lift.
   await page.waitForTimeout(500);
@@ -536,7 +594,17 @@ try {
       const sourceId = sourceIds[turn % sourceIds.length];
       const source = column(from).locator(`[data-board-ticket-slot="${sourceId}"]`);
       await source.scrollIntoViewIfNeeded();
-      const start = await source.boundingBox();
+      let start = await source.boundingBox();
+      if (
+        await page.evaluate(
+          ([px, py]) => window.lab.countdownAt(px, py),
+          [start.x + start.width / 2, start.y + 20],
+        )
+      ) {
+        await source.evaluate((node) => node.scrollIntoView({ block: "center" }));
+        start = await source.boundingBox();
+        results.regrabs += 1;
+      }
       const target = await visibleList(to);
       assert.ok(target.height > 80, `${label}: ${to} is not on screen: ${JSON.stringify(target)}`);
 
@@ -566,6 +634,8 @@ try {
       // jumps straight to the final point (two moves: enter, then settle).
       const finalFraction = [0.85, 0.5, 0.2][turn % 3];
       // With the picker, ⌥ goes down at the second-to-last stop: `altAim`.
+      let throughCountdown = false;
+      let lowAimUnderFullStack = false;
       const fractions =
         phase === "flick"
           ? [altAim ?? 0.9, finalFraction]
@@ -576,6 +646,14 @@ try {
         await page.mouse.move(x, y, { steps });
         if (phase !== "flick") await churnBurst(burst, step % 2 === 1);
         if (usePicker && step === fractions.length - 2) {
+          const overCountdown = await page.evaluate(
+            ([px, py]) => window.lab.countdownAt(px, py),
+            [x + 2, y + 1],
+          );
+          const stackOpen = await page.evaluate(
+            () => document.querySelectorAll("[data-armed-run-window]").length,
+          );
+          if (fraction >= LOW_AIM && stackOpen >= COUNTDOWN_STACK) lowAimUnderFullStack = true;
           await alt(true);
           await page.mouse.move(x + 2, y + 1);
           try {
@@ -591,6 +669,7 @@ try {
                 `viewport=${JSON.stringify(page.viewportSize())}`,
             );
           }
+          if (overCountdown) throughCountdown = true;
           await churnBurst(burst, true);
           await alt(false);
         }
@@ -682,13 +761,15 @@ try {
 
       results.passed += 1;
       if (usePicker) results.pickers += 1;
+      if (throughCountdown) results.throughCountdown += 1;
+      if (lowAimUnderFullStack) results.lowAimsUnderFullStack += 1;
       stallTotals.longTasks += stall.longTasks ?? 0;
       stallTotals.longTaskMs += stall.longTaskMs ?? 0;
       stallTotals.longestTaskMs = Math.max(stallTotals.longestTaskMs, stall.longestTaskMs ?? 0);
       stallTotals.frameGaps += stall.frameGaps;
       stallTotals.worstFrameGapMs = Math.max(stallTotals.worstFrameGapMs, stall.worstFrameGapMs);
       console.log(
-        `PASS ${label}: ${gestureMs}ms churns=${midChurns} rects=${midMeasures} toIndex=${move.input.toIndex} ` +
+        `PASS ${label}${throughCountdown ? " [⌥ through a countdown]" : ""}: ${gestureMs}ms churns=${midChurns} rects=${midMeasures} toIndex=${move.input.toIndex} ` +
           `longTasks=${stall.longTasks ?? "n/a"} (${stall.longTaskMs ?? "n/a"}ms, longest ${stall.longestTaskMs ?? "n/a"}ms) ` +
           `frameGaps>100ms=${stall.frameGaps} (worst ${stall.worstFrameGapMs}ms)`,
       );
@@ -724,7 +805,8 @@ try {
   const mutations = await page.evaluate(() => window.lab.mutations).catch(() => 0);
   console.log(
     `\nSUMMARY: ${results.passed} passed, ${results.failed} failed of ${ITERATIONS} ` +
-      `(${results.pickers} opened the ⌥ picker, aims ${JSON.stringify(ALT_AIMS)}); ` +
+      `(${results.pickers} opened the ⌥ picker, ${results.throughCountdown} through a countdown card, ` +
+      `aims ${JSON.stringify(ALT_AIMS)}; ${results.regrabs} lifts re-aimed off a countdown); ` +
       `${totalChurns} roster replacements injected via ${rawSetState ? "raw setState (old checkout)" : "hydrateProjectRoster"}` +
       `${MUTATE ? ` (${mutations} ticket value mutations)` : ""}; ` +
       `${consoleErrors.length} console errors total`,
@@ -743,7 +825,18 @@ if (results.failed > 0) {
   console.log(`FAILURES: ${JSON.stringify(results.failures, null, 2)}`);
   process.exit(1);
 }
+// The countdown case must actually have been exercised, not merely survived:
+// a layout change that moves the stack off the low aim would otherwise leave
+// this run green while covering nothing (VC-451).
+if (results.lowAimsUnderFullStack > 0 && results.throughCountdown === 0) {
+  console.log(
+    `FAIL: ${results.lowAimsUnderFullStack} low-aim ⌥ gestures ran under a full countdown stack ` +
+      "and none pressed ⌥ with a countdown card on top — the look-through case went unexercised. " +
+      "Check where the stack sits against the target columns (COUNTDOWN_STACK, LOW_AIM).",
+  );
+  process.exit(1);
+}
 console.log(
   `PASS: ${results.passed}/${ITERATIONS} drag→armed-column gestures under mid-gesture roster churn ` +
-    `(${results.pickers} through the ⌥ picker)`,
+    `(${results.pickers} through the ⌥ picker, ${results.throughCountdown} of them with a countdown card on top)`,
 );
