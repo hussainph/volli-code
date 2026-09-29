@@ -25,6 +25,7 @@ import {
 } from "./db/blobs-repo";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
 import type { AutoTitleRequest } from "./session-runtime/auto-title";
 import { listMcpOperations } from "./db/mcp-operations-repo";
 import { McpSettingsService } from "./mcp/settings";
@@ -64,8 +65,11 @@ import type {
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -667,6 +671,42 @@ export function registerDataIpcHandlers(
       };
       insertProject(db, project);
       return { ok: true, project, created: true };
+    },
+
+    /**
+     * Whether one project's registered folder is still there (VC-430) — the
+     * read the recovery path hangs off. Cheap by construction: one row and one
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
+     */
+    "volli:project-folder-check": (input: ProjectIdInput): Promise<ProjectFolderResult> =>
+      inspectProjectFolder(db, input.projectId),
+
+    /**
+     * Points an existing project at the folder it moved to (VC-430).
+     *
+     * The whole judgement lives in `relinkProject`, including the refusal that
+     * matters most: a folder another project already tracks is never taken,
+     * because the alternative a person reaches for — adding the new folder —
+     * is exactly what mints the duplicate this channel exists to avoid.
+     *
+     * `busyWorktreeSites` is threaded through so the answer can warn about
+     * Sessions still running in the folder being left; it is the same supplier
+     * the destructive worktree paths ask, because "what is live in this
+     * directory" must have one answer in this process.
+     */
+    "volli:project-relink": async (input: ProjectRelinkInput): Promise<ProjectRelinkResult> => {
+      const outcome = await relinkProject(
+        { db, busyWorktreeSites: options.busyWorktreeSites },
+        { projectId: input.id, path: input.path },
+      );
+      if (!outcome.ok) return outcome;
+      // Every surface that reads a project path has to re-read: the rail, the
+      // file browsers, Configure, and the renderer's own root allowlist mirror.
+      broadcastDataChanged({ projectId: outcome.project.id });
+      return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
     "volli:project-remove": (id: string): ProjectMutationResult => {

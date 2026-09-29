@@ -64,6 +64,7 @@ App data lives under Electron's `userData` directory. The agent-facing `volli` C
 - Ensure all PRs pass CI/CD checks before shipping.
 - `vp install` or `pnpm install` — install dependencies.
 - `pnpm run ensure:electron` — prefetch Electron when needed; its binary is otherwise fetched lazily on first `require("electron")`.
+- `rg` (ripgrep) — the search tool for this repository, in place of `grep -r` or `find -exec grep`. It respects `.gitignore`, so it skips `node_modules/`, `coverage/` and build output; a plain `grep -r` walks all of them and returns generated coverage HTML as if it were source. Use `rg --files -g <glob>` for file listing, `rg -l` for name-only matches, and `-uu` only when you deliberately need ignored files. If `command -v rg` finds nothing, fall back to `git grep -n` (tracked files only, so the same exclusions), or to `grep -rn --exclude-dir={node_modules,coverage,dist,out,.git}` outside a repository.
 
 The global `vp` toolchain CLI is used by this repository. Node and pnpm versions are pinned in the root `package.json`.
 

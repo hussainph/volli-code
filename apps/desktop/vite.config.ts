@@ -235,6 +235,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Where the Browser replay moves (VC-453): which step a key, a drag or
+        // a growing trace lands on. None of it shows in a screenshot.
+        "src/components/browser/browser-trace-model.ts",
         "src/components/board/board-dnd.ts",
         // Desktop selection gestures are board policy, not view glue: modifier
         // toggles may span columns while Shift ranges stay in one visual column.
@@ -338,6 +341,15 @@ export default defineConfig(({ mode }) => ({
         // chosen as the headline, is a person told they have room they do not
         // have — and neither shows up as an error anywhere.
         "src/components/usage-limits/accounts.ts",
+        // And what the window-bar GLYPH says about all that (VC-376). In the
+        // gate on the same argument, only harder to catch: the icon and the
+        // popover are never on screen at the same moment, so if this module
+        // ever reached a different verdict from the bars below it — a different
+        // window reported, a figure rounded another way, a failed account drawn
+        // as empty rather than dropped — nobody would be looking at the two
+        // together to see it. The spoken name is here too, because it is the
+        // whole reading for anyone who cannot use the drawing.
+        "src/components/usage-limits/icon-reading.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",
@@ -615,6 +627,14 @@ export default defineConfig(({ mode }) => ({
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
+        // Relinking a project to the folder it moved to (VC-430). In the gate
+        // because every branch of it is a rule about a filesystem nobody is
+        // watching: the refusal that stops two projects tracking one checkout,
+        // and the container move that keeps a renamed project's worktrees
+        // inside the set this database recognises as its own. Both are silent
+        // when wrong — one duplicates a project, the other strands checkouts
+        // that no cleanup surface will ever list again.
+        "**/src/main/project-relink.ts",
         "**/src/main/prompt-templates.ts",
         "**/src/main/pty.ts",
         "**/src/main/park.ts",

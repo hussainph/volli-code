@@ -217,4 +217,17 @@ describe("BrowserPictureStore", () => {
     }
     expect(pictures.dataUrl(id)).toBeNull();
   });
+
+  it("hands a live capture's bytes and record to a host that keeps its own copy, and nothing for an id it let go of (VC-453)", () => {
+    const { pictures } = store({ persist: null });
+    const id = pictures.put(shot());
+
+    expect(pictures.copyOf(id)).toEqual({
+      bytes: jpeg("page"),
+      record: expect.objectContaining({ id, tabId: "tab-1", mime: "image/jpeg" }),
+    });
+    expect(pictures.copyOf("never-minted")).toBeNull();
+    for (let index = 0; index < BROWSER_PICTURE_LIVE_LIMIT; index += 1) pictures.put(shot());
+    expect(pictures.copyOf(id)).toBeNull();
+  });
 });

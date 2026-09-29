@@ -233,6 +233,11 @@ export interface ActivityIslandActions {
    * transcript card; the island never promotes straight to the strip.
    */
   promoteTab(id: string): void;
+  /**
+   * Opens the Browser replay (VC-453) of what the tab's Session did in it —
+   * the same modal the transcript card's Replay opens, started at this tab.
+   */
+  replayTab(id: string): void;
   peekAgent(id: string): void;
   promoteAgent(id: string): void;
   stopAgent(id: string): void;

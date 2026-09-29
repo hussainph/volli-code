@@ -290,9 +290,11 @@ BrowserTabHost — never loaded into the app's own renderer. A tab has a
 product-owned opaque id, a mode-scoped session partition isolated from the app
 renderer and from every other mode, and a per-tab generation that advances on
 navigation. People browse in them; Sessions reach them only through the Browser
-port's eight `browser_*` tools, which speak the accessibility-snapshot/ref
-dialect over `webContents.debugger` — Electron's app-private CDP wire, so no
-remote debugging port ever opens. Everything a page contributes — title,
+port's `browser_*` tools, which speak the accessibility-snapshot/ref dialect
+over `webContents.debugger` — Electron's app-private CDP wire, so no remote
+debugging port ever opens. A ref names one element for as long as the tab
+stays at its generation (VC-364), but only the latest snapshot or
+`browser_find` decides which refs may act. Everything a page contributes — title,
 snapshot, console, pixels — is untrusted third-party content in the same
 envelope discipline Web Access established. A tab is not Web Access: reading
 the public web through `web_fetch` and rendering a page a person can also see
@@ -375,6 +377,21 @@ it never claims a spot a click did not go to. Only the on-screen tab draws
 one; a hidden tab keeps its cursor's last position and pays no delay. It
 yields with the plane and never appears in a screenshot or a frozen frame.
 _Avoid_: pointer overlay, ghost cursor, agent mouse
+
+**Browser Trace**:
+The replayable record of what one Session did in one Browser Tab it owns
+(VC-453): every browser call it made against that tab — navigate, act,
+snapshot, find, screenshot, console — in the order they settled (answered,
+refused or failed), with its target, page, time and, for a call that changed
+the page or took a screenshot, the frame the host kept. Only the host writes it, and only for a tab a
+Session created: a person's tab is never recorded, even while a Session
+holds it. Page text in it (a title, an element's name) is cleaned on the way
+in, and nothing typed into a page is kept. It is the person's evidence and
+never the model's input — its own bounded directory under userData, never a
+Blob, read by no tool. The **Browser replay** steps through a Session's
+traces from a browse row's card or the Activity Island, before or after a
+relaunch. The type is `@volli/shared`'s, so any client can replay it.
+_Avoid_: recording, video, screencast (there is none), session log
 
 **Session colour**:
 An identity colour, never a state colour (VC-239): which Session, not how it
@@ -629,6 +646,18 @@ whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
+**Scheduled Resume**:
+A person's choice, made on a run a spent provider allowance stopped, to retry
+that run when the allowance's stated reset arrives. It is three Session
+Commands — schedule, cancel, and the host's settle — whose receipts are the
+whole of its state. A minute after the stated reset (a fast local clock must
+not retry into the spent window) the host resumes through the ordinary retry,
+or skips it with a reason when the Session was continued, ended, or overtaken by
+a person's work in another Session on its Ticket — another Session's own
+scheduled resume does not count. Never scheduled without being chosen, and never
+re-scheduled on its own.
+_Avoid_: auto-retry, auto-resume, Automation
+
 **SessionInteraction**:
 A decision a Session is waiting on — a permission or a question — held in Volli
 terms: a title, optional detail, declared options, and an opaque runtime
@@ -773,7 +802,7 @@ A tracked codebase folder: name, path, ticket prefix, rail position. Removing on
 _Avoid_: workspace (claimed by Ticket workspace — the ticket surface), space
 
 **Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes.
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
 _Avoid_: workspace (that's the whole ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:

@@ -208,17 +208,26 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & {
       kind: "attention.raised";
-      attention: {
-        id: string;
-        kind:
-          | "auth_required"
-          | "configuration_invalid"
-          | "context_limit_reached"
-          | "partial_turn_interrupted"
-          | "adapter_unrecoverable";
-        detail: string | null;
-        diagnostic: SessionNativeDetail | null;
-      };
+      attention:
+        | {
+            id: string;
+            kind:
+              | "auth_required"
+              | "configuration_invalid"
+              | "context_limit_reached"
+              | "partial_turn_interrupted"
+              | "transport_retrying";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+          }
+        | {
+            id: string;
+            kind: "adapter_unrecoverable";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+            /** The spent allowance's reset, when the run failed on one that stated it. */
+            resetsAt: number | null;
+          };
     })
   | (TranslatedObservationBase & { kind: "attention.cleared"; attentionId: string });
 
@@ -232,6 +241,7 @@ const ATTENTION_KINDS = {
   context: "context_limit_reached",
   "runtime-failure": "adapter_unrecoverable",
   "partial-turn": "partial_turn_interrupted",
+  transport: "transport_retrying",
 } as const satisfies Record<
   AttentionObservation["reason"],
   Extract<TranslatedObservation, { kind: "attention.raised" }>["attention"]["kind"]
@@ -782,12 +792,23 @@ export class RuntimeObservationTranslator {
       kind: "attention.raised",
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
-      attention: {
-        id: attentionId,
-        kind: ATTENTION_KINDS[observation.reason],
-        detail: observation.message,
-        diagnostic: null,
-      },
+      // Only a run that failed carries a reset, and a marker written before the
+      // field existed says nothing about one.
+      attention:
+        observation.reason === "runtime-failure"
+          ? {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              diagnostic: null,
+              resetsAt: observation.resetsAt ?? null,
+            }
+          : {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              diagnostic: null,
+            },
     };
   }
 

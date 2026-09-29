@@ -2001,6 +2001,86 @@ describe("SessionRuntime native adapter contract", () => {
     expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
   });
 
+  it("carries a quota reset onto the Attention and runs a scheduled resume through its commands", async () => {
+    const { runtime, engine, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+    await adapter.emit({
+      kind: "attention",
+      state: "raised",
+      reason: "runtime-failure",
+      message: "429: Usage limit reached for 5 hour.",
+      resetsAt: 9_000,
+    });
+    const attention = (await runtime.snapshot({ sessionId })).projection.attention.primary!;
+    expect(attention).toMatchObject({
+      kind: "adapter_unrecoverable",
+      attachmentId,
+      resetsAt: 9_000,
+    });
+    const frames: string[] = [];
+    await runtime.subscribe(
+      { sessionId, afterSequence: (await runtime.snapshot({ sessionId })).throughSequence },
+      (emission) => {
+        if ("event" in emission) frames.push(emission.event.payload.kind);
+      },
+    );
+
+    const scheduled = await runtime.command({
+      commandId: "schedule-1",
+      sessionId,
+      command: {
+        kind: "resume.schedule",
+        attentionId: attention.id,
+        attachmentId,
+        resumeAt: 9_000,
+      },
+    });
+    expect(scheduled.receipt).toMatchObject({ status: "completed" });
+    // Published, so an open chat redraws the row the moment it lands.
+    expect(frames).toEqual(["command.recorded", "command.receipt.recorded"]);
+
+    // The resume is an ordinary retry under the schedule's frozen id: a second
+    // fire replays the one command instead of running a second turn.
+    for (let fire = 0; fire < 2; fire += 1) {
+      await runtime.command({
+        commandId: "schedule-1:resume",
+        sessionId,
+        command: { kind: "executor.retry", attachmentId },
+      });
+    }
+    expect(adapter.commands.filter(({ kind }) => kind === "executor.retry")).toHaveLength(1);
+
+    const settled = await runtime.command({
+      commandId: "schedule-1:settle",
+      sessionId,
+      command: {
+        kind: "resume.settle",
+        scheduleId: "schedule-1",
+        outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+      },
+    });
+    expect(settled.receipt).toMatchObject({ status: "completed" });
+    const events = await engine.listEvents({ sessionId });
+    const provenanceOf = (commandId: string) =>
+      events.find(
+        ({ payload }) => payload.kind === "command.recorded" && payload.command.id === commandId,
+      )?.provenance.source;
+    // A person chose the schedule; nobody chose the outcome.
+    expect(provenanceOf("schedule-1")).toMatchObject({ kind: "user" });
+    expect(provenanceOf("schedule-1:settle")).toMatchObject({
+      kind: "system",
+      id: "scheduled-resume",
+    });
+
+    const cancelled = await runtime.command({
+      commandId: "cancel-1",
+      sessionId,
+      command: { kind: "resume.cancel", scheduleId: "schedule-1" },
+    });
+    expect(cancelled.receipt).toMatchObject({ status: "rejected", code: "resume_not_pending" });
+  });
+
   it("records and dispatches an explicit compaction to the live attachment", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);

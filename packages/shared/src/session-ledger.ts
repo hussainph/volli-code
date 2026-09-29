@@ -558,8 +558,19 @@ interface SessionAttentionBase {
 export type SessionAttention =
   | (SessionAttentionBase & { kind: "rate_limited"; retryAt: number | null })
   | (SessionAttentionBase & { kind: "quota_exhausted"; resetAt: number | null })
+  /**
+   * `resetsAt`: when the run failed on a spent provider allowance whose reset
+   * the runtime could read unambiguously, that instant (epoch ms) — the time a
+   * person may choose to have the run resumed at. `null` for every other
+   * failure, and for every Attention written before the field existed (the
+   * codec reads its absence as `null`). See `quotaResetInstant`.
+   */
+  | (SessionAttentionBase & { kind: "adapter_unrecoverable"; resetsAt: number | null })
   | (SessionAttentionBase & {
-      kind: Exclude<SessionAttentionKind, "rate_limited" | "quota_exhausted">;
+      kind: Exclude<
+        SessionAttentionKind,
+        "rate_limited" | "quota_exhausted" | "adapter_unrecoverable"
+      >;
     });
 
 /**
@@ -1233,7 +1244,42 @@ export type SessionCommandIntent =
       interactionId: string;
       resolution: SessionInteractionResolution;
       reference: TranscriptReference;
-    };
+    }
+  /**
+   * Resume the run an Attention stopped, once the provider's allowance is back.
+   *
+   * A person's choice, made on the failure itself: nothing is scheduled unless
+   * they ask. `resumeAt` is the reset the Attention carried when they chose it
+   * and is checked against it on acceptance, so a schedule can never name a
+   * time the failure did not state. The command's own id is the schedule's
+   * identity. A later schedule replaces an earlier one still pending.
+   */
+  | { kind: "resume.schedule"; attentionId: string; attachmentId: string; resumeAt: number }
+  /** Withdraw the pending scheduled resume named by its schedule command id. */
+  | { kind: "resume.cancel"; scheduleId: string }
+  /**
+   * The host's account of what became of a scheduled resume at its time:
+   * resumed through the named retry command, or skipped and why. System-only;
+   * the Session RPC edge does not accept it from a client.
+   */
+  | { kind: "resume.settle"; scheduleId: string; outcome: ScheduledResumeOutcome };
+
+/** Why a scheduled resume did not run. See `scheduledResumeVerdict`. */
+export const SCHEDULED_RESUME_SKIP_REASONS = [
+  // The Session was continued by hand after the resume was scheduled.
+  "continued",
+  // Another Session on the same Ticket moved on after it was scheduled.
+  "superseded",
+  // The Session was stopped, archived, or lost the executor it failed in.
+  "ended",
+  // The retry itself was refused.
+  "refused",
+] as const;
+export type ScheduledResumeSkipReason = (typeof SCHEDULED_RESUME_SKIP_REASONS)[number];
+
+export type ScheduledResumeOutcome =
+  | { kind: "resumed"; retryCommandId: string }
+  | { kind: "skipped"; reason: ScheduledResumeSkipReason; detail: string | null };
 
 /**
  * The adapter delivery target resolved by the control plane when it records a
@@ -1275,7 +1321,10 @@ export type CommandReceiptResult =
   | { kind: "executor.retried"; sessionId: string }
   | { kind: "context.compacted"; sessionId: string }
   | { kind: "message.submitted"; sessionId: string }
-  | { kind: "interaction.resolved"; sessionId: string };
+  | { kind: "interaction.resolved"; sessionId: string }
+  | { kind: "resume.scheduled"; sessionId: string }
+  | { kind: "resume.cancelled"; sessionId: string }
+  | { kind: "resume.settled"; sessionId: string };
 
 interface CommandReceiptDetailsAccepted {
   status: "accepted";
