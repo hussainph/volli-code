@@ -25,6 +25,12 @@
  *   (cd apps/desktop && ./node_modules/.bin/vp dev --mode lab --port 5191)
  *   VOLLI_LAB_PORT=5191 node apps/desktop/e2e/board-drop-automation-stress.mjs
  * Env: VOLLI_STRESS_ITERATIONS (default 24), VOLLI_CHROME,
+ *      VOLLI_STRESS_ALT_AIMS (default "0.9,0.35,none") — where ⌥ goes down,
+ *      as a fraction of the target column's VISIBLE height, one entry per
+ *      block of 6 gestures (a block covers every column × phase pair); `none`
+ *      is a block of plain drops. The default presses ⌥ low (where the app's
+ *      countdown sits), then high, then not at all: 18 of 24 gestures open the
+ *      picker. VOLLI_STRESS_ALT_AIMS=0.9 hammers the low aim alone.
  *      VOLLI_STRESS_SCALE (tickets per column, default 60 — above the 40-row
  *      threshold at which columns window (VC-316), so the ResizeObserver /
  *      row-stride measurement machinery is live; 0 keeps the scratch's own
@@ -45,6 +51,19 @@
  * The run announces which it got (`HAS` / `lacks` the frozen-reads fix) on the
  * first two lines; read them before trusting a control number.
  * Fixture IPC only; no real tickets, Automations, or Sessions are started.
+ *
+ * The lab's board preview does NOT mount `ArmedRunWindows` (only app-shell
+ * does), so the pending runs this pumps drive the store and the board's
+ * `countdownOpen` read but never paint a countdown card. A picker that fails
+ * to open here is not the countdown in the way; the pointer-over-countdown
+ * case is pinned in board-drop-automation.test.tsx instead (VC-451).
+ *
+ * Every aim is a fraction of the target column's VISIBLE list — its
+ * `[data-column-scroller]` clipped by the window. The dropzone's own box is
+ * the scrolled content, and once an earlier gesture has scrolled that list its
+ * top sits far above the window: aiming at a fraction of THAT put ⌥ over the
+ * board header or off-screen entirely, which is where VC-451's "picker never
+ * expanded … div in no column" came from.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -58,6 +77,16 @@ const SCALE = Number(process.env.VOLLI_STRESS_SCALE ?? "60");
 /** Escalation: every churn also rotates labels / bumps updatedAt on a few mounted tickets. */
 const MUTATE = process.env.VOLLI_STRESS_MUTATE === "1";
 const CONTROL_REV = process.env.VOLLI_STRESS_CONTROL;
+/** ⌥ aim per block of 6 gestures: a column-height fraction, or null for plain drops. */
+const ALT_AIMS = (process.env.VOLLI_STRESS_ALT_AIMS ?? "0.9,0.35,none").split(",").map((raw) => {
+  if (raw.trim() === "none") return null;
+  const fraction = Number(raw);
+  assert.ok(
+    fraction > 0 && fraction < 1,
+    `VOLLI_STRESS_ALT_AIMS: ${raw} is not a fraction in (0, 1)`,
+  );
+  return fraction;
+});
 const E2E_DIR = dirname(fileURLToPath(import.meta.url));
 const BOARD_MODULE = "apps/desktop/src/renderer/src/components/board/board.tsx";
 const CONTROL_DIR = resolve(E2E_DIR, ".control");
@@ -81,7 +110,8 @@ assert.ok(executablePath, "Set VOLLI_CHROME to an installed Chromium browser");
 const url = `http://localhost:${process.env.VOLLI_LAB_PORT ?? "5174"}/lab/?preview=board#automation-improvements`;
 const browser = await chromium.launch({ executablePath, headless: true });
 
-const results = { passed: 0, failed: 0, failures: [] };
+/** `pickers`: passing gestures whose ⌥ really grew the target column's picker. */
+const results = { passed: 0, failed: 0, pickers: 0, failures: [] };
 
 if (CONTROL_REV) {
   const repoRoot = resolve(E2E_DIR, "../../..");
@@ -209,6 +239,20 @@ try {
         measures += 1;
         return nativeRect.call(this);
       };
+      // Serialized into the page with the rest of this callback, so it cannot
+      // hoist to module scope the way the rule would have it.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const describeHit = (element) => {
+        const column = element.closest("[data-board-column]")?.dataset.boardColumn;
+        const countdown = element.closest("[data-armed-run-window]");
+        const toast = element.closest("[data-sonner-toast]");
+        const chrome = countdown
+          ? ` inside [data-armed-run-window=${countdown.dataset.armedRunWindow}]`
+          : toast
+            ? " inside a toast"
+            : "";
+        return `${element.tagName.toLowerCase()}${chrome} in ${column ?? "no column"}`;
+      };
       const lab = {
         scaled: fixture !== null,
         measures: () => measures,
@@ -228,16 +272,26 @@ try {
           };
         },
         now: () => performance.now(),
+        /**
+         * What the picker's hit test sees at (x, y). "In column" is read the way
+         * `board.tsx#pointerLanding` reads it — `closest("[data-board-column]")`,
+         * the column ROOT — not via `[data-column-dropzone]`, a div further in
+         * that excludes the header, the floating panel and the New button, so
+         * it could print "no column" while the picker was perfectly happy. The
+         * topmost element is named with any floating-chrome ancestor (the armed
+         * countdown, a toast) so a blocker names itself; `stack` is the whole
+         * `elementsFromPoint` list top-down, for the case where it does not.
+         */
         pickerDiagnostics: (x, y) => {
           const under = document.elementFromPoint(x, y);
           return {
             panels: [...document.querySelectorAll("[data-offered-panel]")].map((node) => ({
               state: node.dataset.offeredPanel,
-              column: node.closest("[data-column-dropzone]")?.dataset.columnDropzone ?? null,
+              column: node.closest("[data-board-column]")?.dataset.boardColumn ?? null,
             })),
-            underPointer: under
-              ? `${under.tagName.toLowerCase()} in ${under.closest("[data-column-dropzone]")?.dataset.columnDropzone ?? "no column"}`
-              : null,
+            underPointer: under ? describeHit(under) : null,
+            stack: document.elementsFromPoint(x, y).slice(0, 6).map(describeHit),
+            countdowns: document.querySelectorAll("[data-armed-run-window]").length,
             dragging: document.querySelector("[data-board-drag]") !== null,
           };
         },
@@ -397,6 +451,22 @@ try {
   console.log(`board: ${JSON.stringify(boardShape)} (scale=${SCALE}, mutate=${MUTATE})`);
 
   const column = (status) => page.locator(`[data-column-dropzone="${status}"]`);
+  /**
+   * The part of a column's list a hand can actually point at: its scroller
+   * (`[data-column-scroller]`, the list's own viewport) clipped by the window.
+   * NOT the dropzone's box: that is the scrolled CONTENT, and in a windowed
+   * column (VC-316) it can sit wholly above the visible list. Aiming at
+   * fractions of this keeps every aim on the column however far it scrolled.
+   */
+  const visibleList = (status) =>
+    page.evaluate((s) => {
+      const box = document.querySelector(`[data-column-scroller="${s}"]`).getBoundingClientRect();
+      const top = Math.max(box.top, 0);
+      const bottom = Math.min(box.bottom, window.innerHeight);
+      const left = Math.max(box.left, 0);
+      const right = Math.min(box.right, window.innerWidth);
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    }, status);
   const domIds = (status) =>
     column(status)
       .locator("[data-board-ticket-slot]")
@@ -446,12 +516,13 @@ try {
     const iteration = turn + 1;
     const to = turn % 2 === 0 ? "doing" : "needs_review";
     const from = turn % 2 === 0 ? "needs_review" : "doing";
-    const usePicker = turn % 5 === 4;
+    const altAim = ALT_AIMS[Math.floor(turn / 6) % ALT_AIMS.length];
+    const usePicker = altAim !== null;
     const phase = PHASES[Math.floor(turn / 2) % PHASES.length];
     const pumpMs = phase === "steady" ? 15 : 4;
     const burst = phase === "heavy" ? 30 : 8;
     const steps = phase === "flick" ? 1 : 5;
-    const label = `iteration ${iteration} [${phase}] (${from} → ${to}${usePicker ? ", ⌥ picker" : ""})`;
+    const label = `iteration ${iteration} [${phase}] (${from} → ${to}${usePicker ? `, ⌥ picker @${altAim}` : ""})`;
     try {
       await health(`${label} pre`);
       const movesBefore = await page.evaluate(() => window.lab.moves.length);
@@ -466,13 +537,27 @@ try {
       const source = column(from).locator(`[data-board-ticket-slot="${sourceId}"]`);
       await source.scrollIntoViewIfNeeded();
       const start = await source.boundingBox();
-      const target = await column(to).boundingBox();
+      const target = await visibleList(to);
+      assert.ok(target.height > 80, `${label}: ${to} is not on screen: ${JSON.stringify(target)}`);
 
       // Lift.
-      await page.mouse.move(start.x + start.width / 2, start.y + 20);
+      const grab = { x: start.x + start.width / 2, y: start.y + 20 };
+      await page.mouse.move(grab.x, grab.y);
       await page.mouse.down();
-      await page.mouse.move(start.x + start.width / 2 + 10, start.y + 22, { steps: 3 });
-      await page.locator("[data-board-drag]").waitFor();
+      await page.mouse.move(grab.x + 10, grab.y + 2, { steps: 3 });
+      try {
+        await page.locator("[data-board-drag]").waitFor();
+      } catch {
+        // The rarer VC-451 failure, never reproduced: say what took the press.
+        const diagnostics = await page.evaluate(
+          ([px, py]) => window.lab.pickerDiagnostics(px, py),
+          [grab.x, grab.y],
+        );
+        throw new Error(
+          `${label}: drag never started from ${sourceId}: ${JSON.stringify(diagnostics)} ` +
+            `grab=${JSON.stringify(grab)} card=${JSON.stringify(start)}`,
+        );
+      }
       // Churn the store for the whole time the card is in the air.
       await page.evaluate((ms) => window.lab.startPump(ms), pumpMs);
       await churnBurst(burst, false);
@@ -480,8 +565,11 @@ try {
       // Cross to the armed column, churning in bursts between moves. A flick
       // jumps straight to the final point (two moves: enter, then settle).
       const finalFraction = [0.85, 0.5, 0.2][turn % 3];
+      // With the picker, ⌥ goes down at the second-to-last stop: `altAim`.
       const fractions =
-        phase === "flick" ? [0.9, finalFraction] : [0.15, 0.6, 0.9, 0.35, finalFraction];
+        phase === "flick"
+          ? [altAim ?? 0.9, finalFraction]
+          : [0.15, 0.6, 0.9, altAim ?? 0.35, finalFraction];
       for (const [step, fraction] of fractions.entries()) {
         const x = target.x + target.width / 2;
         const y = target.y + target.height * fraction;
@@ -498,7 +586,9 @@ try {
               [x + 2, y + 1],
             );
             throw new Error(
-              `${label}: picker never expanded over ${to}: ${JSON.stringify(diagnostics)}`,
+              `${label}: picker never expanded over ${to}: ${JSON.stringify(diagnostics)} ` +
+                `aim=${JSON.stringify({ x: x + 2, y: y + 1, fraction })} visible=${JSON.stringify(target)} ` +
+                `viewport=${JSON.stringify(page.viewportSize())}`,
             );
           }
           await churnBurst(burst, true);
@@ -591,6 +681,7 @@ try {
       assert.equal(pending.projected, pending.size, `${label}: armed-run projection out of sync`);
 
       results.passed += 1;
+      if (usePicker) results.pickers += 1;
       stallTotals.longTasks += stall.longTasks ?? 0;
       stallTotals.longTaskMs += stall.longTaskMs ?? 0;
       stallTotals.longestTaskMs = Math.max(stallTotals.longestTaskMs, stall.longestTaskMs ?? 0);
@@ -632,7 +723,8 @@ try {
   const rawSetState = await page.evaluate(() => window.lab.rawSetState === true).catch(() => false);
   const mutations = await page.evaluate(() => window.lab.mutations).catch(() => 0);
   console.log(
-    `\nSUMMARY: ${results.passed} passed, ${results.failed} failed of ${ITERATIONS}; ` +
+    `\nSUMMARY: ${results.passed} passed, ${results.failed} failed of ${ITERATIONS} ` +
+      `(${results.pickers} opened the ⌥ picker, aims ${JSON.stringify(ALT_AIMS)}); ` +
       `${totalChurns} roster replacements injected via ${rawSetState ? "raw setState (old checkout)" : "hydrateProjectRoster"}` +
       `${MUTATE ? ` (${mutations} ticket value mutations)` : ""}; ` +
       `${consoleErrors.length} console errors total`,
@@ -652,5 +744,6 @@ if (results.failed > 0) {
   process.exit(1);
 }
 console.log(
-  `PASS: ${results.passed}/${ITERATIONS} drag→armed-column gestures under mid-gesture roster churn`,
+  `PASS: ${results.passed}/${ITERATIONS} drag→armed-column gestures under mid-gesture roster churn ` +
+    `(${results.pickers} through the ⌥ picker)`,
 );
