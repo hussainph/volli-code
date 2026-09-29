@@ -1,0 +1,28 @@
+$ node apps/desktop/e2e/bench/pi-context-scaling/profile-attach.mjs --entries 13500  # unpatched pi-agent-core storage.js, at 9d954018 + working tree (final hunk), 2026-09-29T22:11:20Z, load before { 16.06 14.75 34.31 } after { 14.77 14.56 33.45 }
+sidecar: 13502 entries, 39.99 MB
+re-attach ms: 444, 393, 549, 326, 399, 403
+re-attach loop-delay max ms: 323, 298, 388, 252, 308, 301
+
+self time over 5 re-attaches (2351 ms sampled):
+    670 ms  parseJsonlTransaction  session/jsonl/io.js:51
+    450 ms  splitCompleteLines  session/jsonl/storage.js:7
+    424 ms  write  node:string_decoder:76
+    201 ms  (garbage collector)  :0
+    172 ms  (idle)  :0
+     67 ms  attachSession  src/pi/runtime.ts:1012
+     51 ms  applyValidated  harness/session/in-memory-storage-state.js:54
+     32 ms  applyValueSetOrListAppend  harness/session/in-memory-storage-state.js:150
+     30 ms  hasEntryOrUsageId  harness/session/in-memory-storage-state.js:49
+     28 ms  (program)  :0
+     27 ms  scanBranch  harness/session/in-memory-storage-state.js:206
+     18 ms  openV4  session/jsonl/storage.js:50
+     17 ms  recoveredObservation  src/pi/runtime.ts:695
+     14 ms  isRecoverableObservation  src/pi/runtime.ts:710
+     10 ms  hasEntryId  harness/session/in-memory-storage-state.js:50
+      9 ms  value  harness/session/values.js:9
+      9 ms  isReasoningElisionMarker  src/pi/runtime.ts:473
+      8 ms  replayCommitted  session/jsonl/storage.js:80
+      7 ms  isSessionUsage  :766
+      7 ms  (anonymous)  src/pi/runtime.ts:1216
+
+network attempts refused: 0

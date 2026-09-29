@@ -18,6 +18,7 @@ import { Session } from "node:inspector/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import helpers from "../session-rpc/helpers.cjs";
@@ -59,10 +60,22 @@ try {
     console.log(`sidecar: ${grown.entries} entries, ${(grown.bytes / 1e6).toFixed(2)} MB`);
 
     const timings = [];
+    const stalls = [];
     for (let index = 0; index < TIMED; index += 1) {
+      // VC-462: the longest the loop was held during each re-attach, the
+      // plain-Node stand-in for the Electron bench's hydration-window max.
+      // The histogram records a stall only when its timer next fires, so it
+      // stays enabled for a few ms after the attach; disabled at once, it
+      // would miss a stall that ends the attach.
+      const delay = monitorEventLoopDelay({ resolution: 1 });
+      delay.enable();
       timings.push(Math.round(await generator.reattachOnce({ ...base, target })));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      delay.disable();
+      stalls.push(Math.round(delay.max / 1e6));
     }
     console.log(`re-attach ms: ${timings.join(", ")}`);
+    console.log(`re-attach loop-delay max ms: ${stalls.join(", ")}`);
 
     const inspector = new Session();
     inspector.connect();
