@@ -172,3 +172,72 @@
 .film-scrim[data-format="portrait"][data-place="center"] {
   background: radial-gradient(ellipse 90% 30% at 50% 50%, rgb(0 0 0 / 0.65), transparent 75%);
 }
+
+/* ---- end card (shots/end.tsx) ------------------------------------------------ */
+
+.film-end {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 34px;
+  transform-origin: 50% 50%;
+  color: #f7f7f8;
+  filter: drop-shadow(0 4px 30px rgb(0 0 0 / 0.55));
+}
+
+.film-end[data-format="portrait"] {
+  gap: 40px;
+}
+
+.film-end-name-mask {
+  overflow: hidden;
+  padding: 0 0.06em 0.08em;
+}
+
+.film-end-name {
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 112%;
+  font-weight: 760;
+  font-size: 188px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.film-end[data-format="portrait"] .film-end-name {
+  font-size: 176px;
+}
+
+.film-end-row {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  margin-top: -10px;
+}
+
+.film-end-out {
+  font-family: "Film Display", var(--font-sans);
+  font-stretch: 112%;
+  font-weight: 700;
+  font-size: 72px;
+  line-height: 1;
+  color: #f2eae0;
+}
+
+.film-end-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: rgb(242 234 224 / 0.45);
+}
+
+.film-end-url {
+  font-family: var(--font-mono);
+  font-size: 64px;
+  line-height: 1;
+  color: #e8652a;
+  letter-spacing: -0.01em;
+}
