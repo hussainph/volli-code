@@ -27,19 +27,37 @@ export const HERO = { number: 239, column: 6, row: 5 };
 /** Depth per column: a gentle, irregular relief rather than a staircase. */
 const RELIEF = [10, -24, 18, -6, 30, -14, 0, 22, -30, 8, -18, 26, -8, 14];
 
+/**
+ * Titles that name surfaces the film must not feature (MCP, terminals, native
+ * notifications, "Run once", peek). They are real shipped tickets, so they
+ * stay on the wall and in the count, but they sit in the far top corners —
+ * cells no camera in the film ever brings close enough to read.
+ */
+const QUIET = /\b(mcp|terminal|xterm|notification|run once|peek|hover)/i;
+const QUIET_CELLS: [column: number, row: number][] = [
+  [0, 0], [13, 0], [1, 0], [12, 0], [0, 1], [13, 1], [2, 0], [11, 0],
+  [1, 1], [12, 1], [0, 2], [13, 2], [3, 0], [10, 0], [2, 1], [11, 1],
+];
+
 function columnsOfTickets() {
-  const cards = RELEASE_BOARD.filter((ticket) => ticket.ticketNumber !== HERO.number);
   const hero = RELEASE_BOARD.find((ticket) => ticket.ticketNumber === HERO.number)!;
-  const columns: (typeof RELEASE_BOARD)[] = [];
+  const others = RELEASE_BOARD.filter((ticket) => ticket.ticketNumber !== HERO.number);
+  const quiet = others.filter((ticket) => QUIET.test(ticket.title));
+  const loud = others.filter((ticket) => !QUIET.test(ticket.title));
+  if (quiet.length > QUIET_CELLS.length) throw new Error("wall: add more QUIET_CELLS");
+  const grid: (typeof RELEASE_BOARD)[number][][] = Array.from({ length: WALL_COLUMNS }, (_, column) =>
+    Array.from({ length: column < 7 ? 13 : 12 }),
+  );
+  grid[HERO.column][HERO.row] = hero;
+  quiet.forEach((ticket, index) => {
+    const [column, row] = QUIET_CELLS[index];
+    grid[column][row] = ticket;
+  });
   let cursor = 0;
-  for (let column = 0; column < WALL_COLUMNS; column += 1) {
-    const size = column < 7 ? 13 : 12;
-    const slice = cards.slice(cursor, cursor + size - (column === HERO.column ? 1 : 0));
-    cursor += slice.length;
-    if (column === HERO.column) slice.splice(HERO.row, 0, hero);
-    columns.push(slice);
+  for (const column of grid) {
+    for (let row = 0; row < column.length; row += 1) column[row] ??= loud[cursor++];
   }
-  return columns;
+  return grid;
 }
 
 export const WALL = columnsOfTickets();

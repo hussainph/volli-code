@@ -2,7 +2,8 @@
  * Shot 01 — the hook (VC-464). Frame 1 is a macro on one real 0.2 ticket card
  * (VC-239), already moving; "Volli 0.2" lands inside the first half-second;
  * the camera pulls back to reveal the wall of all 175 tickets that shipped in
- * 0.2, and the count lands. The end card (end.tsx) dives back into the same
+ * 0.2 — every one planned on Volli's own board, 124 merged from Volli ticket
+ * worktrees (`volli/VC-*` branches in v0.1.2..v0.2.0) — and the line lands. The end card (end.tsx) dives back into the same
  * card, so the cut loops.
  */
 import { ease, progress } from "../kit/clock";
@@ -15,8 +16,8 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2150,
       until: 4050,
-      eyebrow: "v0.1.2 → v0.2.0",
-      lines: ["175 tickets.", "31 days."],
+      eyebrow: "175 tickets · 31 days",
+      lines: ["Built on", "its own board."],
       size: "large",
     },
   ],
@@ -25,8 +26,8 @@ const CUES: Record<Format, Cue[]> = {
     {
       at: 2150,
       until: 4050,
-      eyebrow: "v0.1.2 → v0.2.0",
-      lines: ["175 tickets.", "31 days."],
+      eyebrow: "175 tickets · 31 days",
+      lines: ["Built on", "its own board."],
       size: "large",
     },
   ],

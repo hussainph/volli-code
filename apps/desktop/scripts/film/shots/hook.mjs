@@ -20,10 +20,10 @@ const WIDE = {
 const TALL = {
   // The wall's near edge sits just above the count; the wall runs up the
   // frame and away into the dark.
-  rotation: { rotateX: 52, rotateY: -14, rotateZ: 6 },
+  rotation: { rotateX: 34, rotateY: -16, rotateZ: 6 },
   target: [-150, 760, 0],
-  offset: [60, 150],
-  near: 220,
+  offset: [60, 110],
+  near: 60,
   drift: { x: 420, near: 90, rotateY: 4 },
 };
 
