@@ -253,6 +253,9 @@ export interface ChatPlaneProps {
    * stands the rest of the plane down, so it has to be told. Default true.
    */
   visible?: boolean;
+  /** Modal previews cannot let a tall question/composer grow past their header.
+   * Cap and scroll the dock there, keeping part of the transcript visible. */
+  constrainComposer?: boolean;
   /**
    * The ticket that owns this Session, or `null` for one of the project's own.
    *
@@ -282,6 +285,7 @@ export function ChatPlane({
   onOpenSession,
   store,
   visible: surfaceVisible = true,
+  constrainComposer = false,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
   const browser = useChatBrowserTabs(sessionId, projectId);
@@ -1562,7 +1566,11 @@ export function ChatPlane({
           transcript ends where the composer begins. */}
       <div
         ref={composerHeight.ref}
-        className="pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4"
+        data-slot="chat-composer-dock"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 bottom-0 bg-background pb-4",
+          constrainComposer && "pointer-events-auto max-h-[70%] overflow-y-auto overscroll-contain",
+        )}
       >
         <ContentColumn>
           {/* Above whatever the slot holds, card included. A card answers the
@@ -1646,6 +1654,9 @@ export function ChatPlane({
       )}
       <SubagentPeekDialog
         agent={peekedAgent}
+        projectId={projectId}
+        ticketId={ticketId}
+        onOpenFile={onOpenFile}
         onClose={closePeek}
         returnFocus={peekReturnFocus}
         {...(onOpenSession === undefined ? {} : { onOpenAsTab: onOpenSession })}

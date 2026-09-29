@@ -23,6 +23,7 @@ import type { BrowserTabState } from "../../../../ipc/contract";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -119,6 +120,7 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 beforeEach(() => {
+  useChatDraftsStore.setState({ drafts: {} });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -152,6 +154,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
+  useChatDraftsStore.setState({ drafts: {} });
   vi.unstubAllGlobals();
 });
 
@@ -284,8 +287,8 @@ describe("the Activity Island in the chat plane", () => {
     expect(flash?.textContent).toContain("Done");
     expect(flash?.textContent).toContain("Grep the tests");
 
-    // Clicking the row peeks the child: one dialog, holding the child's own
-    // transcript, read-only — no composer inside it.
+    // Clicking the row peeks the child: one shared overlay with the child's
+    // own transcript and a real ChatPlane composer.
     const cluster = island()?.querySelector('[data-island-cluster="agents"]');
     expect(cluster).not.toBeNull();
     click(cluster!);
@@ -298,19 +301,16 @@ describe("the Activity Island in the chat plane", () => {
     act(() => row!.focus());
     click(row!);
     await settle();
-    const dialogs = document.body.querySelectorAll("[data-subagent-peek-dialog]");
+    const dialogs = document.body.querySelectorAll("[data-session-peek-dialog]");
     expect(dialogs).toHaveLength(1);
     const dialog = dialogs[0]!;
     expect(dialog.textContent).toContain("Grep the tests");
-    expect(dialog.querySelector("[data-subagent-peek-state]")?.textContent).toBe("done");
-    // The same two words the row drew, from the same object: a press between
-    // two surfaces must not change what the helper is reported to be running.
+    expect(dialog.querySelector("[data-session-peek-state]")?.textContent).toBe("done");
+    // The shared shell preserves the same model and effort as the island row.
     expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
     expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("High");
-    expect(dialog.querySelector("[data-subagent-peek-transcript]")?.textContent).toContain(
-      "Found three matching tests.",
-    );
-    expect(dialog.querySelector("textarea")).toBeNull();
+    expect(dialog.textContent).toContain("Found three matching tests.");
+    expect(dialog.querySelector("textarea")).not.toBeNull();
 
     // The peek's promotion is the host's door, with the child id.
     const openAsTab = [...dialog.querySelectorAll("button")].find((button) =>
@@ -329,7 +329,7 @@ describe("the Activity Island in the chat plane", () => {
       dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     await settle();
-    expect(document.body.querySelector("[data-subagent-peek-dialog]")).toBeNull();
+    expect(document.body.querySelector("[data-session-peek-dialog]")).toBeNull();
     expect(document.activeElement).toBe(cluster);
     expect(store.getState().sessions[CHILD]).toBeDefined();
   });
