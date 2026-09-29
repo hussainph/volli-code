@@ -338,6 +338,15 @@ export default defineConfig(({ mode }) => ({
         // chosen as the headline, is a person told they have room they do not
         // have — and neither shows up as an error anywhere.
         "src/components/usage-limits/accounts.ts",
+        // And what the window-bar GLYPH says about all that (VC-376). In the
+        // gate on the same argument, only harder to catch: the icon and the
+        // popover are never on screen at the same moment, so if this module
+        // ever reached a different verdict from the bars below it — a different
+        // window reported, a figure rounded another way, a failed account drawn
+        // as empty rather than dropped — nobody would be looking at the two
+        // together to see it. The spoken name is here too, because it is the
+        // whole reading for anyone who cannot use the drawing.
+        "src/components/usage-limits/icon-reading.ts",
         "src/components/pages/cli-status-model.ts",
         "src/components/pages/harness-catalog.ts",
         "src/components/pages/model-access-accounts-model.ts",

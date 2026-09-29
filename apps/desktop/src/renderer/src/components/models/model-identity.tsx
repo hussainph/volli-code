@@ -66,7 +66,7 @@ export type MarkBy = "family" | "provider";
  */
 export const DEFAULT_MARK_BY: MarkBy = "provider";
 
-interface Mark {
+export interface Mark {
   paths: readonly string[];
   viewBox: string;
   tint: string;
@@ -241,14 +241,35 @@ export function modelFamily(model: Pick<ModelAccessModel, "modelId" | "label">):
   return null;
 }
 
+/**
+ * One provider's mark, for a surface that is not a row of models.
+ *
+ * `ModelMark` below is the right thing everywhere a mark sits BESIDE a label:
+ * it fixes the box at `size-3.5`, paints the vendor's tint and falls back to a
+ * lettermark in a muted square. A mark drawn INSIDE another drawing — the
+ * usage-limits glyph's ring (VC-376) — can use none of that: it needs the raw
+ * path data to place in its own coordinate space, at its own size, in
+ * `currentColor`, because in that glyph colour already means the quota verdict
+ * and a second colour language would contradict it.
+ *
+ * So this exposes the registry and nothing else. Callers that want the
+ * standard treatment must keep using `ModelMark`; callers drawing their own
+ * must handle `null` themselves, which is not rare — of the six providers that
+ * report usage today only `anthropic`, `openai-codex` and `github-copilot`
+ * have a mark here.
+ */
+export function providerMark(providerId: string): Mark | null {
+  return PROVIDER_MARK[providerId] ?? null;
+}
+
 function markFor(
   model: Pick<ModelAccessModel, "providerId" | "modelId" | "label">,
   by: MarkBy,
 ): Mark | null {
   const family = modelFamily(model);
   const familyMark = family === null ? null : FAMILY_MARK[family];
-  const providerMark = PROVIDER_MARK[model.providerId] ?? null;
-  return by === "family" ? (familyMark ?? providerMark) : (providerMark ?? familyMark);
+  const ownMark = providerMark(model.providerId);
+  return by === "family" ? (familyMark ?? ownMark) : (ownMark ?? familyMark);
 }
 
 /**
