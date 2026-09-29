@@ -77,6 +77,7 @@ import { createSessionTools } from "./tools";
 import { withoutReasoning } from "./reasoning";
 import { recoveryRefFor } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
+import { estimatedContextTokens } from "./compaction";
 import {
   CONTEXT_CARRY_MAX_CHARS,
   createPiAgentRuntime,
@@ -4632,6 +4633,103 @@ describe("startSession", () => {
     expect(flattened.entries.map((entry) => entry.type)).not.toContain("custom");
     expect(JSON.stringify(flattened)).toContain("small question");
     expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
+  });
+
+  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457 review)", async () => {
+    const attachment = fixture();
+    // Written by a model with a million-token window: three ~50k-token turns.
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream(
+          [1, 2, 3].map((n) => (emit) => {
+            emit.text(`answer ${n}`);
+            emit.finish();
+          }),
+        ),
+        [{ id: MODEL_ID, reasoning: true, contextWindow: 1_000_000 }],
+      ),
+    }).startSession(attachment.spec);
+    for (const n of [1, 2, 3]) {
+      await first.submitUserMessage(`turn-${n} ${"lorem ".repeat(30_000)}`);
+    }
+    const earlier = first.recovery!;
+    await first.close();
+
+    // Resumed where the same model now has a 128k window.
+    const small = modelsWithStream(
+      scriptedStream([
+        (emit, context) => {
+          seen.push(context);
+          emit.text("ok");
+          emit.finish();
+        },
+      ]),
+      [{ id: MODEL_ID, reasoning: true, contextWindow: 128_000 }],
+    );
+    const seen: Context[] = [];
+    const observationsBefore = attachment.observations.length;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: small,
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("continue");
+    await second.close();
+
+    const request = seen[0]!;
+    const model = small.getModel(PROVIDER_ID, MODEL_ID)!;
+    // The first request fits the window with room to spare, without having to
+    // compact over an oversized history first.
+    expect(estimatedContextTokens(request.messages, model)).toBeLessThanOrEqual(64_000 + 1_000);
+    expect(compactions(attachment.observations.slice(observationsBefore))).toEqual([]);
+    const wire = JSON.stringify(request.messages);
+    expect(wire).toContain("turn-3");
+    expect(wire).toContain("answer 3");
+    expect(wire).not.toContain("turn-1");
+    expect(wire).toContain("were too large to carry into this attachment");
+  });
+
+  it("carries whole under the character bound when the attaching model states no window (VC-457)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("remembered");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("question");
+    const earlier = first.recovery!;
+    await first.close();
+    const seen: Context[] = [];
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+        [{ id: MODEL_ID, reasoning: true, contextWindow: 0 }],
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await second.submitUserMessage("next");
+    await second.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("remembered");
   });
 
   it("recovers accepted prompt and retry receipts independently of the observation cursor", async () => {

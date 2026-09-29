@@ -13,7 +13,14 @@ import type {
   NativeAttachmentSpec,
   ObservationSink,
 } from "@volli/session-engine";
-import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
+import {
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+  createSessionEngine,
+  createSessionRuntime,
+  NativeAttachmentError,
+  sessionRootThreadId,
+} from "@volli/session-engine";
 import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
@@ -646,6 +653,85 @@ describe("Pi native adapter authority snapshot", () => {
     const first = await attached(undefined, attachmentSpec({ continuity: "context_replay" }));
     expect(first.runtime.spec).not.toHaveProperty("carry");
     expect(first.runtime.spec).not.toHaveProperty("carryUnreadable");
+  });
+
+  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457 review)", async () => {
+    // The two layers end to end: the Session Engine records this attach as
+    // `fresh` — which is what it is — and the reason it could not carry must
+    // still reach the runtime, which is what raises the Attention.
+    const { adapter, runtime: fakeRuntime } = composition();
+    let now = 1;
+    const venue = { id: "local", kind: "local" as const };
+    const engine = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => now++ },
+      ids: { next: (kind) => `${kind}-${now++}` },
+    });
+    const runtime = createSessionRuntime({
+      engine,
+      executor: adapter,
+      artifacts: createInMemoryTranscriptArtifactStore(),
+      locations: {
+        resolve: async () => ({ directory: "/work", venue }),
+        prepare: async () => ({ directory: "/work", venue }),
+        reaffirm: async () => undefined,
+      },
+      clock: { now: () => now++ },
+      ids: { next: (kind) => `rt-${kind}-${now++}` },
+    });
+    const created = await runtime.command({
+      commandId: "create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: "Resumed",
+      },
+    });
+    const sessionId = created.sessionId;
+    const provenance = {
+      source: { kind: "adapter" as const, id: adapter.id, detail: null },
+      venue,
+    };
+    await engine.observe({
+      id: "earlier",
+      sessionId,
+      occurredAt: now++,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "earlier",
+        sessionId,
+        adapterId: adapter.id,
+        venue,
+        continuity: "fresh",
+        native: { id: "n", detail: { kind: "not-a-binding-envelope" } },
+        authority: null,
+      },
+    });
+    await engine.observe({
+      id: "earlier:closed",
+      sessionId,
+      occurredAt: now++,
+      provenance,
+      kind: "attachment.closed",
+      attachmentId: "earlier",
+      outcome: "completed",
+    });
+
+    await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+
+    expect(fakeRuntime.spec).not.toHaveProperty("carry");
+    expect(fakeRuntime.spec.carryUnreadable).toMatch(/native binding/);
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.continuity).toBe(
+      "fresh",
+    );
   });
 
   it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {

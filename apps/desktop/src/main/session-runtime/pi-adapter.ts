@@ -672,8 +672,13 @@ function piRecoveryRef(spec: NativeAttachmentSpec): RuntimeRecoveryRef | undefin
 function piContextCarry(
   spec: NativeAttachmentSpec,
 ): { carry: RuntimeContextCarry } | { carryUnreadable: string } | undefined {
-  if (spec.continuity !== "context_replay" || spec.carryFrom === undefined) return undefined;
+  if (spec.carryFrom === undefined) return undefined;
+  // Checked before continuity on purpose: the engine records an attach whose
+  // earlier binding it could not read as `fresh` — that is what it IS — and
+  // the reason still has to reach the runtime, or the Attention it raises is
+  // lost between the two layers.
   if ("unreadable" in spec.carryFrom) return { carryUnreadable: spec.carryFrom.unreadable };
+  if (spec.continuity !== "context_replay") return undefined;
   const { native, attachmentId, directory } = spec.carryFrom;
   const detail = native.detail;
   const record =

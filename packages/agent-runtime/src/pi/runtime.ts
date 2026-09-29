@@ -851,6 +851,28 @@ function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
 export const CONTEXT_CARRY_MAX_CHARS = 1_500_000;
 
 /**
+ * The share of the ATTACHING model's context window a carry may fill, as
+ * that model estimates it.
+ *
+ * The character bound above protects the sidecar; this one protects the first
+ * turn. A carry sized for the model that wrote it can be far past what the
+ * model now attaching accepts (a 1M-window Session resumed on a 128k one), and
+ * the proactive compaction that would otherwise rescue it summarises over the
+ * oversized history itself — so a carry that does not fit is a first turn
+ * that may never be sendable. Half the window leaves the other half for the
+ * system prompt, the tool schemas, the new message and the reply, and keeps
+ * the carried conversation under the compaction threshold so the Session
+ * compacts normally from there.
+ */
+export const CONTEXT_CARRY_WINDOW_SHARE = 0.5;
+
+/** How a carry is priced against the attaching model; absent when its window is unknown. */
+interface CarryTokenBudget {
+  tokens: number;
+  tokensOf: (entry: Entry) => number;
+}
+
+/**
  * An earlier attachment's conversation, read the way that attachment would
  * have replayed it, ready to be carried into a fresh one.
  *
@@ -867,12 +889,17 @@ export const CONTEXT_CARRY_MAX_CHARS = 1_500_000;
  * - **Reasoning dropped** from all of it: a fresh attachment is a new request
  *   chain, and "every thinking block before some point" is the one removal
  *   every provider accepts.
- * - **Bounded** at {@link CONTEXT_CARRY_MAX_CHARS}, oldest turns first.
+ * - **Bounded**, oldest turns first, by {@link CONTEXT_CARRY_MAX_CHARS} and by
+ *   {@link CONTEXT_CARRY_WINDOW_SHARE} of the attaching model's window, so the
+ *   first turn after a reattach is one that model can accept.
  * - **No orphaned tool results.** A withheld reply takes its tool calls with
  *   it, and a result whose call is not in the carried history is one no
  *   provider accepts.
  */
-function carriedConversation(entries: readonly Entry[]): Entry[] {
+function carriedConversation(
+  entries: readonly Entry[],
+  budget: CarryTokenBudget | undefined,
+): Entry[] {
   const markers = entries
     .filter((entry): entry is CustomEntry => entry.type === "custom")
     .map(recoveredObservation)
@@ -923,17 +950,37 @@ function carriedConversation(entries: readonly Entry[]): Entry[] {
         : entry,
     );
   }
-  return withoutOrphanedToolResults(boundedCarry(carried));
+  return withoutOrphanedToolResults(boundedCarry(carried, budget));
 }
 
-/** The oldest turns left out until the carry fits, cut where a user turn begins. */
-function boundedCarry(entries: readonly Entry[]): Entry[] {
-  const sizes = entries.map((entry) => JSON.stringify(entry).length);
-  let total = sizes.reduce((sum, size) => sum + size, 0);
-  if (total <= CONTEXT_CARRY_MAX_CHARS) return [...entries];
+/** The attaching model's share for a carry, priced as that model estimates it. */
+function carryTokenBudget(
+  model: Parameters<typeof estimatedContextTokens>[1],
+): CarryTokenBudget | undefined {
+  const window = contextWindowOf(model);
+  if (window === undefined) return undefined;
+  return {
+    tokens: Math.floor(window * CONTEXT_CARRY_WINDOW_SHARE),
+    tokensOf: (entry) => estimatedContextTokens(contextMessages([entry]), model),
+  };
+}
+
+/**
+ * The oldest turns left out until the carry fits both bounds — the sidecar's
+ * characters and the attaching model's window — cut where a user turn begins.
+ */
+function boundedCarry(entries: readonly Entry[], budget: CarryTokenBudget | undefined): Entry[] {
+  const chars = entries.map((entry) => JSON.stringify(entry).length);
+  const tokens = entries.map((entry) => budget?.tokensOf(entry) ?? 0);
+  let totalChars = chars.reduce((sum, size) => sum + size, 0);
+  let totalTokens = tokens.reduce((sum, size) => sum + size, 0);
+  const over = (): boolean =>
+    totalChars > CONTEXT_CARRY_MAX_CHARS || (budget !== undefined && totalTokens > budget.tokens);
+  if (!over()) return [...entries];
   let start = 0;
-  while (start < entries.length && total > CONTEXT_CARRY_MAX_CHARS) {
-    total -= sizes[start]!;
+  while (start < entries.length && over()) {
+    totalChars -= chars[start]!;
+    totalTokens -= tokens[start]!;
     start += 1;
   }
   // Begin a whole turn: a user message (or a summary, which stands in for
@@ -1351,6 +1398,7 @@ async function readCarriedConversation(
   sessionDataDir: string,
   carry: RuntimeContextCarry,
   expected: SidecarIdentity,
+  budget: CarryTokenBudget | undefined,
   context: Context,
 ): Promise<Entry[]> {
   // No legacy-sidecar migration here, unlike a resume: a closed attachment's
@@ -1368,7 +1416,7 @@ async function readCarriedConversation(
   try {
     await assertSidecarIdentity(opened, expected, context);
     const branch = await sidecarBranch(opened, context);
-    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context));
+    return carriedConversation(await branch.findEntries({ order: "oldestFirst" }, context), budget);
   } finally {
     await opened.close(piContext()).catch(
       /* v8 ignore next -- closing a sidecar we only read is best effort. */
@@ -1645,6 +1693,7 @@ async function attachSession(
           host.sessionDataDir,
           spec.carry,
           { ...expectedIdentity, volliAttachmentId: spec.carry.attachmentId },
+          carryTokenBudget(model),
           attachContext,
         );
         if (entries.length > 0) {

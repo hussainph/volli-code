@@ -1121,8 +1121,12 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       delivery?: Promise<unknown>;
       landed?: "prompt" | "queue" | "steer" | "retry";
       turnOpened?: boolean;
+      watches?: Watches;
+      /** Session reads after this many succeed reject — the watch lookup's failure. */
+      failLookupsAfter?: number;
     } = {},
   ) {
+    let lookups = 0;
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1142,65 +1146,71 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       actorTicketDisplay: () => null,
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-      watches: () => null,
+      watches: () => options.watches ?? null,
       delegate: () => null,
       mcp: () => null,
       supervise: () =>
         ({
           sessionEngine: {
-            listSessions: async () => [
-              {
-                session: {
-                  id: TARGET_SESSION,
-                  projectId: "project-one",
-                  ticketId: null,
-                  title: "Implementer",
-                  createdAt: 1,
-                },
-                status: "open",
-                commands: [],
-                receipts: [],
-                pendingExecutorStart: null,
-                attachments: [
-                  {
-                    id: "attachment-1",
-                    sessionId: TARGET_SESSION,
-                    adapterId: "pi",
-                    venue: { id: "local", kind: "local" },
-                    continuity: "fresh",
-                    native: null,
-                    authority: null,
-                    status: "open",
-                    openedAt: 1,
-                    closedAt: null,
-                    outcome: null,
-                    failure: null,
+            listSessions: async () => {
+              lookups += 1;
+              if (options.failLookupsAfter !== undefined && lookups > options.failLookupsAfter) {
+                throw new Error("session store unavailable");
+              }
+              return [
+                {
+                  session: {
+                    id: TARGET_SESSION,
+                    projectId: "project-one",
+                    ticketId: null,
+                    title: "Implementer",
+                    createdAt: 1,
                   },
-                ],
-                liveExecutor: null,
-                attention: { active: [], primary: null },
-                interactions: { active: [], resolved: [] },
-                signal: null,
-                stopped: null,
-                modelSelection: null,
-                turnActive: true,
-                lastTurnOutcome: null,
-                authorityDenials: 0,
-                usage: {
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  cacheReadTokens: 0,
-                  cacheWriteTokens: 0,
-                  meteredOperations: 0,
-                  unreportedOperations: 0,
-                  knownCostUsd: null,
-                  costBasis: "unavailable",
-                  costCoverage: "unavailable",
+                  status: "open",
+                  commands: [],
+                  receipts: [],
+                  pendingExecutorStart: null,
+                  attachments: [
+                    {
+                      id: "attachment-1",
+                      sessionId: TARGET_SESSION,
+                      adapterId: "pi",
+                      venue: { id: "local", kind: "local" },
+                      continuity: "fresh",
+                      native: null,
+                      authority: null,
+                      status: "open",
+                      openedAt: 1,
+                      closedAt: null,
+                      outcome: null,
+                      failure: null,
+                    },
+                  ],
+                  liveExecutor: null,
+                  attention: { active: [], primary: null },
+                  interactions: { active: [], resolved: [] },
+                  signal: null,
+                  stopped: null,
+                  modelSelection: null,
+                  turnActive: true,
+                  lastTurnOutcome: null,
+                  authorityDenials: 0,
+                  usage: {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheReadTokens: 0,
+                    cacheWriteTokens: 0,
+                    meteredOperations: 0,
+                    unreportedOperations: 0,
+                    knownCostUsd: null,
+                    costBasis: "unavailable",
+                    costCoverage: "unavailable",
+                  },
+                  lastActivityAt: 1,
+                  bornTicketless: true,
                 },
-                lastActivityAt: 1,
-                bornTicketless: true,
-              },
-            ],
+              ];
+            },
             submit: async (request: unknown) => {
               stops.push(request);
               return { receipt: { status: "completed" } };
@@ -1228,6 +1238,36 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
     ) => door(CALLER, { verb, input, toolCallId: "tc-9" }, signal);
     return { call, stops, sends };
   }
+
+  it("confirms a delivered send even when arming its watch cannot read the target (VC-457 review)", async () => {
+    const watches = recordingWatches();
+    // The send resolves its target on the first read; the watch's own
+    // authorization read, after delivery, fails.
+    const h = superviseHarness({ watches, failLookupsAfter: 1 });
+
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Use the thinking-orbs library",
+    });
+
+    expect(h.sends).toHaveLength(1);
+    expect(result.text).toContain("Delivered into Session bbbbbbbb");
+    expect(result.text).toMatch(/could not arm a watch on it \(session store unavailable\)/);
+    expect(watches.sessions).toEqual([]);
+  });
+
+  it("watches a Session a Board Session steered (VC-457)", async () => {
+    const watches = recordingWatches();
+    const h = superviseHarness({ watches });
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Carry on",
+    });
+    expect(result.text).toMatch(/A notice from Volli will arrive in this Session/);
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: TARGET_SESSION, armTurn: true }),
+    ]);
+  });
 
   it("binds the caller as the stop's actor and derives the operation id", async () => {
     const h = superviseHarness();

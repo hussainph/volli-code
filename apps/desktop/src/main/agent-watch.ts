@@ -32,6 +32,7 @@ import type Database from "better-sqlite3";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   displayTicketId,
+  errorMessage,
   isSessionAwaitFor,
   isTicketAwaitFor,
   MAX_SESSION_AWAIT_TARGETS,
@@ -234,10 +235,18 @@ export async function watchOpenedSession(
   }
   if (origin === "steered") {
     const engine = ports.sessions();
-    const projections =
-      engine === null
-        ? []
-        : await engine.listSessions({ projectId: caller.projectId, scope: "all" });
+    let projections: readonly { session: Session }[];
+    try {
+      projections =
+        engine === null
+          ? []
+          : await engine.listSessions({ projectId: caller.projectId, scope: "all" });
+    } catch (error) {
+      // The send this rides on has already been delivered. A read that fails
+      // now is a watch that could not be armed, never a failed send: the
+      // caller is told both halves and nothing is retried twice.
+      return `Volli could not arm a watch on it (${errorMessage(error)}), so nothing will report back; use \`volli session peek ${shortSessionId(target.sessionId)}\` to look in on it.`;
+    }
     const found = projections.find((projection) => projection.session.id === target.sessionId);
     if (
       found === undefined ||
