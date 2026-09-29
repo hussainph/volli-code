@@ -89,21 +89,12 @@ interface AutomationsState {
    */
   skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
-   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
-   *
-   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
-   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
-   * project-wide history would make a Ticket's rail depend on a page nobody
-   * visited. Main answers each question with its own indexed read.
-   */
-  runsByTicket: Record<string, readonly AutomationRun[]>;
-  /**
    * {@link automationHistoryKey} → ONE Automation's Runs in ONE project,
    * newest first (VC-297) — what the editor's history draws.
    *
-   * Its own slice for the reason {@link AutomationsState.runsByTicket} already
-   * gives: the editor opens on one record and reads one record, and main
-   * answers each question with its own indexed read. Deriving it by filtering
+   * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
+   * the editor opens on one record and reads one record, and main answers each
+   * question with its own indexed read. Deriving it by filtering
    * {@link AutomationsState.runsByProject} would make one Automation's history
    * depend on having fetched every Run in the project — which is the read a
    * client that is not this process should not have to make.
@@ -175,8 +166,6 @@ interface AutomationsState {
   refreshRuns(projectId: string): Promise<void>;
   /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
   refreshSkips(projectId: string): Promise<void>;
-  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
-  refreshTicketRuns(ticketId: string): Promise<void>;
   /**
    * Re-fetches ONE Automation's Runs and Skipped occurrences in one project
    * (VC-297). Both doors at once, because the editor draws one interleaved
@@ -267,7 +256,6 @@ export function createAutomationsStore() {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
-    runsByTicket: {},
     runsByAutomation: {},
     skipsByAutomation: {},
     enabledIds: [],
@@ -448,19 +436,6 @@ export function createAutomationsStore() {
         }));
       } catch (error) {
         toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
-      }
-    },
-
-    async refreshTicketRuns(ticketId) {
-      try {
-        const result = await window.api.automations.runsForTicket({ ticketId });
-        if (!result.ok) {
-          toastError(`Couldn't load this ticket's runs: ${result.error}`);
-          return;
-        }
-        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
-      } catch (error) {
-        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
       }
     },
 
@@ -682,14 +657,6 @@ export function selectAutomationSkips(
   automationId: string,
 ): readonly AutomationSkippedOccurrence[] {
   return state.skipsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_SKIPS;
-}
-
-/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
-export function selectTicketRuns(
-  state: AutomationsState,
-  ticketId: string,
-): readonly AutomationRun[] {
-  return state.runsByTicket[ticketId] ?? NO_RUNS;
 }
 
 /** One project's listable Automations — a frozen empty array before its first read. */

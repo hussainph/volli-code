@@ -123,6 +123,7 @@ Extend `isAllowedBrowserUrl` in `tab-host.ts` with a per-scope origin policy (Ti
 
 8. **Session recording / trace export for QA runs (Phase-4-shaped).**
 Devin's annotated recordings, chrome-devtools-mcp `screencast_*`, Playwright MCP tracing/video, browser-use cloud recordings all converge: *the artifact of agent browsing is a replayable trace*, not a transcript claim. Volli's `picture-store.ts`/`picture-disk.ts` is the natural seed (persist captures per turn; export a timeline). Keep scoped to agent tabs; personal tabs excluded by construction.
+*Status:* landed as Browser Traces (VC-453) — per-call records (navigate, act and reads) with frames for Session-owned tabs, replayable from the transcript card and the Activity Island; no video or export yet.
 
 9. **Read-only network inspection before any interception.**
 Cursor ships network traffic; Playwright MCP gates it behind `--caps=network`; chrome-devtools-mcp lists/gets requests. Volli explicitly excludes network domains (`cdp-controller.ts` header). Recommend a read-only `browser_network`-style listing first (diagnosing local-app failures is the Dev-Preview job); keep mocking/route control out per VC-110.

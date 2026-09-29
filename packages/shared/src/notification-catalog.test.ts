@@ -64,6 +64,7 @@ describe("producer catalog", () => {
       "run-attention",
       "session-watchdog",
       "harness-input-needed",
+      "scheduled-resume-skipped",
     ]);
     expect([...producersForNotificationEvent("finished")]).toEqual(["pull-request-merged"]);
     // Maintenance that takes back a resource nobody is using: the folder

@@ -135,6 +135,16 @@ export const NON_CODING_TOOL_IDS = [
   "shell_output",
   /** Ending a background shell. */
   "shell_kill",
+  /**
+   * Searching a Browser Tab's accessibility tree for literal text, and reading
+   * back only the matching subtrees with actionable refs (VC-364).
+   *
+   * A browser name, but appended here rather than beside the other eight, for
+   * the hold pair's reason one step further: the Cache Prefix is computed over
+   * the serialized tool array, so every Session frozen before it keeps its
+   * list and every position in it — and is handed a port without `find`.
+   */
+  "browser_find",
 ] as const;
 
 export type NonCodingToolId = (typeof NON_CODING_TOOL_IDS)[number];

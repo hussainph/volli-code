@@ -66,6 +66,7 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-toggle-devtools",
       "volli:browser-set-presentation",
       "volli:browser-picture",
+      "volli:browser-traces",
       "volli:browser-take-over",
       "volli:browser-hand-back",
       "volli:browser-ask-to-leave",
@@ -80,6 +81,14 @@ describe("BROWSER_IPC descriptor table", () => {
     expect(guard([{ tabId: "opaque-1", presentation: "visible" }])).toBe(false);
     expect(guard([{ tabId: "opaque-1" }])).toBe(false);
     expect(guard([{ tabId: 1, presentation: "tab" }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one Session id for a trace read, and nothing looser (VC-453)", () => {
+    const { guard } = BROWSER_IPC["volli:browser-traces"];
+    expect(guard([{ sessionId: "session-1" }])).toBe(true);
+    expect(guard([{ sessionId: 1 }])).toBe(false);
+    expect(guard([{}])).toBe(false);
     expect(guard([])).toBe(false);
   });
 
@@ -509,6 +518,54 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project base branch");
+    });
+  });
+
+  describe("volli:project-relink", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-relink"];
+
+    it("accepts an id and an absolute replacement folder", () => {
+      expect(guard([{ id: "p1", path: "/Users/me/code/volli" }])).toBe(true);
+    });
+
+    // The handler resolves the path against main's own cwd, so a relative one
+    // would silently re-home the project somewhere nobody named.
+    it("rejects a path that is not absolute", () => {
+      expect(guard([{ id: "p1", path: "code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1", path: "" }])).toBe(false);
+    });
+
+    it("rejects a missing id or path", () => {
+      expect(guard([{ path: "/Users/me/code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ id: "p1", path: "/a" }, "extra"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project folder");
+    });
+  });
+
+  describe("volli:project-folder-check", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-folder-check"];
+
+    it("accepts a project id", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project id");
     });
   });
 
@@ -2050,9 +2107,15 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 76 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(76);
+    it("covers all 78 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(78);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      // The relink pair (VC-430): looking at a registered folder, and pointing
+      // the project at the one it moved to. Renderer channels with no agent verb
+      // behind them, and none may ever be added — re-homing a project decides
+      // where every Session it starts will run.
+      expect(DATA_CHANNELS).toContain("volli:project-folder-check");
+      expect(DATA_CHANNELS).toContain("volli:project-relink");
       // The steady-state refresh pair (VC-387): one project's board without
       // bodies, and one ticket's body for the ticket that is open.
       expect(DATA_CHANNELS).toContain("volli:data-project-roster");

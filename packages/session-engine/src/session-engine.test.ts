@@ -972,6 +972,281 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  describe("a scheduled resume", () => {
+    const RESET = 50_000;
+    const systemProvenance: SessionEventProvenance = {
+      source: { kind: "system", id: "scheduled-resume", detail: null },
+      venue: localVenue,
+    };
+
+    /** A Session whose run stopped on a spent allowance that stated its reset. */
+    async function stoppedOnQuota(resetsAt: number | null = RESET) {
+      const composed = composition();
+      const { plane } = composed;
+      const { session } = await plane.createSession(createRequest());
+      const running = attachment(session.id);
+      await plane.observe({
+        id: "quota-open",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: running,
+      });
+      await plane.observe({
+        id: "quota-attention",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 2,
+        provenance: adapterProvenance,
+        kind: "attention.raised",
+        attention: {
+          id: "attention-quota",
+          attachmentId: running.id,
+          kind: "adapter_unrecoverable",
+          detail: "429: Usage limit reached for 5 hour.",
+          diagnostic: null,
+          resetsAt,
+        },
+      });
+      const schedule = (commandId: string, overrides: Record<string, unknown> = {}) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: {
+            kind: "resume.schedule",
+            attentionId: "attention-quota",
+            attachmentId: running.id,
+            resumeAt: RESET,
+            ...overrides,
+          } as SessionCommand["intent"] & { kind: "resume.schedule" },
+          provenance: userProvenance,
+        });
+      return { ...composed, session, running, schedule };
+    }
+
+    it("accepts a schedule for the reset the Attention stated, as a completed receipt", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+
+      const scheduled = await schedule("schedule-1");
+
+      expect(scheduled.receipt).toMatchObject({
+        status: "completed",
+        result: { kind: "resume.scheduled", sessionId: session.id },
+      });
+      // The receipt IS the schedule: no fact is written between the two.
+      expect(scheduled.receiptEvent?.sequence).toBe(scheduled.commandEvent.sequence + 1);
+      // Idempotent: the same command replays rather than scheduling twice.
+      const replayed = await schedule("schedule-1");
+      expect(replayed.receipt).toEqual(scheduled.receipt);
+      const projection = await plane.getSession({ sessionId: session.id });
+      expect(
+        projection?.commands.filter(({ intent }) => intent.kind === "resume.schedule"),
+      ).toHaveLength(1);
+    });
+
+    it("refuses a schedule the failure did not offer", async () => {
+      const refusals = async (resetsAt: number | null, overrides: Record<string, unknown>) => {
+        const { schedule } = await stoppedOnQuota(resetsAt);
+        return (await schedule("schedule-x", overrides)).receipt;
+      };
+      const unavailable = { status: "rejected", code: "resume_unavailable" };
+      // A time the Attention did not state; an Attention stating none; an
+      // Attention that is not live; one on another attachment.
+      await expect(refusals(RESET, { resumeAt: RESET + 1 })).resolves.toMatchObject(unavailable);
+      await expect(refusals(null, {})).resolves.toMatchObject(unavailable);
+      await expect(refusals(RESET, { attentionId: "attention-gone" })).resolves.toMatchObject(
+        unavailable,
+      );
+      await expect(refusals(RESET, { attachmentId: "attachment-2" })).resolves.toMatchObject(
+        unavailable,
+      );
+    });
+
+    it("refuses a schedule for an attachment that has closed, or a non-quota Attention", async () => {
+      const { plane, session, running, schedule } = await stoppedOnQuota();
+      await plane.observe({
+        id: "quota-auth",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 3,
+        provenance: adapterProvenance,
+        kind: "attention.raised",
+        attention: {
+          id: "attention-auth",
+          attachmentId: running.id,
+          kind: "auth_required",
+          detail: null,
+          diagnostic: null,
+        },
+      });
+      await expect(
+        schedule("schedule-auth", { attentionId: "attention-auth" }),
+      ).resolves.toMatchObject({ receipt: { status: "rejected", code: "resume_unavailable" } });
+      await plane.observe({
+        id: "quota-close",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+        kind: "attachment.closed",
+        outcome: "completed",
+      });
+      await expect(schedule("schedule-closed")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_unavailable" },
+      });
+    });
+
+    it("cancels the pending schedule, and refuses to cancel one that is not", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      await schedule("schedule-1");
+      const cancel = (commandId: string, scheduleId: string) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: { kind: "resume.cancel", scheduleId },
+          provenance: userProvenance,
+        });
+
+      await expect(cancel("cancel-other", "schedule-0")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+      await expect(cancel("cancel-1", "schedule-1")).resolves.toMatchObject({
+        receipt: { status: "completed", result: { kind: "resume.cancelled" } },
+      });
+      await expect(cancel("cancel-2", "schedule-1")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+    });
+
+    it("judges a schedule's own retry as it records it, and refuses a cancel once it fired", async () => {
+      const retry = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "schedule-1:resume",
+          sessionId: quota.session.id,
+          intent: { kind: "executor.retry", attachmentId: quota.running.id },
+          provenance: systemProvenance,
+        });
+      const cancel = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "cancel-1",
+          sessionId: quota.session.id,
+          intent: { kind: "resume.cancel", scheduleId: "schedule-1" },
+          provenance: userProvenance,
+        });
+
+      // Still pending and untouched: the retry is the schedule's to make, and
+      // a cancel after it could no longer stop anything.
+      const fired = await stoppedOnQuota();
+      await fired.schedule("schedule-1");
+      expect((await retry(fired)).receipt?.status).not.toBe("rejected");
+      await expect(cancel(fired)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_fired" },
+      });
+
+      // Cancelled between the host's decision and its retry.
+      const cancelled = await stoppedOnQuota();
+      await cancelled.schedule("schedule-1");
+      await cancel(cancelled);
+      await expect(retry(cancelled)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+
+      // Taken back by hand in the same gap.
+      const continued = await stoppedOnQuota();
+      await continued.schedule("schedule-1");
+      await continued.plane.submit({
+        commandId: "message-by-hand",
+        sessionId: continued.session.id,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "message-by-hand", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      });
+      await expect(retry(continued)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_continued" },
+      });
+    });
+
+    it("settles once, with the schedule's own retry, even on an archived Session", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      await schedule("schedule-1");
+      await plane.submit({
+        commandId: "archive",
+        sessionId: session.id,
+        intent: { kind: "session.archive" },
+        provenance: userProvenance,
+      });
+      const settle = (commandId: string, retryCommandId: string) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: {
+            kind: "resume.settle",
+            scheduleId: "schedule-1",
+            outcome: { kind: "resumed", retryCommandId },
+          },
+          provenance: systemProvenance,
+        });
+
+      await expect(settle("settle-wrong", "someone-else")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_outcome_invalid" },
+      });
+      await expect(settle("settle-1", "schedule-1:resume")).resolves.toMatchObject({
+        receipt: { status: "completed", result: { kind: "resume.settled" } },
+      });
+      await expect(settle("settle-2", "schedule-1:resume")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+      // A skip settles an archived Session the same way.
+      const archivedSkip = await stoppedOnQuota();
+      await archivedSkip.schedule("schedule-1");
+      await archivedSkip.plane.submit({
+        commandId: "archive",
+        sessionId: archivedSkip.session.id,
+        intent: { kind: "session.archive" },
+        provenance: userProvenance,
+      });
+      await expect(
+        archivedSkip.plane.submit({
+          commandId: "settle-skip",
+          sessionId: archivedSkip.session.id,
+          intent: {
+            kind: "resume.settle",
+            scheduleId: "schedule-1",
+            outcome: { kind: "skipped", reason: "ended", detail: null },
+          },
+          provenance: systemProvenance,
+        }),
+      ).resolves.toMatchObject({ receipt: { status: "completed" } });
+      // A person's schedule on an archived Session is refused like any command.
+      await expect(archivedSkip.schedule("schedule-late")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "session_archived" },
+      });
+    });
+
+    it("never lets an adapter observe a scheduled resume's receipt", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      const scheduled = await schedule("schedule-1");
+      await expect(
+        plane.observe({
+          id: "external-resume-receipt",
+          sessionId: session.id,
+          occurredAt: 9,
+          provenance: adapterProvenance,
+          kind: "command.receipt",
+          receipt: {
+            id: "receipt-external-resume",
+            commandId: scheduled.command.id,
+            status: "completed",
+            result: { kind: "resume.scheduled", sessionId: session.id },
+          },
+        }),
+      ).rejects.toThrow("cannot be externally observed");
+    });
+  });
+
   it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];

@@ -23,6 +23,16 @@
  *    delivery, so a parent mid-turn reads it now and an idle parent opens a
  *    turn on it. The parent is never parked on its helper.
  *
+ * ## The child's model is its parent's anchor (VC-431)
+ *
+ * A delegation that names neither a `model` nor a `tier` runs on what its
+ * PARENT is anchored to, rather than on a rung of the Subagent Role's own.
+ * This module does not decide that: it passes the caller's override through
+ * untouched, and the facade resolves it in `mint`, beside the tool surface and
+ * MCP a child already inherits there (`sessions.ts`, `anchoredOnParent`). One
+ * place answers "what does a subagent inherit from its parent", so a future
+ * start path cannot get half of it.
+ *
  * ## The answer arrives through a tool, never as the parent's user
  *
  * The notice carries only facts Volli minted — the child's handle, its state,

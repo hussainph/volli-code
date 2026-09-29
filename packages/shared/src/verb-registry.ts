@@ -330,12 +330,20 @@ const MODEL_TIER_VALUES = `valid: ${AGENT_MODEL_TIERS.join(", ")}`;
  * model choosing between `fast` and `deep` reads the words the person who
  * filled those rows read. The first sentence is the rule the door enforces:
  * a tier and an exact model are alternatives, never a pair.
+ *
+ * Both doors that offer a rung offer the SAME set (VC-431), so the subject is
+ * the only word that differs between them.
  */
-const MODEL_TIER_DESCRIPTION = [
-  "Run the Session on one of the user's configured model tiers instead of `model`; pass one or the other, never both.",
-  "The tier's stored reasoning level comes with it unless `reasoning` is given.",
-  ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
-].join(" ");
+function modelTierDescription(subject: string): string {
+  return [
+    `Run ${subject} on one of the user's configured model tiers instead of \`model\`; pass one or the other, never both.`,
+    "The tier's stored reasoning level comes with it unless `reasoning` is given.",
+    ...AGENT_MODEL_TIERS.map((tier) => `${tier}: ${modelTierRow(tier).hint}`),
+  ].join(" ");
+}
+
+const MODEL_TIER_DESCRIPTION = modelTierDescription("the Session");
+const DELEGATE_MODEL_TIER_DESCRIPTION = modelTierDescription("the subagent");
 
 /**
  * The confirmation field the two destructive MCP verbs share (VC-380).
@@ -2206,7 +2214,8 @@ export const VERB_REGISTRY = [
         {
           name: "model",
           type: "object",
-          description: "Run the subagent on a specific model instead of the utility default.",
+          description:
+            "Run the subagent on a specific model instead of the one this Session runs on.",
           fields: [
             {
               name: "providerId",
@@ -2221,6 +2230,12 @@ export const VERB_REGISTRY = [
               description: "Model id, as `model list` prints it.",
             },
           ],
+        },
+        {
+          name: "tier",
+          type: "enum",
+          values: AGENT_MODEL_TIERS,
+          description: DELEGATE_MODEL_TIER_DESCRIPTION,
         },
         {
           name: "reasoning",

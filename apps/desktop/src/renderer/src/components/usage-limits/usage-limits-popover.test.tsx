@@ -122,25 +122,77 @@ async function renderPopover(inspect: ModelAccessClient["inspect"]): Promise<voi
   });
 }
 
+/**
+ * The trigger's name is now the READING — "Usage limits, 4% left on xAI
+ * Weekly" — so it is found by the stable head the name keeps, which is the
+ * guarantee VC-376 made when it made the name dynamic.
+ */
 function button(label: string): HTMLButtonElement {
-  const found = document.querySelector(`[aria-label="${label}"]`);
+  const found = document.querySelector(`[aria-label^="${label}"]`);
   if (!(found instanceof HTMLButtonElement)) throw new Error(`${label} button not found`);
   return found;
 }
 
 describe("UsageLimitsPopover", () => {
-  it("inspects on open and forces the header's explicit Refresh", async () => {
+  it("inspects on mount, because the trigger draws the reading", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
+    await renderPopover(inspect);
+
+    // Nobody has opened anything. A surface that first asked when opened would
+    // have nothing to draw until someone opened it, which is the click the
+    // icon exists to save.
+    expect(inspect).toHaveBeenNthCalledWith(1, { refresh: false });
+    // 4% left with two days of a week still to run: amber from the amount AND
+    // from pace. The glyph has no room to draw pace, so the name says it.
+    expect(button("Usage limits").getAttribute("aria-label")).toBe(
+      "Usage limits, 4% left on xAI Weekly, ahead of pace",
+    );
+  });
+
+  it("opens on what it already read, and forces the header's explicit Refresh", async () => {
     const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
     await renderPopover(inspect);
 
     await act(async () => button("Usage limits").click());
-    expect(inspect).toHaveBeenNthCalledWith(1, { refresh: false });
     expect(document.body.textContent).toContain("xAI");
     expect(document.body.textContent).toContain("4% left");
+    // Opening costs no request: the answer it would ask for is the one the
+    // mount is already holding for this revision.
+    expect(inspect).toHaveBeenCalledTimes(1);
 
     await act(async () => button("Refresh usage limits").click());
     expect(inspect).toHaveBeenNthCalledWith(2, { refresh: true });
     expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-reads when the window is focused, but only once the hold has lapsed", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockResolvedValue(SNAPSHOT);
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true });
+    try {
+      await renderPopover(inspect);
+      expect(inspect).toHaveBeenCalledTimes(1);
+
+      // Alt-tabbing back seconds later is not worth a sweep of credential
+      // reads: the providers would answer from their own hold anyway.
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(inspect).toHaveBeenCalledTimes(1);
+
+      // Once the runtime would answer freshly, coming back is the one moment
+      // worth spending a request on — and it skips the renderer's held answer,
+      // which is the only way new numbers can arrive at all.
+      vi.setSystemTime(NOW + 5 * 60_000);
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(inspect).toHaveBeenNthCalledWith(2, { refresh: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says so in the trigger's name when there is nothing to report", async () => {
+    const inspect = vi.fn<ModelAccessClient["inspect"]>().mockRejectedValue(new Error("no answer"));
+    await renderPopover(inspect);
+
+    expect(button("Usage limits").getAttribute("aria-label")).toBe("Usage limits, not read");
   });
 
   it("drops a superseded open's late answer instead of overwriting the next open", async () => {

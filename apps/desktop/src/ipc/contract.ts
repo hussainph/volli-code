@@ -14,6 +14,7 @@
 import type { ExternalAppId } from "../external-app-ids";
 
 import type {
+  BrowserTrace,
   Appearance,
   ArchivedTicket,
   AutoReapPolicy,
@@ -76,6 +77,9 @@ import type {
   PendingArmedRun,
   PendingArmedRunFailure,
   Project,
+  ProjectFolderState,
+  ProjectRelinkAftermath,
+  ProjectRelinkRefusal,
   ProjectThemeOverride,
   PromptTemplate,
   ResolvedAppearance,
@@ -129,6 +133,20 @@ export interface ProjectUpdateInput {
   baseBranch: string | null;
   /** `undefined` (untouched), `null` (clear), or a `string` (set) — the same shape as ticket-update's worktree-identity fields. */
   setupCommand?: string | null;
+}
+
+/**
+ * Point an existing project at the folder it moved to (VC-430).
+ *
+ * Deliberately NOT part of {@link ProjectUpdateInput}: every other field there
+ * is a preference, and this one re-homes the project. It is judged against the
+ * disk before it is saved, it can be refused, and it is the only write that
+ * can move `projects.path` after creation.
+ */
+export interface ProjectRelinkInput {
+  id: string;
+  /** The replacement folder, absolute. */
+  path: string;
 }
 
 /**
@@ -726,6 +744,21 @@ export interface VolliDataIpcContract {
   "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
   "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
   "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
+  /**
+   * Points an existing project at the folder it moved to (VC-430).
+   *
+   * App-only, and note WHERE that comes from: no data channel is reachable from
+   * the agent socket at all — the socket dispatches verbs from
+   * `verb-registry.ts`, and this has none. So unlike
+   * `volli:project-authority-policy`, which argues for a boundary that must
+   * never be crossed, this is simply the ordinary state of a renderer channel.
+   * It stays that way on the same grounds: re-homing a project changes where
+   * every Session it starts will run, so no agent verb may ever be added behind
+   * it. The folder is validated here before it is saved.
+   */
+  "volli:project-relink": { args: [input: ProjectRelinkInput]; result: ProjectRelinkResult };
+  /** Whether one project's registered folder is still on disk (VC-430). */
+  "volli:project-folder-check": { args: [input: ProjectIdInput]; result: ProjectFolderResult };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
   /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -1811,6 +1844,18 @@ export interface BrowserPictureInput {
  */
 export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
 
+/** Whose Browser Traces a replay asks for (VC-453). */
+export interface BrowserTracesInput {
+  sessionId: string;
+}
+
+/**
+ * A Session's kept Browser Traces, oldest first — the portable record from
+ * `@volli/shared`, frames named by picture id and read through
+ * `volli:browser-picture`. Empty is an answer: nothing recorded, or swept.
+ */
+export type BrowserTracesResult = Result<{ traces: BrowserTrace[] }>;
+
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
 
@@ -1866,6 +1911,7 @@ export interface VolliBrowserIpcContract {
     result: BrowserTabResult;
   };
   "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
+  "volli:browser-traces": { args: [input: BrowserTracesInput]; result: BrowserTracesResult };
   /**
    * The person's three hold controls (VC-239). Explicit, never inferred from
    * input: main cannot tell a person's click in the native view from a
@@ -3043,6 +3089,24 @@ export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: numb
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;
+
+/**
+ * A committed relink, plus what the move could not take with it (VC-430).
+ *
+ * The AFTERMATH travels, not the sentences derived from it: the renderer turns
+ * it into notices through `@volli/shared`'s `projectRelinkNotices`, so the
+ * facts main measured and the words a person reads cannot drift apart. A
+ * refusal carries the shared `ProjectRelinkRefusal` id beside its sentence, so
+ * a surface may react to WHICH refusal it was without matching on prose.
+ */
+export type ProjectRelinkResult =
+  | { ok: true; project: Project; aftermath: ProjectRelinkAftermath }
+  | { ok: false; error: string; refusal?: ProjectRelinkRefusal };
+
+/** Whether a project's registered folder is still on disk (VC-430). */
+export type ProjectFolderResult =
+  | { ok: true; path: string; state: ProjectFolderState }
+  | { ok: false; error: string };
 
 export type ProjectMutationResult = Result;
 

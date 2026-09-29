@@ -13,6 +13,12 @@ import {
 
 import { nextAgeChangeAt } from "../../lib/relative-time";
 import {
+  sessionActivityDotState,
+  sessionActivityIsLive,
+  sessionAttentionRank,
+} from "../ui/session-activity-status";
+import type { StatusDotState } from "../ui/status-dot";
+import {
   WORKING_WINDOW_MS,
   sessionActivityState,
   sessionPanes,
@@ -315,6 +321,17 @@ export interface TicketChatSessionRow {
   record: ChatSessionRecord;
   title: string;
   isOpen: boolean;
+  /**
+   * Whether the Session is still work rather than a record of work — which is
+   * what decides whether it belongs among the live rows (VC-406).
+   *
+   * NOT `isOpen`, and that was the defect. The roster used to split on the
+   * attachment, so a Session whose tab you closed — including one BLOCKED on a
+   * permission prompt — folded under the Earlier caret and stopped being on the
+   * page at all. `sessionActivityIsLive` is the domain's own answer and the
+   * same one Home's roster reads.
+   */
+  isLive: boolean;
 }
 
 /**
@@ -334,7 +351,12 @@ export function buildTicketChatSessionRows(
 ): TicketChatSessionRow[] {
   return records
     .filter((record) => isListableSession(record))
-    .map((record) => ({ record, title: record.title, isOpen: record.live }));
+    .map((record) => ({
+      record,
+      title: record.title,
+      isOpen: record.live,
+      isLive: sessionActivityIsLive(record.activity),
+    }));
 }
 
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
@@ -380,6 +402,50 @@ export function mergeSessionRailRows(
 }
 
 /**
+ * The dot state one rail row draws — the same vocabulary for both kinds, which
+ * is what lets the column be read down rather than row by row.
+ *
+ * A terminal's `setup` is not an activity the shared map knows (it is the
+ * worktree's ensure script, named rather than reported by a PTY), so it is
+ * spelled here; everything else goes through `sessionActivityDotState`, so this
+ * surface states the activity and decides nothing.
+ */
+export function sessionRailRowDotState(row: SessionRailRow): StatusDotState {
+  if (row.kind === "chat") return sessionActivityDotState(row.row.record.activity);
+  return row.row.status === "setup" ? "setup" : sessionActivityDotState(row.row.status);
+}
+
+/**
+ * Past this many rows a roster stops being scannable and earns its filter
+ * (VC-406, the reviewed proposal's rule).
+ *
+ * Counted over the WHOLE roster — live rows and record together — because one
+ * query reaches both halves, so what doing without it costs is the total. One
+ * constant for both scopes: Home's roster and the Ticket's are the same object
+ * at two scopes, and a rail that showed its filter at four rows on one page and
+ * at five on the other would be two designs.
+ */
+export const SESSION_ROSTER_FILTER_THRESHOLD = 4;
+
+/**
+ * The live rows in the order a reader should meet them: whatever is asking for
+ * a person first, everything else left as it arrived (VC-406).
+ *
+ * Applied to the CURRENT list alone. The record is a chronology — nothing in it
+ * is asking for anybody — and an attention order over finished work would only
+ * make it harder to date. `toSorted` is stable by specification, so "newest
+ * first within a rank" is a property of this function rather than of the engine
+ * running it.
+ */
+export function orderSessionRailRowsByAttention(rows: readonly SessionRailRow[]): SessionRailRow[] {
+  return rows.toSorted(
+    (left, right) =>
+      sessionAttentionRank(sessionRailRowDotState(left)) -
+      sessionAttentionRank(sessionRailRowDotState(right)),
+  );
+}
+
+/**
  * The instant a History row's relative stamp is measured from: when a chat
  * Session last said anything, when a terminal Session ended — or, for a record
  * that somehow never got an end stamp, when it was created, which is the
@@ -397,6 +463,26 @@ export function sessionRailRowStampAt(row: SessionRailRow): number {
 }
 
 /**
+ * The instant a LIVE row's age is measured from — when the Session last did
+ * anything (VC-406).
+ *
+ * A separate reading from {@link sessionRailRowStampAt}, and deliberately so:
+ * that one dates an ENDING, which a live row does not have. A chat carries its
+ * own `lastActivityAt`; a terminal's equivalent is the last line it printed,
+ * which the sessions store holds and the panel already subscribes to in
+ * narrowed form (`ticketOutputStamps`). A pane that has printed nothing at all
+ * falls back to when it was created, which is the oldest instant that is
+ * certainly true of it — never a fabricated "now".
+ */
+export function sessionRailRowActivityAt(
+  row: SessionRailRow,
+  lastOutputAt: Readonly<Record<string, number>>,
+): number {
+  if (row.kind === "chat") return row.row.record.lastActivityAt;
+  return lastOutputAt[row.row.record.id] ?? row.row.record.createdAt;
+}
+
+/**
  * The soonest instant any of `rows` prints a different age than it does at
  * `now`, or `null` for an empty list.
  *
@@ -409,10 +495,18 @@ export function sessionRailRowStampAt(row: SessionRailRow): number {
 export function nextSessionRailAgeChangeAt(
   rows: readonly SessionRailRow[],
   now: number,
+  /**
+   * Which instant each row's age is read from. Defaults to the ending the
+   * record holds; the live rows pass {@link sessionRailRowActivityAt} instead,
+   * because the timer and the text on screen have to be waiting on the same
+   * number — two readings is how a column refreshes on a boundary belonging to
+   * a stamp it is not printing.
+   */
+  stampAt: (row: SessionRailRow) => number = sessionRailRowStampAt,
 ): number | null {
   let soonest: number | null = null;
   for (const row of rows) {
-    const at = nextAgeChangeAt(sessionRailRowStampAt(row), now);
+    const at = nextAgeChangeAt(stampAt(row), now);
     if (soonest === null || at < soonest) soonest = at;
   }
   return soonest;

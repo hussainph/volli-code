@@ -955,6 +955,7 @@ describe("live observation translation", () => {
       "context",
       "runtime-failure",
       "partial-turn",
+      "transport",
     ] as const) {
       await translate({ kind: "attention", state: "raised", reason, message: reason });
     }
@@ -965,6 +966,8 @@ describe("live observation translation", () => {
       "context_limit_reached",
       "adapter_unrecoverable",
       "partial_turn_interrupted",
+      // The runtime reconnecting on its own: a waiting row, never a failure.
+      "transport_retrying",
     ]);
   });
 

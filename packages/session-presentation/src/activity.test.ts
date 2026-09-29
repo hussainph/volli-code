@@ -8,6 +8,7 @@ import type { DynamicToolUIPart, UIMessage } from "ai";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  browseCaption,
   ACTIVITY_PRESENTERS,
   activityContext,
   activityStatus,
@@ -1150,6 +1151,23 @@ describe("presenters", () => {
  * would draw the same rows. Element actions name the element the page named;
  * page actions name the page.
  */
+describe("browseCaption (VC-453)", () => {
+  it("quotes an element's page name and leaves a bare ref as Volli's", () => {
+    expect(browseCaption("click", "Sign in")).toEqual({ verb: "Clicked", object: "“Sign in”" });
+    expect(browseCaption("type", "e12")).toEqual({ verb: "Typed into", object: "e12" });
+    expect(browseCaption("hover", null)).toEqual({ verb: "Hovered", object: null });
+  });
+
+  it("names a key or a direction as given, and gives navigation no object", () => {
+    expect(browseCaption("press", "Enter")).toEqual({ verb: "Pressed", object: "Enter" });
+    expect(browseCaption("scroll", "down")).toEqual({ verb: "Scrolled", object: "down" });
+    expect(browseCaption("open", "ignored")).toEqual({ verb: "Opened", object: null });
+    expect(browseCaption("wait", null)).toEqual({ verb: "Waited", object: null });
+    expect(browseCaption("find", "e4")).toEqual({ verb: "Searched for", object: "“e4”" });
+    expect(browseCaption("find", null)).toEqual({ verb: "Searched for", object: null });
+  });
+});
+
 describe("browse presenter", () => {
   const browse = (
     action: ActivityBrowse["action"],
@@ -1216,6 +1234,17 @@ describe("browse presenter", () => {
       object: "down",
     });
     expect(describeActivity(browse("wait"))).toMatchObject({ verb: "Waited", object: null });
+  });
+
+  it("reads a search by the model's query, always quoted, with the page as its meta (VC-364)", () => {
+    expect(describeActivity(browse("find", { target: "Delete account" }))).toMatchObject({
+      verb: "Searched for",
+      object: "“Delete account”",
+      meta: "example.com/sign-in",
+    });
+    // A query that looks like a ref is still the model's words, not a handle.
+    expect(describeActivity(browse("find", { target: "e5" })).object).toBe("“e5”");
+    expect(describeActivity(browse("find")).object).toBeNull();
   });
 
   it("reads the reads: page, screenshot, console with its error count, and a tab listing", () => {

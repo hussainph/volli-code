@@ -27,6 +27,7 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { sanitizeSurrogates } from "@earendil-works/pi-ai/utils/sanitize-unicode";
 import type { SessionUsage } from "@volli/shared";
 import { Buffer } from "node:buffer";
+import { providerImageGuard } from "./provider-images";
 import { costBasisForApi, sanitizeDiagnostic } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
 
@@ -286,9 +287,16 @@ export async function compactProviderNative(
     ) {
       return { kind: "unsupported", reason: "Native checkpoint belongs to another model." };
     }
+    // This request is built by hand rather than through the live turn's
+    // `streamFn`, so it takes the same image guard explicitly: a checkpoint
+    // request carries the same screenshots, under the same provider limits.
+    const sendable = {
+      ...input,
+      messages: await providerImageGuard.sanitize(input.messages, input.model),
+    };
     return input.model.api === "openai-responses"
-      ? await compactOpenAI(input, auth)
-      : await compactAnthropic(input, auth);
+      ? await compactOpenAI(sendable, auth)
+      : await compactAnthropic(sendable, auth);
   } catch (error) {
     return {
       kind: "failed",

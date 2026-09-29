@@ -17,14 +17,22 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { ChangeSetFile } from "@volli/shared";
+import type { ChangeSetFile, ChangeSetSnapshot, Ticket } from "@volli/shared";
 
 import {
   TicketChangesList,
+  TicketChangesPanel,
   toChangeListRow,
-  WorktreeStateStrip,
   type ChangeListRow,
 } from "./ticket-changes-panel";
+import {
+  clearRememberedNavigatorViews,
+  navigatorScopeKey,
+  readNavigatorView,
+} from "@renderer/components/files/navigator-scope-state";
+// The strip is a row of the rail's worktree footer now (VC-406), not a block
+// this page floats above its list — so it is asserted where it is drawn.
+import { WorktreeStateStrip } from "./ticket-repository-summary";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { sortChangeSetFiles } from "./ticket-changes-model";
 import { EMPTY_CHANGE_RECENCY_STATE } from "./ticket-change-recency";
@@ -72,7 +80,10 @@ const AUDIT_CHANGE_SET: readonly ChangeSetFile[] = [
 ];
 
 /** Row actions are tooltip triggers; the real tree always has a provider. */
-function render(rows: readonly ChangeListRow[], props: { hiddenCount?: number } = {}): string {
+function render(
+  rows: readonly ChangeListRow[],
+  props: { hiddenCount?: number; filtered?: boolean } = {},
+): string {
   return renderToStaticMarkup(
     <TooltipProvider>
       <TicketChangesList rows={rows} currentPath={null} onSelectRow={noop} {...props} />
@@ -132,9 +143,7 @@ describe("TicketChangesList markup", () => {
     );
 
     expect(html).toContain("rail.tsx");
-    expect(html).toContain("Modified");
     expect(html).toContain("Binary");
-    expect(html).toContain("Conflicted");
     expect(html).toContain("←");
     expect(html).toContain("src/old.ts");
     // Flat list — no nested tree markup.
@@ -166,6 +175,35 @@ describe("TicketChangesList markup", () => {
     }
   });
 
+  // VC-406 follow-up: the glyph is the ONLY drawing of the status. The word
+  // used to trail the filename in the status ink, fade out under the hover
+  // actions that share that strip, and collapse to `sr-only` on a narrow rail
+  // — three renderings of one fact, the widest of them the one no sighted
+  // reader needed. Asserted per status, because a row type that quietly kept
+  // its word would be the drift this removal exists to end.
+  it("draws no status word on a row, and keeps the word in every row's name", () => {
+    const html = render(
+      listRows([
+        file({ path: "src/rail.tsx" }),
+        file({ path: "src/new.ts", status: "added" }),
+        file({ path: "src/gone.ts", status: "deleted" }),
+        file({ path: "src/moved.ts", previousPath: "src/old.ts", status: "renamed" }),
+        file({ path: "src/fresh.ts", status: "untracked" }),
+        file({ path: "src/clash.ts", status: "conflicted" }),
+      ]),
+    );
+
+    for (const word of ["Modified", "Added", "Deleted", "Renamed", "Untracked", "Conflicted"]) {
+      // Never as text on the row — not visible, and not hidden in an `sr-only`
+      // span either, which would only move the duplication.
+      expect(html, word).not.toContain(`>${word}<`);
+      // Always as the first word of the row's accessible name.
+      expect(html, word).toContain(`aria-label="${word}: `);
+    }
+    // The rename origin stays on the face of the row, where the word never was.
+    expect(html).toContain("src/old.ts");
+  });
+
   it("renders a framed empty state when there are no changes", () => {
     const html = render([]);
     expect(html).toContain("No changes vs base");
@@ -181,6 +219,35 @@ describe("TicketChangesList markup", () => {
   it("has no trailing row when nothing was cut", () => {
     const html = render(listRows([file({ path: "src/a.ts" })]));
     expect(html).not.toContain('data-testid="ticket-changes-truncated"');
+  });
+
+  // VC-406 review: a filter that matched none of the files it COULD see, over a
+  // snapshot that is already cut, was drawing "No files match" and dropping the
+  // truncation notice with the list — a page claiming it had searched files it
+  // never held.
+  it("qualifies an empty filter over a truncated snapshot, and keeps the cap visible", () => {
+    const html = render([], { filtered: true, hiddenCount: 4000 });
+
+    expect(html).toContain("No matches among the files shown");
+    expect(html).toContain('data-testid="ticket-changes-truncated"');
+    expect(html).toContain("4,000 files not shown or searched");
+    // Not the branch-is-clean claim, which is about the whole change set.
+    expect(html).not.toContain("No changes vs base");
+  });
+
+  it("still says plainly that nothing matched when the snapshot is whole", () => {
+    const html = render([], { filtered: true });
+
+    expect(html).toContain("No files match");
+    expect(html).not.toContain('data-testid="ticket-changes-truncated"');
+  });
+
+  it("does not call a truncated snapshot with no visible rows a clean branch", () => {
+    const html = render([], { hiddenCount: 1 });
+
+    expect(html).toContain("No changed files shown");
+    expect(html).toContain("1 file not shown or searched");
+    expect(html).not.toContain("No changes vs base");
   });
 
   it("renders updated awareness as visible text with an accessible explanation", () => {
@@ -327,6 +394,40 @@ describe("the Change Set list in the accessibility tree", () => {
       `Modified: ${PAIR_PLAIN}, 34 insertions, 12 deletions`,
       "Added: assets/volli-mark.png, binary file",
     ]);
+  });
+
+  // The other half of the status-word removal (VC-406 follow-up), read off a
+  // live row rather than a string: what a sighted reader is left with is the
+  // filename, its path, the recency mark and the two figures — and the word the
+  // row no longer draws is still the first thing its name says.
+  it("leaves the row's visible text to the name, the path, the recency mark and the counts", () => {
+    mount({
+      rows: [
+        {
+          ...toChangeListRow(
+            file({ path: "src/rail.tsx", insertions: 11, deletions: 2 }),
+            EMPTY_CHANGE_RECENCY_STATE,
+          ),
+          updatedLabel: "Updated",
+          updatedDescription: "Updated since you last opened this file",
+        },
+      ],
+    });
+    const text = item("src/rail.tsx").textContent ?? "";
+
+    expect(text).not.toContain("Modified");
+    expect(text).toContain("rail.tsx");
+    expect(text).toContain("Updated");
+    expect(text).toContain("+11");
+    expect(text).toContain("−2");
+    // The mark that replaced the word, and the name that still carries it.
+    expect(row("src/rail.tsx").querySelector("svg")).not.toBeNull();
+    expect(row("src/rail.tsx").getAttribute("aria-label")).toBe(
+      "Modified: src/rail.tsx, 11 insertions, 2 deletions",
+    );
+    expect(
+      item("src/rail.tsx").querySelector('[data-testid="ticket-changes-updated"]'),
+    ).not.toBeNull();
   });
 
   it("marks the row whose diff is on screen current, and only that one", () => {
@@ -488,5 +589,295 @@ describe("the row's full-path reveal", () => {
     act(() => row(PAIR_TEST).blur());
 
     expect(revealText()).toBeNull();
+  });
+});
+
+/**
+ * VC-406: what the page says about its own READ, which is a different question
+ * from what the change set contains.
+ *
+ * The three states a rail list gets wrong are all here: a first read that
+ * failed (which has proved nothing about the branch), a refresh that failed
+ * over rows that are still true, and a read that genuinely returned nothing.
+ * The panel is mounted whole because the decision spans its header, its body
+ * and the request in flight between them.
+ */
+type ChangeSetResult = { ok: true; changeSet: ChangeSetSnapshot } | { ok: false; error: string };
+
+/** One snapshot, with the totals main computes over the SAME files. */
+function changeSetOk(files: readonly ChangeSetFile[], revision = "r1"): ChangeSetResult {
+  return {
+    ok: true,
+    changeSet: {
+      baseRevision: "base",
+      headRevision: "head",
+      files: [...files],
+      insertions: files.reduce((sum, f) => sum + (f.insertions ?? 0), 0),
+      deletions: files.reduce((sum, f) => sum + (f.deletions ?? 0), 0),
+      revision,
+      truncated: false,
+      totalCount: files.length,
+    },
+  };
+}
+
+/** The same snapshot, cut by main's cap: `hidden` paths it did not send. */
+function changeSetTruncated(files: readonly ChangeSetFile[], hidden: number): ChangeSetResult {
+  const whole = changeSetOk(files);
+  if (!whole.ok) throw new Error("unreachable");
+  return {
+    ok: true,
+    changeSet: {
+      ...whole.changeSet,
+      truncated: true,
+      totalCount: files.length + hidden,
+    },
+  };
+}
+
+/** Types into the header's filter field. */
+async function typeFilter(text: string): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Filter changed files"]',
+  );
+  if (input === null) throw new Error("no filter field");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, text);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+}
+
+/** Presses a control by its accessible name, or by its visible word. */
+async function press(label: string): Promise<void> {
+  const button =
+    document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`) ??
+    [...document.querySelectorAll("button")].find((el) => el.textContent?.trim() === label);
+  if (button === undefined || button === null) throw new Error(`no control named ${label}`);
+  await act(async () => {
+    button.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  });
+}
+
+/** Every element matching `selector`, anywhere the panel drew it. */
+function drawn(selector: string): Element[] {
+  return [...document.querySelectorAll(selector)];
+}
+
+describe("TicketChangesPanel reads", () => {
+  const TICKET: Ticket = {
+    id: "t1",
+    projectId: "p1",
+    ticketNumber: 406,
+    title: "Reorganize the rail",
+    body: "",
+    status: "doing",
+    priority: "medium",
+    labels: [],
+    usesWorktree: true,
+    preferredHarnessId: null,
+    order: 0,
+    worktreePath: "/worktrees/VC-406",
+    branch: "volli/VC-406",
+    baseBranch: "main",
+    prUrl: null,
+    createdAt: 0,
+    updatedAt: 0,
+  } as unknown as Ticket;
+
+  let panelRoot: Root | null = null;
+  let panelContainer: HTMLElement | null = null;
+
+  /** Mounts the panel over a scripted sequence of `worktree.changeSet` answers. */
+  async function mountPanel(answers: readonly ChangeSetResult[]) {
+    let call = 0;
+    const changeSet = vi.fn(async () => answers[Math.min(call++, answers.length - 1)]);
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: {
+        worktree: {
+          changeSet,
+          watchChangeSet: async () => ({ ok: true }),
+          unwatchChangeSet: async () => ({ ok: true }),
+          pauseChangeSet: async () => ({ ok: true }),
+          resumeChangeSet: async () => ({ ok: true }),
+          onChanged: () => () => {},
+          onWatchError: () => () => {},
+        },
+      },
+    });
+
+    panelContainer = document.createElement("div");
+    document.body.append(panelContainer);
+    panelRoot = createRoot(panelContainer);
+    await act(async () => {
+      panelRoot?.render(
+        <TooltipProvider>
+          <TicketChangesPanel
+            ticket={TICKET}
+            activeTabId="none"
+            recency={EMPTY_CHANGE_RECENCY_STATE}
+            onOpenDiff={() => {}}
+          />
+        </TooltipProvider>,
+      );
+    });
+    return { changeSet };
+  }
+
+  // The act environment and its teardown are the file's, one level up; this
+  // block only owns the second root it mounts and the `window.api` it defines.
+  afterEach(async () => {
+    await act(async () => {
+      panelRoot?.unmount();
+    });
+    panelRoot = null;
+    panelContainer?.remove();
+    panelContainer = null;
+    Reflect.deleteProperty(window, "api");
+    // The filter now OUTLIVES the panel (VC-406), so one test's would be the
+    // next one's starting state.
+    clearRememberedNavigatorViews();
+  });
+
+  it("does not claim the branch is clean when the first read failed", async () => {
+    await mountPanel([{ ok: false, error: "git is unavailable" }]);
+
+    expect(drawn('[data-testid="ticket-changes-error"]')).toHaveLength(1);
+    expect(drawn('[data-testid="ticket-changes-empty"]')).toHaveLength(0);
+  });
+
+  it("says the branch is clean once a read has actually returned nothing", async () => {
+    await mountPanel([changeSetOk([])]);
+
+    expect(drawn('[data-testid="ticket-changes-empty"]')).toHaveLength(1);
+    expect(drawn('[data-testid="ticket-changes-error"]')).toHaveLength(0);
+  });
+
+  it("retries the read from the fault body", async () => {
+    const { changeSet } = await mountPanel([
+      { ok: false, error: "git is unavailable" },
+      changeSetOk([file({ path: "src/a.ts" })]),
+    ]);
+    expect(changeSet).toHaveBeenCalledTimes(1);
+
+    await press("Retry");
+
+    expect(changeSet).toHaveBeenCalledTimes(2);
+    expect(drawn('[data-testid="ticket-changes-row"]')).toHaveLength(1);
+    expect(drawn('[data-testid="ticket-changes-error"]')).toHaveLength(0);
+  });
+
+  it("keeps the rows a failed refresh could not replace, and caveats them on the heading", async () => {
+    await mountPanel([
+      changeSetOk([file({ path: "src/a.ts" })]),
+      { ok: false, error: "git is unavailable" },
+    ]);
+    expect(drawn('[data-testid="ticket-changes-row"]')).toHaveLength(1);
+
+    await press("Refresh changes");
+
+    // The rows were true as of the last read, so they stay.
+    expect(drawn('[data-testid="ticket-changes-row"]')).toHaveLength(1);
+    expect(drawn('[data-testid="ticket-changes-error"]')).toHaveLength(0);
+    expect(
+      document
+        .querySelector('[data-testid="ticket-changes-read-status"]')
+        ?.getAttribute("data-read-status"),
+    ).toBe("refresh-failed");
+  });
+
+  it("offers refresh on a clean branch, which is where a stale read hides best", async () => {
+    const { changeSet } = await mountPanel([changeSetOk([])]);
+
+    await press("Refresh changes");
+
+    expect(changeSet).toHaveBeenCalledTimes(2);
+  });
+
+  it("totals the same snapshot the rows come from", async () => {
+    await mountPanel([
+      changeSetOk([
+        file({ path: "src/a.ts", insertions: 3, deletions: 1 }),
+        file({ path: "src/b.ts", insertions: 4, deletions: 2 }),
+      ]),
+    ]);
+
+    const header = document.querySelector('[data-testid="ticket-changes-panel"] header');
+    expect(header?.textContent).toContain("+7");
+    expect(header?.textContent).toContain("−3");
+    expect(drawn('[data-testid="ticket-changes-row"]')).toHaveLength(2);
+  });
+
+  it("remembers the filter for this ticket across the page being unmounted", async () => {
+    await mountPanel([changeSetOk([file({ path: "src/a.ts" }), file({ path: "src/b.ts" })])]);
+
+    await press("Filter changed files");
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Filter changed files"]',
+    );
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "b.ts");
+      input?.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    expect(drawn('[data-testid="ticket-changes-row"]')).toHaveLength(1);
+
+    expect(
+      readNavigatorView(navigatorScopeKey("diffs", { projectId: "p1", ticketId: "t1" })),
+    ).toEqual({ cwd: "", filtering: true, query: "b.ts" });
+    // Another ticket's Diffs page starts unfiltered.
+    expect(
+      readNavigatorView(navigatorScopeKey("diffs", { projectId: "p1", ticketId: "t2" })).filtering,
+    ).toBe(false);
+  });
+
+  it("does not call a filtered-away change set a clean branch", async () => {
+    await mountPanel([changeSetOk([file({ path: "src/a.ts" })])]);
+
+    await press("Filter changed files");
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Filter changed files"]',
+    );
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, "nothing-matches-this");
+      input?.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+
+    expect(drawn('[data-testid="ticket-changes-filter-empty"]')).toHaveLength(1);
+    expect(drawn('[data-testid="ticket-changes-empty"]')).toHaveLength(0);
+  });
+
+  // VC-406 review: the filter can only run over the files this snapshot carries,
+  // so over a CUT one an empty result is not evidence about the rest — and the
+  // truncation notice used to disappear along with the list it rode in.
+  it("does not claim to have searched the files the cap left out", async () => {
+    await mountPanel([changeSetTruncated([file({ path: "src/a.ts" })], 4000)]);
+
+    await press("Filter changed files");
+    await typeFilter("nothing-matches-this");
+
+    expect(drawn('[data-testid="ticket-changes-filter-empty"]')[0]?.textContent).toBe(
+      "No matches among the files shown",
+    );
+    const note = drawn('[data-testid="ticket-changes-truncated"]')[0];
+    expect(note?.getAttribute("data-hidden-count")).toBe("4000");
+    expect(note?.textContent).toBe("4,000 files not shown or searched");
+    expect(drawn('[data-testid="ticket-changes-empty"]')).toHaveLength(0);
+    // The query that produced it is still on screen, beside the count of
+    // everything the branch changed.
+    expect(
+      document.querySelector<HTMLInputElement>('input[aria-label="Filter changed files"]')?.value,
+    ).toBe("nothing-matches-this");
+    expect(
+      document.querySelector('[data-testid="ticket-changes-panel"] header')?.textContent,
+    ).toContain("4001");
   });
 });

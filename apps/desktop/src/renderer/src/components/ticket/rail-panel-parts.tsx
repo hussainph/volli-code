@@ -12,21 +12,23 @@
 import * as React from "react";
 import { ArrowClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowClockwise";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
-import { ArrowUUpLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowUUpLeft";
+import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { FilePlusIcon } from "@phosphor-icons/react/dist/csr/FilePlus";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
+import { Slot } from "radix-ui";
 
 import { errorMessage, type DiffStat } from "@volli/shared";
 
+import type { RailReadFeedback } from "@renderer/components/ticket/rail-read-feedback";
 import { Button } from "@renderer/components/ui/button";
-import { Input } from "@renderer/components/ui/input";
 import { Notice } from "@renderer/components/ui/notice";
-import { SectionHeading } from "@renderer/components/ui/section-heading";
+import { SECTION_HEADING, SectionHeading } from "@renderer/components/ui/section-heading";
 import { Skeleton } from "@renderer/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
+import { prefersReducedMotion } from "@renderer/hooks/use-reduced-motion";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
@@ -62,18 +64,583 @@ export const RAIL_PANEL_MARGIN = "mx-4 group-data-[narrow=true]/rail:mx-3";
  */
 export function RailSectionHeadingRow({
   label,
+  status,
   children,
 }: {
   label: string;
+  /**
+   * What the block's read is doing, as {@link RailHeadingReadStatus} draws it.
+   * Beside the label rather than at the right edge: the right edge is the
+   * control's, and a mark that swapped places with it as reads came and went
+   * would move the control out from under the pointer.
+   */
+  status?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
     <div className="mb-1 flex items-center justify-between gap-2 px-2">
-      <SectionHeading>{label}</SectionHeading>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <SectionHeading>{label}</SectionHeading>
+        {status}
+      </span>
       {children}
     </div>
   );
 }
+
+/**
+ * The rail's ONE fold: what opens and closes in place on a rail page, and how
+ * it moves (VC-406). Three things fold — the roster's record under the
+ * Sessions eyebrow, the worktree body under its footer row, the cost breakdown
+ * under its — and they are one object drawn three times, so the motion is
+ * spelled once here.
+ *
+ * THE TRIGGER NEVER MOVES. A body that opens BELOW its trigger (the eyebrow's
+ * record) grows downward into the scroller; a body that opens ABOVE its
+ * trigger (a footer row's) grows upward into the space the scroller gives
+ * back. Either way the thing the pointer is on stays under the pointer, and a
+ * second press lands where the first did. The alternative for a footer —
+ * header above body, the row rising by the body's height — was drawn and
+ * rejected in the comparison scratch: it reads correctly and it moves the
+ * target out from under the hand, which is worse.
+ *
+ * THE MOTION is a measured `height` TRANSITION — 200ms on the strong
+ * `--ease-out`, the caret 150ms on the same curve — and it is a transition
+ * rather than the `collapsible-down/up` keyframes `ui/accordion.tsx` runs on
+ * for one reason: a fold is pressed twice in a second. Keyframes restart from
+ * their own zero, so a close interrupted halfway jumped back to full height
+ * and fell again. A transition retargets from the CURRENT computed height, so
+ * a reversal continues from where the eye is. `height` is a layout property
+ * and normally the wrong thing to animate, but a fold's whole effect is that
+ * the surface around it resizes; the layout pass is the purpose, not the cost,
+ * and 200ms bounds it. Nothing else animates: the rows inside do not fade or
+ * slide, because they are data the reader came to read.
+ *
+ * NOT RADIX. Radix's `Collapsible` was what this was, and its `Presence` only
+ * watches CSS ANIMATIONS (`animationName`), so a transition-driven close
+ * unmounts the body on the first frame — and its content keeps its own
+ * measurement effect, which zeroes `transitionDuration` on every state change.
+ * The pieces it did give away are cheap to keep honest here: `useId` wires
+ * `aria-controls`/`aria-expanded` to the body, `Slot` keeps `asChild`, and the
+ * body still unmounts its children once closed rather than sitting mounted
+ * under a clip.
+ *
+ * THE GATES ship with it. A toggle from the KEYBOARD (`event.detail === 0`,
+ * how a browser reports Enter/Space on a button) and `prefers-reduced-motion`
+ * — read at the moment of the toggle, so a setting changed mid-session lands
+ * on the next press — both drop the height transition AND the caret's turn:
+ * the state change is instant, not merely faster. The closing body is `inert`
+ * from the first frame of the close, and if focus was inside it when the close
+ * began it returns to the trigger rather than falling to the document.
+ */
+const FOLD_MS = 200;
+
+type RailFoldContextValue = {
+  open: boolean;
+  /** Whether the CURRENT change runs with no motion at all. */
+  instant: boolean;
+  contentId: string;
+  triggerRef: React.RefObject<HTMLElement | null>;
+  toggle(instant: boolean): void;
+};
+
+const RailFoldContext = React.createContext<RailFoldContextValue | null>(null);
+
+function useRailFold(part: string): RailFoldContextValue {
+  const fold = React.useContext(RailFoldContext);
+  if (fold === null) throw new Error(`${part} must be rendered inside a RailFold.`);
+  return fold;
+}
+
+export function RailFold({
+  open,
+  defaultOpen = false,
+  onOpenChange,
+  asChild = false,
+  className,
+  children,
+  ...props
+}: Omit<React.ComponentProps<"div">, "onChange"> & {
+  /** Controlled state. Omit it and the fold keeps its own. */
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?(open: boolean): void;
+  asChild?: boolean;
+}) {
+  const [uncontrolled, setUncontrolled] = React.useState(defaultOpen);
+  // React state rather than a ref: the caret is a sibling of the body and has
+  // to be drawn without its transition in the SAME commit the state flips in.
+  const [instant, setInstant] = React.useState(false);
+  const contentId = React.useId();
+  const triggerRef = React.useRef<HTMLElement | null>(null);
+  const isOpen = open ?? uncontrolled;
+
+  const value = React.useMemo<RailFoldContextValue>(
+    () => ({
+      open: isOpen,
+      instant,
+      contentId,
+      triggerRef,
+      toggle(keyboard) {
+        setInstant(keyboard || prefersReducedMotion());
+        if (open === undefined) setUncontrolled(!isOpen);
+        onOpenChange?.(!isOpen);
+      },
+    }),
+    [isOpen, instant, contentId, open, onOpenChange],
+  );
+
+  const Comp = asChild ? Slot.Root : "div";
+  return (
+    <RailFoldContext.Provider value={value}>
+      <Comp
+        data-slot="rail-fold"
+        data-state={isOpen ? "open" : "closed"}
+        className={className}
+        {...props}
+      >
+        {children}
+      </Comp>
+    </RailFoldContext.Provider>
+  );
+}
+
+/** The press. Carries the body's `aria-controls` pair and how the change moves. */
+export function RailFoldTrigger({
+  asChild = false,
+  onClick,
+  ref,
+  ...props
+}: React.ComponentProps<"button"> & { asChild?: boolean }) {
+  const fold = useRailFold("RailFoldTrigger");
+  const Comp = asChild ? Slot.Root : "button";
+  return (
+    <Comp
+      type="button"
+      {...props}
+      ref={(node: HTMLElement | null) => {
+        fold.triggerRef.current = node;
+        if (typeof ref === "function") ref(node as HTMLButtonElement | null);
+        else if (ref) ref.current = node as HTMLButtonElement;
+      }}
+      data-slot="rail-fold-trigger"
+      data-state={fold.open ? "open" : "closed"}
+      aria-controls={fold.contentId}
+      aria-expanded={fold.open}
+      onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+        onClick?.(event);
+        // `detail` is 0 for Enter/Space on a button and ≥1 for a real click:
+        // the keyboard path is the one that must not animate.
+        if (!event.defaultPrevented) fold.toggle(event.detail === 0);
+      }}
+    />
+  );
+}
+
+/** The fold's body: measured, transitioned, clipped while it moves. */
+export function RailFoldBody({ className, children, ...props }: React.ComponentProps<"div">) {
+  const fold = useRailFold("RailFoldBody");
+  const { open } = fold;
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  // Mounted while open AND through a close, so the body has something to
+  // measure on the way down; dropped once it is shut.
+  const [present, setPresent] = React.useState(open);
+  const shown = React.useRef(open);
+  const mounted = React.useRef(false);
+  const focusInside = React.useRef(false);
+  /** Detaches the in-flight run's listener and fallback timer. */
+  const settle = React.useRef<(() => void) | null>(null);
+
+  React.useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (body === null) return;
+
+    /**
+     * A close pulls the ground out from under whatever was focused inside it.
+     * `inert` lands in the same commit and blurs it to nothing, so the flag is
+     * kept by the body's own focus events and a blur with no `relatedTarget`
+     * — focus that went NOWHERE — does not clear it.
+     */
+    function returnFocus(node: HTMLElement): void {
+      const active = document.activeElement;
+      const lost = active === null || active === document.body || node.contains(active);
+      if (focusInside.current && lost) fold.triggerRef.current?.focus();
+      focusInside.current = false;
+    }
+    function rest(node: HTMLElement): void {
+      node.style.transition = "";
+      // `auto` while open, so the body tracks content that grows under it.
+      node.style.height = open ? "auto" : "0px";
+      if (!open) setPresent(false);
+    }
+
+    // The first frame is a resting state, never a movement: a rail that
+    // unfolded everything it remembered on every mount would animate a layout
+    // the reader never asked to change.
+    if (!mounted.current) {
+      mounted.current = true;
+      body.style.height = open ? "auto" : "0px";
+      return;
+    }
+    if (shown.current === open) return;
+    // Opening: mount the children first, then measure them on the next pass.
+    if (open && !present) {
+      setPresent(true);
+      return;
+    }
+    shown.current = open;
+    // Detach only — the height stays where the interrupted run left it, which
+    // is what the reversal transitions FROM.
+    settle.current?.();
+    if (!open) returnFocus(body);
+
+    if (fold.instant || prefersReducedMotion()) {
+      rest(body);
+      return;
+    }
+
+    const from = body.getBoundingClientRect().height;
+    const to = open ? (contentRef.current?.getBoundingClientRect().height ?? 0) : 0;
+    body.style.transition = "none";
+    body.style.height = `${from}px`;
+    void body.offsetHeight; // commit the start height before the target lands
+    body.style.transition = `height ${FOLD_MS}ms var(--ease-out)`;
+    body.style.height = `${to}px`;
+
+    function finish(): void {
+      settle.current?.();
+      // Re-checked because a closure loses the guard above, not because the
+      // ref can empty: the run is detached before the body can unmount.
+      if (body !== null) rest(body);
+    }
+    function onEnd(event: TransitionEvent): void {
+      if (event.target === body && event.propertyName === "height") finish();
+    }
+    body.addEventListener("transitionend", onEnd);
+    // A transition that never runs (a body that measures zero either way, a
+    // display-less environment) still has to land the resting state.
+    const timer = window.setTimeout(finish, FOLD_MS + 60);
+    settle.current = () => {
+      body.removeEventListener("transitionend", onEnd);
+      window.clearTimeout(timer);
+      settle.current = null;
+    };
+  }, [open, present, fold.instant, fold.triggerRef]);
+
+  // Content that grows while the body is opening retargets the run in flight
+  // (a read landing under a fold that is still moving). Never while closing:
+  // the destination there is zero whatever the content does.
+  React.useEffect(() => {
+    const body = bodyRef.current;
+    const content = contentRef.current;
+    if (body === null || content === null || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => {
+      if (settle.current === null || !shown.current) return;
+      body.style.height = `${content.getBoundingClientRect().height}px`;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  React.useEffect(() => () => settle.current?.(), []);
+
+  return (
+    <div
+      ref={bodyRef}
+      id={fold.contentId}
+      data-slot="rail-fold-body"
+      data-state={open ? "open" : "closed"}
+      // Nothing inside a shutting body is reachable — by tab, by pointer or by
+      // a screen reader — while it is still on screen.
+      inert={!open}
+      onFocus={() => {
+        focusInside.current = true;
+      }}
+      onBlur={(event) => {
+        if (event.relatedTarget !== null) focusInside.current = false;
+      }}
+      className={cn("overflow-hidden", !open && "h-0", className)}
+      {...props}
+    >
+      {/* The measured child: its height is the fold's target, and what a
+          ResizeObserver watches. The clip lives on the parent. */}
+      <div ref={contentRef}>{present ? children : null}</div>
+    </div>
+  );
+}
+
+/**
+ * The caret that says which way a fold opens, and whether it is open.
+ *
+ * An eyebrow's fold opens DOWN, under the label, so its caret points right
+ * while closed and turns to point down: the file-browser idiom, read by
+ * everyone. A footer row's fold opens UP, over the row, so its caret points
+ * up while closed and turns to point down once the body is standing above
+ * it — pointing at where the body went, and at what pressing again does.
+ *
+ * It turns with the body or not at all: the fold's instant gates reach the
+ * caret through the context, so a keyboard press changes a still picture and
+ * the CSS gate keeps covering a reduced-motion change that came from anywhere
+ * else.
+ */
+export function RailFoldCaret({
+  open,
+  placement,
+}: {
+  open: boolean;
+  placement: "eyebrow" | "footer";
+}) {
+  const Caret = placement === "eyebrow" ? CaretRightIcon : CaretUpIcon;
+  const instant = React.useContext(RailFoldContext)?.instant ?? false;
+  return (
+    <Caret
+      aria-hidden
+      weight={placement === "eyebrow" ? "bold" : undefined}
+      className={cn(
+        "shrink-0 text-muted-foreground transition-transform duration-150 ease-out motion-reduce:transition-none",
+        instant && "transition-none",
+        placement === "eyebrow" ? "size-2.5" : "size-3",
+        open && (placement === "eyebrow" ? "rotate-90" : "rotate-180"),
+      )}
+    />
+  );
+}
+
+/**
+ * A section eyebrow whose LABEL is a fold's trigger (the Sessions block, whose
+ * record folds under its live rows). Same geometry as {@link RailSectionHeadingRow}
+ * — the label at the left, at most one control at the right — with the label
+ * drawn as a button carrying the caret. The caret follows the word rather
+ * than leading it so the eyebrow column stays one straight line down the
+ * page. Must sit inside a {@link RailFold}.
+ *
+ * `foldable` OFF draws a plain eyebrow: a roster with no record has nothing
+ * to fold, and a caret that opens onto nothing is a lie about the block.
+ */
+export function RailFoldHeadingRow({
+  label,
+  open,
+  foldable,
+  triggerLabel,
+  testId,
+  status,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  foldable: boolean;
+  /** The trigger's accessible name — what pressing it does, in the reader's terms. */
+  triggerLabel: string;
+  testId?: string;
+  /** {@link RailSectionHeadingRow}'s read mark, in the foldable eyebrow. */
+  status?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 px-2">
+      <span className="flex min-w-0 items-center gap-1.5">
+        {foldable ? (
+          // Still a heading in the document — the button is INSIDE it, so the
+          // outline keeps its section and the trigger keeps its name.
+          <h2 className={SECTION_HEADING}>
+            <RailFoldTrigger asChild>
+              <button
+                type="button"
+                aria-label={triggerLabel}
+                data-testid={testId}
+                className="flex items-center gap-1 rounded-sm uppercase outline-none transition-colors duration-150 ease-out hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+              >
+                {label}
+                <RailFoldCaret open={open} placement="eyebrow" />
+              </button>
+            </RailFoldTrigger>
+          </h2>
+        ) : (
+          <SectionHeading>{label}</SectionHeading>
+        )}
+        {status}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * What a block's heading says about a read while rows are already on screen
+ * (VC-406) — the drawing for `rail-read-feedback.ts`'s `heading` placement.
+ *
+ * IT RIDES THE ROW THE BLOCK ALREADY OWNS and never reserves one. The earlier
+ * revision of this design gave every heading a fixed-height status strip
+ * beneath it, blank at rest; that is 24px of nothing under every block on the
+ * page, paid for a state most blocks are in for half a second a minute. The
+ * eyebrow is 28px in every state, so the mark has to fit inside it — which is
+ * also why the WORD is optional and off by default: a section eyebrow already
+ * holds a label and one control, and a third thing there is what pushes the
+ * control off the end of a 240px rail.
+ *
+ * THE SENTENCE ALWAYS REACHES THE READER even when the face is a bare glyph:
+ * `detail` is the accessible name and the hover title, and the live region
+ * announces it. A failed refresh additionally carries the block's own Retry,
+ * because the rows under it are stale and the reader is the one who decides
+ * whether that matters.
+ *
+ * The turning mark is the only motion on working data, and `motion-reduce`
+ * stops it outright — the mark stays, so the state is still legible without
+ * movement.
+ */
+export function RailHeadingReadStatus({
+  feedback,
+  onRetry,
+  word = false,
+  testId,
+}: {
+  feedback: RailReadFeedback;
+  /** Re-runs the read this block owns. Local to the block, never app-wide. */
+  onRetry(): void;
+  /**
+   * Draw the short face beside the mark. OFF inside a section eyebrow (label
+   * plus one control is already the row's budget); ON for a page heading, where
+   * it still yields to the rail's narrow step.
+   */
+  word?: boolean;
+  testId?: string;
+}) {
+  if (feedback === null || feedback.place !== "heading") return null;
+  const failed = feedback.kind === "refresh-failed";
+  const Mark = failed ? WarningIcon : ArrowClockwiseIcon;
+  return (
+    <span
+      role={failed ? "alert" : "status"}
+      data-testid={testId}
+      data-read-status={feedback.kind}
+      title={feedback.detail}
+      className={cn(
+        "flex min-w-0 shrink-0 items-center gap-1 text-label",
+        failed ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      <Mark
+        aria-hidden
+        weight="bold"
+        className={cn(
+          "size-3 shrink-0",
+          !failed && "animate-spin [animation-duration:1.2s] motion-reduce:animate-none",
+        )}
+      />
+      {/* The whole sentence, for a screen reader and for `getByText`, whether or
+          not the face is drawn. */}
+      <span className="sr-only">{feedback.detail}</span>
+      {word ? (
+        <span aria-hidden className="truncate group-data-[narrow=true]/rail:hidden">
+          {feedback.face}
+        </span>
+      ) : null}
+      {failed ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`Retry — ${feedback.detail}`}
+          onClick={onRetry}
+        >
+          <ArrowClockwiseIcon />
+        </Button>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * What a block's BODY says when a read has never landed — the drawing for
+ * `rail-read-feedback.ts`'s `body` placement, minus the pending case, which
+ * every caller already answers with its own skeleton.
+ *
+ * A refused first read is the case this exists for. The block has no rows, and
+ * the two sentences it could draw — "nothing here" and "this could not be
+ * read" — are opposite claims; production drew them together on two pages. The
+ * failure wins, and it brings the one action that can change it.
+ */
+export function RailReadFaultBody({
+  feedback,
+  detail,
+  onRetry,
+  testId,
+  className,
+}: {
+  feedback: RailReadFeedback;
+  /** The transport's own words, for the hover title. Never onto the row. */
+  detail?: string | null;
+  onRetry(): void;
+  testId?: string;
+  className?: string;
+}) {
+  if (feedback === null || feedback.place !== "body" || feedback.kind !== "failed") return null;
+  return (
+    <div
+      role="alert"
+      data-testid={testId}
+      data-read-status="failed"
+      title={detail ?? undefined}
+      className={cn(
+        "flex items-center gap-2 rounded-lg border border-dashed border-sidebar-border px-2 py-2 text-ui text-muted-foreground",
+        className,
+      )}
+    >
+      <WarningIcon aria-hidden weight="bold" className="size-3.5 shrink-0 text-destructive" />
+      <span className="min-w-0 flex-1 truncate">{feedback.face}</span>
+      <Button size="xs" variant="outline" onClick={onRetry}>
+        <ArrowClockwiseIcon />
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A rail footer's shell and its row: the top rule the pinned rows wear
+ * (VC-406), and the row geometry every footer face shares — the mark at the
+ * left where every rail row's mark sits, then the face, then the caret.
+ */
+export const RAIL_FOOTER = "shrink-0 border-t border-sidebar-border/70 bg-background/30";
+export const RAIL_FOOTER_ROW = cn(
+  "flex min-h-8 w-full items-center gap-2 py-2 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring",
+  RAIL_PANEL_INSET,
+);
+
+/**
+ * The checkout row: ONE row, TWO targets, and every pixel of it belongs to one
+ * of them (VC-406, revision 05).
+ *
+ * The row answers two questions — which tree is this, and what is going on in
+ * it — so it is two buttons rather than one with two jobs. What the review
+ * caught was the geometry around them: the identity read as though it were
+ * indented from the page titles above it, and the strip between the two targets
+ * was a dead band that looked pressable and was not.
+ *
+ * So the rule is EDGE-ALIGNED TARGETS. The identity starts at the rail's own
+ * content gutter, exactly where a page title starts (16px, 12px at the narrow
+ * step — {@link RAIL_PANEL_INSET}'s pair, spelled here as the single side each
+ * target owns); the fact ends at that same gutter on the right. They meet in
+ * the middle with nothing between them, so the pointer is always on one or the
+ * other, and the inner edges take the padding the two faces need to breathe
+ * rather than an inset that pretends to be alignment.
+ *
+ * 42px, which is the row's own arithmetic rather than a number chosen for the
+ * look of it: a `text-ui` line at 20px between 8px of padding a side, plus the
+ * 2px the row's targets need to stay legible as targets at the rail's floor.
+ * It is the tallest thing in the footer stack and the one the eye lands on
+ * last, which is the trade the design accepts for a target a pointer can hit
+ * without aiming.
+ */
+export const RAIL_CHECKOUT_ROW = "flex min-h-[42px] items-stretch";
+
+/** The left target: the tree's identity, from the content gutter inward. */
+export const RAIL_CHECKOUT_IDENTITY =
+  "flex min-w-0 flex-1 items-center gap-2 py-2 pr-2 pl-4 text-left outline-none group-data-[narrow=true]/rail:pl-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
+
+/** The right target: the one fact, and the fold's caret, out to the same gutter. */
+export const RAIL_CHECKOUT_FACT =
+  "flex shrink-0 items-center gap-2 py-2 pr-4 pl-2 text-left outline-none group-data-[narrow=true]/rail:pr-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * One repository-card row's shared frame: full-width, quiet hover, seam above
@@ -128,6 +695,25 @@ export const RAIL_CARD_FRAME =
 
 /** The seam above every card row but the first. */
 export const RAIL_CARD_SEAM = "border-t border-sidebar-border/70";
+
+/**
+ * The one button recipe a rail page presses: an `outline` Button on the
+ * rail's own border, a resting wash, and the raised tier's lift.
+ *
+ * Spelled here for the reason {@link RAIL_CARD_FRAME} is. The repository
+ * card's publish row wrote it three times inline (the primary, its `⋯`, the
+ * PR link), and the Automations block below it drew its own split button as a
+ * `secondary` pill — flat, filled, full-width — so the two acts the Now page
+ * offers wore two different costumes ten pixels apart, and a reader had to
+ * work out from context which of them was a button (VC-406). One recipe,
+ * composed by every act on the page, is what makes "this is a button" a
+ * fact about the drawing rather than a thing to infer.
+ *
+ * Only the material is here. Size stays with the primitive (`sm` / `icon-sm`,
+ * the toolbar rung), and width is the row's decision: the recipe must work for
+ * a control that truncates its own label and for a bare icon beside it.
+ */
+export const RAIL_CONTROL = "border-sidebar-border bg-background/30 text-ui shadow-raised";
 
 /**
  * Insertions and deletions as one pair — the repository card's changes row, the
@@ -305,102 +891,6 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
         <Skeleton key={width} className={cn("h-8", width)} />
       ))}
     </div>
-  );
-}
-
-/**
- * The header both file navigators wear — the ticket's worktree listing and
- * Home's Main checkout (VC-121).
- *
- * Three parts, and every one of them is a fact about a flat directory
- * navigator rather than about which repository it is pointed at: the panel's
- * name, a mono sub-line that names the ROOT at the top level and becomes the
- * way back OUT once you walk into a folder, and a filter that toggles an input
- * open beside the list it narrows. The two panels had drawn all three
- * separately, differing only in which words they used and — accidentally — in
- * what the filter matched.
- *
- * `children` is the slot for what one panel has and the other does not: the
- * ticket's Attach control and its attachment strip.
- */
-export function RailNavigatorHeader({
-  title,
-  root,
-  cwd,
-  upTestId,
-  filtering,
-  query,
-  onToggleFilter,
-  onQueryChange,
-  onNavigateUp,
-  actions,
-  children,
-}: {
-  /** The panel's name — "Ticket files", "Project files". */
-  title: string;
-  /** The mono sub-line at the top level: a branch, a project name. */
-  root: string;
-  /** The folder being browsed, or `""` at the root. */
-  cwd: string;
-  upTestId: string;
-  filtering: boolean;
-  query: string;
-  onToggleFilter(): void;
-  onQueryChange(next: string): void;
-  onNavigateUp(): void;
-  /** Controls parked beside Filter — they act on the panel, not on a row. */
-  actions?: React.ReactNode;
-  /** Anything under the title row and above the filter input. */
-  children?: React.ReactNode;
-}) {
-  return (
-    <header className={cn("flex shrink-0 flex-col gap-2 pt-1 pb-4", RAIL_PANEL_INSET)}>
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-ui font-medium">{title}</p>
-          {cwd === "" ? (
-            <p className="truncate font-mono text-ui text-muted-foreground">{root}</p>
-          ) : (
-            <button
-              type="button"
-              data-testid={upTestId}
-              onClick={onNavigateUp}
-              aria-label={`Leave ${cwd}`}
-              className="flex min-w-0 items-center gap-1 font-mono text-ui text-muted-foreground hover:text-foreground"
-            >
-              <ArrowUUpLeftIcon className="size-3 shrink-0" />
-              <span className="truncate">{cwd}</span>
-            </button>
-          )}
-        </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Filter files"
-              aria-pressed={filtering}
-              onClick={onToggleFilter}
-            >
-              <MagnifyingGlassIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Filter files</TooltipContent>
-        </Tooltip>
-        {actions}
-      </div>
-      {children}
-      {filtering ? (
-        <Input
-          autoFocus
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          aria-label="Filter files"
-          placeholder="Filter files…"
-          className="h-7 text-ui"
-        />
-      ) : null}
-    </header>
   );
 }
 
