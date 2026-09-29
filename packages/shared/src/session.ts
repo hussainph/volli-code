@@ -43,6 +43,7 @@ import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { SessionTurnOutcome } from "./session-ledger";
 import type { SessionProvenance } from "./session-provenance";
+import type { SessionReadState } from "./session-read";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
@@ -269,6 +270,13 @@ export interface ChatSessionRecord {
 export type SessionListingRow = SessionListingIdentity & {
   usage: SessionUsageSummary;
   provenance: SessionProvenance;
+  /**
+   * Unread state (VC-30). OPTIONAL and sparse for the reason `provenance` is
+   * defaulted: a builder with no receipt reader must mark nothing rather than
+   * guess. Read it through `sessionReadStateOf`, which answers the resting
+   * `SESSION_READ` for a row that carries none.
+   */
+  read?: SessionReadState;
 };
 
 /**

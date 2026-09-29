@@ -81,8 +81,9 @@ describe("the wireframe scratch's contract and content", () => {
     expect(html).toContain('data-session-glyph="waiting"');
   });
 
-  it("links the v1 scratch rather than replacing it", () => {
-    expect(html).toContain('href="#session-peek"');
+  it("points at the shipped peek now that the v1 scratch is retired", () => {
+    expect(html).not.toContain('href="#session-peek"');
+    expect(html).toContain("components/session-peek");
   });
 
   it("says which parts are simulated", () => {

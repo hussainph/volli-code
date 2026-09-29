@@ -85,6 +85,18 @@ const fixture = vi.hoisted(() => {
     waitingOn: null,
     outcome: null,
   };
+  // Finished AND unread (VC-30, D6): the Session left a turn behind and then
+  // went quiet. Its lifecycle says record, its receipt says nobody has seen it
+  // — and unread wins, or the dot would be folded away behind the caret.
+  const unreadFinished: ChatSessionRecord = {
+    ...record,
+    sessionId: "chat-unseen",
+    title: "Finished while nobody watched",
+    live: false,
+    activity: "stopped",
+    waitingOn: null,
+    outcome: null,
+  };
   // VC-324: `interrupted` is durable — a relaunch does not end the fact that
   // the last turn died, so a History row for one must keep saying so.
   const interrupted: ChatSessionRecord = {
@@ -128,8 +140,23 @@ const fixture = vi.hoisted(() => {
   const rows: SessionListingRow[] = [
     { kind: "terminal", record: closedTerminal, usage: unmetered, provenance: personStarted },
     { kind: "terminal", record: recoveringTerminal, usage: unmetered, provenance: personStarted },
-    { kind: "chat", record, usage: unmetered, provenance: personStarted },
+    // Unread (VC-30): the one row that carries a receipt, so the dot, the
+    // heavier title and the menu's direction all have a subject.
+    {
+      kind: "chat",
+      record,
+      usage: unmetered,
+      provenance: personStarted,
+      read: { unreadSince: 5 },
+    },
     { kind: "chat", record: ended, usage: unmetered, provenance: personStarted },
+    {
+      kind: "chat",
+      record: unreadFinished,
+      usage: unmetered,
+      provenance: personStarted,
+      read: { unreadSince: 7 },
+    },
     { kind: "chat", record: interrupted, usage: unmetered, provenance: personStarted },
     {
       kind: "chat",
@@ -148,7 +175,17 @@ const fixture = vi.hoisted(() => {
       },
     },
   ];
-  return { record, ended, interrupted, byRun, byAgent, closedTerminal, recoveringTerminal, rows };
+  return {
+    record,
+    ended,
+    unreadFinished,
+    interrupted,
+    byRun,
+    byAgent,
+    closedTerminal,
+    recoveringTerminal,
+    rows,
+  };
 });
 
 // Partial: the STORE is a fixture, but `ticketSessionListingStateOf` is kept
@@ -219,28 +256,77 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain("justify-between");
   });
 
-  it("draws a row as one line: kind, title, status", () => {
+  it("leads a row with the Session's mark, not with a kind glyph (VC-30)", () => {
     const html = panel();
 
-    // The kind is the leading glyph's label now, not a second line of prose, so
-    // the row has to keep SAYING which kind it is.
-    expect(html).toContain('aria-label="Chat"');
+    // The mark IS the kind and the state: one glyph, named with both, replacing
+    // the `ChatCircle`/`TerminalWindow` icon and the status dot beside it.
+    expect(html).toContain('aria-label="Chat · Waiting for you"');
+    expect(html).toContain('data-session-glyph="waiting"');
     expect(html).toContain(fixture.record.title);
-    expect(html).toContain("Waiting for you");
     expect(html).not.toContain("Chat · Live");
+    // A companion's mark is named by the shipped source rule, the one the left
+    // band reads: this record was launched as a bare SHELL, so it is `Shell` —
+    // never the default harness its `harnessId` falls back to, which would put
+    // Claude Code's name and logo on a plain terminal.
+    expect(html).toContain('aria-label="Shell · Exited"');
+    expect(html).not.toContain('aria-label="Claude Code · Exited"');
   });
 
-  it("reports a chat Session's own activity, in the terminal rows' vocabulary", () => {
-    // `ChatSessionRecord.activity` is a subset of `SessionActivityState`, so one
-    // status column serves both kinds — the attention tone for an agent that is
-    // blocked on you, the same one the sidebar's Active band and the ticket tab
-    // strip paint, because all three now ask `ui/status-dot.tsx`.
-    //
-    // Asserted on the STATE rather than on `bg-attention`: the class is
-    // `StatusDot`'s business and this panel's job is to hand it the right state.
-    // A test that matched the class would fail the day the dot is restyled and
-    // pass the day this panel starts reporting the wrong state.
-    expect(panel()).toContain('data-state="waiting"');
+  it("gives a live row the age alone, and keeps the state word in the record", () => {
+    // D5: the mark carries the state, so a live row's second line is only when
+    // — but a record row's whole content is how it ended and when, so the word
+    // stays there.
+    const html = panel();
+    const live = html.indexOf(fixture.record.title);
+    const folded = html.indexOf('data-testid="session-history"');
+
+    expect(live).toBeGreaterThan(-1);
+    expect(html.slice(live, folded)).not.toContain("Waiting for you<");
+    expect(html.slice(folded)).toContain("Stopped · ");
+    // The live half no longer draws a status dot at all; the record still does.
+    expect(html.slice(live, folded)).not.toContain('data-slot="status-dot"');
+    expect(html.slice(folded)).toContain('data-slot="status-dot"');
+  });
+
+  it("marks an unread Session with the dot and a heavier title, and nothing else with either", () => {
+    const html = panel();
+    const at = html.indexOf(fixture.record.title);
+
+    expect(html).toContain('data-unread=""');
+    expect(html).toContain("Unread");
+    expect(html).toContain("bg-info");
+    // Only the rows that carry a receipt: the live unread one and the
+    // finished-but-unseen one, and nothing else in the roster.
+    expect(html.match(/data-unread-dot/g)).toHaveLength(2);
+    expect(html.slice(html.lastIndexOf("<span", at), at)).toContain("font-semibold");
+  });
+
+  it("keeps an unread Session out of the fold after it goes quiet (VC-30, D6)", () => {
+    // The defect: the live half was `chatRows.filter((row) => row.isLive)`, so
+    // a Session that finished with work nobody had seen dropped into the
+    // collapsed record and took its dot with it. Unread is never retired for
+    // being old or idle — the row stays above the record fold.
+    const html = panel();
+    const unseen = html.indexOf(fixture.unreadFinished.title);
+    const folded = html.indexOf('data-testid="session-history"');
+
+    expect(unseen).toBeGreaterThan(-1);
+    expect(folded).toBeGreaterThan(-1);
+    expect(unseen).toBeLessThan(folded);
+    // Its dot is on the page, in the live half, rather than behind the caret.
+    expect(html.slice(0, folded)).toContain("data-unread-dot");
+    // …and the READ finished Session is still in the record, which is what
+    // says the rule is unread and not "every chat row stays up top".
+    expect(html.slice(folded)).toContain(fixture.ended.title);
+  });
+
+  it("addresses every row for the peek, live rows and record alike", () => {
+    const html = panel();
+
+    expect(html).toContain('data-peek-row="chat:chat-1"');
+    expect(html).toContain('data-peek-row="session:terminal-0"');
+    expect(html).toContain('data-peek-surface="rail"');
   });
 
   describe("who started the Session", () => {
@@ -248,11 +334,17 @@ describe("TicketSessionsPanel rows", () => {
       const html = panel();
 
       expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
-      expect(html).toContain('title="Automation · Nightly sweep"');
     });
 
-    it("names the parent in a tooltip, and mints no glyph for it", () => {
-      expect(panel()).toContain('title="Started by Previous implementation"');
+    it("drops the native tooltip on a peekable row, where the card now says it", () => {
+      // D1: a browser tooltip would open on top of the peek card at nearly the
+      // same instant. The provenance line rides the card instead, so the row's
+      // `title` attribute goes — including the one a Session-started child's
+      // mark used as its whole mark.
+      const html = panel();
+
+      expect(html).not.toContain('title="Automation · Nightly sweep"');
+      expect(html).not.toContain('title="Started by Previous implementation"');
     });
 
     it("gives a person's row nothing — no mark, and no empty tooltip", () => {
@@ -311,15 +403,16 @@ describe("TicketSessionsPanel rows", () => {
     expect(html).toContain('data-state="stopped"');
   });
 
-  it("keeps an interrupted chat visibly interrupted in History, after a relaunch (VC-324)", () => {
+  it("keeps an interrupted chat visibly interrupted, after a relaunch (VC-324)", () => {
     const html = panel();
     const at = html.indexOf(fixture.interrupted.title);
 
     expect(at).toBeGreaterThan(-1);
-    // The row says the word, in the destructive state `ui/status-dot.tsx`
-    // gives it — not collapsed into generic ended history.
-    expect(html.slice(at)).toContain("Interrupted · ");
-    expect(html).toContain('data-state="interrupted"');
+    // `interrupted` is durable, and it is still SAID — by the mark now, whose
+    // badge and accessible name carry it on a live row (VC-30, D5). Collapsing
+    // it into generic ended history is still the drift this guards.
+    expect(html.slice(0, at)).toContain('aria-label="Chat · Interrupted"');
+    expect(html.slice(0, at)).toContain('data-session-glyph="interrupted"');
   });
 
   it("insets the record with the column instead of a hardcoded edge", () => {

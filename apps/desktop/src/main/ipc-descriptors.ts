@@ -933,6 +933,30 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session title",
   },
+  "volli:session-read-set": {
+    guard: (args): args is IpcArgs<"volli:session-read-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["sessionId"] === "string" &&
+        input["sessionId"].length > 0 &&
+        typeof input["unread"] === "boolean"
+      );
+    },
+    invalidError: "Invalid session read state",
+  },
+  "volli:session-peek-content": {
+    guard: (args): args is IpcArgs<"volli:session-peek-content"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      if (!isRecord(input)) return false;
+      // A peek's depth is the app's (`SESSION_PEEK_ENTRIES`), so the id is the
+      // whole ask and there is nothing else here to check.
+      return typeof input["sessionId"] === "string" && input["sessionId"].length > 0;
+    },
+    invalidError: "Invalid session peek",
+  },
   "volli:session-stop": {
     guard: (args): args is IpcArgs<"volli:session-stop"> => {
       if (args.length !== 1) return false;

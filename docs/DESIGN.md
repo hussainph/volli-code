@@ -54,7 +54,7 @@ plane, ticket detail), `pt-8` (32px) on roomy reading surfaces, `pb-16` (64px) �
 the half-steps (`0.5` `1.5` `2.5` `3.5`) and the orphans (`3` `7` `10`)
 are gone, and a new one is a change argued here rather than a value picked in a component.
 
-**Nine recorded exceptions**, each because the ladder's fixed rungs cannot express a
+**Thirteen recorded exceptions**, each because the ladder's fixed rungs cannot express a
 measured piece of geometry rather than a value chosen locally. They are commented at their site;
 do not re-collapse them without looking at the surface:
 
@@ -69,6 +69,10 @@ do not re-collapse them without looking at the surface:
 | `ui/list-row.tsx` `density="two-line"` | `py-1.5` | Two `text-ui` line boxes + 12 keeps the measured 52px two-line row; `py-2` grows every row of a dense list to 56 and orphans the `min-h-13` floor. Recorded against the Diffs page until the row became a primitive — it was a fact about the object, and the Files page's 56 was the drift |
 | `ui/list-row.tsx` `ListRowSkeleton` | `gap-1.5` | Its 16px/14px bars need the 6px join to preserve the measured two-line placeholder footprint; `gap-2` changes that first paint before the labels replace it |
 | `chat/transcript-skeleton.tsx` | `gap-1.5` | Its 14px assistant bars sit on a 20px top-to-top placeholder rhythm (14 + 6); `gap-2` makes the transcript's loading drawing taller before prose replaces it |
+| `session-peek/session-peek-card.tsx` card grid | `p-3` · `px-3` · `py-3` · `gap-3` | The peek's 12px inset is `RAIL_PANEL_INSET`'s narrow rung measured onto a popover, and for the same reason that one is recorded: 8 halves the edge of a floating card, and 16 inside a 360px card costs a line of the five-line summary fold. The block rhythm is that one measure turned vertical — inset and rhythm are the same number, which is what makes the two peek cards read as one surface |
+| `session-peek/session-peek-card.tsx` lead column | `pt-0.5` · `gap-0.5` · `gap-3.5` | The card's lead column is 24px + 8, so text starts 44px in everywhere. The 2px top nudge centres a 20px first line on that 24px mark and the 2px join binds the title to its own meta line (`sidebar/session-band-row.tsx`'s fact about the same two lines); the crumb's 14px is measured backwards from the 44px edge — a 12px glyph inside a `px-2` button pulled back 2px lands there at 14 and nowhere else |
+| `session-peek/session-peek-card.tsx` ghost buttons | `-ml-1.5` · `-ml-0.5` | Optically aligning a ghost button's icon to the lead column is that control's own inset subtracted — 6px for `size="sm"`, 2px for `size="xs"`. A negative of another component's padding is a measurement of `ui/button.tsx`, not a rung any ladder can hold |
+| `session-peek/ticket-peek-card.tsx` drill rows | `py-1.5` | A drill row is a two-line row (title + summary), so it takes the same 6px `ui/list-row.tsx` records for `density="two-line"`; the list's own 6px then meets it to make the card's measured 12px at the top and bottom edge. `py-2` on either half breaks the inset the header already sets |
 
 **Responsiveness is the whitespace, not breakpoints:** `<ContentColumn>` is
 `mx-auto w-full max-w-content px-gutter` — on wide windows the side margins grow; as the window

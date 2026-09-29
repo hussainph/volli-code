@@ -196,6 +196,10 @@ import type {
   RevealResult,
   SessionActivityNotice,
   SessionHarnessNotice,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
   SessionStopInput,
@@ -672,6 +676,27 @@ const api = {
      */
     stop: (input: SessionStopInput): Promise<SessionStopResult> =>
       invoke("volli:session-stop", input),
+    /**
+     * Marks a Session read or unread (VC-30) — `U`, the row's context menu,
+     * opening it, or answering it from a peek card.
+     *
+     * The row every window draws follows on `onActivity`: main persists the
+     * receipt and re-publishes that Session's listing row through the same
+     * broadcast the push channel uses, because this write moves no ledger fact
+     * for the activity watch to notice.
+     */
+    setRead: (input: SessionReadSetInput): Promise<SessionReadSetResult> =>
+      invoke("volli:session-read-set", input),
+    /**
+     * One fold of a Session for a peek card (VC-30): its transcript tail, the
+     * question it is asking, and the counts beside them.
+     *
+     * A pull, deliberately: a peek adopts nothing and subscribes to nothing, so
+     * sweeping the pointer down a sidebar costs reads and leaves nothing to
+     * tear down. Acting on what it shows is a separate, explicit intent.
+     */
+    peekContent: (input: SessionPeekContentInput): Promise<SessionPeekContentResult> =>
+      invoke("volli:session-peek-content", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count

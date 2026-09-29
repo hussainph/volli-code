@@ -1,6 +1,10 @@
 import { canResumeTerminalRecord, sessionSourceLabel } from "@volli/session-presentation";
 import {
+  applyHeldOrder,
   isListableSession,
+  isSessionUnread,
+  sessionOrderPhaseOf,
+  type SessionOrderMember,
   type ChatSessionRecord,
   type HarnessAdapterLookup,
   type SessionActivityState,
@@ -359,6 +363,36 @@ export function buildTicketChatSessionRows(
     }));
 }
 
+/**
+ * A ticket's chat rows split into the live half and the folded record — the
+ * chat counterpart of {@link groupSessionRows}, and the one place the rail
+ * decides which half a chat Session belongs to.
+ *
+ * TWO FACTS DECIDE IT, not one. `isLive` is the Session's own lifecycle
+ * (VC-406), and UNREAD is its own axis on top of that (VC-30, D6): work nobody
+ * has seen is never retired for being old or idle. The rail used to split on
+ * `isLive` alone, so a Session that left a question or a finished turn behind
+ * and then went quiet dropped into the collapsed record — taking its unread dot
+ * with it, behind a caret, which is precisely the state the dot exists to
+ * announce. A row is in the live half while it is live OR unread; only a read,
+ * finished Session becomes a record.
+ *
+ * `unread` is the ticket's set from {@link ticketSessionUnreadIds}, keyed by
+ * Session id — the same read the rows and the peek draw from, so a row cannot
+ * be folded and dotted by two different answers to one question.
+ */
+export function groupChatSessionRows(
+  rows: readonly TicketChatSessionRow[],
+  unread: ReadonlySet<string>,
+): { current: TicketChatSessionRow[]; history: TicketChatSessionRow[] } {
+  const current: TicketChatSessionRow[] = [];
+  const history: TicketChatSessionRow[] = [];
+  for (const chatRow of rows) {
+    (chatRow.isLive || unread.has(chatRow.record.sessionId) ? current : history).push(chatRow);
+  }
+  return { current, history };
+}
+
 /** {@link filterSessionHistory}'s title+source match, over chat rows instead of durable records. */
 export function filterChatSessionHistory(
   rows: readonly TicketChatSessionRow[],
@@ -436,6 +470,14 @@ export const SESSION_ROSTER_FILTER_THRESHOLD = 4;
  * make it harder to date. `toSorted` is stable by specification, so "newest
  * first within a rank" is a property of this function rather than of the engine
  * running it.
+ *
+ * WHICH SURFACE USES WHICH (VC-30). This is a re-sort on every build, so a row
+ * moves under the pointer that is reaching for it. The in-ticket rail therefore
+ * draws {@link orderSessionRailRowsByHold} instead — the HELD order both
+ * sidebars share (D7), which lifts on the same events and then keeps still
+ * while a person is pointing at it. This rule stays because Home's roster is
+ * not a hover surface: it is read top-down in a glance, has no peek and no
+ * hold, and attention-first is exactly what it wants.
  */
 export function orderSessionRailRowsByAttention(rows: readonly SessionRailRow[]): SessionRailRow[] {
   return rows.toSorted(
@@ -443,6 +485,73 @@ export function orderSessionRailRowsByAttention(rows: readonly SessionRailRow[])
       sessionAttentionRank(sessionRailRowDotState(left)) -
       sessionAttentionRank(sessionRailRowDotState(right)),
   );
+}
+
+/**
+ * The row id the peek and the held order address a rail row by — the same
+ * `chat:` / `session:` ids the sidebar's listing mints
+ * (`sidebar/active-session-listing.ts`, read back by
+ * `session-peek/peek-subject.ts`).
+ *
+ * One vocabulary across both sidebars is what lets one committed order and one
+ * peek controller serve them: a row id that meant something different here
+ * would make the rail's members unaddressable by the shared rules.
+ */
+export function sessionRailRowId(row: SessionRailRow): string {
+  return row.kind === "chat" ? `chat:${row.row.record.sessionId}` : `session:${row.row.record.id}`;
+}
+
+/** The bare Session id a rail row stands for. */
+export function sessionRailRowSessionId(row: SessionRailRow): string {
+  return row.kind === "chat" ? row.row.record.sessionId : row.row.record.id;
+}
+
+/**
+ * The rail's membership for `stores/session-order.ts`, in its current order.
+ *
+ * The PHASE is `sessionOrderPhaseOf` in `@volli/shared` — the one reading both
+ * sidebars share (D7). The rail used to spell its own, and the two disagreed
+ * about `setup` and `starting`, so one event lifted a Session's rail row and
+ * left its band row where it was. It is read off {@link sessionRailRowDotState}
+ * rather than off a second look at the record, so the order lifts a row on
+ * exactly the state its own mark is drawing.
+ */
+export function sessionRailOrderMembers(rows: readonly SessionRailRow[]): SessionOrderMember[] {
+  return rows.map((row) => ({
+    id: sessionRailRowId(row),
+    phase: sessionOrderPhaseOf(sessionRailRowDotState(row)),
+  }));
+}
+
+/**
+ * The live rows in the order the rail's own key last committed to (D7,
+ * amendment A2) — a row the order does not name keeps its place at the end,
+ * which is `applyHeldOrder`'s rule and not a second one.
+ */
+export function orderSessionRailRowsByHold(
+  rows: readonly SessionRailRow[],
+  order: readonly string[],
+): SessionRailRow[] {
+  const identified = rows.map((row) => ({ id: sessionRailRowId(row), row }));
+  return applyHeldOrder(order, identified).map((entry) => entry.row);
+}
+
+/**
+ * Which of a ticket's Sessions have unread work, by Session id (VC-30).
+ *
+ * Read off the LISTING rows, for the reason {@link ticketSessionProvenance}
+ * above is: unread rides on the row wrapper (`SessionListingRow.read`, sparse —
+ * absent is read), and the rail splits its listing into two record arrays
+ * before it builds view rows, so the wrapper is gone by the time a row is
+ * drawn. A ticket nobody has left work in contributes an empty set.
+ */
+export function ticketSessionUnreadIds(rows: readonly SessionListingRow[]): ReadonlySet<string> {
+  const unread = new Set<string>();
+  for (const row of rows) {
+    if (!isSessionUnread(row.read)) continue;
+    unread.add(row.kind === "terminal" ? row.record.id : row.record.sessionId);
+  }
+  return unread;
 }
 
 /**

@@ -392,8 +392,24 @@ export default defineConfig(({ mode }) => ({
         // and which command that offer would run.
         "src/components/workspace-dependencies-offer-model.ts",
         "src/components/sessions/terminal-tab-state.ts",
+        // The hover peek's three decisions (VC-30), pure `.ts` beside the cards
+        // for `tab-focus.ts`'s reason: none of them is visible in a screenshot
+        // of an open card. `peek-machine.ts` owns dwell, the warm switch and the
+        // suppression window — a state machine whose failure is a card that
+        // opens on a pointer merely crossing a row, or never opens at all.
+        // `peek-geometry.ts` is arithmetic against real bounds, where a missed
+        // branch is a card off the edge of the window. `peek-subject.ts` decides
+        // WHAT a row peeks — a Session, a ticket folder, or nothing.
+        "src/components/session-peek/peek-machine.ts",
+        "src/components/session-peek/peek-geometry.ts",
+        "src/components/session-peek/peek-subject.ts",
         "src/components/sidebar/active-session-listing.ts",
         "src/components/sidebar/session-band-filter.ts",
+        // Which row the keyboard is on, and what each key does to the band
+        // (VC-30 D8): folders and their open Sessions step as one order, so an
+        // off-by-one here is focus landing inside a collapsed group nobody can
+        // see. Pure precisely so the gate can reach it.
+        "src/components/sidebar/session-band-keys.ts",
         "src/components/sidebar/edge-region.ts",
         // How the shell's pin/unpin journey decides what to do next (VC-359).
         // Enrolled on `edge-region.ts`'s argument and then some: the rule holds
@@ -655,6 +671,11 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/theme-overlay.ts",
         "**/src/main/db/export.ts",
         "**/src/main/db/theme-repo.ts",
+        // Where "unread" is written down (VC-30). Enrolled beside the other
+        // named db modules for the reason the notification boundary is: a
+        // receipt read or written wrong is work a person never sees they have,
+        // and nothing on screen says the dot was the part that was broken.
+        "**/src/main/db/session-read-repo.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a
@@ -664,6 +685,13 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/session-rpc-ipc.ts",
         "**/src/main/session-runtime/sessions.ts",
         "**/src/main/session-control/activity-watch.ts",
+        // The turn boundary that decides unread (VC-30), beside the watch it
+        // decorates: main is the only process that knows both that a turn ended
+        // and whether anyone was looking, so every branch of this is one nobody
+        // else can check. The peek's fold rides here too — it is the whole of
+        // what a card is allowed to say about a Session it never adopted.
+        "**/src/main/session-control/session-read-watch.ts",
+        "**/src/main/session-control/peek-content.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

@@ -15,6 +15,9 @@ import type {
   RetentionArchiveCleanResult,
   RetentionKeepResult,
   RetentionTtlResult,
+  SessionActivityNotice,
+  SessionPeekContentResult,
+  SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
   SessionStopResult,
@@ -221,6 +224,7 @@ import { insertSession } from "./session-control/test-support";
 import { recordAutomationRun } from "./db/automations-repo";
 import { recordSessionStartedOnce } from "./db/events-repo";
 import { readSessionProvenance } from "./db/session-provenance-repo";
+import { readSessionUnread } from "./db/session-read-repo";
 import { recordMcpOperation } from "./db/mcp-operations-repo";
 import { insertProject } from "./db/projects-repo";
 import { openTestDb, testProject, testSession } from "./db/test-helpers";
@@ -2568,6 +2572,165 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
       ok: false,
       error: "Invalid ticket",
     });
+  });
+});
+
+describe("volli:session-read-set (VC-30)", () => {
+  /** One chat Session, minted through the engine the handlers are given. */
+  async function chatSession(
+    sessionEngine: ReturnType<typeof createDesktopSessionEngine>,
+    ticketId: string | null,
+  ): Promise<string> {
+    const created = await sessionEngine.createSession({
+      commandId: "create-read",
+      projectId: createProject(),
+      ticketId,
+      role: roleImpliedByTicket(ticketId),
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    return created.session.id;
+  }
+
+  it("persists the receipt and re-publishes the row every sidebar holds", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const marked = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+
+    expect(marked.ok && marked.read.unreadSince).toEqual(expect.any(Number));
+    // The durable answer, read back through the same door a listing reads.
+    expect(readSessionUnread(ctx.db, sessionId).unreadSince).toBe(
+      marked.ok ? marked.read.unreadSince : null,
+    );
+    // And the row itself, on the push channel: this write moves no ledger fact,
+    // so without the re-publish the other sidebar and the second window would
+    // keep drawing the old dot.
+    const pushed = dataChangedSends.filter((send) => send.channel === "volli:session-activity");
+    expect(pushed).toHaveLength(1);
+    const notice = pushed[0]!.payload as SessionActivityNotice;
+    expect(rowId(notice.row)).toBe(sessionId);
+    expect(notice.row.read).toEqual(marked.ok ? marked.read : null);
+  });
+
+  it("clears the receipt again, and publishes a row with nothing to say", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionId = await chatSession(sessionEngine, null);
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: true,
+    });
+    dataChangedSends.length = 0;
+
+    const read = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId,
+      unread: false,
+    });
+
+    expect(read).toEqual({ ok: true, read: { unreadSince: null } });
+    const notice = dataChangedSends.find((send) => send.channel === "volli:session-activity")
+      ?.payload as SessionActivityNotice;
+    // The resting state is the field's absence — the same row the fetch returns.
+    expect(notice.row).not.toHaveProperty("read");
+  });
+
+  it("refuses a Session the ledger does not have, and publishes nothing", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+    dataChangedSends.length = 0;
+
+    const result = await invoke<Promise<SessionReadSetResult>>("volli:session-read-set", {
+      sessionId: "never-minted",
+      unread: true,
+    });
+
+    expect(result).toEqual({ ok: false, error: "Unknown session" });
+    expect(dataChangedSends.filter((send) => send.channel === "volli:session-activity")).toEqual(
+      [],
+    );
+  });
+
+  it("rejects invalid input", () => {
+    expect(invoke<SessionReadSetResult>("volli:session-read-set", { sessionId: "s1" })).toEqual({
+      ok: false,
+      error: "Invalid session read state",
+    });
+    expect(
+      invoke<SessionReadSetResult>("volli:session-read-set", { sessionId: "", unread: true }),
+    ).toEqual({ ok: false, error: "Invalid session read state" });
+  });
+});
+
+describe("volli:session-peek-content (VC-30)", () => {
+  it("answers the Session's tail and the question it is asking", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const created = await sessionEngine.createSession({
+      commandId: "create-peek",
+      projectId: createProject(),
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: "Plan the migration",
+      provenance: {
+        source: { kind: "user", id: "test", detail: null },
+        venue: { id: "local", kind: "local" },
+      },
+    });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: created.session.id,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      content: {
+        sessionId: created.session.id,
+        // No artifact store in this composition: counts, and no invented
+        // entries (and `unreadable` stays 0 — nothing looked).
+        entries: [],
+        question: null,
+        turns: 0,
+        turnDepth: 0,
+        unreadable: 0,
+        lastActivityAt: expect.any(Number),
+      },
+    });
+  });
+
+  it("answers null content for a Session the ledger does not have", async () => {
+    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    handlers.clear();
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
+
+    const result = await invoke<Promise<SessionPeekContentResult>>("volli:session-peek-content", {
+      sessionId: "never-minted",
+    });
+
+    expect(result).toEqual({ ok: true, content: null });
+  });
+
+  it("rejects invalid input", () => {
+    expect(
+      invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: 7 }),
+    ).toEqual({ ok: false, error: "Invalid session peek" });
+    expect(
+      invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: "" }),
+    ).toEqual({ ok: false, error: "Invalid session peek" });
   });
 });
 

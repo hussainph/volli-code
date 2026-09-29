@@ -1,5 +1,10 @@
-import { PERSON_STARTED } from "@volli/shared";
-import type { SessionListingRow, SessionProjection, SessionProvenance } from "@volli/shared";
+import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
+import type {
+  SessionListingRow,
+  SessionProjection,
+  SessionProvenance,
+  SessionReadState,
+} from "@volli/shared";
 
 import { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
 import { terminalSessionRecord } from "./terminal-attachment";
@@ -33,12 +38,29 @@ const NO_LIVE_ATTACHMENTS: ReadonlySet<string> = new Set();
  * `liveAttachmentIds` is the process-local half of the projection. Structured
  * attachments deliberately remain durably open across relaunch so Pi can lazily
  * rehydrate them; only an id present in this set has an executor bound now.
+ *
+ * `read` arrives the same way `provenance` does, and for the same reason
+ * (VC-30): whether a Session has unread work is a durable fact neither
+ * attachment projection can see — it lives in `session_read_receipts` — so the
+ * host reads it and hands it over. It defaults to {@link SESSION_READ}, the
+ * resting state, so a caller with no receipt reader marks nothing rather than
+ * guessing. Both app callers supply one, which is what keeps a fetched row and
+ * a pushed row identical.
+ *
+ * Unlike `provenance`, the resting answer is written as the field's ABSENCE
+ * rather than as a value — `SessionListingRow.read` is optional precisely so a
+ * row with nothing to say carries nothing, and `sessionReadStateOf` turns the
+ * miss back into {@link SESSION_READ}. That is what keeps a read Session's row
+ * byte-identical to the row this builder returned before unread existed, which
+ * matters because the renderer upserts whole rows and the push channel gates on
+ * them differing.
  */
 export function sessionListingRow(
   session: SessionProjection,
   provenance: SessionProvenance = PERSON_STARTED,
   /** Attachment ids with an executor binding in this process right now. */
   liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
+  read: SessionReadState = SESSION_READ,
 ): SessionListingRow {
   const terminal = terminalSessionRecord(session);
   // The fold's own total, taken whichever arm the row lands on. A terminal row
@@ -47,7 +69,9 @@ export function sessionListingRow(
   // spend, and reading it off the projection is what keeps the two arms from
   // disagreeing about the same Session.
   const usage = session.usage;
-  if (terminal !== null) return { kind: "terminal", record: terminal, usage, provenance };
+  const unread = read.unreadSince === null ? {} : { read };
+  if (terminal !== null)
+    return { kind: "terminal", record: terminal, usage, provenance, ...unread };
   const structuredAttachment = latestStructuredAttachment(session.attachments);
   const executorBound =
     structuredAttachment !== null && liveAttachmentIds.has(structuredAttachment.id);
@@ -56,6 +80,7 @@ export function sessionListingRow(
     record: chatSessionRecord(session, executorBound),
     usage,
     provenance,
+    ...unread,
   };
 }
 
@@ -73,8 +98,9 @@ export function sessionListingRows(
   sessions: readonly SessionProjection[],
   provenanceOf: (session: SessionProjection) => SessionProvenance = () => PERSON_STARTED,
   liveAttachmentIds: ReadonlySet<string> = NO_LIVE_ATTACHMENTS,
+  readOf: (session: SessionProjection) => SessionReadState = () => SESSION_READ,
 ): SessionListingRow[] {
   return sessions.map((session) =>
-    sessionListingRow(session, provenanceOf(session), liveAttachmentIds),
+    sessionListingRow(session, provenanceOf(session), liveAttachmentIds, readOf(session)),
   );
 }
