@@ -193,6 +193,26 @@ describe("ask_user tool", () => {
     expect(tool.description).toContain("2-5");
   });
 
+  it("guides concise questions with choice-specific detail beneath the answer labels", () => {
+    const tool = createAskUserTool(async () => CHOSE_ONE);
+
+    expect(tool.description).toContain("one or two short sentences");
+    expect(tool.description).toContain(
+      "each option's description (the subtitle/body beneath its label)",
+    );
+    expect(tool.description).toContain(
+      "Keep only the context needed to understand the decision in the question",
+    );
+    expect(tool.parameters.properties.question).toMatchObject({
+      description: expect.stringContaining("options[].description"),
+    });
+    expect(tool.parameters.properties.options.items.properties.description).toMatchObject({
+      description: expect.stringContaining(
+        "Supporting context, trade-offs, or consequences for this option, shown beneath its label",
+      ),
+    });
+  });
+
   it("declares one required question beside optional options and multiplicity", () => {
     const tool = createAskUserTool(async () => CHOSE_ONE);
 

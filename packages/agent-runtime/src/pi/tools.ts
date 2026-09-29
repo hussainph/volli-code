@@ -365,19 +365,26 @@ const ASK_USER_DESCRIPTION = [
   "Ask the person driving this session a question, and wait for their answer.",
   "Use it only for a decision that genuinely blocks you and is theirs to make: a product or scope choice, an ambiguity in what they asked for, a trade-off with no defensible default.",
   "Do not use it for anything you can find out by reading the workspace, to narrate progress, or to confirm work you were already told to do.",
-  "Keep the question to one or two sentences. Offer 2-5 concrete options when the answer is a choice; omit options entirely when you need them to write something.",
+  "Keep the question to one or two short sentences. Offer 2-5 concrete options when the answer is a choice; omit options entirely when you need them to write something.",
+  "Prefer putting choice-specific context, trade-offs, and consequences in each option's description (the subtitle/body beneath its label) instead of making the question long. Keep only the context needed to understand the decision in the question.",
   "The turn is blocked until they answer.",
 ].join(" ");
 
 const askUserSchema = Type.Object({
-  question: Type.String({ description: "The question to put to them, in one or two sentences." }),
+  question: Type.String({
+    description:
+      "The decision to put to them, in one or two short sentences. Put option-specific detail in options[].description.",
+  }),
   options: Type.Optional(
     Type.Array(
       Type.Object({
         id: Type.String({ description: "Stable id for this option; returned when it is chosen." }),
         label: Type.String({ description: "The answer itself, in a few words." }),
         description: Type.Optional(
-          Type.String({ description: "One line of extra context for this option." }),
+          Type.String({
+            description:
+              "Supporting context, trade-offs, or consequences for this option, shown beneath its label. Prefer this field over a long question.",
+          }),
         ),
       }),
       { description: "2-5 answers to choose between. Omit entirely to ask for free text." },
