@@ -151,8 +151,8 @@ export function BrowserTabCard({
           host.sessionTitle,
         );
   const driven = (live?.ownerSessionId ?? facet.ownerSessionId) !== null;
-  // A replay exists only for what a trace records: a navigate or act in a tab
-  // a Session owns (VC-453). The transcript is durable and so is the trace, so
+  // A replay exists only for what a trace records: a call against a tab a
+  // Session owns (VC-453) — every browse row but a tab listing. The transcript is durable and so is the trace, so
   // this needs no live tab — it is how a reopened chat replays after a relaunch.
   const openTrace = host?.openTrace;
   const replay =

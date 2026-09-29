@@ -380,9 +380,10 @@ _Avoid_: pointer overlay, ghost cursor, agent mouse
 
 **Browser Trace**:
 The replayable record of what one Session did in one Browser Tab it owns
-(VC-453): each `browser_navigate` and `browser_act`, in the order they
-settled — answered, refused or failed — with its target, page, time and the
-frame the host took after it. Only the host writes it, and only for a tab a
+(VC-453): every browser call it made against that tab — navigate, act,
+snapshot, find, screenshot, console — in the order they settled (answered,
+refused or failed), with its target, page, time and, for a call that changed
+the page or took a screenshot, the frame the host kept. Only the host writes it, and only for a tab a
 Session created: a person's tab is never recorded, even while a Session
 holds it. Page text in it (a title, an element's name) is cleaned on the way
 in, and nothing typed into a page is kept. It is the person's evidence and

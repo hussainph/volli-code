@@ -70,7 +70,8 @@ describe("cleanBrowserTraceText", () => {
 describe("guards", () => {
   it("knows the recorded actions and outcomes", () => {
     expect(isBrowserTraceAction("click")).toBe(true);
-    expect(isBrowserTraceAction("read")).toBe(false);
+    expect(isBrowserTraceAction("find")).toBe(true);
+    expect(isBrowserTraceAction("tabs")).toBe(false);
     expect(isBrowserTraceAction(3)).toBe(false);
     expect(isBrowserTraceOutcome("refused")).toBe(true);
     expect(isBrowserTraceOutcome("maybe")).toBe(false);
@@ -152,7 +153,7 @@ describe("readBrowserTrace", () => {
         good,
         "not a step",
         { ...good, seq: -1 },
-        { ...good, action: "read" },
+        { ...good, action: "tabs" },
         { ...good, at: "then" },
         { ...good, outcome: "meh" },
         { ...good, generation: "1" },

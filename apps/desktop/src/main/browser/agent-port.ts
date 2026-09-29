@@ -121,7 +121,7 @@ export interface AgentBrowserHost {
   releaseAllHeldBy(holder: BrowserSessionHolder, why: BrowserHoldEnd): string[];
   forgetSession(holder: BrowserSessionHolder): void;
   /**
-   * Records one settled navigate or act for replay (VC-453); the host decides
+   * Records one settled call against a tab for replay (VC-453); the host decides
    * whether the tab is one it records. Optional so a test host can omit it.
    */
   recordTraceStep?(step: BrowserTraceStepInput): void;
@@ -815,11 +815,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     navigate: scoped(
       traced.navigate(options.host, options.scope, session.sessionId, port.navigate),
     ),
-    snapshot: scoped(port.snapshot),
+    snapshot: scoped(traced.snapshot(options.host, session.sessionId, port.snapshot)),
     act: scoped(traced.act(options.host, session.sessionId, port.act)),
-    find: scoped(port.find),
-    screenshot: scoped(port.screenshot),
-    console: scoped(port.console),
+    find: scoped(traced.find(options.host, session.sessionId, port.find)),
+    screenshot: scoped(traced.screenshot(options.host, session.sessionId, port.screenshot)),
+    console: scoped(traced.console(options.host, session.sessionId, port.console)),
     acquire: scoped(port.acquire),
     release: scoped(port.release),
   };

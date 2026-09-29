@@ -247,7 +247,7 @@ describe("BrowserTabCard", () => {
     expect(button("Close")).toBeDefined();
   });
 
-  it("offers Replay for a Session's navigate or act, even once the tab is gone (VC-453)", async () => {
+  it("offers Replay for a Session's call against its tab, even once the tab is gone (VC-453)", async () => {
     const openTrace = vi.fn();
     const card = { ...host(), openTrace };
 
@@ -267,12 +267,12 @@ describe("BrowserTabCard", () => {
     expect(button("Close")).toBeDefined();
   });
 
-  it("offers no Replay where nothing was recorded: a person's tab, a read, no tab, or no replay to open", async () => {
+  it("offers no Replay where nothing was recorded: a person's tab, a tab listing, no tab, or no replay to open", async () => {
     const card = { ...host(), openTrace: vi.fn() };
 
     await draw(card, facet({ ownerSessionId: null }));
     expect(button("Replay")).toBeUndefined();
-    await draw(card, facet({ action: "read" }));
+    await draw(card, facet({ action: "tabs" }));
     expect(button("Replay")).toBeUndefined();
     await draw(card, facet({ tabId: null }));
     expect(button("Replay")).toBeUndefined();

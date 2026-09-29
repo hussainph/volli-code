@@ -2,7 +2,7 @@
  * Acceptance smoke for Browser Traces (VC-453), against the BUILT app, across
  * a relaunch:
  *
- *   1. a Session that navigates and acts in its own tab produces a trace whose
+ *   1. a Session that navigates, reads, finds and acts in its own tab produces a trace whose
  *      steps match its calls in order — a refused act included;
  *   2. each step's frame is on disk under userData/browser-traces, and a tab
  *      the PERSON created, driven by the same Session, left nothing there;
@@ -95,6 +95,7 @@ async function driveSession(app, input) {
       out.tabId = opened.tabId;
       out.calls.push("open");
       const snap = await port.snapshot({ tabId: opened.tabId, signal });
+      out.calls.push("read");
       const ref = /button[^\n]*\[ref=(e\d+)\]/.exec(snap.snapshotText)?.[1];
       await port.act({
         tabId: opened.tabId,
@@ -119,6 +120,7 @@ async function driveSession(app, input) {
       });
       out.calls.push("open");
       const next = await port.snapshot({ tabId: opened.tabId, signal });
+      out.calls.push("read");
       await port.act({
         tabId: opened.tabId,
         generation: next.generation,
@@ -127,6 +129,9 @@ async function driveSession(app, input) {
         signal,
       });
       out.calls.push("press");
+      // A search (VC-364) is a call against the tab too, and a step like any other.
+      await port.find({ tabId: opened.tabId, query: "Sign in", signal });
+      out.calls.push("find");
 
       // The person's own tab, driven by the same Session: never recorded.
       const person = host.open({
@@ -246,6 +251,12 @@ async function walkReplay(page, pictures) {
   return seen;
 }
 
+/** The frame each step of one tab's trace shows: its own, else the tab's last. */
+function shownFrames(steps) {
+  let last = null;
+  return steps.map((step) => (last = step.pictureId ?? last));
+}
+
 /** Waits for the replay to show one frame, fully decoded. */
 async function frameLoaded(page, pictureId) {
   return waitUntil(
@@ -336,7 +347,7 @@ async function main() {
 
   await must(
     1,
-    "a Session's navigates and acts become one trace, in order, refusal included",
+    "a Session's calls in its own tab become one trace, in order — find and a refusal included",
     async () => {
       const result = await tracesOf(page, sessionId);
       recorded = result.ok ? result.traces : [];
@@ -344,15 +355,16 @@ async function main() {
       const actual = steps.map((step) =>
         step.outcome === "ok" ? step.action : `${step.action}(${step.outcome})`,
       );
-      const expected = ["open", "click", "click(refused)", "open", "press"];
+      const expected = driven.calls;
       return {
         ok:
           driven.error === undefined &&
           recorded.length === 1 &&
           recorded[0].tabId === driven.tabId &&
           JSON.stringify(actual) === JSON.stringify(expected) &&
-          steps[1].target === "Sign in" &&
-          steps[2].rule === driven.refusal &&
+          steps[2].target === "Sign in" &&
+          steps[3].rule === driven.refusal &&
+          steps[7].target === "Sign in" &&
           steps.every((step, index) => step.seq === index),
         detail: `calls=${JSON.stringify(driven.calls)} pictures=${JSON.stringify(steps.map((step) => step.pictureId?.slice(0, 8) ?? null))} steps=${JSON.stringify(actual)} refusal=${driven.refusal} ${driven.error ?? ""}`,
       };
@@ -396,7 +408,7 @@ async function main() {
     async () => {
       await openReplayFromIsland(page, driven.tabId);
       const opened = await replayPosition(page).textContent();
-      const expectedFrames = recorded[0].steps.map((step) => step.pictureId);
+      const expectedFrames = shownFrames(recorded[0].steps);
       const walked = await walkReplay(page, expectedFrames);
       await page.keyboard.press("ArrowLeft");
       await page.keyboard.press("ArrowLeft");
@@ -409,14 +421,21 @@ async function main() {
       const frames = walked.map((one) => one.frame?.id ?? null);
       return {
         ok:
-          opened === "Step 5 of 5" &&
-          walked.length === 5 &&
-          walked[0].caption === "Opened" &&
-          walked[1].caption === "Clicked “Sign in”" &&
-          /^Clicked e\d+$/.test(walked[2].caption ?? "") &&
-          walked[2].trouble === `refused by ${driven.refusal}` &&
-          walked[3].caption === "Opened" &&
-          walked[4].caption === "Pressed Tab" &&
+          opened === "Step 8 of 8" &&
+          walked.length === 8 &&
+          JSON.stringify(walked.map((one) => one.caption)) ===
+            JSON.stringify([
+              "Opened",
+              "Read page",
+              "Clicked “Sign in”",
+              walked[3].caption,
+              "Opened",
+              "Read page",
+              "Pressed Tab",
+              "Searched for “Sign in”",
+            ]) &&
+          /^Clicked e\d+$/.test(walked[3].caption ?? "") &&
+          walked[3].trouble === `refused by ${driven.refusal}` &&
           JSON.stringify(frames) === JSON.stringify(expectedFrames) &&
           walked.every((one) => one.frame === null || one.frame.width > 0),
         detail: `opened="${opened}" captions=${JSON.stringify(walked.map((one) => one.caption))} frames=${JSON.stringify(frames.map((id) => id?.slice(0, 8) ?? null))}`,
@@ -520,7 +539,7 @@ async function main() {
       });
       await openReplayFromIsland(page, tabId);
       const opened = await replayPosition(page).textContent();
-      const before = recorded[0].steps.map((step) => step.pictureId);
+      const before = shownFrames(recorded[0].steps);
       const after = await tracesOf(page, sessionId);
       const latest = after.ok ? (after.traces.at(-1)?.steps[0]?.pictureId ?? null) : null;
       const walked = await walkReplay(page, [...before, latest]);
@@ -530,7 +549,7 @@ async function main() {
       const replayed = walked.slice(0, before.length).map((one) => one.frame?.id ?? null);
       return {
         ok:
-          opened === "Step 6 of 6" &&
+          opened === "Step 9 of 9" &&
           walked[0].caption === "Opened" &&
           JSON.stringify(replayed) === JSON.stringify(before) &&
           replayed.some((id) => id !== null),

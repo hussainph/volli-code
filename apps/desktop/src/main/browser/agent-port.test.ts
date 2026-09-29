@@ -1625,7 +1625,7 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
     return { port: traced, steps, fake };
   }
 
-  it("hears every navigate and act in the order they settled, with the page's name for the target", async () => {
+  it("hears every call against a tab in the order they settled — reads and finds too — with the page's name for the target", async () => {
     const { port: traced, steps } = tracing([]);
 
     const opened = await traced.navigate({
@@ -1648,14 +1648,35 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
       signal,
     });
     await traced.navigate({ tabId: opened.tabId, navigation: { kind: "reload" }, signal });
+    await traced.find({ tabId: opened.tabId, query: "Save", signal });
+    const shot = await traced.screenshot({ tabId: opened.tabId, signal });
+    await traced.console({ tabId: opened.tabId, signal });
+    await traced.tabs({ signal });
 
-    // Reads are not steps: a snapshot changes nothing.
+    // A tab listing names no tab, and is the one call a trace has no place for.
     expect(steps.map((step) => [step.action, step.target, step.outcome])).toEqual([
       ["open", null, "ok"],
+      ["read", null, "ok"],
       ["click", "Save", "ok"],
       ["press", "Enter", "ok"],
       ["reload", null, "ok"],
+      ["find", "Save", "ok"],
+      ["screenshot", null, "ok"],
+      ["console", null, "ok"],
     ]);
+    // Reads carry no frame of their own, except the picture a screenshot kept.
+    expect(steps.map((step) => step.pictureId === null)).toEqual([
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+    ]);
+    expect(steps[6]?.pictureId).toBe(shot.picture);
+    expect(steps[1]?.generation).toBe(snap.generation);
     expect(steps[0]).toMatchObject({
       sessionId: ME.sessionId,
       tabId: opened.tabId,
@@ -1665,7 +1686,7 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
       rule: null,
       error: null,
     });
-    expect(steps[1]?.pictureId).toMatch(/^live:/);
+    expect(steps[2]?.pictureId).toMatch(/^live:/);
   });
 
   it("never records the text a type carried, only the field it went into", async () => {
@@ -1682,9 +1703,9 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
       signal,
     });
 
-    expect(steps).toHaveLength(1);
+    expect(steps.map((step) => step.action)).toEqual(["read", "type"]);
     expect(JSON.stringify(steps)).not.toContain("hunter2");
-    expect(steps[0]?.target).toBe("Save");
+    expect(steps[1]?.target).toBe("Save");
   });
 
   it("records a refused act with its rule, the page it was aimed at, and the ref the call named", async () => {
@@ -1839,6 +1860,16 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
 
     expect(steps).toMatchObject([
       { action: "open", tabId: "opened-1", url: "https://example.com/", outcome: "failed" },
+    ]);
+  });
+
+  it("records a console read against the page it read", async () => {
+    const { port: traced, steps } = tracing([
+      state({ tabId: "mine", createdBy: "session", ticketId: "t1", url: "https://example.com/a" }),
+    ]);
+    await expect(traced.console({ tabId: "mine", signal })).resolves.toBeDefined();
+    expect(steps.map((step) => [step.action, step.url])).toEqual([
+      ["console", "https://example.com/a"],
     ]);
   });
 

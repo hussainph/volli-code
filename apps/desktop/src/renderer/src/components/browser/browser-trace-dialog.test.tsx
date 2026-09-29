@@ -150,7 +150,10 @@ describe("BrowserTraceDialog", () => {
     expect(text()).toContain("Form");
     expect(text()).toContain("example.com/form");
     expect(text()).toContain("+4s");
-    expect(text()).toContain("No picture for this step");
+    // A refusal changed nothing and took no picture: the tab as its last step left it.
+    await act(async () => {});
+    expect(frame()).toBe("p-2");
+    expect(text()).toContain("As of step 2");
     expect(document.querySelector("[data-trace-outcome]")?.getAttribute("data-trace-outcome")).toBe(
       "refused",
     );
@@ -277,6 +280,12 @@ describe("BrowserTraceDialog", () => {
     expect(warn).toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("says so when a tab has no picture yet", async () => {
+    await open(api(() => [trace("tab-1", [step({ action: "read", target: null })])]));
+    expect(caption()).toBe("Read page");
+    expect(text()).toContain("No picture for this step");
   });
 
   it("says when nothing was recorded", async () => {

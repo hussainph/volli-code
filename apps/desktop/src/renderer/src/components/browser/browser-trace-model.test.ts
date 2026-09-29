@@ -8,6 +8,7 @@ import {
   elapsed,
   followTraceIndex,
   traceIndexAtOffset,
+  traceFrameShown,
   traceIndexForKey,
 } from "./browser-trace-model";
 
@@ -143,5 +144,20 @@ describe("elapsed", () => {
     expect(elapsed(42_500)).toBe("+42s");
     expect(elapsed(187_000)).toBe("+3m 07s");
     expect(elapsed(3_720_000)).toBe("+1h 02m");
+  });
+});
+
+describe("traceFrameShown", () => {
+  it("shows a step's own picture, and the tab's last one for a step that took none", () => {
+    const timeline = [
+      frame("one", { action: "read" }),
+      frame("one", { pictureId: "a" }),
+      frame("two", { pictureId: "b" }),
+      frame("one", { action: "find", target: "Save" }),
+    ];
+    expect(traceFrameShown(timeline, 0)).toBeNull();
+    expect(traceFrameShown(timeline, 1)).toEqual({ pictureId: "a", asOf: null });
+    expect(traceFrameShown(timeline, 3)).toEqual({ pictureId: "a", asOf: 2 });
+    expect(traceFrameShown(timeline, 9)).toBeNull();
   });
 });

@@ -1,7 +1,8 @@
 /**
  * A Browser Trace (VC-453): the replayable record of what one Session did in
- * one Browser Tab it owns — each navigate and act, in the order the host
- * answered them, with the picture the host took after it.
+ * one Browser Tab it owns — each call against the tab, in the order the host
+ * answered them, with the picture the host took after each one that changed
+ * the page.
  *
  * The transcript already says THAT a Session browsed; a trace is what lets a
  * person scrub back through WHAT it did once the live picture set has moved
@@ -43,9 +44,12 @@ export const BROWSER_TRACE_STEP_LIMIT = 150;
 export const BROWSER_TRACE_TEXT_LIMIT = 240;
 
 /**
- * The actions a trace records: the ones that change the page. Reads —
- * snapshot, console, a tab listing — change nothing and take no picture, and
- * a `browser_screenshot` is already the model's own kept picture.
+ * The actions a trace records: every call a Session makes against one of its
+ * tabs, so the steps match its tool calls in order — the ones that change the
+ * page (navigation and acts, each with the frame taken after it) and the
+ * reads (a snapshot, a find, a screenshot, the console), which change nothing
+ * and carry a frame only when the call itself took one. A tab listing names
+ * no tab, and is the one browser call a trace has no place for.
  */
 export const BROWSER_TRACE_ACTIONS = [
   "open",
@@ -59,6 +63,10 @@ export const BROWSER_TRACE_ACTIONS = [
   "hover",
   "scroll",
   "wait",
+  "read",
+  "find",
+  "screenshot",
+  "console",
 ] as const satisfies readonly ActivityBrowseAction[];
 
 export type BrowserTraceAction = (typeof BROWSER_TRACE_ACTIONS)[number];

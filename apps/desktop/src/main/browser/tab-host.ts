@@ -1568,7 +1568,7 @@ export class BrowserTabHost {
   }
 
   /**
-   * Records one settled navigate or act into the acting Session's trace for
+   * Records one settled call against a tab into the acting Session's trace for
    * the tab (VC-453) — or nothing, when the tab is not a Session's. A tab the
    * person created is never recorded, even while a Session holds it: their
    * pages carry their sign-ins, and the live card is all the evidence those

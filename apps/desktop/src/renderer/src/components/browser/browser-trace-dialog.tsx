@@ -53,6 +53,7 @@ import {
   browserTraceFacts,
   clampTraceIndex,
   followTraceIndex,
+  traceFrameShown,
   traceIndexAtOffset,
   traceIndexForKey,
 } from "@renderer/components/browser/browser-trace-model";
@@ -229,7 +230,7 @@ function TraceReplay({
         </div>
       ) : (
         <>
-          <Frame api={api} pictureId={current.step.pictureId} />
+          <Frame api={api} shown={traceFrameShown(timeline, at)} />
           <div
             className="flex shrink-0 flex-col gap-1 border-t border-border px-4 py-2 text-ui"
             data-trace-step={current.step.seq}
@@ -298,15 +299,24 @@ function TraceReplay({
 }
 
 /**
- * The frame the host took after the step. While the next one loads the last
- * frame stays up, dimmed, so stepping quickly reads as motion, not flicker.
+ * The frame the host took after the step — or, for a step that took none, the
+ * tab's last one, marked with the step it came from. While the next frame
+ * loads the last one stays up, dimmed, so stepping quickly reads as motion,
+ * not flicker.
  */
-function Frame({ api, pictureId }: { api: BrowserApi; pictureId: string | null }) {
+function Frame({
+  api,
+  shown,
+}: {
+  api: BrowserApi;
+  shown: { pictureId: string; asOf: number | null } | null;
+}) {
+  const pictureId = shown?.pictureId ?? null;
   const picture = useBrowserPicture(api, pictureId);
-  const [shown, setShown] = React.useState<string | null>(null);
+  const [drawn, setDrawn] = React.useState<string | null>(null);
   React.useEffect(() => {
-    if (picture.kind === "ready") setShown(picture.dataUrl);
-    if (picture.kind === "gone") setShown(null);
+    if (picture.kind === "ready") setDrawn(picture.dataUrl);
+    if (picture.kind === "gone") setDrawn(null);
   }, [picture]);
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-3">
@@ -314,19 +324,27 @@ function Frame({ api, pictureId }: { api: BrowserApi; pictureId: string | null }
         <span className="text-ui text-muted-foreground">No picture for this step</span>
       ) : picture.kind === "gone" ? (
         <span className="text-ui text-muted-foreground">Picture unavailable</span>
-      ) : shown === null ? (
+      ) : drawn === null ? (
         <div className="size-full animate-pulse rounded-sm bg-muted/50" aria-hidden />
       ) : (
         <img
-          alt="The page after this step"
-          src={shown}
+          alt={
+            shown?.asOf == null ? "The page after this step" : `The page as of step ${shown.asOf}`
+          }
+          src={drawn}
           draggable={false}
           data-trace-frame={pictureId}
+          data-trace-frame-as-of={shown?.asOf ?? undefined}
           className={cn(
             "max-h-full max-w-full rounded-sm border border-border/50 object-contain",
             picture.kind === "loading" && "opacity-60",
           )}
         />
+      )}
+      {shown?.asOf == null || drawn === null ? null : (
+        <span className="absolute top-5 left-5 rounded-sm bg-background/80 px-1.5 py-0.5 text-label text-muted-foreground">
+          As of step {shown.asOf}
+        </span>
       )}
     </div>
   );

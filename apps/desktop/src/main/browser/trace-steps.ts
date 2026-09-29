@@ -1,8 +1,11 @@
 /**
  * How a Browser port call becomes a Browser Trace step (VC-453): wrappers the
- * port puts around its two changing calls, `navigate` and `act`, so the host
- * hears how each one settled — answered, refused or failed — in the order the
- * calls settle, which is the order a replay shows.
+ * port puts around every call it makes against one tab — `navigate` and `act`,
+ * which change the page, and the reads `snapshot`, `find`, `screenshot` and
+ * `console` — so the host hears how each one settled — answered, refused or
+ * failed — in the order the calls settle, which is the order a replay shows.
+ * A read carries a frame only when the call took one (a screenshot); the
+ * replay shows the tab's last frame beside the others.
  *
  * Kept beside the port rather than inside it: the port's job is scope, holds
  * and the CDP wire, and a trace is a record the HOST keeps about that work.
@@ -19,13 +22,14 @@
  */
 import { BrowserRefusal } from "@volli/agent-runtime";
 import type {
+  BrowserTraceAction,
   RuntimeBrowserActResult,
   RuntimeBrowserPage,
   RuntimeBrowserPort,
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
-import type { AgentBrowserHost } from "./agent-port";
+import type { AgentBrowserHost, AgentBrowserPort } from "./agent-port";
 import type { BrowserTraceStepInput } from "./trace-store";
 
 type NavigateInput = Parameters<RuntimeBrowserPort["navigate"]>[0];
@@ -123,7 +127,63 @@ function act(
     await report(record, sessionId, input, run, (answer, page) => actStep(input, answer, page));
 }
 
-export const traced = { navigate, act };
+/**
+ * A read against one tab: it changes nothing, so its step is the page as the
+ * host answered it, what the call looked for (a find's query — the model's
+ * own words, bounded by the store), and the picture only if the call took one.
+ */
+function read<I extends { tabId: string; signal: AbortSignal }, O extends RuntimeBrowserPage>(
+  host: Pick<AgentBrowserHost, "recordTraceStep">,
+  sessionId: string,
+  action: Extract<BrowserTraceAction, "read" | "find" | "screenshot" | "console">,
+  run: (input: I) => Promise<O>,
+  said: (
+    input: I,
+    answer: O | null,
+  ) => { target: string | null; pictureId: string | null; generation: number | null } = () => ({
+    target: null,
+    pictureId: null,
+    generation: null,
+  }),
+): (input: I) => Promise<O> {
+  const record = host.recordTraceStep?.bind(host);
+  if (record === undefined) return run;
+  return async (input) =>
+    await report(record, sessionId, input, run, (answer, page) => ({
+      tabId: answer?.tabId ?? page?.tabId ?? input.tabId,
+      action,
+      url: answer?.url ?? page?.url ?? null,
+      title: answer?.title ?? page?.title ?? null,
+      error: answer?.error ?? null,
+      ...said(input, answer),
+    }));
+}
+
+type Host = Pick<AgentBrowserHost, "recordTraceStep">;
+const NOTHING_SAID = { target: null, pictureId: null, generation: null };
+
+export const traced = {
+  navigate,
+  act,
+  snapshot: (host: Host, sessionId: string, run: RuntimeBrowserPort["snapshot"]) =>
+    read(host, sessionId, "read", run, (_input, snap) => ({
+      ...NOTHING_SAID,
+      generation: snap?.generation ?? null,
+    })),
+  find: (host: Host, sessionId: string, run: AgentBrowserPort["find"]) =>
+    read(host, sessionId, "find", run, (input, found) => ({
+      ...NOTHING_SAID,
+      target: input.query,
+      generation: found?.generation ?? null,
+    })),
+  screenshot: (host: Host, sessionId: string, run: RuntimeBrowserPort["screenshot"]) =>
+    read(host, sessionId, "screenshot", run, (_input, shot) => ({
+      ...NOTHING_SAID,
+      pictureId: shot?.picture ?? null,
+    })),
+  console: (host: Host, sessionId: string, run: RuntimeBrowserPort["console"]) =>
+    read(host, sessionId, "console", run),
+};
 
 function navigateStep(
   input: NavigateInput,

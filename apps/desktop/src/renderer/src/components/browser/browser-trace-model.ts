@@ -88,6 +88,26 @@ export function followTraceIndex(
   return kept >= 0 ? kept : clampTraceIndex(index, after.length);
 }
 
+/**
+ * The picture a step shows. A step that took one shows its own; a read, a
+ * refusal or a failure changed nothing and took none, so it shows the tab as
+ * its last picture left it — `asOf` names that step (1-based) so the replay
+ * can say the frame is an earlier one. Null when the tab has no picture yet.
+ */
+export function traceFrameShown(
+  timeline: readonly BrowserTraceFrame[],
+  index: number,
+): { pictureId: string; asOf: number | null } | null {
+  const frame = timeline[index];
+  if (frame === undefined) return null;
+  for (let at = index; at >= 0; at -= 1) {
+    const earlier = timeline[at];
+    if (earlier?.tabId !== frame.tabId || earlier.step.pictureId === null) continue;
+    return { pictureId: earlier.step.pictureId, asOf: at === index ? null : at + 1 };
+  }
+  return null;
+}
+
 /** What one frame of the replay reads. */
 export interface BrowserTraceFacts {
   verb: string;

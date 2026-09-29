@@ -1163,6 +1163,8 @@ describe("browseCaption (VC-453)", () => {
     expect(browseCaption("scroll", "down")).toEqual({ verb: "Scrolled", object: "down" });
     expect(browseCaption("open", "ignored")).toEqual({ verb: "Opened", object: null });
     expect(browseCaption("wait", null)).toEqual({ verb: "Waited", object: null });
+    expect(browseCaption("find", "e4")).toEqual({ verb: "Searched for", object: "“e4”" });
+    expect(browseCaption("find", null)).toEqual({ verb: "Searched for", object: null });
   });
 });
 

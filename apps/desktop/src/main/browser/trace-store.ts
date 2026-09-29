@@ -1,7 +1,7 @@
 /**
  * Where a Session's Browser Traces live on this host (VC-453): the ordered,
- * bounded record of every navigate and act a Session ran in a tab it owns,
- * with a copy of the frame the host took after each one.
+ * bounded record of every call a Session made against a tab it owns, with a
+ * copy of the frame the host took after each one that changed the page.
  *
  * WHY A SECOND STORE. {@link BrowserPictureStore} holds the per-action
  * captures in a 48-slot live set that forgets the oldest first, and writes

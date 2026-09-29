@@ -831,27 +831,22 @@ export function browseCaption(
   const verb = BROWSE_VERBS[action];
   if (ELEMENT_ACTIONS.has(action)) return { verb, object: quotedTarget(target) };
   if (PAGE_INPUT_ACTIONS.has(action)) return { verb, object: target };
+  // A find's object is the model's own query, quoted even when it looks like
+  // a ref: it is words searched for, never a handle.
+  if (action === "find") return { verb, object: target === null ? null : `“${target}”` };
   return { verb, object: null };
 }
 
 function browseActionFacts(context: ActivityContext, facet: ActivityBrowse): ActivityFacts {
   const page = context.descriptor.subject.label;
   const verb = BROWSE_VERBS[facet.action];
-  if (ELEMENT_ACTIONS.has(facet.action) || PAGE_INPUT_ACTIONS.has(facet.action)) {
+  if (
+    ELEMENT_ACTIONS.has(facet.action) ||
+    PAGE_INPUT_ACTIONS.has(facet.action) ||
+    facet.action === "find"
+  ) {
     return {
       ...browseCaption(facet.action, facet.target),
-      openPath: null,
-      meta: page,
-      metaTone: "muted",
-      detail: null,
-    };
-  }
-  if (facet.action === "find") {
-    // The object is the model's own query, quoted even when it looks like a
-    // ref: it is words searched for, never a handle.
-    return {
-      verb,
-      object: facet.target === null ? null : `“${facet.target}”`,
       openPath: null,
       meta: page,
       metaTone: "muted",
