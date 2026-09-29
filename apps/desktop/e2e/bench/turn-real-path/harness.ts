@@ -187,11 +187,30 @@ export interface RawTurn {
   timers: TimerSample[];
   artifactCalls: ArtifactCall[];
   ledgerTransactions: LedgerTransaction[];
+  /** Time in the ledger's BEGIN IMMEDIATE and COMMIT statements for this turn. */
+  ledgerBoundaryMs: number;
+}
+
+/** One wave: its turns, and what its measured phase cost the process. */
+export interface WaveResult {
+  turns: RawTurn[];
+  /** From the first submit to the last turn's `command()` resolving and its answer settling. */
+  measuredWallMs: number;
+  /** Process CPU (user + system) over the same window: every Session's work on the one loop. */
+  measuredCpuMs: number;
 }
 
 export interface RealPathComposition {
   readonly artifactStore: ArtifactStoreKind;
-  runWave(input: { concurrency: number; wave: number }): Promise<RawTurn[]>;
+  /**
+   * `around` wraps only the measured phase (every submit, until every turn and
+   * answer settled), so a diagnostic can profile it without setup or teardown.
+   */
+  runWave(input: {
+    concurrency: number;
+    wave: number;
+    around?: (measure: () => Promise<void>) => Promise<void>;
+  }): Promise<WaveResult>;
   /** Envelopes recorded outside every Session scope, across the composition's life. */
   unscopedEnvelopeCount(): number;
   /** Envelopes whose `runId` was recorded under two different Sessions. */
@@ -208,6 +227,8 @@ interface SessionEvidence {
   timers: TimerSample[];
   artifactCalls: ArtifactCall[];
   ledgerTransactions: LedgerTransaction[];
+  /** Time in the ledger's BEGIN IMMEDIATE and COMMIT statements. */
+  ledgerBoundaryMs: number;
 }
 
 /**
@@ -338,8 +359,29 @@ export async function createRealPathComposition(
     usageLimits: { fetch: refusingFetch },
   });
 
-  // `createDesktopSessionEngine`, with the ledger's transactions timed.
-  const sqliteLedger = createSqliteSessionLedger(db);
+  // `createDesktopSessionEngine`, with the ledger's transactions timed. The
+  // ledger runs BEGIN IMMEDIATE and COMMIT outside the work callback, so the
+  // handle it is given times those statements too. Both are filed under the
+  // Session whose call queued the transaction: the ledger runs it as a
+  // reaction registered in that caller's async context.
+  const timedDb = new Proxy(db, {
+    get(target, property) {
+      if (property === "exec") {
+        return (sql: string) => {
+          const filed = evidenceFor();
+          const startedAt = performance.now();
+          try {
+            return target.exec(sql);
+          } finally {
+            if (filed !== undefined) filed.ledgerBoundaryMs += performance.now() - startedAt;
+          }
+        };
+      }
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const sqliteLedger = createSqliteSessionLedger(timedDb);
   const ledger: SessionLedger = {
     transaction(work) {
       const calledAt = performance.now();
@@ -400,14 +442,23 @@ export async function createRealPathComposition(
     observability: sink,
   });
 
-  async function runWave(input: { concurrency: number; wave: number }): Promise<RawTurn[]> {
+  async function runWave(input: {
+    concurrency: number;
+    wave: number;
+    around?: (measure: () => Promise<void>) => Promise<void>;
+  }): Promise<WaveResult> {
     const { concurrency, wave } = input;
     // Setup, untimed: N fresh Sessions, each attached and watched, so every
     // measured turn is the first turn of an identical Session.
     const sessions = await Promise.all(
       Array.from({ length: concurrency }, async (_value, index) => {
         const sessionId = randomUUID();
-        const filed: SessionEvidence = { timers: [], artifactCalls: [], ledgerTransactions: [] };
+        const filed: SessionEvidence = {
+          timers: [],
+          artifactCalls: [],
+          ledgerTransactions: [],
+          ledgerBoundaryMs: 0,
+        };
         evidence.set(sessionId, filed);
         const frames: LedgerFrame[] = [];
         const answers: AnswerRecord[] = [];
@@ -495,38 +546,57 @@ export async function createRealPathComposition(
       session.filed.timers.length = 0;
       session.filed.artifactCalls.length = 0;
       session.filed.ledgerTransactions.length = 0;
+      session.filed.ledgerBoundaryMs = 0;
     }
 
     // Measured: every Session submits at once, as a wave of VC-441 did.
     const firstEnvelope = envelopes.length;
-    const measured = await Promise.all(
-      sessions.map((session) =>
-        scope.run(session.sessionId, async () => {
-          const commandId = randomUUID();
-          const submittedAt = performance.now();
-          const result = await runtime.command({
-            commandId,
-            sessionId: session.sessionId,
-            command: {
-              kind: "message.submit",
-              message: {
-                id: randomUUID(),
-                role: "user",
-                parts: [{ type: "text", text: PRIVATE_CONTENT_CANARY }],
+    type Measured = {
+      session: (typeof sessions)[number];
+      commandId: string;
+      submittedAt: number;
+      resolvedAt: number;
+      receiptStatus: string | null;
+    };
+    let measured: Measured[] = [];
+    let measuredWallMs = 0;
+    let measuredCpuMs = 0;
+    const measure = async (): Promise<void> => {
+      const cpuBefore = process.cpuUsage();
+      const startedAt = performance.now();
+      measured = await Promise.all(
+        sessions.map((session) =>
+          scope.run(session.sessionId, async () => {
+            const commandId = randomUUID();
+            const submittedAt = performance.now();
+            const result = await runtime.command({
+              commandId,
+              sessionId: session.sessionId,
+              command: {
+                kind: "message.submit",
+                message: {
+                  id: randomUUID(),
+                  role: "user",
+                  parts: [{ type: "text", text: PRIVATE_CONTENT_CANARY }],
+                },
               },
-            },
-          });
-          return {
-            session,
-            commandId,
-            submittedAt,
-            resolvedAt: performance.now(),
-            receiptStatus: result.receipt?.status ?? null,
-          };
-        }),
-      ),
-    );
-    await Promise.all(sessions.flatMap((session) => session.pendingAnswers));
+            });
+            return {
+              session,
+              commandId,
+              submittedAt,
+              resolvedAt: performance.now(),
+              receiptStatus: result.receipt?.status ?? null,
+            };
+          }),
+        ),
+      );
+      await Promise.all(sessions.flatMap((session) => session.pendingAnswers));
+      measuredWallMs = performance.now() - startedAt;
+      const cpu = process.cpuUsage(cpuBefore);
+      measuredCpuMs = (cpu.user + cpu.system) / 1_000;
+    };
+    await (input.around === undefined ? measure() : input.around(measure));
     const waveEnvelopes = envelopes.slice(firstEnvelope);
 
     // Teardown, untimed: copy the evidence out, release every attachment so
@@ -538,6 +608,7 @@ export async function createRealPathComposition(
       const timers = [...session.filed.timers];
       const artifactCalls = [...session.filed.artifactCalls];
       const ledgerTransactions = [...session.filed.ledgerTransactions];
+      const ledgerBoundaryMs = session.filed.ledgerBoundaryMs;
       evidence.delete(session.sessionId);
       await scope.run(session.sessionId, () =>
         runtime.command({
@@ -566,9 +637,10 @@ export async function createRealPathComposition(
         timers,
         artifactCalls,
         ledgerTransactions,
+        ledgerBoundaryMs,
       });
     }
-    return turns;
+    return { turns, measuredWallMs, measuredCpuMs };
   }
 
   return {

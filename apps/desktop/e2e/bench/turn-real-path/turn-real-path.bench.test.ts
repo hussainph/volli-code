@@ -169,7 +169,7 @@ describe("VC-456 real-path smoke", () => {
     const composition = await createRealPathComposition();
     let turns: RawTurn[];
     try {
-      turns = await composition.runWave({ concurrency: 3, wave: 0 });
+      ({ turns } = await composition.runWave({ concurrency: 3, wave: 0 }));
       expect(composition.networkAttempts()).toBe(0);
       expect(composition.unscopedEnvelopeCount()).toBe(0);
       expect(composition.runIdConflictCount()).toBe(0);

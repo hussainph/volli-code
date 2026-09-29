@@ -8,7 +8,7 @@
  * moment, as one VC-441 wave did. Every arm gets a fresh disposable profile.
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import {
   availableParallelism,
   cpus,
@@ -17,13 +17,20 @@ import {
   loadavg,
   platform,
   release,
+  tmpdir,
   totalmem,
 } from "node:os";
 import { join, resolve } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { REAL_PATH_REQUEST_PLAN } from "@volli/agent-runtime/bench/turn-to-completion";
+import { REAL_PATH_REQUEST_PLAN, summarize } from "@volli/agent-runtime/bench/turn-to-completion";
 
-import { analyzeRealTurn, REAL_PATH_EXPECTED, summarizeTurns, type Distribution, type RealTurnSample } from "./analysis";
+import {
+  analyzeRealTurn,
+  REAL_PATH_EXPECTED,
+  summarizeTurns,
+  type Distribution,
+  type RealTurnSample,
+} from "./analysis";
 import { AUTHORITY_THINK_MS, createRealPathComposition, type ArtifactStoreKind } from "./harness";
 
 export const FIXTURE_VERSION = "vc456-turn-real-path-v1";
@@ -82,9 +89,13 @@ export async function runArm(input: {
     const startedAt = performance.now();
     let peakRssBytes = process.memoryUsage.rss();
     const samples: RealTurnSample[] = [];
+    let measuredWallMs = 0;
+    let measuredCpuMs = 0;
     for (let wave = 0; wave < repetitions; wave += 1) {
-      const turns = await composition.runWave({ concurrency, wave });
-      for (const [index, turn] of turns.entries()) {
+      const result = await composition.runWave({ concurrency, wave });
+      measuredWallMs += result.measuredWallMs;
+      measuredCpuMs += result.measuredCpuMs;
+      for (const [index, turn] of result.turns.entries()) {
         const sample = analyzeRealTurn(
           turn,
           `${artifactStore}-${concurrency}-${wave + 1}-${index + 1}`,
@@ -119,7 +130,13 @@ export async function runArm(input: {
       },
       host: {
         wallMs: round(wallMs),
-        processCpuPercentOfOneCore: wallMs > 0 ? round(((cpu.user + cpu.system) / (wallMs * 1_000)) * 100) : null,
+        // The measured phases alone, without setup and teardown: what the
+        // turns cost the one event loop, and how busy they kept it.
+        measuredCpuMsPerTurn: samples.length > 0 ? round(measuredCpuMs / samples.length) : null,
+        measuredCpuPercentOfOneCore:
+          measuredWallMs > 0 ? round((measuredCpuMs / measuredWallMs) * 100) : null,
+        processCpuPercentOfOneCore:
+          wallMs > 0 ? round(((cpu.user + cpu.system) / (wallMs * 1_000)) * 100) : null,
         eventLoopDelayMs: {
           p50: toMs(loopDelay.percentile(50)),
           p95: toMs(loopDelay.percentile(95)),
@@ -147,7 +164,9 @@ export function integrityFailures(arm: ArmReport): string[] {
     failures.push(`${label}: an envelope escaped every Session scope`);
   if (arm.integrity.runIdConflicts !== 0) failures.push(`${label}: a runId crossed Sessions`);
   if (summary.completeTurnCount !== summary.turnSampleCount)
-    failures.push(`${label}: ${summary.turnSampleCount - summary.completeTurnCount} incomplete turns`);
+    failures.push(
+      `${label}: ${summary.turnSampleCount - summary.completeTurnCount} incomplete turns`,
+    );
   const turns = summary.turnSampleCount;
   for (const [kind, count] of Object.entries(arm.integrity.providerRequests)) {
     if (count !== turns) failures.push(`${label}: ${count} ${kind} requests for ${turns} turns`);
@@ -155,9 +174,51 @@ export function integrityFailures(arm: ArmReport): string[] {
   return failures;
 }
 
+/**
+ * How long one `FileHandle.sync()` takes on the volume the disposable profile
+ * lives on, alone and with others in flight. The transcript-artifact store
+ * syncs a file and its directory for every artifact it publishes, so this is
+ * the unit its cost is made of. On macOS libuv implements `sync()` with
+ * `F_FULLFSYNC`, which flushes the drive's cache.
+ */
+export async function probeFileSync(): Promise<Record<string, unknown>> {
+  const directory = await mkdtemp(join(tmpdir(), "volli-vc456-fsync-"));
+  let sequence = 0;
+  const once = async (): Promise<number> => {
+    sequence += 1;
+    const handle = await open(join(directory, `probe-${sequence}`), "wx");
+    try {
+      await handle.writeFile("x".repeat(600));
+      const startedAt = performance.now();
+      await handle.sync();
+      return performance.now() - startedAt;
+    } finally {
+      await handle.close();
+    }
+  };
+  try {
+    const sequential: number[] = [];
+    for (let index = 0; index < 40; index += 1) sequential.push(await once());
+    const startedAt = performance.now();
+    const concurrent = await Promise.all(Array.from({ length: 40 }, () => once()));
+    const concurrentWallMs = performance.now() - startedAt;
+    return {
+      sequentialMs: summarize(sequential),
+      concurrent40Ms: summarize(concurrent),
+      concurrent40WallMs: round(concurrentWallMs),
+      concurrent40SyncsPerSecond: round((40 / concurrentWallMs) * 1_000),
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 function git(args: string[]): string | null {
   try {
-    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
   } catch {
     return null;
   }
@@ -184,13 +245,17 @@ async function prepareOutputDirectory(outputPath: string): Promise<string> {
   const directory = resolve(outputPath);
   const root = git(["rev-parse", "--show-toplevel"]);
   if (directory === root || directory === resolve("/") || directory === homedir()) {
-    throw new Error("Output must be a dedicated child directory, not a repository, home or filesystem root.");
+    throw new Error(
+      "Output must be a dedicated child directory, not a repository, home or filesystem root.",
+    );
   }
   await mkdir(directory, { recursive: true });
   const entries = await readdir(directory);
   const allowed = new Set<string>(ARTIFACTS);
   if (entries.some((entry) => !allowed.has(entry))) {
-    throw new Error(`Refusing to write into ${directory}: it holds files this benchmark does not own.`);
+    throw new Error(
+      `Refusing to write into ${directory}: it holds files this benchmark does not own.`,
+    );
   }
   if (entries.length > 0) {
     let manifest: { fixtureVersion?: string };
@@ -232,10 +297,11 @@ function timingRow(arm: ArmReport): string {
   const s = arm.summary as Summary;
   const host = arm.host as {
     eventLoopDelayMs: { p95: number | null; max: number | null };
-    processCpuPercentOfOneCore: number | null;
+    measuredCpuMsPerTurn: number | null;
+    measuredCpuPercentOfOneCore: number | null;
     loadAverageAfter: number[] | null;
   };
-  return `| ${arm.concurrency} | ${s.turnSampleCount} | ${fmt(s["submitToAcceptedMs"])} | ${fmt(s["queuedMs"])} | ${fmt(s["turnStartDurableLagMs"])} | ${fmt(s["runtimeTurnMs"])} | ${fmt(s["firstMessageToCompletionMs"])} | ${fmt(s["submitToResolvedMs"])} | ${host.eventLoopDelayMs.p95 ?? "n/a"} / ${host.eventLoopDelayMs.max ?? "n/a"} | ${host.processCpuPercentOfOneCore ?? "n/a"} | ${host.loadAverageAfter?.[0] ?? "n/a"} |`;
+  return `| ${arm.concurrency} | ${s.turnSampleCount} | ${fmt(s["submitToAcceptedMs"])} | ${fmt(s["queuedMs"])} | ${fmt(s["turnStartDurableLagMs"])} | ${fmt(s["runtimeTurnMs"])} | ${fmt(s["firstMessageToCompletionMs"])} | ${fmt(s["submitToResolvedMs"])} | ${host.eventLoopDelayMs.p95 ?? "n/a"} / ${host.eventLoopDelayMs.max ?? "n/a"} | ${host.measuredCpuMsPerTurn ?? "n/a"} | ${host.measuredCpuPercentOfOneCore ?? "n/a"} | ${host.loadAverageAfter?.[0] ?? "n/a"} |`;
 }
 
 function attributionRow(arm: ArmReport): string {
@@ -246,6 +312,17 @@ function attributionRow(arm: ArmReport): string {
 function checkRow(arm: ArmReport): string {
   const s = arm.summary as Summary;
   return `| ${arm.artifactStore} | ${arm.concurrency} | ${s.completeTurnCount} / ${s.turnSampleCount} | ${s.vc119OrderViolations} | ${s.crossCheck.turnsWithAllFactsPaired} | ${s.crossCheck.orderInversions} | ${s.crossCheck.causalityViolations} | ${s.crossCheck.streamMismatches} | ${s.ledgerShapes.length} | ${arm.integrity.networkAttempts} |`;
+}
+
+function fileSyncLine(probe: unknown): string {
+  if (typeof probe !== "object" || probe === null) return "not measured";
+  const value = probe as {
+    sequentialMs: Distribution | null;
+    concurrent40Ms: Distribution | null;
+    concurrent40WallMs: number;
+    concurrent40SyncsPerSecond: number;
+  };
+  return `one at a time p50 / p95 ${fmt(value.sequentialMs, 2)} ms; 40 at once p50 / p95 ${fmt(value.concurrent40Ms, 1)} ms each, ${value.concurrent40WallMs} ms wall, ${value.concurrent40SyncsPerSecond} syncs/s`;
 }
 
 export function formatMarkdown(report: {
@@ -259,7 +336,7 @@ export function formatMarkdown(report: {
   const memory = report.arms.filter((arm) => arm.artifactStore === "memory");
   const env = report.environment;
   const timingHeader =
-    "| In flight | Turns | Submit → accepted | Submit → turn start (`queuedMs`) | `turn-queue` → durable `turn.started` | Runtime turn (VC-119) | First message → completion | Submit → `command()` resolved | Loop delay p95 / max (ms) | Runner CPU (% one core) | Load 1m after |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+    "| In flight | Turns | Submit → accepted | Submit → turn start (`queuedMs`) | `turn-queue` → durable `turn.started` | Runtime turn (VC-119) | First message → completion | Submit → `command()` resolved | Loop delay p95 / max (ms) | CPU per turn (ms) | Loop busy (% one core) | Load 1m after |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const attributionHeader =
     "| In flight | Provider per turn | `read` ×2 per turn | `bash` | Authority wait | Wait start → question seen | `interaction.resolve` round trip | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const shape = (file[0]?.summary as Summary | undefined)?.ledgerShapes[0]?.shape ?? "n/a";
@@ -296,12 +373,19 @@ export function formatMarkdown(report: {
     `Ledger shape of a turn, \`command.recorded\` → \`turn.completed\`: \`${shape}\`.\n`,
     `## Method\n`,
     `- Composition: \`SessionRuntime\` + the desktop Pi adapter over \`createPiAgentRuntime\` + the desktop \`SqliteSessionLedger\` on a migrated \`volli.db\` opened by \`openVolliDb\`, the file transcript-artifact store, and one VC-119 sink shared by the Session runtime and the Pi runtime, as \`createDesktopSessionRuntime\` composes them. Differences: an Electron-free location resolver answering a fixed directory, and a fixed \`resolveRuntimeContext\`.\n`,
-    `- Script per turn: a tool round (\`read\` inside the workspace, \`read\` outside it, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(REAL_PATH_REQUEST_PLAN).map((plan) => `${plan.kind} ${plan.serviceMs} ms (first event ${plan.ttftMs} ms)`).join(", ")}. Expected per turn: ${REAL_PATH_EXPECTED.modelAttempts} provider attempts, ${Object.values(REAL_PATH_EXPECTED.toolsByName).reduce((sum, count) => sum + count, 0)} tools, ${REAL_PATH_EXPECTED.authorityWaits} authority wait, ${REAL_PATH_EXPECTED.compactions} compaction, ${REAL_PATH_EXPECTED.retries} retry, ${REAL_PATH_EXPECTED.turnQueues} \`turn-queue\`.\n`,
+    `- Script per turn: a tool round (\`read\` inside the workspace, \`read\` outside it, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
+      REAL_PATH_REQUEST_PLAN,
+    )
+      .map((plan) => `${plan.kind} ${plan.serviceMs} ms (first event ${plan.ttftMs} ms)`)
+      .join(
+        ", ",
+      )}. Expected per turn: ${REAL_PATH_EXPECTED.modelAttempts} provider attempts, ${Object.values(REAL_PATH_EXPECTED.toolsByName).reduce((sum, count) => sum + count, 0)} tools, ${REAL_PATH_EXPECTED.authorityWaits} authority wait, ${REAL_PATH_EXPECTED.compactions} compaction, ${REAL_PATH_EXPECTED.retries} retry, ${REAL_PATH_EXPECTED.turnQueues} \`turn-queue\`.\n`,
     `- Authority: \`enforcement: "enforce"\` with a one-refusal fallback (the shipped default is \`observe\`, which installs no gate). The outside read is refused by \`path.outside-workspace\` and escalated; a live subscriber answers \`once\` via \`interaction.resolve\` after ${AUTHORITY_THINK_MS} ms.\n`,
     `- Clocks: \`queuedMs\` and every VC-119 duration come from the product's own \`Date.now\` clocks, so they have 1 ms resolution. Submit, frame arrival and envelope record times are the harness's \`performance.now()\`.\n`,
     `- Accepted is this command's durable \`command.recorded\` reaching a live subscriber. \`turn-queue\` → durable \`turn.started\` is one fact's ledger write and publish. Artifact and ledger timings wrap the real store and ledger and are filed per Session through \`AsyncLocalStorage\`, which also joins VC-119 envelopes to turns.\n`,
     `- Cross-check facts (VC-119 envelope ↔ ledger event): turn start (\`turn-queue\` ↔ \`turn.started\`), first attempt (first \`provider-attempt\` ↔ first \`usage.recorded\`), authority answer (wait-bearing \`authority\` ↔ \`interaction.resolved\`), compaction (\`compaction\` ↔ \`context.compacted\`), final attempt (last of each), turn end (\`turn\` ↔ \`turn.completed\`).\n`,
     `- ${control === "none" ? "No diagnostic control arm ran." : "The control arms swap only the transcript-artifact store for the in-memory one."}\n`,
+    `File sync on the profile's volume (\`FileHandle.sync()\`, 600-byte file): ${fileSyncLine(env["fileSyncProbe"])}.\n`,
     `Environment: Node ${String(env["nodeVersion"])} · ${String(env["platform"])} ${String(env["osRelease"])} · ${String(env["cpuModel"])} · ${String(env["logicalCores"])} logical cores · ${String(env["totalMemoryBytes"])} bytes RAM · UV_THREADPOOL_SIZE ${String(env["uvThreadpoolSize"])} · initial load ${JSON.stringify(env["initialLoadAverage"])} · commit ${String(env["gitSha"])} (dirty=${String(env["dirty"])}).\n`,
   );
   return sections.join("\n");
@@ -328,7 +412,7 @@ export async function runBenchmark(input: {
     throw new Error("concurrencies accepts unique integers from 1 through 20.");
   }
   const directory = await prepareOutputDirectory(input.output);
-  const env = environment();
+  const env = { ...environment(), fileSyncProbe: await probeFileSync() };
   const arms: ArmReport[] = [];
   const stores: ArtifactStoreKind[] = parameters.control === "none" ? ["file"] : ["file", "memory"];
   for (const artifactStore of stores) {
@@ -366,7 +450,9 @@ export async function runBenchmark(input: {
       `${JSON.stringify({ fixtureVersion: FIXTURE_VERSION, artifacts: ARTIFACTS }, null, 2)}\n`,
     ],
   ] as const;
-  for (const [temporary, , contents] of staged) await writeFile(join(directory, temporary), contents);
-  for (const [temporary, final] of staged) await rename(join(directory, temporary), join(directory, final));
+  for (const [temporary, , contents] of staged)
+    await writeFile(join(directory, temporary), contents);
+  for (const [temporary, final] of staged)
+    await rename(join(directory, temporary), join(directory, final));
   return { report, failures };
 }

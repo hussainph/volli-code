@@ -18,7 +18,12 @@ import {
 } from "@volli/agent-runtime/bench/turn-to-completion";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import { AUTHORITY_THINK_MS, type LedgerFrame, type RawTurn, type RecordedEnvelope } from "./harness";
+import {
+  AUTHORITY_THINK_MS,
+  type LedgerFrame,
+  type RawTurn,
+  type RecordedEnvelope,
+} from "./harness";
 
 /**
  * What one scripted turn must produce in VC-119 terms: VC-441's shape on the
@@ -85,7 +90,9 @@ function envelopeOf(
   which: "first" | "last" = "first",
 ): RecordedEnvelope | undefined {
   const sorted = envelopes.toSorted((left, right) => left.order - right.order);
-  return which === "first" ? sorted.find((entry) => predicate(entry.event)) : sorted.findLast((entry) => predicate(entry.event));
+  return which === "first"
+    ? sorted.find((entry) => predicate(entry.event))
+    : sorted.findLast((entry) => predicate(entry.event));
 }
 
 function hasWait(event: ObservabilityEvent): boolean {
@@ -133,7 +140,9 @@ export function crossCheckLedger(input: {
   const ledgerFacts: Record<CrossCheckFact, LedgerSide | undefined> = {
     "turn-start": side(started),
     "first-attempt": side(usage[0]?.sequence),
-    "authority-answer": side(inTurn.find((entry) => entry.kind === "interaction.resolved")?.sequence),
+    "authority-answer": side(
+      inTurn.find((entry) => entry.kind === "interaction.resolved")?.sequence,
+    ),
     compaction: side(inTurn.find((entry) => entry.kind === "context.compacted")?.sequence),
     "final-attempt": side(usage.at(-1)?.sequence),
     "turn-end": side(completed),
@@ -172,7 +181,8 @@ export function crossCheckLedger(input: {
     const envelope = envelopeFacts[fact];
     const arrivedAt = ledgerFacts[fact]?.arrivedAt;
     if (envelope === undefined || arrivedAt === undefined || arrivedAt === null) continue;
-    if (envelope.recordedAt > arrivedAt) causalityViolations.push(`${fact}: envelope after its durable fact`);
+    if (envelope.recordedAt > arrivedAt)
+      causalityViolations.push(`${fact}: envelope after its durable fact`);
   }
   const authority = envelopeFacts["authority-answer"];
   const openedAt = opened === undefined ? undefined : arrival.get(opened.sequence);
@@ -219,6 +229,7 @@ export interface RealTurnSample extends TurnSample {
   artifactReadCount: number;
   artifactReadTotalMs: number;
   ledgerTransactionCount: number;
+  /** The transactions' work plus their BEGIN and COMMIT: the ledger's time on the loop. */
   ledgerServiceTotalMs: number;
   ledgerWaitDurationsMs: number[];
   crossCheck: LedgerCrossCheck;
@@ -304,7 +315,8 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     artifactReadTotalMs: round(reads.reduce((sum, call) => sum + call.durationMs, 0)),
     ledgerTransactionCount: raw.ledgerTransactions.length,
     ledgerServiceTotalMs: round(
-      raw.ledgerTransactions.reduce((sum, transaction) => sum + transaction.serviceMs, 0),
+      raw.ledgerTransactions.reduce((sum, transaction) => sum + transaction.serviceMs, 0) +
+        raw.ledgerBoundaryMs,
     ),
     ledgerWaitDurationsMs: raw.ledgerTransactions.map((transaction) => round(transaction.waitMs)),
     crossCheck,
@@ -319,12 +331,15 @@ export function summarizeTurns(samples: readonly RealTurnSample[]): Record<strin
   const timers = (kind: string) =>
     summarize(
       samples.flatMap((sample) =>
-        sample.localTimerLateness.flatMap((entry) => (entry.kind === kind ? [entry.latenessMs] : [])),
+        sample.localTimerLateness.flatMap((entry) =>
+          entry.kind === kind ? [entry.latenessMs] : [],
+        ),
       ),
       { allowNegative: true },
     );
   const shapes = new Map<string, number>();
-  for (const sample of samples) shapes.set(sample.ledgerShape, (shapes.get(sample.ledgerShape) ?? 0) + 1);
+  for (const sample of samples)
+    shapes.set(sample.ledgerShape, (shapes.get(sample.ledgerShape) ?? 0) + 1);
   return {
     turnSampleCount: samples.length,
     completeTurnCount: samples.filter(({ complete }) => complete).length,
