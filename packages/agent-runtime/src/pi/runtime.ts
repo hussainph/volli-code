@@ -17,6 +17,7 @@ import {
   type MessageEntry,
   type Session,
   type StreamFn,
+  type ToolExecutionMode,
 } from "@earendil-works/pi-agent-core";
 import {
   Agent,
@@ -296,6 +297,7 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  toolExecution: ToolExecutionMode;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -336,16 +338,37 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one structured executor port.
- *
- * The models are resolved once, here, rather than per attachment: the credential
- * store behind them serializes this process's writes to Pi's `auth.json`, and a
- * fresh store per attach would serialize nothing.
+ * Build the one production structured executor port. Ordinary Sessions remain
+ * sequential; test fixtures have a separate internal factory below.
  */
 export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
+  return createPiAgentRuntimeWithToolExecution(options, "sequential");
+}
+
+/**
+ * Internal fixture-only opt-in used by tests/benchmarks, intentionally omitted
+ * from `src/index.ts` and therefore not part of the package's runtime API.
+ */
+export function createPiAgentRuntimeForFixture(
+  options: PiRuntimeHostOptions,
+  toolExecution: ToolExecutionMode,
+): AgentRuntime {
+  return createPiAgentRuntimeWithToolExecution(options, toolExecution);
+}
+
+/**
+ * Build the one structured executor port. The models are resolved once rather
+ * than per attachment: the credential store behind them serializes this
+ * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ */
+function createPiAgentRuntimeWithToolExecution(
+  options: PiRuntimeHostOptions,
+  toolExecution: ToolExecutionMode,
+): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    toolExecution,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -2006,7 +2029,7 @@ async function attachSession(
         sidecarMetadata.id,
       ),
       sessionId: sidecarMetadata.id,
-      toolExecution: "sequential",
+      toolExecution: host.toolExecution,
       // Pi's harness converter, not the `Agent`'s default, and the difference is
       // exactly one message role. The default keeps `user`, `assistant` and
       // `toolResult` and DROPS everything else — including the

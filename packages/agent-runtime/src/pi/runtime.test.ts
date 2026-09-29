@@ -69,7 +69,12 @@ import { ScopedExecutionEnv } from "./scoped-execution-env";
 import { MAIN_BRANCH_TIP } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
 import { withoutReasoning } from "./reasoning";
-import { autoRetryDelayMs, createPiAgentRuntime, type PiRuntimeHostOptions } from "./runtime";
+import {
+  autoRetryDelayMs,
+  createPiAgentRuntime,
+  createPiAgentRuntimeForFixture,
+  type PiRuntimeHostOptions,
+} from "./runtime";
 import { UsageLimitsHolder } from "./usage-limits/holder";
 import type { UsageProbeFetch } from "./usage-limits/probe";
 
@@ -3438,6 +3443,136 @@ describe("startSession", () => {
       activities[1],
     ]);
     await handle.close();
+  });
+
+  it("keeps ordinary production Sessions sequential for an emitted MCP batch", async () => {
+    const definitions: McpToolDefinition[] = ["fixture/first", "fixture/second"].map(
+      (toolName) => ({
+        serverId: "fixture-1",
+        toolName,
+        providerName: mcpProviderToolName("fixture-1", "Fixture", toolName),
+        description: "Local runtime fixture",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
+    let active = 0;
+    let peakActive = 0;
+    const order: string[] = [];
+    const { spec, sessionDataDir } = fixture({
+      tools: { tools: [], mcp: definitions },
+      mcp: {
+        call: async (request) => {
+          active += 1;
+          peakActive = Math.max(peakActive, active);
+          order.push(`start:${request.toolName}`);
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          order.push(`end:${request.toolName}`);
+          active -= 1;
+          return { content: [{ type: "text", text: request.toolName }], isError: false };
+        },
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            for (const tool of definitions) emit.toolCall(tool.providerName, {});
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("complete");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    try {
+      await handle.submitUserMessage("Run the synthetic MCP batch.");
+      expect(peakActive).toBe(1);
+      expect(order).toEqual([
+        "start:fixture/first",
+        "end:fixture/first",
+        "start:fixture/second",
+        "end:fixture/second",
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("keeps the parallel fixture factory off every package entry point", async () => {
+    // The app can reach this package only through `package.json#exports`: the
+    // main entry and the VC-444 bench subpath. Neither may carry the opt-in.
+    const entry = await import("../index");
+    const bench = await import("../../bench/mcp-parallel/driver");
+    expect(Object.keys(entry)).toContain("createPiAgentRuntime");
+    expect(Object.keys(entry)).not.toContain("createPiAgentRuntimeForFixture");
+    expect(Object.keys(bench)).not.toContain("createPiAgentRuntimeForFixture");
+  });
+
+  it("opts a fixture Session into parallel MCP dispatch through the internal test factory", async () => {
+    const definitions: McpToolDefinition[] = ["fixture/first", "fixture/second"].map(
+      (toolName) => ({
+        serverId: "fixture-1",
+        toolName,
+        providerName: mcpProviderToolName("fixture-1", "Fixture", toolName),
+        description: "Local parallel fixture read",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
+    let active = 0;
+    let peakActive = 0;
+    const completed: string[] = [];
+    let resultOrder: string[] = [];
+    const { spec, sessionDataDir } = fixture({
+      tools: { tools: [], mcp: definitions },
+      mcp: {
+        call: async (request) => {
+          active += 1;
+          peakActive = Math.max(peakActive, active);
+          await new Promise<void>((resolve) =>
+            setTimeout(resolve, request.toolName === "fixture/first" ? 30 : 5),
+          );
+          completed.push(request.toolName);
+          active -= 1;
+          return { content: [{ type: "text", text: request.toolName }], isError: false };
+        },
+      },
+    });
+    const runtime = createPiAgentRuntimeForFixture(
+      {
+        sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit, context) => {
+              const results = context.messages.filter(
+                (message): message is Extract<Message, { role: "toolResult" }> =>
+                  message.role === "toolResult",
+              );
+              resultOrder = results.map((message) => message.toolCallId);
+              emit.text("complete");
+              emit.finish();
+            },
+          ]),
+        ),
+      },
+      "parallel",
+    );
+    const handle = await runtime.startSession(spec);
+    try {
+      await handle.submitUserMessage("Run the internal parallel MCP fixture.");
+      expect(peakActive).toBe(2);
+      expect(completed).toEqual(["fixture/second", "fixture/first"]);
+      expect(resultOrder).toEqual(["tc-0", "tc-1"]);
+    } finally {
+      await handle.close();
+    }
   });
 
   it("reports an MCP isError result as a failed activity the model can read", async () => {
