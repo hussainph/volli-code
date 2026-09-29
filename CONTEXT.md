@@ -130,11 +130,14 @@ Session history exactly as a Ticket Session is. A Subagent Session is started by
 a parent's `session_delegate` call, shares the parent's working directory and
 inherits its Ticket, holds every coding tool and no agent-control verb or
 `ask_user`, and carries its parent on the Session itself (`parentSessionId`, a
-ledger fact). When its first turn completes a notice from Volli — the child's
-handle, state and title, none of its words — is steered into the parent, and the
-parent reads the answer with `volli session answer <handle>`, so the child's
-prose reaches it as a tool result and never as its user; the parent is never
-parked on it, and stopping the parent stops its children. The Session
+ledger fact). When its first turn completes a notice from Volli is steered into
+the parent — the child's handle, state and title, then its final message quoted
+inside an untrusted-prose envelope as the child's own words (cut when very long,
+with `volli session answer <handle>` naming the rest), so the child's prose
+never reads as the parent's user (VC-457). The parent is never parked on it,
+nothing bounds the child's time, and stopping the parent stops its children. A
+child a person resumes after that notice reports to its parent again when the
+resumed turn ends. The Session
 Presentation Contract projects that notice into the parent's transcript as a
 quiet host-authored receipt row, not as a Turn in the person's voice. This row
 records the delegation outcome; it is not a listing of the child. While work is
@@ -737,50 +740,48 @@ _Avoid_: verdict comment, `VERDICT:` first line, status (that is a column)
 **Ticket Wake**:
 One committed Ticket Event, fanned out in-process after its transaction
 commits (`ticket-wake.ts`). The wake bus is main's canonical post-commit
-stream: every mutation door feeds it, and the await tool parks on it. A wake
-is never a source of truth — the durable event it reports already is.
+stream: every mutation door feeds it, and the Watch registry listens on it. A
+wake is never a source of truth — the durable event it reports already is.
 _Avoid_: notification, broadcast (that is the window fan-out)
 
-**Await**:
-The control-tier wait: a Session's `ticket_await` tool call parks its turn
-until a watched Ticket signals, is commented on, or moves — then wakes with
-that one event (VC-85). Runtime-native like `ask_user`: no bash sleeps, no
-polling, and never a CLI verb, because a CLI verb must never wait. What may
-be awaited is per-actor policy data (`awaitable`); chaining the opaque `cursor`
-returned by every wake or timeout makes the watch window continuous. A cursor
-is ledger order; `occurredAt` is metadata and must never be used as one.
-_Avoid_: watch verb, `volli ticket wait`, polling loop
+**Watch**:
+A non-blocking subscription one Session holds on another Session or a Ticket
+(VC-457): arming it returns at once, and each later change arrives in the
+watcher as a notice from Volli — steered into a turn in progress, opening a turn
+on an idle Session, or parked until a detached one attaches again. A watched
+Session reports the end of its NEXT turn (once, with what it said last), its
+done/blocked signal, and its stop; a watched Ticket reports moves, comments and
+signals made by anyone but the watcher. `session_start`, `automation_run` and
+`session_send` arm one on the Session they open or steer; the `watch` tool
+covers the rest and ends a watch. Changes for one watcher that land together
+arrive as one notice. What may wake a watcher is per-actor policy data
+(`awaitable`, `awaitableSessions` — durable names kept from the await tools).
+Watches are process memory: a relaunch forgets them, and the durable facts they
+reported remain in their own ledgers.
+_Avoid_: await, wait, polling loop, `volli ticket wait` (nothing waits)
 
-**Session Await**:
-The control-tier wait between Sessions: a Session's `session_await` tool call
-parks its turn until a watched Session finishes a turn (`for: turn`), signals
-done or blocked (`verdict`), or is stopped (`stopped`) — then wakes with that
-one fact (VC-324). Same discipline as **Await**, one ledger over: one or many
-short session ids, the same `timeoutSeconds`, and the same opaque `cursor`.
-The first cursor comes from the `session_start`, `session_send`, or
-`session_delegate` receipt; each wake or timeout returns the next cursor to
-chain, so a Board Session supervising a fleet misses nothing between calls
-without polling `session list`. A Board Session
-may await any Session in its project; a ticket Session only itself and the
-subagents it delegated. What may be awaited is per-actor policy data
-(`awaitableSessions`); a Board Session no longer needs every child to post a
-Ticket Signal at the end of every stage just to be waited on.
-_Avoid_: `volli session wait` (a CLI verb must never wait), polling loop,
-waking on every Session Event (bookkeeping would hand back a turn per write)
+**Await** (retired):
+The control-tier waits `ticket_await` (VC-85) and `session_await` (VC-324)
+parked the caller's turn until a watched fact arrived, which left the person
+driving a chat they could not use; VC-457 replaced both with **Watch**. They are
+in no Role bundle and cannot be granted. Sessions whose frozen surface still
+names one keep it so they reattach unchanged, and calling one now arms the
+equivalent watch and returns at once.
+_Avoid_: using either as a current mechanism
 
 **Session Wake**:
-The one durable Session Event a Session Await parks on, returned with the same
-opaque `cursor` discipline as a Ticket Wake — the cursor is ledger order and
-`occurredAt` is metadata that must never be used as one. One await kind maps
-to a LIST of Session Event kinds: `turn` wakes on both `turn.completed` and
-`turn.interrupted`, because "the child is done talking" wants both while still
-naming which it got — an interruption is a wake, not a missing wake.
+One committed Session Event, fanned out in-process after its transaction
+commits (`session-wake.ts`), the Session-ledger twin of a Ticket Wake. Watches
+and the resumed-subagent re-arm listen on it; it carries the durable event
+itself, un-coalesced, because a listener must decide whether THIS is the fact it
+cares about.
 _Avoid_: notification, treating `turn.completed` and `turn.interrupted` as one
 
 **`awaitableSessions`**:
-The Session-await half of an actor's policy list, beside `awaitable` (VC-324):
-which of `turn`, `verdict`, `stopped` (and `$defaults`) the actor may wait on
-another Session with. A separate list under a separate name, never a widened
+The Session half of an actor's policy list, beside `awaitable` (VC-324): which
+of `turn`, `verdict`, `stopped` (and `$defaults`) may wake the actor about
+another Session — read by a **Watch** since VC-457, under the name the await
+tool gave it. A separate list under a separate name, never a widened
 `awaitable`: Ticket await kinds name planner facts and this list names Session
 Events — two ledgers, two sequences, and two cursors. A document naming a
 Ticket kind in this list is refused, not filtered.

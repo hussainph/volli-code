@@ -231,10 +231,12 @@ describe("createSessionWatchdog", () => {
     expect(h.submits).toHaveLength(1);
   });
 
-  it("waits out a tool that waits on another Session, however long", async () => {
+  it("waits out a tool that waits on a person, however long", async () => {
+    // The retired awaits no longer wait (VC-457); `ask_user` is the one tool
+    // whose whole job is to.
     const h = harness({ now: () => 5 * 60 * 60_000, projections: [projection()] });
     h.toolsById.set(SESSION, [
-      { activityId: "call-1", toolName: "ticket_await", declaredTimeoutMs: null },
+      { activityId: "call-1", toolName: "ask_user", declaredTimeoutMs: null },
     ]);
 
     await h.watchdog.scan();

@@ -2,8 +2,9 @@
  * The Session wake bus (VC-324 item 3): main's one post-commit stream of
  * Session Events.
  *
- * `ticket-wake.ts`'s twin, one ledger over. The await tool (`session.await`)
- * needs an in-process wake on a Session's own durable facts, and until this
+ * `ticket-wake.ts`'s twin, one ledger over. Watches (`watches.ts`, VC-457 —
+ * built for the retired `session.await`, VC-324) need an in-process wake on a
+ * Session's own durable facts, and until this
  * module nothing in main could observe one as an EVENT: the renderer fan-out
  * carries listing rows, and `session-control/activity-watch.ts` — the only
  * other observer on this write path — coalesces on a 60ms timer and
