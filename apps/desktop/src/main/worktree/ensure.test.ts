@@ -10,6 +10,7 @@ import { listTicketEvents } from "../db/events-repo";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
+import { updateTicketFieldsCommand } from "../ticket-commands";
 import { ensure } from "./ensure";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
@@ -601,5 +602,177 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
       branch: "volli/VC-12-mcp-server",
       baseBranch: "main",
     });
+  });
+});
+
+/** Real git's stdout, trimmed — for reading back what the checkout is on. */
+function repoGitOut(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+/**
+ * A real repository, a VC-12 ticket, and its worktree materialized by a first
+ * `ensure` — the state every Session start after the first one begins from.
+ */
+async function materializedTicket() {
+  const projectPath = tempDir("drift-repo");
+  runRepoGit(projectPath, ["init", "-b", "main"]);
+  writeFileSync(join(projectPath, "README.md"), "# repo\n");
+  runRepoGit(projectPath, ["add", "README.md"]);
+  runRepoGit(projectPath, ["commit", "-m", "initial"]);
+  insertProject(
+    ctx.db,
+    testProject({ id: "p1", path: projectPath, ticketPrefix: "VC", baseBranch: "main" }),
+  );
+  insertTicket(
+    ctx.db,
+    testTicket("p1", { id: "t1", ticketNumber: 12, title: "MCP server", usesWorktree: true }),
+  );
+  const deps = {
+    db: ctx.db,
+    git: poisonedSyncGit,
+    gitAsync: runGitCapturingAsync,
+    home: tempDir("drift-home"),
+    blobsRoot: blobsRoot(tempDir("drift-userdata")),
+  };
+  const first = await ensure(deps, "t1");
+  if (!first.ok) throw new Error(first.error);
+  const worktreePath = first.value.identity.worktreePath!;
+  expect(first.value.identity.branch).toBe(BRANCH);
+  return { projectPath, worktreePath, deps };
+}
+
+/** Commits one file on whatever the worktree currently has checked out. */
+function commitIn(worktreePath: string, file: string): string {
+  writeFileSync(join(worktreePath, file), `${file}\n`);
+  runRepoGit(worktreePath, ["add", file]);
+  runRepoGit(worktreePath, ["commit", "-m", file]);
+  return repoGitOut(worktreePath, ["rev-parse", "HEAD"]);
+}
+
+function worktreeEvents() {
+  return listTicketEvents(ctx.db, "t1").filter(
+    (event) =>
+      event.payload.kind === "worktree_changed" || event.payload.kind === "worktree_failed",
+  );
+}
+
+describe("ensure — the ticket's worktree on another branch, against a real repository", () => {
+  it("adopts a same-ticket branch an agent cut in the worktree, recording it as automation", async () => {
+    const { projectPath, worktreePath, deps } = await materializedTicket();
+    // What happened to VC-297, VC-141 and VC-403: the agent working in the
+    // ticket's worktree cut a narrower branch of its own and committed there.
+    runRepoGit(worktreePath, ["switch", "-c", "volli/VC-12-narrower-fix"]);
+    const head = commitIn(worktreePath, "fix.txt");
+    const before = worktreeEvents().length;
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toEqual({
+      ok: true,
+      value: {
+        // No worktree was made, so the setup command must not run; the recorded
+        // identity did change, so the rail's Branch has to be told.
+        created: false,
+        restamped: true,
+        identity: { worktreePath, branch: "volli/VC-12-narrower-fix", baseBranch: "main" },
+      },
+    });
+    // The checkout is exactly as the agent left it: same branch, same commit,
+    // and the branch it moved off still exists.
+    expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe("volli/VC-12-narrower-fix");
+    expect(repoGitOut(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
+    expect(repoGitOut(projectPath, ["branch", "--list", BRANCH])).toContain(BRANCH);
+    expect(existsSync(join(worktreePath, "fix.txt"))).toBe(true);
+    // Recorded through the ordinary identity write, attributed to automation.
+    const row = getTicketRow(ctx.db, "t1")!;
+    expect(row.branch).toBe("volli/VC-12-narrower-fix");
+    expect(row.worktree_path).toBe(worktreePath);
+    const added = worktreeEvents().slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({
+      actor: "automation",
+      payload: {
+        kind: "worktree_changed",
+        from: { worktreePath, branch: BRANCH, baseBranch: "main" },
+        to: { worktreePath, branch: "volli/VC-12-narrower-fix", baseBranch: "main" },
+      },
+    });
+
+    // Idempotent from here: the next start is a plain already-present reuse.
+    const again = await ensure(deps, "t1");
+    expect(again).toMatchObject({ ok: true, value: { created: false, restamped: false } });
+    expect(worktreeEvents().slice(before)).toHaveLength(1);
+  });
+
+  it("adopts the old-slug branch when a retitle drifted the name an unstamped branch computes", async () => {
+    const { worktreePath, deps } = await materializedTicket();
+    // A path stamped with no branch beside it falls back to the name computed
+    // from the CURRENT title, so a retitle alone moved it off the checkout.
+    const now = Date.now();
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "t1", title: "Model context protocol server", branch: null },
+      { now, actor: { kind: "user" } },
+    );
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { created: false, restamped: true, identity: { branch: BRANCH } },
+    });
+    expect(getTicketRow(ctx.db, "t1")?.branch).toBe(BRANCH);
+    expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe(BRANCH);
+  });
+
+  it("keeps a stamped identity through a retitle — the name is frozen at creation", async () => {
+    const { worktreePath, deps } = await materializedTicket();
+    updateTicketFieldsCommand(
+      ctx.db,
+      { ticketId: "t1", title: "Something else entirely" },
+      { now: Date.now(), actor: { kind: "user" } },
+    );
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      value: { created: false, restamped: false, identity: { worktreePath, branch: BRANCH } },
+    });
+  });
+
+  it.each([
+    [
+      "another ticket's branch",
+      ["switch", "-c", "volli/VC-13-someone-elses-work"],
+      /on branch volli\/VC-13-someone-elses-work/,
+    ],
+    [
+      "a branch outside the volli convention",
+      ["switch", "-c", "fix/unrelated"],
+      /on branch fix\/unrelated/,
+    ],
+    ["a detached HEAD", ["switch", "--detach"], /in detached HEAD state/],
+  ])("still refuses %s, loudly and without touching the checkout", async (_label, args, state) => {
+    const { worktreePath, deps } = await materializedTicket();
+    runRepoGit(worktreePath, args);
+    const head = repoGitOut(worktreePath, ["rev-parse", "HEAD"]);
+    const branchBefore = repoGitOut(worktreePath, ["branch", "--show-current"]);
+    const before = worktreeEvents().length;
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toMatch(state);
+      expect(outcome.error).toMatch(/Check out volli\/VC-12-mcp-server there/);
+    }
+    const added = worktreeEvents().slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]?.payload).toMatchObject({ kind: "worktree_failed", stage: "create" });
+    expect(getTicketRow(ctx.db, "t1")?.branch).toBe(BRANCH);
+    expect(repoGitOut(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
+    expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe(branchBefore);
   });
 });

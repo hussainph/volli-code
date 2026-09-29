@@ -300,6 +300,8 @@ export interface RuntimeToolBundle {
   todoWrite?: boolean;
   /** Sanitized dynamic MCP definitions, frozen in provider order. */
   mcp?: readonly McpToolDefinition[];
+  /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
+  mcpManagementNames?: "server";
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -729,9 +731,40 @@ export interface RuntimeBrowserActRequest {
   waitMs?: number;
 }
 
-/** A captured Browser Tab image, bounded by the host before it reaches anyone. */
+/**
+ * One bounded search of a Browser Tab's accessibility tree (VC-364): the
+ * subtrees whose accessible names or text contain a literal query, each under
+ * its path from the root, printed in the snapshot's dialect with refs that are
+ * as actionable — and as strictly judged — as a snapshot's.
+ *
+ * Everything in {@link findText} is page-derived and untrusted, exactly as a
+ * snapshot's text is. The counts beside it are Volli's: how many matches the
+ * search found and showed, and whether the tree had anything in it at all —
+ * so "no match" and "an empty page" never read the same.
+ */
+export interface RuntimeBrowserFind extends RuntimeBrowserPage {
+  /** The query as the model gave it; its own words, never the page's. */
+  query: string;
+  /** The matching subtrees, already bounded by the host; empty when nothing matched. */
+  findText: string;
+  /** The generation the refs belong to, as for a snapshot. */
+  generation: number;
+  /** Every match in the tree the host searched. */
+  matches: number;
+  /** The matches {@link findText} shows. */
+  shown: number;
+  /** Whether the host cut the search or its answer at its own bound. */
+  truncated: boolean;
+  /** Whether the tree exposed nothing at all — distinct from matching nothing. */
+  empty: boolean;
+}
+
+/** A captured Browser Tab image. */
 export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
-  /** PNG bytes, base64. The host owns scale and size bounds. */
+  /**
+   * PNG bytes, base64, at the capture's own resolution. The runtime bounds the
+   * copy it hands a model; this one is what the host keeps for the person.
+   */
   base64Png: string;
   /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
   picture: string | null;
@@ -755,7 +788,7 @@ export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
  * The one Browser port: everything a Session can do to a Browser Tab, answered
  * by the host that owns the native surface.
  *
- * One port for six tools, deliberately. Looking and acting are one capability
+ * One port for every browser tool, deliberately. Looking and acting are one capability
  * with one answerer — the desktop's BrowserTabHost — and splitting the port
  * would invent a grant model this slice does not have; when per-tab grants
  * arrive they arrive as policy inside the host, not as port shape. Like
@@ -788,6 +821,14 @@ export interface RuntimeBrowserPort {
   acquire?(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
   /** Give a hold back early. Releasing a tab this Session does not hold is a no-op. */
   release?(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
+  /**
+   * Search a fresh read of the tab's accessibility tree for literal text
+   * (VC-364). Optional for the hold pair's reason: a Session whose frozen
+   * surface predates `browser_find` is handed a port without it, and the
+   * surface offers the tool exactly when the port carries it. A read, so it
+   * never takes a hold; its refs replace the latest snapshot's.
+   */
+  find?(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
   /** Releases host-private debugger/controller resources when an attachment ends. */
   dispose?(): void;
 }
@@ -817,6 +858,19 @@ export function browserHoldPort(
   // narrowing is a fact about `port` rather than a copy that could lose a
   // `this`-bound method.
   return port as RuntimeBrowserHoldPort;
+}
+
+/** A Browser port that carries `find` — what `browser_find` binds to (VC-364). */
+export type RuntimeBrowserFindPort = RuntimeBrowserPort &
+  Required<Pick<RuntimeBrowserPort, "find">>;
+
+/** The port narrowed to `find`, or `undefined` when it does not carry it. */
+export function browserFindPort(
+  port: RuntimeBrowserPort | undefined,
+): RuntimeBrowserFindPort | undefined {
+  if (port?.find === undefined) return undefined;
+  // The same object, proven, for `browserHoldPort`'s reason.
+  return port as RuntimeBrowserFindPort;
 }
 
 /** How a background shell stands: still running, or exited with what it exited with. */
@@ -1269,6 +1323,8 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // The search (VC-364) carries the port with its optional `find` proven.
+  | { tool: "browser_find"; port: RuntimeBrowserFindPort }
   // A name and nothing else, like a coding tool — but for the opposite reason.
   // A coding tool carries nothing because the runtime holds the environment
   // this package cannot see; `todo_write` carries nothing because there is
@@ -1320,6 +1376,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // smaller surface, and it is caught here where the cost is a thrown error
   // rather than a Session that can take a hold it cannot give back.
   const hold = browserHoldPort(browser);
+  const find = browserFindPort(browser);
   const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
@@ -1341,6 +1398,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_start: shell === undefined ? null : { tool: "shell_start", port: shell },
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
+    browser_find: find === undefined ? null : { tool: "browser_find", port: find },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -1715,22 +1773,36 @@ export type RuntimeActivityObservation =
     });
 
 /**
- * Attention's `reason` is frozen, unlike the arms of this union.
+ * Attention's `reason` may be widened, never narrowed or renamed.
  *
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
- * then whitelisting this exact set — and it throws rather than skipping what it
- * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar holds none of them, so no marker already on disk changes how it
- * validates — {@link CompactionObservation} was added exactly that way.
- * Adding a `reason` is not: every attention marker written by an older build is
- * re-validated against the new list on the next recovery, and a Session whose
- * marker no longer matches fails to attach outright.
+ * then whitelisting this exact set, so every attention marker already on disk
+ * is re-read against the current list on the next recovery. Adding a reason
+ * leaves each older marker valid. Removing or renaming one does not: a marker
+ * that stops validating is quarantined (skipped and counted, never thrown on),
+ * which costs the Session the attention state that marker held. A build OLDER
+ * than a reason quarantines that reason's markers the same way — the one price
+ * of widening, and a bounded one.
+ *
+ * `transport` is the widening (VC-443): the runtime is waiting out a network
+ * or provider failure on its own and the turn is still live. It projects to
+ * the ledger's existing `transport_retrying`, which is deliberately neither a
+ * failure nor a question — it clears itself when the provider answers, and
+ * nobody is notified about it.
  */
 export interface AttentionObservation {
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   message: string;
+  /**
+   * On a raised `runtime-failure` only: the instant, epoch ms, at which the
+   * spent provider allowance that stopped the run comes back, when the failure
+   * stated it unambiguously (`quotaResetInstant`). A FIELD rather than a new
+   * `reason`, and optional, for the reason above: the sidecar ignores a field
+   * it does not validate, so markers already on disk still recover.
+   */
+  resetsAt?: number;
   occurredAt?: number;
   recoveryCursor?: string;
 }

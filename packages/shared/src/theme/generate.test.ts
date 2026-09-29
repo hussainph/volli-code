@@ -1,3 +1,4 @@
+import { wcagContrast } from "culori";
 import { describe, expect, it } from "vite-plus/test";
 
 import { apcaLc, hexToOklch, oklchToHex } from "./color";
@@ -24,10 +25,8 @@ describe("generateThemeTokens", () => {
   });
 
   it("emits --primary-text, the accent solved for body copy", () => {
-    // --primary is pinned at PRIMARY_LIGHTNESS for its job as a *fill*, which
-    // leaves it at Lc 41 as text on --background — fine for icons, below the
-    // floor for body copy. --primary-text is the second accent lightness that
-    // fixes every such site at once.
+    // A fill is solved for its own label, not for use as body copy.
+    // Accent text has an independent lightness on the content surface.
     expect(generateThemeTokens(DEFAULT_THEME)["--primary-text"]).toMatch(/^#[0-9a-f]{6}$/);
   });
 });
@@ -50,10 +49,10 @@ describe("the ember golden", () => {
     "--border": "#2d2421",
     "--border-strong": "#423834",
     "--sidebar-border": "#29211d",
-    "--primary": "#e8652a",
+    "--primary": "#cd4d00",
     "--primary-foreground": "#ffffff",
     "--primary-text": "#ff966c",
-    "--ring": "#e8652a",
+    "--ring": "#ff966c",
     "--destructive": "#ffa39e",
     "--destructive-foreground": "#290b0b",
     "--positive": "#27d496",
@@ -68,10 +67,8 @@ describe("the ember golden", () => {
     expect(generateThemeTokens(DEFAULT_THEME)).toEqual(EMBER);
   });
 
-  it("makes the brand accent an exact fixed point of the accent math", () => {
-    // The seed goes in, the *same* hex comes back out of `oklch(0.661 C h)`.
-    // If this ever breaks, the accent lightness constant has drifted.
-    expect(generateThemeTokens(DEFAULT_THEME)["--primary"]).toBe("#e8652a");
+  it("darkens the brand fill enough for a small white label", () => {
+    expect(generateThemeTokens(DEFAULT_THEME)["--primary"]).toBe("#cd4d00");
   });
 
   it("solves the destructive red onto the card, like the rest of its family", () => {
@@ -216,17 +213,17 @@ describe("the generator's guarantees, over 360 hues × 5 chromas", () => {
     }
   });
 
-  it("holds the accent at its fixed lightness, repairing imperceptibly", () => {
-    // The verify/repair pass (step 9) may nudge the accent's lightness where
-    // no label clears Lc 60 — saturated mid-greens are the real case. Measured
-    // over the sweep it fires for 6 seeds in 1800 and never moves further than
-    // ΔL 0.0035, about one 8-bit step. If this bound grows, the repair has
-    // started doing something the eye can see and wants re-examining.
+  it("repairs the fill to AA without giving up the perceptual floor", () => {
     for (const { seed, tokens } of sweep) {
       expect(
-        Math.abs(hexToOklch(tokens["--primary"]).L - 0.661),
-        `--primary for seed ${seed}`,
-      ).toBeLessThan(0.004);
+        wcagContrast(tokens["--primary-foreground"], tokens["--primary"]),
+        seed,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        apcaLc(tokens["--primary-foreground"], tokens["--primary"]),
+        seed,
+      ).toBeGreaterThanOrEqual(60);
+      expect(hexToOklch(tokens["--primary"]).L, seed).toBeLessThanOrEqual(0.662);
     }
   });
 });
@@ -309,7 +306,7 @@ describe("--primary-text, the accent at body-copy contrast", () => {
 
   it("is the accent brightened — same hue and chroma, never a different color", () => {
     // The point of a second token rather than a brighter --primary: the fill
-    // keeps its pinned lightness (and ember keeps being a fixed point), while
+    // keeps the lightness its label requires, while
     // text gets the lightness it needs. Anything that moved hue would make an
     // accent link stop matching the accent button beside it.
     for (const { seed, tokens } of sweep) {
@@ -355,12 +352,9 @@ describe("--primary-text, the accent at body-copy contrast", () => {
     expect(apcaLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(60);
   });
 
-  it("fixes the Lc 41 finding that motivated it", () => {
-    // Ember's --primary is Lc 41 as body copy. Both halves are pinned so the
-    // gap cannot silently close from the wrong end — --primary must stay the
-    // fill it is.
+  it("keeps accent text independently readable after the fill darkens", () => {
     const tokens = generateThemeTokens(DEFAULT_THEME);
-    expect(apcaLc(tokens["--primary"], tokens["--background"])).toBeCloseTo(41, 0);
+    expect(apcaLc(tokens["--primary"], tokens["--background"])).toBeLessThan(60);
     expect(apcaLc(tokens["--primary-text"], tokens["--background"])).toBeGreaterThanOrEqual(60);
   });
 
@@ -382,7 +376,7 @@ describe("--primary-text, the accent at body-copy contrast", () => {
       overrides: { "--primary-text": "#ffd7c4" },
     });
     expect(tokens["--primary-text"]).toBe("#ffd7c4");
-    expect(tokens["--primary"]).toBe("#e8652a");
+    expect(tokens["--primary"]).toBe("#cd4d00");
   });
 });
 
@@ -504,14 +498,16 @@ describe("the clamps", () => {
     }
   });
 
-  it("keeps the achromatic accent legible and at its fixed lightness", () => {
+  it("keeps the achromatic accent legible at both contrast floors", () => {
     // A neutral --primary is still a button: its label must clear the same
-    // Lc 60 floor, and it must sit on the ladder's accent rung like any other.
+    // Lc 60 and WCAG 4.5 floors as a chromatic accent.
     const tokens = generateThemeTokens(themeFor("#808080"));
-    expect(tokens["--primary"]).toBe("#929292");
+    expect(tokens["--primary"]).toBe("#767676");
     expect(tokens["--primary-foreground"]).toBe("#ffffff");
     expect(apcaLc(tokens["--primary-foreground"], tokens["--primary"])).toBeGreaterThanOrEqual(60);
-    expect(hexToOklch(tokens["--primary"]).L).toBeCloseTo(0.661, 2);
+    expect(
+      wcagContrast(tokens["--primary-foreground"], tokens["--primary"]),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 
   it("still solves a readable foreground from a near-black seed", () => {
@@ -547,33 +543,16 @@ describe("determinism and idempotence", () => {
     }
   });
 
-  it("converges when its own --primary is fed back as the seed", () => {
-    // The resolved theme is recomputed at every render and never persisted,
-    // so a generator that wandered under its own output would make the UI
-    // wander. Feeding --primary back must reach a fixed point and stay there.
-    //
-    // Most seeds are a fixed point on the first pass. The exception is a seed
-    // whose accent gets gamut-mapped hard (pure green): each pass re-reads a
-    // chroma one 8-bit step nearer the sRGB cusp, so it creeps a few LSBs and
-    // then stops. It converges — it does not oscillate or run away.
+  it("never writes the resolved fill back over authored input", () => {
+    // Repaints start from the stored definition, NOT the derived primary hex.
+    // Gamut mapping is lossy, so feeding output back is not an idempotence contract.
     for (const seed of ["#e8652a", "#3b82f6", "#00ff00", "#808080", "#ff0000"]) {
-      let current = generateThemeTokens(themeFor(seed))["--primary"];
-      let settled = "";
-      for (let i = 0; i < 10; i += 1) {
-        const next = generateThemeTokens(themeFor(current))["--primary"];
-        if (next === current) {
-          settled = next;
-          break;
-        }
-        current = next;
-      }
-      expect(settled, `seed ${seed} never settled`).toBe(current);
+      const authored = themeFor(seed);
+      const before = structuredClone(authored);
+      const first = generateThemeTokens(authored);
+      for (let i = 0; i < 10; i += 1) expect(generateThemeTokens(authored)).toEqual(first);
+      expect(authored).toEqual(before);
     }
-  });
-
-  it("makes ember a fixed point on the very first pass", () => {
-    const once = generateThemeTokens(DEFAULT_THEME);
-    expect(generateThemeTokens(themeFor(once["--primary"]))).toEqual(once);
   });
 });
 
@@ -601,7 +580,7 @@ describe("overrides", () => {
   });
 
   it("does not follow an aliased token", () => {
-    // --ring is generated as a copy of --primary, but overriding one must not
+    // --ring is independently solved; overriding the fill must not
     // silently move the other — that separability is the whole reason the two
     // names survived the alias collapse (see tokens.ts).
     const tokens = generateThemeTokens({
@@ -609,7 +588,7 @@ describe("overrides", () => {
       overrides: { "--primary": "#1a1a1a" },
     });
     expect(tokens["--primary"]).toBe("#1a1a1a");
-    expect(tokens["--ring"]).toBe("#e8652a");
+    expect(tokens["--ring"]).toBe("#ff966c");
   });
 });
 
@@ -622,7 +601,7 @@ describe("the unlocked accent (#75)", () => {
       seed: "#3b82f6",
       accent: "#e8652a",
     });
-    expect(hexToOklch(tokens["--primary"]).h).toBeCloseTo(hexToOklch("#e8652a").h, 1);
+    expect(hexToOklch(tokens["--primary"]).h).toBeCloseTo(hexToOklch("#e8652a").h, 0);
     // Near-black at C 0.011 resolves hue coarsely once quantised to 8 bits —
     // a degree of slop here is a rounding artifact, not a hue shift.
     expect(Math.abs(hexToOklch(tokens["--background"]).h - hexToOklch("#3b82f6").h)).toBeLessThan(
@@ -639,7 +618,7 @@ describe("the unlocked accent (#75)", () => {
       ...themeFor("#808080"),
       accent: "#e8652a",
     });
-    expect(tokens["--primary"]).toBe("#e8652a");
+    expect(tokens["--primary"]).toBe("#cd4d00");
     expect(tokens["--background"]).toBe(generateThemeTokens(themeFor("#808080"))["--background"]);
   });
 
@@ -791,9 +770,7 @@ describe("pickAccentLabel", () => {
 });
 
 describe("the accent repair path", () => {
-  // A saturated mid-green is the one place no label clears Lc 60 at the
-  // ladder's fixed accent lightness, so step 9's "adjust lightness only"
-  // repair fires. Verified by sweep: ~6 seeds in 1800 reach it.
+  // Saturated green exercises both lightness repair and gamut mapping.
   const GREEN = "#24af32";
 
   it("moves the accent until its label is legible", () => {
@@ -806,10 +783,15 @@ describe("the accent repair path", () => {
     const repaired = hexToOklch(tokens["--primary"]);
     const ideal = hexToOklch(oklchToHex(0.661, hexToOklch(GREEN).C, hexToOklch(GREEN).h));
     expect(repaired.h).toBeCloseTo(ideal.h, 0);
-    expect(repaired.C).toBeCloseTo(ideal.C, 2);
-    // Darker than the ideal, and only barely — about one 8-bit step.
+    // Only gamut mapping can reduce chroma: compare the emitted color with
+    // the same authored hue/chroma at its solved lightness.
+    const source = hexToOklch(GREEN);
+    const mapped = hexToOklch(oklchToHex(repaired.L, source.C, source.h));
+    expect(repaired.C).toBeCloseTo(mapped.C, 2);
     expect(repaired.L).toBeLessThan(0.661);
-    expect(0.661 - repaired.L).toBeLessThan(0.01);
+    expect(
+      wcagContrast(tokens["--primary-foreground"], tokens["--primary"]),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
 

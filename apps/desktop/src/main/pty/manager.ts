@@ -502,10 +502,11 @@ export class PtyManager {
       // A fresh `git worktree add` just stamped worktree_path/branch/base_branch
       // on the ticket — tell every window so the Branch/Base fields refresh from
       // their blank-and-editable pre-boot state. Only on `created` (a re-stamp of
-      // a cleared path after removal also reconciles to `create`); a reused
-      // ready worktree changed nothing, so it never broadcasts. Targeted at the
-      // booting ticket, so its own rail refreshes promptly.
-      if (worktreeOutcome.created) {
+      // a cleared path after removal also reconciles to `create`) or `restamped`
+      // (a reuse that adopted the same-ticket branch actually checked out); a
+      // reused ready worktree that changed nothing never broadcasts. Targeted at
+      // the booting ticket, so its own rail refreshes promptly.
+      if (worktreeOutcome.created || worktreeOutcome.restamped) {
         broadcastDataChanged({
           ticketId: scope.worktree.ticketId,
           projectId: scope.projectId,

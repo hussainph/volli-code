@@ -58,6 +58,8 @@ import type {
   BootstrapResult,
   BrowserPictureInput,
   BrowserPictureResult,
+  BrowserTracesInput,
+  BrowserTracesResult,
   BrowserTabCaptureResult,
   BrowserTabIdInput,
   BrowserTabListInput,
@@ -90,6 +92,7 @@ import type {
   AutomationsResult,
   AutomationSetEnabledInput,
   AutomationSetEnabledResult,
+  AutomationHistoryScopeInput,
   AutomationSkipsResult,
   AutomationUpdateInput,
   PendingArmedRunCancelInput,
@@ -167,8 +170,11 @@ import type {
   ProjectCanvasWriteResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectRosterResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
@@ -475,6 +481,8 @@ const api = {
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
       invoke("volli:browser-picture", input),
+    traces: (input: BrowserTracesInput): Promise<BrowserTracesResult> =>
+      invoke("volli:browser-traces", input),
     takeOver: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
       invoke("volli:browser-take-over", input),
     handBack: (input: BrowserTabIdInput): Promise<BrowserTabResult> =>
@@ -540,6 +548,16 @@ const api = {
     setAuthorityPolicy: (
       input: ProjectAuthorityPolicyInput,
     ): Promise<ProjectAuthorityPolicyResult> => invoke("volli:project-authority-policy", input),
+    /**
+     * Points an existing project at the folder it moved to (VC-430) — the same
+     * row, so its id, tickets, settings and history come with it. Refused when
+     * the folder is missing, is a file, or is one another project tracks.
+     */
+    relink: (input: ProjectRelinkInput): Promise<ProjectRelinkResult> =>
+      invoke("volli:project-relink", input),
+    /** Whether a project's registered folder is still on disk (VC-430). */
+    checkFolder: (projectId: string): Promise<ProjectFolderResult> =>
+      invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
     /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
@@ -941,6 +959,15 @@ const api = {
      */
     skipsForProject: (input: ProjectIdInput): Promise<AutomationSkipsResult> =>
       invoke("volli:automation-skips-for-project", input),
+    /**
+     * ONE Automation's Runs in one project, newest first (VC-297) — the
+     * editor's own history, asked for rather than sieved out of the project's.
+     */
+    runsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationRunsResult> =>
+      invoke("volli:automation-runs-for-automation", input),
+    /** That Automation's Skipped occurrences, read beside its Runs (VC-297). */
+    skipsForAutomation: (input: AutomationHistoryScopeInput): Promise<AutomationSkipsResult> =>
+      invoke("volli:automation-skips-for-automation", input),
     /** Runs an Automation against the PROJECT: one fresh Board Session (VC-130). */
     runForProject: (input: AutomationRunForProjectInput): Promise<AutomationRunStartResult> =>
       invoke("volli:automation-run-for-project", input),

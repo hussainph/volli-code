@@ -241,6 +241,8 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
+  mcpManagementNames?: "server";
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /**
@@ -349,6 +351,22 @@ function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
   return withoutPair;
 }
 
+/** The port without `find`, for a surface frozen before `browser_find` (VC-364). */
+function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
+  // Safe as a shallow copy for `withoutHoldPair`'s reasons.
+  const { find: _find, ...withoutSearch } = port;
+  return withoutSearch;
+}
+
+/** The port a frozen surface binds: exactly the optional tools it recorded. */
+function browserForSurface(
+  port: DesktopBrowserPort,
+  surface: { holdPair: boolean; find: boolean },
+): DesktopBrowserPort {
+  const held = surface.holdPair ? port : withoutHoldPair(port);
+  return surface.find ? held : withoutFind(held);
+}
+
 export interface PiAdapterOptions {
   /**
    * Directory that owns every attachment's Pi recovery sidecar. Main resolves
@@ -379,6 +397,13 @@ export interface PiAdapterOptions {
    * link is reachable yet.
    */
   executionEnvFactory?: PiRuntimeHostOptions["executionEnvFactory"];
+  /**
+   * The machine's network and sleep, over Electron's `net` and `powerMonitor`
+   * (`connectivity.ts`). Lets a turn wait out a closed lid or a missing Wi-Fi
+   * instead of spending its retry budget on it (VC-443). Absent, the runtime
+   * treats the host as always online.
+   */
+  connectivity?: PiRuntimeHostOptions["connectivity"];
   /**
    * The web ports this profile can honestly bind now, resolved once per
    * attachment. Membership comes from the Session's durable tool surface, not
@@ -671,6 +696,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { compactionPolicy: options.compactionPolicy }),
     ...(options.observability === undefined ? {} : { observability: options.observability }),
+    ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
   });
 
@@ -964,6 +990,8 @@ class PiBinding implements BindingHandle {
     // names six, and is handed a port without the pair so it binds six.
     const wantsBrowser = context.toolSurface.includes("browser_tabs");
     const wantsHoldPair = context.toolSurface.includes("browser_acquire");
+    // And the search (VC-364), appended after both, on the same terms.
+    const wantsFind = context.toolSurface.includes("browser_find");
     // One name stands for the three (VC-270), on the browser's reasoning.
     const wantsShell = context.toolSurface.includes("shell_start");
     const mcpTools = context.mcpTools ?? [];
@@ -1079,6 +1107,9 @@ class PiBinding implements BindingHandle {
         // Ticket Session holds no verbs, and "no verb field" is the shape the
         // runtime's own tests pin for that.
         ...(verbs.length === 0 ? {} : { verbs }),
+        ...(context.mcpManagementNames === undefined
+          ? {}
+          : { mcpManagementNames: context.mcpManagementNames }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
       },
       ...(this.#recovery === undefined ? {} : { recovery: this.#recovery }),
@@ -1089,7 +1120,12 @@ class PiBinding implements BindingHandle {
       ...(wantsWebFetch ? { webFetch: this.#web.webFetch } : {}),
       ...(wantsWebSearch ? { webSearch: this.#web.webSearch } : {}),
       ...(wantsBrowser && this.#browser !== undefined
-        ? { browser: wantsHoldPair ? this.#browser : withoutHoldPair(this.#browser) }
+        ? {
+            browser: browserForSurface(this.#browser, {
+              holdPair: wantsHoldPair,
+              find: wantsFind,
+            }),
+          }
         : {}),
       ...(wantsShell && this.#shell !== undefined ? { shell: this.#shell } : {}),
       ...(mcpTools.length === 0 ? {} : { mcp: this.#mcp! }),

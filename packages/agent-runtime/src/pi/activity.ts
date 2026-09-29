@@ -91,6 +91,7 @@ const BROWSER_TOOL_ACTION: Record<string, ActivityBrowseAction> = {
   browser_act: "click",
   browser_screenshot: "screenshot",
   browser_console: "console",
+  browser_find: "find",
 };
 
 /** Binary content never enters an activity payload. */
@@ -282,7 +283,12 @@ function browseFacet(
     tabId: cleanPayloadText(readField(source, "tabId")),
     url: toolName === "browser_navigate" ? cleanPayloadText(readField(source, "url")) : null,
     title: null,
-    target: toolName === "browser_act" ? actTargetOf(source) : null,
+    target:
+      toolName === "browser_act"
+        ? actTargetOf(source)
+        : toolName === "browser_find"
+          ? cleanPayloadText(readField(source, "query"))
+          : null,
     picture: null,
     errorCount: null,
     ownerSessionId: null,

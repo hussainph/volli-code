@@ -99,7 +99,7 @@ export function HealthPanel({
             aria-expanded={open}
             aria-controls={detailsId}
             onClick={() => setOpen((current) => !current)}
-            className="flex w-full items-center gap-1 py-2 text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:outline-none"
+            className="flex w-full items-center gap-1 py-2 text-ui text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
             <CaretDownIcon
               aria-hidden

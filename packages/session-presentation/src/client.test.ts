@@ -100,6 +100,7 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     turnActive: false,
     lastActivityAt: SESSION.createdAt,
     bornTicketless: SESSION.ticketId === null,
+    scheduledResume: null,
   };
 }
 
@@ -1273,6 +1274,41 @@ describe("retryRuntime", () => {
 
     await expect(client.retryRuntime()).resolves.toBe(false);
     expect(rpc.commands).toEqual([]);
+  });
+});
+
+describe("scheduled resume", () => {
+  it("schedules a resume at the stated reset, and cancels it by its schedule id", async () => {
+    const { client, rpc, sessionId } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+
+    await expect(
+      client.scheduleResume({
+        attentionId: "attention-1",
+        attachmentId: "attach-1",
+        resumeAt: 1_800_000_000_000,
+      }),
+    ).resolves.toBe(true);
+    await expect(client.cancelScheduledResume("schedule-1")).resolves.toBe(true);
+
+    expect(rpc.commands).toEqual([
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: {
+          kind: "resume.schedule",
+          attentionId: "attention-1",
+          attachmentId: "attach-1",
+          resumeAt: 1_800_000_000_000,
+        },
+      },
+      {
+        commandId: expect.any(String),
+        sessionId,
+        command: { kind: "resume.cancel", scheduleId: "schedule-1" },
+      },
+    ]);
   });
 });
 

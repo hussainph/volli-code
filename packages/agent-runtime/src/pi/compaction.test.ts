@@ -14,12 +14,17 @@ import {
   createAssistantMessageEventStream,
   createModels,
   fauxProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
-  type Context,
   type Model,
   type Models,
+  type Tool,
+  type TranscriptContext,
   type Usage,
 } from "@earendil-works/pi-ai";
+import { systemHead, withoutSystemMessages, withSystemHead } from "./transcript-context";
+import { projectedContextTokens } from "./token-counting";
 import { describe, expect, it } from "vite-plus/test";
 import { composeFirstUserMessage } from "../prompt";
 import {
@@ -67,6 +72,16 @@ function user(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
+/** A tool-change system message as Pi's loop persists one (0.86): no text, one declaration. */
+function toolDelta(name: string, timestamp: number): AgentMessage {
+  return {
+    role: "system",
+    content: "",
+    toolsAdded: [{ name, description: "a tool", parameters: { type: "object" } }],
+    timestamp,
+  };
+}
+
 let nextSeq = 0;
 
 function messageEntry(message: AgentMessage): MessageEntry {
@@ -102,8 +117,18 @@ const reader: ConversationReader = {
     entry.message.role !== "assistant" || (entry.message as AssistantMessage).stopReason === "stop",
 };
 
-/** Scripts one reply per provider call, in order, retaining what each was sent. */
-function scriptedModels(replies: readonly string[], sent: Context[] = []): Models {
+/**
+ * Scripts one reply per provider call, in order, retaining what each was sent.
+ *
+ * What is retained is the normalized transcript pi-ai 0.86 hands the provider,
+ * as is: an assertion that wants the folded prompt, the resolved tools or the
+ * bare conversation derives them with Pi's own `getCurrentSystemPrompt`,
+ * `getCurrentTools` and `withoutSystemMessages`, and one that wants the
+ * structure — how many system messages, where, whether the head is doubled —
+ * reads the list itself. Folding here would hide the second kind: two identical
+ * heads fold to one string (VC-421 review).
+ */
+function scriptedModels(replies: readonly string[], sent: TranscriptContext[] = []): Models {
   const faux = fauxProvider({
     api: "anthropic-messages",
     provider: PROVIDER_ID,
@@ -113,7 +138,7 @@ function scriptedModels(replies: readonly string[], sent: Context[] = []): Model
   let call = 0;
   models.setProvider({
     ...faux.provider,
-    streamSimple: ((model: Model<string>, context: Context) => {
+    streamSimple: ((model: Model<string>, context: TranscriptContext) => {
       sent.push(context);
       const stream = createAssistantMessageEventStream();
       const text = replies[call++];
@@ -609,6 +634,111 @@ describe("compactSession", () => {
     ).toEqual([outcome.entry]);
   });
 
+  it("prices tokensBefore once for a tool the sidecar declares beside the attachment's own", async () => {
+    // The durable number on the entry, and the one the summary text quotes
+    // to the model. The path is read off the sidecar, which never holds the
+    // head but can hold a tool-change system message Pi persisted; priced
+    // beside the attachment's own tools, that declaration used to count twice
+    // (VC-421 review, finding A). A system message is not a cut point and
+    // says nothing to the summarizer, so the only difference between the two
+    // runs is the one declaration — and it must make none.
+    //
+    // No reply here carries a measurement: the projection would otherwise
+    // read the last one and estimate only what follows it, which is the
+    // shape of a fresh Session, not of one whose retained replies had their
+    // usage cleared by an earlier compaction. This is the path the whole
+    // request is estimated on, and the one the double count lived on.
+    const unmeasured = usage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
+    const tool: Tool = {
+      name: "read_file",
+      description: "Read a file from disk.",
+      parameters: { type: "object", properties: {} } as Tool["parameters"],
+    };
+    const redeclared: AgentMessage = {
+      role: "system",
+      content: "",
+      toolsAdded: [tool],
+      timestamp: 0,
+    };
+    const compactWith = async (path: Entry[]) => {
+      const sidecar = await memorySession();
+      const models = scriptedModels(["## Goal\nfinish the ticket"]);
+      const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+      const outcome = await compactSession({
+        sidecar,
+        path,
+        models,
+        model,
+        settings,
+        systemPrompt: "You are the runtime.",
+        tools: [tool],
+      });
+      expect(outcome.kind).toBe("compacted");
+      return outcome.kind === "compacted" ? outcome.entry.tokensBefore : Number.NaN;
+    };
+    const plain = [
+      messageEntry(user("the original request")),
+      messageEntry(assistant("a long early answer", { usage: unmeasured })),
+      messageEntry(user("x".repeat(90_000))),
+      messageEntry(assistant("the recent answer", { usage: unmeasured })),
+    ];
+    const withDelta = [plain[0]!, plain[1]!, messageEntry(redeclared), ...plain.slice(2)];
+    const before = await compactWith(plain);
+    expect(before).toBeGreaterThan(0);
+    expect(await compactWith(withDelta)).toBe(before);
+  });
+
+  it("prices tokensBefore as the transcript the live turn sends: the head, then the path", async () => {
+    // The one spelling the estimator has (VC-421 review, B): the sidecar
+    // conversation behind the attachment's head, composed here from the same
+    // prompt and tools the native request carries in fields of its own. So
+    // the durable number is the projection of exactly that array — prompt and
+    // declarations inside, once — and a path priced with no prompt and no
+    // tools is the bare conversation, as Pi would send it.
+    const unmeasured = usage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 });
+    const tool: Tool = {
+      name: "read_file",
+      description: "Read a file from disk.",
+      parameters: { type: "object", properties: {} } as Tool["parameters"],
+    };
+    const path = [
+      messageEntry(user("the original request")),
+      messageEntry(assistant("a long early answer", { usage: unmeasured })),
+      messageEntry(user("x".repeat(90_000))),
+      messageEntry(assistant("the recent answer", { usage: unmeasured })),
+    ];
+    const compactWith = async (pair: { systemPrompt?: string; tools?: readonly Tool[] }) => {
+      const sidecar = await memorySession();
+      const models = scriptedModels(["## Goal\nfinish the ticket"]);
+      const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+      const outcome = await compactSession({ sidecar, path, models, model, settings, ...pair });
+      expect(outcome.kind).toBe("compacted");
+      return {
+        model,
+        tokensBefore: outcome.kind === "compacted" ? outcome.entry.tokensBefore : Number.NaN,
+      };
+    };
+    const systemPrompt = "You are the runtime. ".repeat(40);
+    const bare = await compactWith({});
+    const headed = await compactWith({ systemPrompt, tools: [tool] });
+    // Tools with no prompt: Pi's head for that is declarations under an empty
+    // prompt, and costs the declarations alone.
+    const toolsOnly = await compactWith({ tools: [tool] });
+    const conversation = contextMessages(path);
+    expect(bare.tokensBefore).toBe(projectedContextTokens(conversation, bare.model));
+    expect(headed.tokensBefore).toBe(
+      projectedContextTokens(
+        withSystemHead(systemHead(systemPrompt, [tool]), conversation),
+        headed.model,
+      ),
+    );
+    expect(toolsOnly.tokensBefore).toBe(
+      projectedContextTokens(withSystemHead(systemHead("", [tool]), conversation), toolsOnly.model),
+    );
+    expect(headed.tokensBefore).toBeGreaterThan(toolsOnly.tokensBefore);
+    expect(toolsOnly.tokensBefore).toBeGreaterThan(bare.tokensBefore);
+  });
+
   it("summarizes through a request that shares no prefix with the Session", async () => {
     // Why VC-164's "the compaction request itself reuses the parent's exact
     // prefix" was struck rather than implemented, pinned at the boundary where
@@ -622,20 +752,94 @@ describe("compactSession", () => {
     // Failing this test means Pi changed its mind about that. It is then worth
     // re-reading the struck clause, not worth working around here.
     const sidecar = await memorySession();
-    const sent: Context[] = [];
+    const sent: TranscriptContext[] = [];
     const models = scriptedModels(["## Goal\nfinish the ticket"], sent);
     const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
 
-    await compactSession({ sidecar, path: longPath(), models, model, settings });
+    await compactSession({
+      sidecar,
+      path: longPath(),
+      models,
+      model,
+      settings,
+      // The attachment's own pair, which the summarization request must not
+      // inherit: neither as a second head nor folded into Pi's prompt.
+      systemPrompt: "You are the runtime.",
+      tools: [
+        {
+          name: "read_file",
+          description: "Read a file from disk.",
+          parameters: { type: "object", properties: {} } as Tool["parameters"],
+        },
+      ],
+    });
 
     expect(sent).toHaveLength(1);
     const [summarization] = sent;
-    expect(summarization?.tools ?? []).toEqual([]);
-    // Pi's own, and nothing this runtime composed or could compose: the module
-    // hands `compact()` a model and a path, never a prompt.
-    expect(summarization?.systemPrompt).toContain("summarization");
-    expect(summarization?.messages).toHaveLength(1);
-    expect(JSON.stringify(summarization?.messages)).toContain("<conversation>");
+    const transcript = summarization?.messages ?? [];
+    // The real list, not a fold of it: exactly one system message, leading,
+    // and it is Pi's summarizer prompt with no tools declared — nothing this
+    // runtime composed or could compose, since the module hands `compact()` a
+    // model and a path, never a prompt.
+    expect(transcript.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(getCurrentTools(transcript)).toEqual([]);
+    expect(getCurrentSystemPrompt(transcript)).toContain("summarization");
+    expect(getCurrentSystemPrompt(transcript)).not.toContain("You are the runtime.");
+    expect(withoutSystemMessages(transcript)).toHaveLength(1);
+    expect(JSON.stringify(withoutSystemMessages(transcript))).toContain("<conversation>");
+  });
+
+  it("carries a persisted tool-change system message through compaction, never as a head", async () => {
+    // The sidecar can hold system messages of its own: the tool-change deltas
+    // Pi's loop persisted (0.86). They are conversation to a compaction, not
+    // prompt — one in the kept region rides the retained tail verbatim, one in
+    // the elided region is summarized with its neighbours, and neither is a
+    // cut point or a second head on the summarization request. The head
+    // itself is never on the path, so the transcript Pi sends the summarizer
+    // leads with Pi's own prompt and nothing this runtime composed.
+    const early = toolDelta("early_tool", 1);
+    const late = toolDelta("late_tool", 2);
+    const sidecar = await memorySession();
+    const sent: TranscriptContext[] = [];
+    const models = scriptedModels(["## Goal\nfinish the ticket"], sent);
+    const model = models.getModel(PROVIDER_ID, MODEL_ID)!;
+    const path = [
+      messageEntry(user("the original request")),
+      messageEntry(early),
+      messageEntry(assistant("a long early answer")),
+      messageEntry(user("x".repeat(90_000))),
+      messageEntry(late),
+      messageEntry(assistant("the recent answer")),
+    ];
+
+    const outcome = await compactSession({
+      sidecar,
+      path,
+      models,
+      model,
+      settings,
+      systemPrompt: "You are the runtime.",
+    });
+
+    expect(outcome.kind).toBe("compacted");
+    if (outcome.kind !== "compacted") return;
+    // The kept region, delta included, exactly as the sidecar holds it.
+    expect(outcome.entry.retainedTail).toEqual([path[3]!.message, late, path[5]!.message]);
+    expect(outcome.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "system",
+      "assistant",
+    ]);
+    // The elided region went to the summarizer as conversation. The request
+    // itself has one system message, leading, and it is Pi's: the early delta
+    // is inside the <conversation> blob, not declared on the request.
+    const [summarization] = sent;
+    const transcript = summarization?.messages ?? [];
+    expect(transcript.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(getCurrentTools(transcript)).toEqual([]);
+    expect(getCurrentSystemPrompt(transcript)).not.toContain("You are the runtime.");
+    expect(JSON.stringify(withoutSystemMessages(transcript))).toContain("a long early answer");
   });
 
   it("writes nothing when Pi finds nothing to compact", async () => {
@@ -686,7 +890,7 @@ describe("compactSession", () => {
         ...faux.provider,
         streamSimple: ((
           model: Model<string>,
-          _context: Context,
+          _context: TranscriptContext,
           options?: { headers?: Record<string, string> },
         ) => {
           seen.push(options?.headers);
@@ -769,7 +973,7 @@ describe("compactSession", () => {
       ...faux.provider,
       streamSimple: ((
         model: Model<string>,
-        _context: Context,
+        _context: TranscriptContext,
         options?: { headers?: Record<string, string> },
       ) => {
         seen.push(options?.headers);
@@ -816,7 +1020,7 @@ describe("compactSession", () => {
       ...faux.provider,
       streamSimple: ((
         model: Model<string>,
-        _context: Context,
+        _context: TranscriptContext,
         options?: { headers?: Record<string, string> },
       ) => {
         seen.push(options?.headers);
