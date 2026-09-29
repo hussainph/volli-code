@@ -264,6 +264,11 @@ export async function composeSession(scenario: {
   };
 }
 
+/** Summed call intervals, overlapping or not. */
+function span(trace: ReadonlyArray<ToolSample>): number {
+  return trace.reduce((sum, call) => sum + call.endedAt - call.startedAt, 0);
+}
+
 function perServerPeak(
   trace: ReadonlyArray<ToolSample & { serverId: string }>,
   fixtures: readonly FixtureMcpServer[],
@@ -316,8 +321,6 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
         serverErrorKinds[call.status] = (serverErrorKinds[call.status] ?? 0) + 1;
       }
     }
-    const span = (trace: ReadonlyArray<ToolSample>) =>
-      trace.reduce((sum, call) => sum + call.endedAt - call.startedAt, 0);
     const toolTimeMs = span(composed.hostTrace);
     const result = {
       ...turn,

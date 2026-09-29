@@ -341,17 +341,17 @@ describe("validateMcpToolDefinitions", () => {
   });
 });
 
-describe("parallel-read eligibility (VC-454)", () => {
-  function definition(serverId: string, toolName: string, description: string): McpToolDefinition {
-    return {
-      serverId,
-      toolName,
-      providerName: mcpProviderToolName(serverId, "Fixture", toolName),
-      description,
-      inputSchema: { type: "object" },
-    };
-  }
+function definition(serverId: string, toolName: string, description: string): McpToolDefinition {
+  return {
+    serverId,
+    toolName,
+    providerName: mcpProviderToolName(serverId, "Fixture", toolName),
+    description,
+    inputSchema: { type: "object" },
+  };
+}
 
+describe("parallel-read eligibility (VC-454)", () => {
   it("keys a tool by its exact server id and tool name, whatever the name holds", () => {
     expect(mcpToolKey({ serverId: "github", toolName: "search:issues" })).toBe(
       "github:search:issues",

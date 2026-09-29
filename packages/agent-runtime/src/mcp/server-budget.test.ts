@@ -45,7 +45,7 @@ function manualPort(): RuntimeMcpPort & {
   };
 }
 
-function request(serverId: string, toolCallId: string): RuntimeMcpCall {
+function mcpCall(serverId: string, toolCallId: string): RuntimeMcpCall {
   return { serverId, toolName: "read", arguments: {}, toolCallId };
 }
 
@@ -54,6 +54,11 @@ function budget(limits: Record<string, McpServerLimits>): McpServerBudget {
 }
 
 const never = new AbortController().signal;
+
+/** Finish every call still open on `port`, oldest first. */
+function finishAll(port: { pending: Pending[] }): void {
+  while (port.pending.length > 0) port.pending[0]!.finish();
+}
 
 /** Let queued admissions and the calls they start run. */
 const flush = async (): Promise<void> => {
@@ -72,7 +77,7 @@ describe("McpServerBudget", () => {
     expect(DEFAULT_MCP_SERVER_LIMITS).toEqual({ maxConcurrent: 8, maxStarts: 32, windowMs: 1_000 });
     const port = manualPort();
     const bound = new McpServerBudget().bind(port);
-    void bound.call(request("anything", "one"), never);
+    void bound.call(mcpCall("anything", "one"), never);
     await flush();
     expect(port.calls).toHaveLength(1);
 
@@ -85,7 +90,7 @@ describe("McpServerBudget", () => {
       [{ maxConcurrent: 1, maxStarts: 1, windowMs: Number.NaN }, /windowMs/],
     ] as const) {
       const bad = budget({ bad: limits }).bind(manualPort());
-      await expect(bad.call(request("bad", "one"), never)).rejects.toThrow(message);
+      await expect(bad.call(mcpCall("bad", "one"), never)).rejects.toThrow(message);
     }
   });
 
@@ -93,7 +98,7 @@ describe("McpServerBudget", () => {
     const port = manualPort();
     const limits = budget({ s: { maxConcurrent: 2, maxStarts: Infinity, windowMs: 100 } });
     const bound = limits.bind(port);
-    const results = ["a", "b", "c", "d", "e"].map((id) => bound.call(request("s", id), never));
+    const results = ["a", "b", "c", "d", "e"].map((id) => bound.call(mcpCall("s", id), never));
     await flush();
 
     expect(port.calls.map((call) => call.toolCallId)).toEqual(["a", "b"]);
@@ -116,11 +121,11 @@ describe("McpServerBudget", () => {
     const bound = limits.bind(port);
     const t0 = Date.now();
     const results = Array.from({ length: 7 }, (_, index) =>
-      bound.call(request("s", `c${index}`), never),
+      bound.call(mcpCall("s", `c${index}`), never),
     );
     await flush();
     // Finishing a call frees a slot but not the window.
-    for (const call of [...port.pending]) call.finish();
+    finishAll(port);
     await flush();
     expect(port.calls).toHaveLength(3);
 
@@ -128,7 +133,7 @@ describe("McpServerBudget", () => {
     expect(port.calls).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(port.calls).toHaveLength(6);
-    for (const call of [...port.pending]) call.finish();
+    finishAll(port);
     await vi.advanceTimersByTimeAsync(100);
     expect(port.calls).toHaveLength(7);
     port.pending[0]!.finish();
@@ -149,11 +154,11 @@ describe("McpServerBudget", () => {
     const sessionB = limits.bind(second);
 
     const a = [
-      sessionA.call(request("shared", "a1"), never),
-      sessionA.call(request("shared", "a2"), never),
+      sessionA.call(mcpCall("shared", "a1"), never),
+      sessionA.call(mcpCall("shared", "a2"), never),
     ];
-    const b = sessionB.call(request("shared", "b1"), never);
-    const other = sessionB.call(request("other", "o1"), never);
+    const b = sessionB.call(mcpCall("shared", "b1"), never);
+    const other = sessionB.call(mcpCall("other", "o1"), never);
     await flush();
 
     expect(first.calls).toHaveLength(2);
@@ -163,7 +168,7 @@ describe("McpServerBudget", () => {
     await vi.waitFor(() =>
       expect(second.calls.map((call) => call.toolCallId)).toEqual(["o1", "b1"]),
     );
-    for (const port of [first, second]) for (const call of [...port.pending]) call.finish();
+    for (const port of [first, second]) finishAll(port);
     await Promise.all([...a, b, other]);
     expect(limits.load("shared").peakActive).toBe(2);
     expect(limits.load("other").peakActive).toBe(1);
@@ -173,10 +178,10 @@ describe("McpServerBudget", () => {
     const port = manualPort();
     const limits = budget({ s: { maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 } });
     const bound = limits.bind(port);
-    const running = bound.call(request("s", "running"), never);
+    const running = bound.call(mcpCall("s", "running"), never);
     const withdrawn = new AbortController();
-    const queued = bound.call(request("s", "queued"), withdrawn.signal);
-    const after = bound.call(request("s", "after"), never);
+    const queued = bound.call(mcpCall("s", "queued"), withdrawn.signal);
+    const after = bound.call(mcpCall("s", "after"), never);
     await flush();
     expect(limits.load("s").queued).toBe(2);
 
@@ -196,9 +201,9 @@ describe("McpServerBudget", () => {
     const port = manualPort();
     const limits = budget({ s: { maxConcurrent: 5, maxStarts: 1, windowMs: 100 } });
     const bound = limits.bind(port);
-    const first = bound.call(request("s", "first"), never);
+    const first = bound.call(mcpCall("s", "first"), never);
     const withdrawn = new AbortController();
-    const queued = bound.call(request("s", "queued"), withdrawn.signal);
+    const queued = bound.call(mcpCall("s", "queued"), withdrawn.signal);
     await flush();
     port.pending[0]!.finish();
     await first;
@@ -214,8 +219,8 @@ describe("McpServerBudget", () => {
     const limits = budget({ s: { maxConcurrent: 5, maxStarts: 1, windowMs: 100 } });
     const bound = limits.bind(port);
     const t0 = Date.now();
-    const slow = bound.call(request("s", "slow"), never);
-    const next = bound.call(request("s", "next"), never);
+    const slow = bound.call(mcpCall("s", "slow"), never);
+    const next = bound.call(mcpCall("s", "next"), never);
     await flush();
     // Held by a call still running: its release, not a timer, wakes the queue.
     expect(vi.getTimerCount()).toBe(0);
@@ -257,7 +262,7 @@ describe("McpServerBudget", () => {
     const limits = budget({ s: { maxConcurrent: 4, maxStarts: 6, windowMs: 100 } });
     const bound = limits.bind(port);
     const all = Promise.all(
-      Array.from({ length: 40 }, (_, index) => bound.call(request("s", `c${index}`), never)),
+      Array.from({ length: 40 }, (_, index) => bound.call(mcpCall("s", `c${index}`), never)),
     );
     await vi.advanceTimersByTimeAsync(5_000);
     await all;
@@ -275,7 +280,7 @@ describe("McpServerBudget", () => {
     const limits = budget({});
     const controller = new AbortController();
     controller.abort(new Error("already stopped"));
-    await expect(limits.bind(port).call(request("s", "x"), controller.signal)).rejects.toThrow(
+    await expect(limits.bind(port).call(mcpCall("s", "x"), controller.signal)).rejects.toThrow(
       "already stopped",
     );
     expect(port.calls).toHaveLength(0);
@@ -288,38 +293,38 @@ describe("McpServerBudget", () => {
     const limits = budget({ s: { maxConcurrent: 2, maxStarts: Infinity, windowMs: 100 } });
     const sessionA = limits.bind(closing);
     const sessionB = limits.bind(staying);
-    const inFlight = sessionA.call(request("s", "a-running"), never);
-    const other = sessionB.call(request("s", "b-running"), never);
-    const queued = sessionA.call(request("s", "a-queued"), never);
-    const bQueued = sessionB.call(request("s", "b-queued"), never);
+    const inFlight = sessionA.call(mcpCall("s", "a-running"), never);
+    const other = sessionB.call(mcpCall("s", "b-running"), never);
+    const queued = sessionA.call(mcpCall("s", "a-queued"), never);
+    const bQueued = sessionB.call(mcpCall("s", "b-queued"), never);
     await flush();
 
     sessionA.close();
 
     await expect(inFlight).rejects.toThrow("MCP attachment closed");
     await expect(queued).rejects.toThrow("MCP attachment closed");
-    await expect(sessionA.call(request("s", "late"), never)).rejects.toThrow(
+    await expect(sessionA.call(mcpCall("s", "late"), never)).rejects.toThrow(
       "MCP attachment closed",
     );
     await vi.waitFor(() =>
       expect(staying.calls.map((call) => call.toolCallId)).toEqual(["b-running", "b-queued"]),
     );
     expect(closing.calls.map((call) => call.toolCallId)).toEqual(["a-running"]);
-    for (const call of [...staying.pending]) call.finish();
+    finishAll(staying);
     await Promise.all([other, bQueued]);
     expect(limits.load("s")).toMatchObject({ active: 0, queued: 0 });
 
     const custom = limits.bind(manualPort());
     custom.close(new Error("custom reason"));
-    await expect(custom.call(request("s", "x"), never)).rejects.toThrow("custom reason");
+    await expect(custom.call(mcpCall("s", "x"), never)).rejects.toThrow("custom reason");
   });
 
   it("hands each call to the port exactly once and releases its slot when it fails", async () => {
     const port = manualPort();
     const limits = budget({ s: { maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 } });
     const bound = limits.bind(port);
-    const failing = bound.call(request("s", "fails"), never);
-    const next = bound.call(request("s", "next"), never);
+    const failing = bound.call(mcpCall("s", "fails"), never);
+    const next = bound.call(mcpCall("s", "next"), never);
     await flush();
 
     port.pending[0]!.fail(new Error("server down"));
@@ -337,7 +342,7 @@ describe("McpServerBudget", () => {
     const bound = new McpServerBudget({
       limitsFor: () => ({ maxConcurrent: 1, maxStarts: 1, windowMs: 100 }),
     }).bind(manualPort());
-    void bound.call(request("s", "x"), never);
+    void bound.call(mcpCall("s", "x"), never);
     expect(now).toHaveBeenCalled();
   });
 });
