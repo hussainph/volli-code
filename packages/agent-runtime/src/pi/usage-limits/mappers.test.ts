@@ -943,6 +943,15 @@ const ZAI_BODY = {
   },
 };
 
+/** One five-hour token window, spent this far. */
+const zaiSpan = (currentValue: number) => ({
+  type: "TOKENS_LIMIT",
+  unit: 3,
+  number: 5,
+  usage: 100,
+  currentValue,
+});
+
 describe("zaiUsageFromEndpoint", () => {
   it("reads the token windows by the length each one states, and nothing else", () => {
     expect(zaiUsageFromEndpoint(ZAI_BODY, NOW)).toEqual({
@@ -1015,20 +1024,13 @@ describe("zaiUsageFromEndpoint", () => {
   });
 
   it("keeps the further-along of two readings of the same span, in either order", () => {
-    const span = (currentValue: number) => ({
-      type: "TOKENS_LIMIT",
-      unit: 3,
-      number: 5,
-      usage: 100,
-      currentValue,
-    });
     // The console has served a token limit beside a per-tier one over the same
     // five hours, and two rows under one id is not a row anyone can read. The
     // one that stops a turn first wins whichever way round they arrive — a
     // rule that held only in listed order would be a coin toss on the wire.
     for (const limits of [
-      zaiUsageFromEndpoint({ limits: [span(20), span(80)] }, NOW),
-      zaiUsageFromEndpoint({ limits: [span(80), span(20)] }, NOW),
+      zaiUsageFromEndpoint({ limits: [zaiSpan(20), zaiSpan(80)] }, NOW),
+      zaiUsageFromEndpoint({ limits: [zaiSpan(80), zaiSpan(20)] }, NOW),
     ]) {
       expect(limits.windows).toHaveLength(1);
       expect(limits.windows[0]?.usedPercent).toBe(80);
