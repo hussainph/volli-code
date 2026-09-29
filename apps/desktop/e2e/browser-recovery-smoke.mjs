@@ -25,8 +25,22 @@ const scratchRun = await makeScratch("volli-browser-recovery-");
 const { scratch, userDataDir, dbPath } = scratchRun;
 const home = join(scratch, "home");
 await fs.mkdir(home, { recursive: true });
-const server = http.createServer((_request, response) => {
+const server = http.createServer((request, response) => {
   response.setHeader("content-type", "text/html");
+  if (request.url === "/long") {
+    // VC-364: a page whose full snapshot stops printing long before its one
+    // target, so only browser_find can reach it.
+    const links = Array.from(
+      { length: 1500 },
+      (_, index) =>
+        `<li><a href="#a${index}">Article number ${index} with a descriptive title</a></li>`,
+    ).join("");
+    response.end(`<!doctype html><title>Long fixture</title>
+      <nav aria-label="Articles"><ul>${links}</ul></nav>
+      <footer><button id="deep">Deep target</button></footer>
+      <script>document.querySelector('#deep').onclick = () => { document.title = 'Deep clicked'; };</script>`);
+    return;
+  }
   response.end(`<!doctype html><title>Recovery fixture</title>
     <h1>Recovery fixture</h1><button id="go">Count 0</button>
     <form><input aria-label="Text"><button>Submit</button></form>
@@ -298,10 +312,57 @@ try {
           faultContents.capturePage = faultOriginalCapture;
         }
       });
-      await check("concurrent same-tab snapshots have distinct refs", async () => {
+      await check("concurrent same-tab snapshots keep one ref per element", async () => {
         const snapshots = await Promise.all(Array.from({ length: 12 }, snapshot));
         const refs = snapshots.map((snap) => snap.snapshotText.match(/\[ref=(e\d+)\]/)?.[1]);
-        must(new Set(refs).size === 12 && refs.every(Boolean), "Concurrent snapshots reused refs");
+        must(
+          new Set(refs).size === 1 && refs.every(Boolean),
+          `Concurrent snapshots renamed one element: ${refs.join(", ")}`,
+        );
+      });
+      await check("browser_find reaches past the snapshot bound and its ref acts", async () => {
+        const opened = await port.navigate({
+          tabId,
+          navigation: { kind: "url", url: `${url}long` },
+          signal,
+        });
+        must(
+          opened.truncated && !opened.snapshotText.includes("Deep target"),
+          "The long fixture did not outrun the snapshot bound",
+        );
+        const again = await snapshot();
+        const firstRef = (text) => text.match(/link "Article number 0[^"]*" \[ref=(e\d+)\]/)?.[1];
+        must(
+          firstRef(opened.snapshotText) !== undefined &&
+            firstRef(again.snapshotText) === firstRef(opened.snapshotText) &&
+            !again.snapshotText.includes("[new]"),
+          "A re-read renamed an element or marked an old one new",
+        );
+        const found = await port.find({ tabId, query: "deep TARGET", signal });
+        const line = found.findText.split("\n").find((one) => one.includes('"Deep target"'));
+        const ref = line?.match(/\[ref=(e\d+)\] \[new\] \[match\]$/)?.[1];
+        must(
+          found.matches === 1 && found.shown === 1 && !found.empty && ref !== undefined,
+          `Find missed the deep target: ${found.findText}`,
+        );
+        const clicked = await port.act({
+          tabId,
+          generation: found.generation,
+          kind: "click",
+          ref,
+          signal,
+        });
+        must(clicked.title === "Deep clicked", `Found ref did not act: ${clicked.title}`);
+        const none = await port.find({ tabId, query: "no such words here", signal });
+        must(none.matches === 0 && !none.empty && none.findText === "", "No match read as a match");
+        await port.navigate({ tabId, navigation: { kind: "url", url }, signal });
+        let stale;
+        try {
+          await port.act({ tabId, generation: found.generation, kind: "click", ref, signal });
+        } catch (error) {
+          stale = error;
+        }
+        must(stale?.rule === "browser.stale-ref", "A found ref outlived its navigation");
       });
       await check("explicit screenshot errors remain failures", async () => {
         const send = contents.debugger.sendCommand.bind(contents.debugger);
