@@ -760,6 +760,12 @@ function armSummary(
   };
 }
 
+function fmt(distribution: Distribution | null): string {
+  return distribution === null
+    ? "n/a"
+    : `${distribution.p50} / ${distribution.p95} ms (n=${distribution.n})`;
+}
+
 function armReportMarkdown(arm: Record<string, unknown>): string {
   const summary = arm as {
     concurrency: number;
@@ -781,10 +787,6 @@ function armReportMarkdown(arm: Record<string, unknown>): string {
       eventLoopDelayMs: { p95Ms: number | null; maxMs: number | null };
     };
   };
-  const fmt = (distribution: Distribution | null): string =>
-    distribution === null
-      ? "n/a"
-      : `${distribution.p50} / ${distribution.p95} ms (n=${distribution.n})`;
   const load = summary.host.loadAverageAfter?.[0];
   const cpu = summary.host.processCpuPercentOfOneCore;
   const rssMb = round(summary.host.rssPeakBytes / (1024 * 1024));
@@ -819,17 +821,18 @@ function formatMarkdown(report: {
   );
 }
 
+function git(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
 async function hostEnvironment(): Promise<Record<string, unknown>> {
-  const git = (args: string[]): string | null => {
-    try {
-      return execFileSync("git", args, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-    } catch {
-      return null;
-    }
-  };
   const core = cpus()[0];
   return {
     nodeVersion: process.version,

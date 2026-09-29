@@ -1,7 +1,16 @@
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 import type { ObservabilityEvent } from "@volli/shared";
 
-import { analyzeTurn, runScriptedTurn, summarize, type RecordedFixtureEvent } from "./measurement";
+import {
+  analyzeTurn,
+  runConcurrencyBenchmark,
+  runScriptedTurn,
+  summarize,
+  type RecordedFixtureEvent,
+} from "./measurement";
 
 function recorded(
   event: ObservabilityEvent,
@@ -81,6 +90,28 @@ describe("VC-441 fixture turn analysis", () => {
     expect(
       sample.rawEvents.find((event) => event.kind === "tool" && event.activityKind === "fetch-url"),
     ).toMatchObject({ toolId: null, activityKind: "fetch-url" });
+  });
+
+  it("writes published artifacts that carry none of the fixture's private content", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vc441-artifacts-"));
+    try {
+      await runConcurrencyBenchmark({ output: directory, repetitions: 20, concurrencies: [2] });
+      const files = (await readdir(directory)).toSorted();
+      expect(files).toEqual(["benchmark.json", "benchmark.md", "run-manifest.json"]);
+      for (const file of files) {
+        const content = await readFile(join(directory, file), "utf8");
+        expect(content).not.toContain("fixture-private-prompt-and-tool-output-canary");
+        expect(content).not.toContain("fixture_mcp_batch");
+        expect(content).not.toContain("fixture-call-");
+      }
+      const report = JSON.parse(await readFile(join(directory, "benchmark.json"), "utf8")) as {
+        arms: Array<{ turnSampleCount: number; orderViolationCount: number }>;
+      };
+      expect(report.arms).toHaveLength(1);
+      expect(report.arms[0]).toMatchObject({ turnSampleCount: 40, orderViolationCount: 0 });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("uses nearest-rank p50/p95 and preserves the sample size", () => {
