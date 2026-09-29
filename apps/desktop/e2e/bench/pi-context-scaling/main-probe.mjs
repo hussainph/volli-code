@@ -133,7 +133,6 @@ export function startWindow(_electron, name) {
     ticks,
     startedEpochMs: origin + perf.performance.now(),
     cpu: process.cpuUsage(),
-    elu: perf.performance.eventLoopUtilization(),
     gcFrom: state.gcEntries.length,
   };
   return { name, startedEpochMs: state.window.startedEpochMs };
@@ -162,10 +161,6 @@ export function stopWindow() {
     endedEpochMs,
     wallMs: endedEpochMs - window.startedEpochMs,
     mainCpuMs: (cpu.user + cpu.system) / 1000,
-    // Fraction of the window main's loop spent running JavaScript and I/O
-    // callbacks rather than waiting — the busy share any IPC request queues
-    // behind.
-    eventLoopUtilization: perf.performance.eventLoopUtilization(window.elu).utilization,
     eventLoopDelay: {
       count: window.histogram.count,
       minMs: ms(window.histogram.min),

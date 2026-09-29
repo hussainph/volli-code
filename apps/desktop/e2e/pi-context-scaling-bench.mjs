@@ -29,9 +29,9 @@
  * absolute paths stay identical), launches the app, and in ONE process:
  *
  *   1. census: every fixture Session is durably open, and NONE is bound;
- *   2. warm: an IPC burst, then an idle window (main loop delay, loop
- *      utilization and GC while the renderer samples IPC echo and Session RPC
- *      round trips concurrently);
+ *   2. warm: an IPC burst, then an idle window (main loop delay and GC while
+ *      the renderer samples IPC echo and Session RPC round trips
+ *      concurrently);
  *   3. two forced full GCs (each timed) and the pre-hydration memory snapshot;
  *   4. hydration window: the same instruments while N Sessions are bound, one
  *      after another, by re-selecting their own model (`model.select`), which
@@ -733,6 +733,11 @@ async function runLaunch(options, paths, fixture, arm, meta) {
 
 // ---- main ------------------------------------------------------------------
 
+/** Latency is re-derived without launches whose 1-minute load exceeded 1.5× the cores. */
+function loadThresholdFor(environment) {
+  return environment.machine.cores * 1.5;
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   // This process loads the generator (which runs the real Pi runtime), so it
@@ -840,7 +845,7 @@ async function main() {
       arm: launch.arm,
       failures: launch.failures,
     })),
-    ...aggregateRun(launches),
+    ...aggregateRun(launches, { loadThreshold: loadThresholdFor(environment) }),
   };
 
   if (options.output) {

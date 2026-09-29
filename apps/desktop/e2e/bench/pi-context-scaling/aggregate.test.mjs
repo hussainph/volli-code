@@ -159,6 +159,22 @@ describe("VC-445 aggregation", () => {
     expect(markdownTables({ ...aggregate })).toContain("| 5 | 100 | 1 |");
   });
 
+  it("re-derives latency without the launches a loaded host distorted", () => {
+    const quiet = launch(5, 100, 10, {
+      host: { before: { loadavg: [4] }, after: { loadavg: [5] } },
+    });
+    const busy = launch(5, 100, 12, {
+      host: { before: { loadavg: [30] }, after: { loadavg: [9] } },
+    });
+    const aggregate = aggregateRun([quiet, busy], { loadThreshold: 12 });
+    expect(aggregate.hostLoad.launchLoad1m.max).toBe(30);
+    expect(aggregate.lowLoad.launchesKept).toBe(1);
+    expect(aggregate.lowLoad.launchesDropped).toBe(1);
+    expect(aggregate.lowLoad.arms[0].heapUsedDeltaMiB.median).toBe(10);
+    expect(aggregateRun([quiet]).lowLoad).toBeUndefined();
+    expect(markdownTables(aggregate)).toContain("Load sensitivity");
+  });
+
   it("flags an arm whose binding census disagrees", () => {
     const bad = launch(5, 10, 1);
     bad.bindings.after.live = 4;

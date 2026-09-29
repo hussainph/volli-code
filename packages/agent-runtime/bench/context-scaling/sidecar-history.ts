@@ -21,7 +21,7 @@
  * with the bench's network tripwire loaded, against a disposable profile.
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 import {
   createModels,
@@ -258,23 +258,53 @@ interface SidecarCounts {
   bytes: number;
 }
 
-/** Pi writes transactions: a line is one record or an array of them. */
-export function countSidecar(path: string): SidecarCounts {
-  const text = readFileSync(path, "utf8");
-  let entries = 0;
-  let messages = 0;
-  let customEntries = 0;
+function countLines(text: string, into: SidecarCounts): void {
   for (const line of text.split("\n")) {
     if (line.length === 0) continue;
     const parsed = JSON.parse(line) as Record<string, unknown> | Record<string, unknown>[];
     for (const record of Array.isArray(parsed) ? parsed : [parsed]) {
       if (record["kind"] !== "entry") continue;
-      entries += 1;
-      if (record["type"] === "message") messages += 1;
-      if (record["type"] === "custom") customEntries += 1;
+      into.entries += 1;
+      if (record["type"] === "message") into.messages += 1;
+      if (record["type"] === "custom") into.customEntries += 1;
     }
   }
-  return { entries, messages, customEntries, bytes: Buffer.byteLength(text) };
+}
+
+/** Pi writes transactions: a line is one record or an array of them. */
+export function countSidecar(path: string): SidecarCounts {
+  const text = readFileSync(path, "utf8");
+  const counts: SidecarCounts = { entries: 0, messages: 0, customEntries: 0, bytes: 0 };
+  countLines(text, counts);
+  return { ...counts, bytes: Buffer.byteLength(text) };
+}
+
+/**
+ * The same count, kept up to date by reading only what was appended since the
+ * last call. Pi's JSONL is append-only while one attachment writes it, and
+ * re-reading a 40 MB sidecar after every turn would make growing one quadratic.
+ * The caller checks the final figure against a full {@link countSidecar}.
+ */
+function appendCounter(path: string): () => SidecarCounts {
+  const counts: SidecarCounts = { entries: 0, messages: 0, customEntries: 0, bytes: 0 };
+  let offset = 0;
+  return () => {
+    const size = statSync(path).size;
+    if (size > offset) {
+      const buffer = Buffer.alloc(size - offset);
+      const handle = openSync(path, "r");
+      try {
+        readSync(handle, buffer, 0, buffer.length, offset);
+      } finally {
+        closeSync(handle);
+      }
+      const complete = buffer.lastIndexOf(0x0a) + 1;
+      countLines(buffer.subarray(0, complete).toString("utf8"), counts);
+      offset += complete;
+      counts.bytes = offset;
+    }
+    return { ...counts };
+  };
 }
 
 // --- generation ------------------------------------------------------------
@@ -329,8 +359,9 @@ export async function growSidecarHistories(options: HistoryOptions): Promise<His
     // every turn actually appended.
     let base = 6;
     let perRound = 5;
+    const count = appendCounter(target.recovery.sessionFilePath);
     try {
-      let counts = countSidecar(target.recovery.sessionFilePath);
+      let counts = count();
       while (counts.entries < target.targetEntries) {
         const remaining = target.targetEntries - counts.entries;
         let rounds = plannedRounds(random);
@@ -348,7 +379,7 @@ export async function growSidecarHistories(options: HistoryOptions): Promise<His
         if (outcome.kind !== "delivered") {
           throw new Error(`turn ${turns} was not accepted: ${JSON.stringify(outcome)}`);
         }
-        counts = countSidecar(target.recovery.sessionFilePath);
+        counts = count();
         const appended = counts.entries - before;
         if (rounds === 0) base = appended;
         else perRound = Math.max(1, (appended - base) / rounds);
@@ -359,6 +390,9 @@ export async function growSidecarHistories(options: HistoryOptions): Promise<His
       await handle.close();
     }
     const counts = countSidecar(target.recovery.sessionFilePath);
+    if (counts.entries !== count().entries) {
+      throw new Error(`incremental sidecar count drifted for ${target.sessionId}`);
+    }
     const result: HistoryResult = {
       sessionId: target.sessionId,
       targetEntries: target.targetEntries,

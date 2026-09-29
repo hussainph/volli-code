@@ -127,9 +127,6 @@ function aggregateWindow(launches, name) {
     launches: windows.length,
     wallMs: acrossLaunches(windows.map((window) => window.main.wallMs)),
     mainCpuMs: acrossLaunches(windows.map((window) => window.main.mainCpuMs)),
-    eventLoopUtilization: acrossLaunches(
-      windows.map((window) => window.main.eventLoopUtilization ?? Number.NaN),
-    ),
     eventLoopDelay: {
       samples: windows.reduce((sum, window) => sum + window.main.eventLoopDelay.count, 0),
       p50Ms: acrossLaunches(windows.map((window) => window.main.eventLoopDelay.p50Ms)),
@@ -270,18 +267,51 @@ export function contextCostFits(arms, metric = "mainHeapUsedMiB") {
     });
 }
 
-export function aggregateRun(launches) {
-  const measured = launches.filter((launch) => !launch.warmup);
+function groupByArm(launches) {
   const byArm = new Map();
-  for (const launch of measured) {
+  for (const launch of launches) {
     const key = armKey(launch.arm);
     const group = byArm.get(key) ?? { arm: launch.arm, launches: [] };
     group.launches.push(launch);
     byArm.set(key, group);
   }
-  const arms = [...byArm.values()]
+  return [...byArm.values()]
     .map(({ arm, launches: group }) => aggregateArm(arm, group))
     .toSorted((a, b) => a.historyEntries - b.historyEntries || a.attached - b.attached);
+}
+
+/** The worst 1-minute load average seen at either end of a launch. */
+export function launchLoad(launch) {
+  return Math.max(launch.host?.before?.loadavg?.[0] ?? 0, launch.host?.after?.loadavg?.[0] ?? 0);
+}
+
+/**
+ * The machine is shared, so every latency figure is re-derived from only the
+ * launches whose load stayed under `threshold`. If the headline and this
+ * disagree, load, not the arm, moved the number.
+ */
+function loadSensitivity(measured, threshold) {
+  const kept = measured.filter((launch) => launchLoad(launch) <= threshold);
+  return {
+    threshold,
+    launchesKept: kept.length,
+    launchesDropped: measured.length - kept.length,
+    arms: groupByArm(kept).map((arm) => ({
+      key: arm.key,
+      launches: arm.launches,
+      heapUsedDeltaMiB: arm.memory.mainHeapUsedMiB.delta,
+      hydrationLaterMs: arm.hydrationLaterMs,
+      hydrationTickGapMs: arm.windows.hydration?.tickGapMs ?? null,
+      hydrationIpcEchoMs: arm.windows.hydration?.ipcEchoMs ?? null,
+      steadyTickGapMs: arm.windows.steady?.tickGapMs ?? null,
+      steadyIpcEchoMs: arm.windows.steady?.ipcEchoMs ?? null,
+    })),
+  };
+}
+
+export function aggregateRun(launches, { loadThreshold = Number.POSITIVE_INFINITY } = {}) {
+  const measured = launches.filter((launch) => !launch.warmup);
+  const arms = groupByArm(measured);
   return {
     arms,
     fits: {
@@ -290,6 +320,21 @@ export function aggregateRun(launches) {
       mainRssMiB: contextCostFits(arms, "mainRssMiB"),
       mainFootprintMiB: contextCostFits(arms, "mainFootprintMiB"),
     },
+    hostLoad: {
+      launchLoad1m: summarize(measured.map(launchLoad)),
+      memoryPressureLevels: [
+        ...new Set(
+          measured.flatMap((launch) => [
+            launch.host?.before?.memoryPressureLevel,
+            launch.host?.after?.memoryPressureLevel,
+          ]),
+        ),
+      ].filter((level) => level !== undefined && level !== null),
+      power: [...new Set(measured.map((launch) => launch.host?.before?.power ?? null))],
+    },
+    ...(Number.isFinite(loadThreshold)
+      ? { lowLoad: loadSensitivity(measured, loadThreshold) }
+      : {}),
     tripwire: {
       blocked: launches.flatMap((launch) => launch.tripwire?.blocked ?? []),
       chromiumBlocked: launches.flatMap((launch) => launch.tripwire?.chromiumBlocked ?? []),
