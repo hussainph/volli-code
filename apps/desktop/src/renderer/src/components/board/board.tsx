@@ -229,7 +229,7 @@ function ticketSlotElement(ticketId: string): HTMLElement | null {
  * The column under the pointer, and the picker row under it when the pointer is
  * standing on an expanded panel.
  *
- * `elementFromPoint` rather than cached rects, for the Lab rig's reason: a
+ * A live hit test rather than cached rects, for the Lab rig's reason: a
  * column list scrolls during a drag and the panel changes size when ⌥ goes
  * down, so a rect measured a frame ago is a rect for the wrong thing — and a
  * stale rect is the classic source of a drop landing one column over from where
@@ -242,8 +242,12 @@ function ticketSlotElement(ticketId: string): HTMLElement | null {
  * bottom-centre and must keep its Cancel live, and sonner's toasts own
  * bottom-right. Either one under the hand used to answer "no column", so ⌥
  * opened nothing and a drag aimed low at a column ran its default (VC-451).
- * Looking THROUGH chrome is right only mid-drag, which is the only time this
- * runs; the chrome itself stays clickable at rest. A pure DOM read in a
+ * Anything hit-testable above a column is looked through, not only those two —
+ * which is also how dnd-kit's rect-based collision already resolves the drop,
+ * so the picker and the release agree. A modal is not looked through: Radix
+ * sets `pointer-events: none` on the body behind it, so nothing under it is in
+ * the stack. Looking through is right only mid-drag, which is the only time
+ * this runs; the chrome itself stays clickable at rest. A pure DOM read in a
  * pointer handler — it adds no store read and no render path to the board.
  */
 function pointerLanding(
@@ -1188,14 +1192,17 @@ export const Board = React.memo(function Board({
               // The lifted card is a PICTURE, never a surface: dnd-kit's own
               // wrapper is a fixed, card-sized box at `z-index: 999` that
               // follows the pointer exactly, so without this it is the topmost
-              // thing under the hand at every moment of the drag — and the
-              // picker's hit test (`pointerLanding`) reads the topmost thing
-              // under the hand. It answered "no column, no row" for any aim
-              // that ended INSIDE the lifted card's own outline, which is most
-              // of them: which aims survived depended on where the card had
-              // been grabbed. A row aimed at and not taken is the one failure
-              // this gesture cannot have, because the release then runs the
-              // column's default instead of what the hand was pointing at.
+              // thing under the hand at every moment of the drag. When the
+              // picker's hit test (`pointerLanding`) read only the topmost
+              // thing, that answered "no column, no row" for any aim that ended
+              // INSIDE the lifted card's own outline — most of them. It now
+              // looks through to the first hit inside a column (VC-451), which
+              // would skip the overlay anyway; this keeps the picture out of
+              // the hit-test stack altogether, so nothing reading it — the
+              // picker or anything later — can mistake the card for a surface.
+              // A row aimed at and not taken is the one failure this gesture
+              // cannot have: the release would run the column's default
+              // instead of what the hand was pointing at.
               className="pointer-events-none"
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not
