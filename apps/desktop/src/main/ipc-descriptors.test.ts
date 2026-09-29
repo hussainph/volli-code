@@ -2107,8 +2107,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 78 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(78);
+    it("covers all 80 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(80);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
