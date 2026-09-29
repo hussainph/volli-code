@@ -7,6 +7,8 @@ import type { SessionOrderMember } from "@volli/shared";
 
 import {
   createSessionOrderStore,
+  projectBandOrderKey,
+  ticketRailOrderKey,
   useHeldSessionOrder,
   useSessionOrderStore,
 } from "./session-order";
@@ -31,8 +33,19 @@ function withPhase(
   return members.map((member) => (member.id === id ? { id, phase } : member));
 }
 
-const BAND = "project:p1";
-const RAIL = "ticket:t1";
+const BAND = projectBandOrderKey("p1");
+const RAIL = ticketRailOrderKey("t1");
+
+describe("surface keys", () => {
+  it("keeps each surface in its own namespace", () => {
+    // A ticket rail holds a SUBSET of its project band's membership, so the
+    // two must never collide on one key (amendment A2) — and a ticket whose id
+    // happens to read like a project's must not borrow its order.
+    expect(projectBandOrderKey("p1")).toBe("project:p1");
+    expect(ticketRailOrderKey("t1")).toBe("ticket:t1");
+    expect(projectBandOrderKey("x")).not.toBe(ticketRailOrderKey("x"));
+  });
+});
 
 describe("createSessionOrderStore", () => {
   it("commits the order a free band drew, and draws it back", () => {

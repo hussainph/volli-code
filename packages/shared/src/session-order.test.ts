@@ -6,6 +6,7 @@ import {
   frozenHeldOrder,
   heldOrderTarget,
   sameHeldOrder,
+  sessionOrderPhaseOf,
   type HeldSessionOrder,
   type SessionOrderMember,
   type SessionOrderPhase,
@@ -174,5 +175,41 @@ describe("applyHeldOrder", () => {
       { id: "a1" },
       { id: "a3" },
     ]);
+  });
+});
+
+describe("sessionOrderPhaseOf", () => {
+  it("puts a Session asking for a person above every other reading", () => {
+    expect(sessionOrderPhaseOf("waiting")).toBe("waiting");
+  });
+
+  it("counts a Session coming up as working, on both surfaces", () => {
+    // The disagreement this function ends: the left band lifted only on
+    // `working`, while the rail also lifted on `setup` and `starting`, so one
+    // event moved a row on one sidebar and not on the other.
+    expect(sessionOrderPhaseOf("working")).toBe("working");
+    expect(sessionOrderPhaseOf("setup")).toBe("working");
+    expect(sessionOrderPhaseOf("starting")).toBe("working");
+  });
+
+  it("rests everything that is neither asking nor coming up", () => {
+    // `ready` is attached between turns, not work; a died turn is over (VC-324)
+    // and lifting it would move a row for something that already ended.
+    expect(sessionOrderPhaseOf("ready")).toBe("resting");
+    expect(sessionOrderPhaseOf("error")).toBe("resting");
+    expect(sessionOrderPhaseOf("idle")).toBe("resting");
+    expect(sessionOrderPhaseOf("parked")).toBe("resting");
+    expect(sessionOrderPhaseOf("exited")).toBe("resting");
+    expect(sessionOrderPhaseOf("stopped")).toBe("resting");
+    expect(sessionOrderPhaseOf("interrupted")).toBe("resting");
+  });
+
+  it("lifts a row the moment its phase says a turn began", () => {
+    // The rule and its reading, together: a member built through this function
+    // climbs under the open question, which is what D7 asks of both surfaces.
+    const members = START.map((member) =>
+      member.id === "a5" ? { id: "a5", phase: sessionOrderPhaseOf("starting") } : member,
+    );
+    expect(heldOrderTarget(HELD, members)).toEqual(["a1", "a5", "a2", "a3", "a4"]);
   });
 });

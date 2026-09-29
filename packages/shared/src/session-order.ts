@@ -39,6 +39,73 @@ export interface SessionOrderMember {
   readonly phase: SessionOrderPhase;
 }
 
+/**
+ * Every state either sidebar's row mark can be in — the union of
+ * `SessionActivityState` and the renderer's `StatusDotState`.
+ *
+ * Spelled out here rather than imported because `@volli/shared` owns no DOM
+ * vocabulary, and the two surfaces answer in different ones: the left band
+ * maps an activity through `sessionActivityDotState`, a rail row reads
+ * `sessionRailRowDotState`. Both results are assignable to this union, so a
+ * state added to either vocabulary and not decided here fails to compile at
+ * the call site rather than silently resting.
+ */
+export type SessionOrderState =
+  | "working"
+  | "setup"
+  | "ready"
+  | "starting"
+  | "waiting"
+  | "error"
+  | "idle"
+  | "parked"
+  | "exited"
+  | "stopped"
+  | "interrupted";
+
+/**
+ * THE one reading of a Session's state as an order phase, for both sidebars.
+ *
+ * It exists because they disagreed: the left band counted only `working`, while
+ * the rail also counted `setup` and `starting` — so a Session coming up lifted
+ * its rail row and left its band row where it was, and the same event produced
+ * two different bands. Three decisions, made once:
+ *
+ *   • **`waiting` outranks everything.** A Session asking for a person is the
+ *     row they must not have to hunt for (D7), whatever else its plumbing is
+ *     doing. `sessionActivityDotState` already resolves attention to `waiting`,
+ *     so this agrees with the mark the row is drawing.
+ *   • **Coming up is working.** `setup` (the worktree's ensure pipeline) and
+ *     `starting` (connecting) are a turn beginning, which is the lift D7
+ *     describes — "resting → working, which a person usually caused". A
+ *     Session a person just started must not need its first tool call before
+ *     it climbs.
+ *   • **Everything else rests**, `ready` and `interrupted` included. `ready` is
+ *     attached-and-between-turns, which is not work; a died turn (VC-324) is
+ *     over, and lifting it would move a row for something that already ended.
+ *
+ * A lift is positional, not a sort, so resting is the resting DEFAULT and not a
+ * demotion: a row whose phase falls back to resting simply stays where it is.
+ */
+export function sessionOrderPhaseOf(state: SessionOrderState): SessionOrderPhase {
+  switch (state) {
+    case "waiting":
+      return "waiting";
+    case "working":
+    case "setup":
+    case "starting":
+      return "working";
+    case "ready":
+    case "error":
+    case "idle":
+    case "parked":
+    case "exited":
+    case "stopped":
+    case "interrupted":
+      return "resting";
+  }
+}
+
 /** The order a held band last committed to, and the phase each row was in then. */
 export interface HeldSessionOrder {
   readonly order: readonly string[];

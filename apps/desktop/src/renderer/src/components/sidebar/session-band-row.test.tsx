@@ -337,6 +337,16 @@ describe("the Previous row", () => {
     );
   });
 
+  it("weights an unread title, and marks the row for the band around it", () => {
+    const unread = renderPrevious(previousRow(), { unread: true });
+
+    expect(unread).toContain("data-unread");
+    expect(unread).toContain("font-semibold");
+    // Unread is the exception in this band — a read row carries neither mark.
+    expect(renderPrevious()).not.toContain("data-unread");
+    expect(renderPrevious()).not.toContain("font-semibold");
+  });
+
   it("ghosts a cleaned row and says so out of band", () => {
     expect(renderPrevious(previousRow({ cleaned: true }))).toContain("Cleaned up");
     expect(renderPrevious()).not.toContain("Cleaned up");
@@ -557,6 +567,27 @@ describe("the row's read menu", () => {
       document.querySelector<HTMLElement>('[data-slot="context-menu-item"]')?.click();
     });
     expect(onToggleRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the read direction on a Previous row that IS unread", async () => {
+    // The row used to hard-code `unread={false}`, so its menu could only ever
+    // offer "Mark as unread" — including for a Session that already was one,
+    // where the act did nothing a reader could see.
+    await mount(
+      <PreviousBandRow
+        row={previousRow({ id: "chat:c1" })}
+        projectId="proj-1"
+        ticketPrefix="VC"
+        now={60_000}
+        selected={false}
+        unread
+        onSelect={() => {}}
+        onToggleRead={() => {}}
+      />,
+    );
+    await rightClick();
+
+    expect(menuItems()).toEqual(["Mark as read"]);
   });
 
   it("gives a companion no menu at all — it has no turns to be unread", async () => {

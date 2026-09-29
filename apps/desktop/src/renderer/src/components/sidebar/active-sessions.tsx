@@ -7,10 +7,10 @@ import {
   type LatestSessionSignal,
   type ModelSelection,
   type Project,
+  sessionOrderPhaseOf,
   type SessionOrderMember,
   type Ticket,
 } from "@volli/shared";
-import { getChatClient } from "@volli/session-presentation";
 
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { loadingRegionProps } from "@renderer/components/ui/loading-region";
@@ -57,6 +57,10 @@ import {
 import { PeekConversation } from "@renderer/components/session-peek/peek-conversation";
 import { folderRowId, peekSessionId } from "@renderer/components/session-peek/peek-subject";
 import {
+  createSidebarPeekPorts,
+  usePeekHold,
+} from "@renderer/components/session-peek/sidebar-peek";
+import {
   peekRowButton,
   peekRowElement,
   useSessionPeek,
@@ -83,17 +87,12 @@ import {
   unreadSessionIds,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
-import { useHeldSessionOrder, useSessionOrderStore } from "@renderer/stores/session-order";
+import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/session-order";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
-
-/** One id per message a card sends, as `chat-plane.tsx` mints them. */
-function peekMessageId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `peek-${Date.now()}-${Math.random()}`;
-}
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
 const EMPTY_EXPANDED: readonly string[] = [];
@@ -675,17 +674,23 @@ export function ActiveSessions({
    * key is the surface's, not the project's, because the ticket rail holds a
    * SUBSET of this membership and a shared key would let each overwrite the
    * other's commit on every build (amendment A2).
+   *
+   * The phase is read off the row's own MARK through `sessionOrderPhaseOf`,
+   * which is the rail's reading too: this band used to count only `working`
+   * while the rail also counted a Session coming up, so one event moved a row
+   * on one sidebar and left it standing on the other.
    */
   const members = React.useMemo<readonly SessionOrderMember[]>(
     () =>
       listing.active.map((row) => ({
         id: row.id,
-        phase:
-          row.attention !== null ? "waiting" : row.activity === "working" ? "working" : "resting",
+        phase: sessionOrderPhaseOf(
+          sessionActivityDotState(row.activity, { attention: row.attention !== null }),
+        ),
       })),
     [listing.active],
   );
-  const heldOrder = useHeldSessionOrder(`project:${project.id}`, members);
+  const heldOrder = useHeldSessionOrder(projectBandOrderKey(project.id), members);
   /**
    * That order by its CONTENT, because its identity is not stable: the hook
    * rebuilds the array on every render (it is a pure derivation of the last
@@ -1129,59 +1134,34 @@ export function ActiveSessions({
     [project.id, setSessionRead, unread],
   );
 
+  /**
+   * The peek's ports — `session-peek/sidebar-peek.tsx`'s, which is the rail's
+   * too. What this band answers for is only what is genuinely its own: which
+   * row activation a row id names, where a ticket opens, the conversation
+   * overlay this component mounts, and its own read store. The pull door, the
+   * adopt-then-shipped-client answer and send paths, and which acts read a
+   * Session are one implementation for both sidebars.
+   */
   const ports = React.useMemo<SessionPeekPorts>(
-    () => ({
-      // One pull per shown Session, and nothing adopted: a peek must be cheaper
-      // than opening the Session (plan §1.1). A refusal is a failed card, not a
-      // card claiming the Session said nothing.
-      async readContent(sessionId) {
-        const result = await window.api.sessions.peekContent({ sessionId });
-        if (!result.ok) throw new Error(result.error);
-        return result.content;
-      },
-      // Acting is where adoption happens, and only then: the shipped resident
-      // client owns delivery, the submission latch and every recovery rule.
-      async answer(sessionId, interactionId, submission) {
-        const chat = useChatSessionsStore.getState();
-        chat.adoptChatSession(sessionId);
-        const client = getChatClient(sessionId);
-        if (client === undefined) return false;
-        const resolved = await client.resolveInteraction(interactionId, submission.resolution);
-        if (!resolved) return false;
-        // Words the resolution could not carry travel as an ordinary message
-        // after it, exactly as the chat's own question card sends them.
-        if (submission.message !== null) {
-          await client.submit({ id: peekMessageId(), text: submission.message }, "queue");
-        }
-        void setSessionRead(project.id, sessionId, false);
-        return true;
-      },
-      async sendMessage(sessionId, text) {
-        const chat = useChatSessionsStore.getState();
-        chat.adoptChatSession(sessionId);
-        const client = getChatClient(sessionId);
-        if (client === undefined) return false;
-        const delivery = await client.submit({ id: peekMessageId(), text }, "queue");
-        if (delivery === "refused") return false;
-        void setSessionRead(project.id, sessionId, false);
-        return true;
-      },
-      openSession(rowId) {
-        const row = listingRows.get(rowId);
-        if (row !== undefined) openRow(row);
-      },
-      openTicket(ticketId) {
-        openTicketWorkspace(project.id, ticketId);
-      },
-      viewConversation(sessionId) {
-        setViewedSessionId(sessionId);
-        void setSessionRead(project.id, sessionId, false);
-      },
-      setRead(sessionId, nowUnread) {
-        void setSessionRead(project.id, sessionId, nowUnread);
-      },
-    }),
-    [listingRows, openRow, openTicketWorkspace, project.id, setSessionRead],
+    () =>
+      createSidebarPeekPorts({
+        // Activation ALONE: the port adds the read, so a row opened from its
+        // card and a row clicked in the band cannot disagree about it.
+        openRow(rowId) {
+          const row = listingRows.get(rowId);
+          if (row !== undefined) activate(row);
+        },
+        openTicket(ticketId) {
+          openTicketWorkspace(project.id, ticketId);
+        },
+        showConversation(sessionId) {
+          setViewedSessionId(sessionId);
+        },
+        setRead(sessionId, nowUnread) {
+          void setSessionRead(project.id, sessionId, nowUnread);
+        },
+      }),
+    [activate, listingRows, openTicketWorkspace, project.id, setSessionRead],
   );
 
   const rowOf = React.useCallback((rowId: string) => peekRows.get(rowId), [peekRows]);
@@ -1205,13 +1185,10 @@ export function ActiveSessions({
   /**
    * The hold (D7): while the pointer is in this band or a card is open, no row
    * may move — anywhere. Released on leave, and on unmount, which is what lands
-   * the pending moves in one step.
+   * the pending moves in one step. Taken in a LAYOUT effect by the shared hook,
+   * so it beats this band's own commit in the same render.
    */
-  const holding = peek.holding;
-  React.useEffect(() => {
-    if (!holding) return;
-    return useSessionOrderStore.getState().hold();
-  }, [holding]);
+  usePeekHold(peek.holding);
 
   /**
    * The band's own keys, answered before the peek's (D8). The peek has a blind
@@ -1308,6 +1285,7 @@ export function ActiveSessions({
                 ticketPrefix={project.ticketPrefix}
                 now={ageNow}
                 selected={isSelected(entry.row)}
+                unread={unreadRow(entry.id, unread)}
                 vendor={vendorOf(entry.row)}
                 onSelect={openRow}
                 onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
@@ -1334,6 +1312,7 @@ export function ActiveSessions({
                         ticketPrefix={project.ticketPrefix}
                         now={ageNow}
                         selected={isSelected(row)}
+                        unread={unreadRow(row.id, unread)}
                         vendor={vendorOf(row)}
                         onSelect={openRow}
                         onToggleRead={row.kind === "chat" ? toggleRead : null}

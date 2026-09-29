@@ -41,6 +41,20 @@ import {
   type SessionOrderMember,
 } from "@volli/shared";
 
+/**
+ * The left band's surface key. Written once, because the two sidebars address
+ * the same store and a key spelled by hand at each call site is how one
+ * surface starts reading an order the other never committed to.
+ */
+export function projectBandOrderKey(projectId: string): string {
+  return `project:${projectId}`;
+}
+
+/** A ticket rail's surface key — its own, for the reason above the store records. */
+export function ticketRailOrderKey(ticketId: string): string {
+  return `ticket:${ticketId}`;
+}
+
 export interface SessionOrderState {
   /** Surface key → the order that surface last committed to. */
   held: Readonly<Record<string, HeldSessionOrder>>;

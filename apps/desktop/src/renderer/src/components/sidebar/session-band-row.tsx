@@ -66,6 +66,7 @@ import type {
   PreviousSessionRow,
 } from "@renderer/components/sidebar/active-session-listing";
 import { canPeekRow, folderRowId } from "@renderer/components/session-peek/peek-subject";
+import { sessionGlyphName, UnreadDot } from "@renderer/components/session-peek/sidebar-peek";
 import { SessionGlyph, harnessVendorId } from "@renderer/components/sessions/session-glyph";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { splitDragSourceProps } from "@renderer/components/split/split-drag-source";
@@ -79,10 +80,7 @@ import {
 import { ListRow, type LoadingBarWidth } from "@renderer/components/ui/list-row";
 import { SidebarMenuButton, SidebarMenuItem } from "@renderer/components/ui/sidebar";
 import { Skeleton } from "@renderer/components/ui/skeleton";
-import {
-  SESSION_ACTIVITY_LABEL,
-  sessionActivityDotState,
-} from "@renderer/components/ui/session-activity-status";
+import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { compactAge, relativeTime } from "@renderer/lib/relative-time";
 import { cn } from "@renderer/lib/utils";
@@ -217,32 +215,6 @@ export function sessionRowVendor(row: {
   };
 }
 
-/**
- * The mark's accessible name: who is working, then what it is doing.
- *
- * The words are `SESSION_ACTIVITY_LABEL`'s, composed here because the row is
- * what knows whether it also PRINTS them — and since VC-30 it never does, so
- * this name is the only place the state is said at all.
- */
-function markName(vendor: SessionRowVendor, state: StatusDotState | null): string {
-  const who = vendor.providerLabel;
-  switch (state) {
-    case null:
-      return who;
-    case "working":
-    case "setup":
-    case "starting":
-      return `${who} · ${SESSION_ACTIVITY_LABEL.working}`;
-    case "waiting":
-      return `${who} · ${SESSION_ACTIVITY_LABEL.waiting}`;
-    case "interrupted":
-    case "error":
-      return `${who} · ${SESSION_ACTIVITY_LABEL.interrupted}`;
-    default:
-      return `${who} · ${SESSION_ACTIVITY_LABEL.idle}`;
-  }
-}
-
 /** One row's mark, in the size its band gives it. */
 function RowMark({
   vendor,
@@ -262,26 +234,12 @@ function RowMark({
       state={state}
       kind={kind}
       fallback={vendor.fallback}
-      name={markName(vendor, state)}
+      // The name is `session-peek/sidebar-peek.tsx`'s, so a Session is
+      // announced the same on this band and on the ticket rail.
+      name={sessionGlyphName(vendor.providerLabel, state)}
       size={size}
       surface="sidebar"
     />
-  );
-}
-
-/**
- * The unread mark (VC-108, D6), in the row's trailing slot.
- *
- * Blue because it is the one hue neither a state badge nor a vendor logo
- * wears, so it cannot be read as either. `bg-info` is a generated token; the
- * word rides out of band, since a row this narrow has no room to print it.
- */
-function UnreadDot() {
-  return (
-    <span data-unread-dot="" className="flex size-4 shrink-0 items-center justify-center">
-      <span aria-hidden className="size-2 rounded-full bg-info" />
-      <span className="sr-only">Unread</span>
-    </span>
   );
 }
 
@@ -505,6 +463,7 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
   ticketPrefix,
   now,
   selected,
+  unread = false,
   vendor,
   onSelect,
   onToggleRead,
@@ -522,6 +481,16 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
    */
   now: number;
   selected: boolean;
+  /**
+   * Whether this Session has work nobody has looked at (VC-108).
+   *
+   * It used to be hard-coded `false` here, which made the row's own menu lie:
+   * an unread Session pulled back into this band offered "Mark as unread" for
+   * something already unread, and marking it did nothing a reader could see.
+   * Unread normally keeps a Session in Active — normally is not always, and a
+   * row that cannot say it is unread is a row whose menu cannot end it.
+   */
+  unread?: boolean;
   /** Whose logo leads the row — see {@link ActiveBandRow}'s own prop. */
   vendor?: SessionRowVendor;
   onSelect(row: PreviousSessionRow): void;
@@ -548,9 +517,10 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
     <SidebarMenuItem
       data-peek-row={peekable ? row.id : undefined}
       data-peek-surface={peekable ? "nav" : undefined}
+      data-unread={unread ? "" : undefined}
     >
       <ReadMenu
-        unread={false}
+        unread={unread}
         onToggle={
           onToggleRead === null || onToggleRead === undefined || !peekable
             ? null
@@ -590,7 +560,13 @@ export const PreviousBandRow = React.memo(function PreviousBandRow({
               keeps its mark in the same place as it ages out of one band and
               into the other. */}
           <SessionProvenanceMark provenance={row.provenance} rowTitle={row.title} />
-          <span className="min-w-0 flex-1 truncate">{row.title}</span>
+          {/* Unread outranks by WEIGHT alone, as it does on the Active row.
+              There is no trailing slot to put the dot in here: this row's right
+              edge is the age, and one trailing mark is the whole of its
+              geometry. */}
+          <span className={cn("min-w-0 flex-1 truncate", unread && "font-semibold")}>
+            {row.title}
+          </span>
           {/* 0 is the model's "nothing durable can date this" sentinel — an age
               drawn from it would read as the epoch, so the row says nothing. */}
           {row.endedOrQuietAt > 0 ? (
