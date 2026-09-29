@@ -247,8 +247,11 @@ export function projectMarkdown(input: ProjectionInput): readonly ProjectionOp[]
 
       // --- Fenced code: block background; hide the ``` lines off-cursor. -----
       if (node.name === "FencedCode") {
-        const reveal = selectionTouches(selection, node.from, node.to);
         const startLine = lineAt(index, node.from);
+        // Measured from the LINE's start, not the node's: the opening hide
+        // below covers the whole line, so a quote's `> ` or a list item's
+        // indent in front of the fence is hidden with it and must reveal it.
+        const reveal = selectionTouches(selection, startLine.from, node.to);
         // `to - 1` steps back off the terminator the block ends past, so the
         // last line of the block is the last line that HOLDS something.
         const endLine = lineAt(index, Math.max(node.from, Math.min(node.to - 1, index.length)));
