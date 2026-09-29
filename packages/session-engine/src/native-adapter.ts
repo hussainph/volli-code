@@ -51,11 +51,14 @@ export interface NativeAttachmentSpec {
    * this one's context; {@link native} stays null, because this attachment's
    * own native identity is minted fresh.
    */
-  carryFrom?: {
-    attachmentId: string;
-    directory: string | null;
-    native: SessionNativeReference;
-  };
+  carryFrom?:
+    | {
+        attachmentId: string;
+        directory: string | null;
+        native: SessionNativeReference;
+      }
+    /** The earlier attachment's binding exists but is not one this build can read. */
+    | { attachmentId: string; unreadable: string };
 }
 
 export type NativeMessageDelivery = "queue" | "steer" | "replace";

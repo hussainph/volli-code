@@ -171,7 +171,14 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: 
   return { promise, resolve, reject };
 }
 
-function harness(options: { failStops?: boolean; answers?: Map<string, string> } = {}) {
+function harness(
+  options: {
+    failStops?: boolean;
+    answers?: Map<string, string>;
+    /** The parent's projection lags its ledger: the attach-vs-park race (VC-457). */
+    staleParent?: boolean;
+  } = {},
+) {
   let children = 0;
   const starts: SessionStartInput[] = [];
   const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
@@ -274,7 +281,11 @@ function harness(options: { failStops?: boolean; answers?: Map<string, string> }
       projection: async ({ sessionId }) => {
         const found = projections.get(sessionId);
         if (found === undefined) throw new Error(`no projection for ${sessionId}`);
-        return { projection: found, throughSequence: throughSequence(sessionId) };
+        return {
+          projection: found,
+          throughSequence:
+            options.staleParent === true && sessionId === PARENT ? 0 : throughSequence(sessionId),
+        };
       },
       subscribe: async (input, listener) => {
         const subscription: Subscription = { ...input, listener, active: true };
@@ -846,6 +857,22 @@ describe("the notice carries the answer (VC-457)", () => {
     );
   });
 
+  it("cuts a long answer at a code-point boundary, never through a surrogate pair", () => {
+    const text = `${"y".repeat(SUBAGENT_ANSWER_NOTICE_LIMIT - 1)}😀tail`;
+    const notice = subagentNotice({
+      childSessionId: CHILD,
+      title: "T",
+      state: "completed",
+      reason: null,
+      answer: { text, unreadable: false },
+    });
+    expect(notice).toContain(`  | ${"y".repeat(SUBAGENT_ANSWER_NOTICE_LIMIT - 1)}\n`);
+    expect(notice).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(notice).toContain(
+      `cut at ${SUBAGENT_ANSWER_NOTICE_LIMIT - 1} of ${text.length} characters`,
+    );
+  });
+
   it("says so when the answer cannot be read, and when there is none", () => {
     const base = {
       childSessionId: CHILD,
@@ -964,5 +991,25 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
     await h.delegations.rearm({ ...entry, answered: false }, { turnId: "t1", afterSequence: 3 });
     await completeChildTurn(h);
     expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+  });
+});
+
+describe("the attach-vs-park race (VC-457 review)", () => {
+  it("delivers a parked notice once when the parent attached between the read and the subscribe", async () => {
+    const h = harness({ staleParent: true });
+    await h.delegate("tc-1");
+    h.setParent({ liveExecutor: null, attachments: [] });
+    // Durable, but after the projection the notice was judged against: the
+    // subscription replays it before it has returned.
+    h.ledgers.set(PARENT, [
+      event(PARENT, 5, { kind: "attachment.opened", attachment: OPEN_ATTACHMENT(PARENT) }),
+    ]);
+
+    await completeChildTurn(h);
+
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+    expect(h.activeSubscriptions(PARENT)).toEqual([]);
+    expect(h.reports).toEqual([]);
   });
 });

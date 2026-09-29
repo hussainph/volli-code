@@ -264,7 +264,7 @@ export function contextMessages(path: readonly Entry[]): AgentMessage[] {
  * message entries by the time they reach here — {@link conversationPath} does
  * that — which is why dropping them at this step loses no user turn.
  */
-export function contextEntries(path: readonly Entry[]): Entry[] {
+function contextEntries(path: readonly Entry[]): Entry[] {
   for (let index = path.length - 1; index >= 0; index--) {
     const entry = path[index];
     if (entry?.type === "compaction") return [entry, ...path.slice(index + 1)];

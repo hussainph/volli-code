@@ -73,7 +73,6 @@ interface SessionTarget {
   id: string;
   handle: string;
   title: string | null;
-  turnActive: boolean;
 }
 
 interface TicketTarget {
@@ -142,7 +141,6 @@ async function resolveSessions(
       id: target.session.id,
       handle,
       title: target.session.title,
-      turnActive: target.turnActive,
     });
   }
   return { ok: true, targets };
@@ -203,21 +201,50 @@ const TICKET_KIND_WORD: Record<TicketAwaitKind, string> = {
   signal: "signals",
 };
 
+const NOTHING_REPORTS_BACK =
+  "Nothing reports back into this Session; use `volli session peek` to look in on it.";
+
 /**
  * Arm the automatic watch a Session-opening or Session-steering tool gives its
  * caller, and say what it arms in one receipt line. Never refuses: a caller
  * whose policy allows nothing, or a composition with no registry, is told
  * that nothing will report back — which is what those tools always said.
+ *
+ * Authorization is the explicit `watch` tool's, by origin:
+ *
+ * - `started` — the caller opened this Session (`session_start`,
+ *   `automation_run`). Opening work is the strongest claim to hear about it,
+ *   so a Ticket Session watches a Session its own-ticket grant started even
+ *   though that Session is not one of its subagents.
+ * - `steered` — the caller only sent into it (`session_send`). Holding a send
+ *   is not holding a watch, so {@link watchBarrier} judges the target exactly
+ *   as `watch` would: a Ticket Session granted `session_send` does not come
+ *   to watch a Session the explicit tool would refuse it.
  */
-export function watchOpenedSession(
-  ports: Pick<WatchToolPorts, "authorityPolicy" | "watches">,
+export async function watchOpenedSession(
+  ports: Pick<WatchToolPorts, "authorityPolicy" | "watches" | "sessions">,
   caller: RuntimeSessionIdentity,
-  target: { sessionId: string; title: string | null; turnActive: boolean },
-): string {
+  target: { sessionId: string; title: string | null },
+  origin: "started" | "steered",
+): Promise<string> {
   const watches = ports.watches();
   const kinds = ports.authorityPolicy(caller.projectId).actors.session.awaitableSessions;
   if (watches === null || caller.role === "subagent" || kinds.length === 0) {
-    return "Nothing reports back into this Session; use `volli session peek` to look in on it.";
+    return NOTHING_REPORTS_BACK;
+  }
+  if (origin === "steered") {
+    const engine = ports.sessions();
+    const projections =
+      engine === null
+        ? []
+        : await engine.listSessions({ projectId: caller.projectId, scope: "all" });
+    const found = projections.find((projection) => projection.session.id === target.sessionId);
+    if (
+      found === undefined ||
+      watchBarrier(caller, found.session, shortSessionId(target.sessionId)) !== null
+    ) {
+      return NOTHING_REPORTS_BACK;
+    }
   }
   watches.watchSession({
     watcherSessionId: caller.sessionId,
@@ -225,7 +252,6 @@ export function watchOpenedSession(
     title: target.title,
     kinds,
     armTurn: true,
-    turnActive: target.turnActive,
   });
   return `A notice from Volli will arrive in this Session ${sessionKindsText(kinds, true)}; keep working meanwhile, or end your turn and the notice will open a new one. \`volli session peek ${shortSessionId(target.sessionId)}\` looks in on it before then.`;
 }
@@ -291,14 +317,21 @@ export async function watchTool(
     };
   }
 
+  // Every refusal before any watch is armed: a call is armed whole or not at
+  // all, so a refusal never leaves half of it watching.
   const policy = ports.authorityPolicy(project.id).actors.session;
+  if (sessions.targets.length > 0 && policy.awaitableSessions.length === 0) {
+    return refusal(
+      "This project's policy lets Sessions watch no Session facts, so nothing was watched.",
+    );
+  }
+  if (tickets.targets.length > 0 && policy.awaitable.length === 0) {
+    return refusal(
+      "This project's policy lets Sessions watch no Ticket facts, so nothing was watched.",
+    );
+  }
   const lines: string[] = [];
   if (sessions.targets.length > 0) {
-    if (policy.awaitableSessions.length === 0) {
-      return refusal(
-        "This project's policy lets Sessions watch no Session facts, so nothing was watched.",
-      );
-    }
     for (const target of sessions.targets) {
       watches.watchSession({
         watcherSessionId: session.sessionId,
@@ -306,7 +339,6 @@ export async function watchTool(
         title: target.title,
         kinds: policy.awaitableSessions,
         armTurn: true,
-        turnActive: target.turnActive,
       });
       lines.push(
         `Watching Session ${target.handle}: a notice arrives ${sessionKindsText(policy.awaitableSessions, true)}.`,
@@ -314,11 +346,6 @@ export async function watchTool(
     }
   }
   if (tickets.targets.length > 0) {
-    if (policy.awaitable.length === 0) {
-      return refusal(
-        "This project's policy lets Sessions watch no Ticket facts, so nothing was watched.",
-      );
-    }
     for (const target of tickets.targets) {
       watches.watchTicket({
         watcherSessionId: session.sessionId,
@@ -383,7 +410,6 @@ export async function retiredSessionAwaitTool(
       title: target.title,
       kinds,
       armTurn: true,
-      turnActive: target.turnActive,
     });
   }
   return {

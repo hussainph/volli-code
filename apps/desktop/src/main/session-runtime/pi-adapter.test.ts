@@ -601,8 +601,8 @@ describe("Pi native adapter authority snapshot", () => {
     });
     expect(runtime.spec).not.toHaveProperty("recovery");
 
-    // A binding this build cannot read is carried as nothing: the attach
-    // opens fresh rather than failing.
+    // A binding this build cannot read opens fresh rather than failing — and
+    // says why, so a lost conversation never looks like a first attach.
     const unreadable = await attached(
       undefined,
       attachmentSpec({
@@ -615,6 +615,37 @@ describe("Pi native adapter authority snapshot", () => {
       }),
     );
     expect(unreadable.runtime.spec).not.toHaveProperty("carry");
+    expect(unreadable.runtime.spec.carryUnreadable).toMatch(/not one this build can read/);
+    const notAnObject = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: { id: "x", detail: null },
+        },
+      }),
+    );
+    expect(notAnObject.runtime.spec.carryUnreadable).toMatch(/not one this build can read/);
+    // The engine's own "unreadable envelope" is passed through as the reason.
+    const envelope = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          unreadable: "Attachment has invalid native binding metadata",
+        },
+      }),
+    );
+    expect(envelope.runtime.spec.carryUnreadable).toBe(
+      "Attachment has invalid native binding metadata",
+    );
+    // A first attach through the reattach door has nothing to carry, and says nothing.
+    const first = await attached(undefined, attachmentSpec({ continuity: "context_replay" }));
+    expect(first.runtime.spec).not.toHaveProperty("carry");
+    expect(first.runtime.spec).not.toHaveProperty("carryUnreadable");
   });
 
   it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {

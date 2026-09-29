@@ -481,7 +481,7 @@ async function startSessionTool(
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
         started.state === "ready"
-          ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title, turnActive: true })}`
+          ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
           : "It was created but its attachment needs recovery, so no kickoff was submitted. A person can retry it from the app.",
       ].join("\n"),
     };
@@ -612,11 +612,12 @@ async function sendSessionTool(
             : outcome.midTurn === false
               ? "The adapter took it as a new prompt, but did not confirm that a turn opened."
               : "The adapter accepted it but did not report whether it opened or joined a turn.",
-        watchOpenedSession(watchPorts(options), session, {
-          sessionId: outcome.sessionId,
-          title: outcome.title,
-          turnActive: outcome.turnOpened || outcome.midTurn === true,
-        }),
+        await watchOpenedSession(
+          watchPorts(options),
+          session,
+          { sessionId: outcome.sessionId, title: outcome.title },
+          "steered",
+        ),
       ].join(" "),
     };
   } catch (error) {
@@ -791,11 +792,12 @@ async function runAutomationTool(
       `Started ${JSON.stringify(found.automation.name)} on ${display} as Session ${shortSessionId(outcome.run.sessionId)}.`,
       `Model: ${model.providerId}/${model.modelId} at reasoning ${model.reasoningLevel}.`,
       "The Run is recorded with the automation Actor, exactly as one a person starts by hand. It opened a fresh Session that runs on its own.",
-      watchOpenedSession(watchPorts(options), session, {
-        sessionId: outcome.run.sessionId,
-        title: null,
-        turnActive: true,
-      }),
+      await watchOpenedSession(
+        watchPorts(options),
+        session,
+        { sessionId: outcome.run.sessionId, title: null },
+        "started",
+      ),
     ].join("\n"),
   };
 }

@@ -105,30 +105,52 @@ export async function deliverHostNotice(
     submitHostNotice(ports, notice);
     return "delivered";
   }
+  // Replay-safe on purpose. `subscribe` replays everything after the cursor
+  // BEFORE it returns, so an attachment that opened between the projection
+  // read above and the subscription lands here while `subscribe` is still
+  // running — with no unsubscribe to call yet. The listener only records that
+  // it is done; whoever holds the handle (the listener, once it exists, or the
+  // line after `subscribe` returns) releases it.
   let settled = false;
-  const unsubscribe = await ports.runtime.subscribe(
+  let unsubscribe: (() => void) | null = null;
+  const settle = (): void => {
+    settled = true;
+    unsubscribe?.();
+  };
+  const release = await ports.runtime.subscribe(
     { sessionId: notice.sessionId, afterSequence: throughSequence },
     (emission) => {
       if (settled || !isSessionStreamFrame(emission)) return;
       const kind = emission.event.payload.kind;
       if (kind === "session.stopped") {
-        settled = true;
-        unsubscribe();
+        settle();
         ports.report(
           `${notice.label} was not delivered: Session ${shortSessionId(notice.sessionId)} stopped before it attached again`,
         );
         return;
       }
       if (kind !== "attachment.opened") return;
-      settled = true;
-      unsubscribe();
+      settle();
       submitHostNotice(ports, notice);
     },
     (error) => {
       ports.report(`parked ${notice.label} lost its stream: ${errorText(error)}`);
     },
   );
+  unsubscribe = release;
+  if (settled) release();
   return "parked";
+}
+
+/**
+ * The first `limit` UTF-16 units of `text`, never ending on half a surrogate
+ * pair: a notice cut through an emoji or a CJK extension character would hand
+ * the model a lone surrogate, which some providers reject outright.
+ */
+export function cutAtCodePoint(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const code = text.charCodeAt(limit - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? limit - 1 : limit);
 }
 
 export function errorText(error: unknown): string {

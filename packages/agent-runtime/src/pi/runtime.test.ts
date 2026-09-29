@@ -78,6 +78,7 @@ import { withoutReasoning } from "./reasoning";
 import { recoveryRefFor } from "./transcript";
 import { withoutSystemMessages } from "./transcript-context";
 import {
+  CONTEXT_CARRY_MAX_CHARS,
   createPiAgentRuntime,
   createPiAgentRuntimeForFixture,
   type PiRuntimeHostOptions,
@@ -905,6 +906,27 @@ function writeCurrentSidecar(
     JSON.stringify(record),
   );
   writeFileSync(path, `${lines.join("\n")}\n`);
+}
+
+/** An assistant message that called one tool, for hand-built sidecar history. */
+function toolCallAssistant(id: string, stopReason: string): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "m",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: 8,
+  };
 }
 
 function writeSidecarEntries(path: string, entries: Record<string, unknown>[]): void {
@@ -4345,6 +4367,271 @@ describe("startSession", () => {
     expect(wire).toContain("nested memory");
     expect(wire).not.toContain("withheld answer");
     expect(wire).not.toContain("original question");
+  });
+
+  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457 review)", async () => {
+    const attachment = fixture();
+    const seen: Context[] = [];
+    const handle = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("fresh");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, carryUnreadable: "binding unreadable" });
+    await handle.submitUserMessage("hello");
+    await handle.close();
+    expect(JSON.stringify(seen[0]?.messages)).toContain("BEGIN TICKET BRIEF");
+    expect(attachment.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "attention",
+        reason: "runtime-failure",
+        message: expect.stringContaining("binding unreadable"),
+      }),
+    );
+  });
+
+  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457 review)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("first answer");
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("second answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("first question");
+    await first.submitUserMessage("second question");
+    const earlier = first.recovery!;
+    await first.close();
+    // A provider-native checkpoint minted by ANOTHER model sits between the
+    // two turns: the carrying attachment's model cannot replay it.
+    const records = readJsonl(earlier.sessionFilePath);
+    const second = records.findIndex((record) => {
+      const message = record["message"] as { role?: string; content?: unknown } | undefined;
+      return (
+        message?.role === "user" && JSON.stringify(message.content).includes("second question")
+      );
+    });
+    expect(second).toBeGreaterThan(0);
+    records.splice(second, 0, {
+      kind: "entry",
+      type: "compaction",
+      id: "native-checkpoint",
+      timestamp: 5,
+      summary: "opaque",
+      retainedTail: [],
+      tokensBefore: 10,
+      fromHook: false,
+      details: {
+        providerCompaction: {
+          kind: "anthropic-messages",
+          model: "some-other-model",
+          compactedAt: 5,
+          block: { type: "compaction", content: "opaque checkpoint" },
+        },
+      },
+    });
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const seen: Context[] = [];
+    const carried = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, context) => {
+            seen.push(context);
+            emit.text("ok");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    await carried.submitUserMessage("third question");
+    await carried.close();
+    const wire = JSON.stringify(seen[0]?.messages);
+    // The checkpoint could not be replayed here, and what it replaced was
+    // carried: nothing is lost.
+    expect(wire).not.toContain("opaque checkpoint");
+    expect(wire).toContain("first answer");
+    expect(wire).toContain("second answer");
+  });
+
+  it("carries no tool result whose call was withheld (VC-457 review)", async () => {
+    const attachment = fixture();
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.text("kept answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("question");
+    const earlier = first.recovery!;
+    await first.close();
+    const records = readJsonl(earlier.sessionFilePath);
+    records.push(
+      // A portable summary whose retained tail holds a call whose result
+      // follows it: that pair is carried.
+      {
+        kind: "entry",
+        type: "compaction",
+        id: "portable-summary",
+        timestamp: 7,
+        summary: "summary of earlier work",
+        retainedTail: [toolCallAssistant("call-2", "toolUse")],
+        tokensBefore: 10,
+        fromHook: false,
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "kept-result",
+        timestamp: 8,
+        message: {
+          role: "toolResult",
+          toolCallId: "call-2",
+          toolName: "read",
+          content: [{ type: "text", text: "kept tool output" }],
+          isError: false,
+          timestamp: 8,
+        },
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "aborted-call",
+        timestamp: 9,
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "m",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "aborted",
+          timestamp: 9,
+        },
+      },
+      {
+        kind: "entry",
+        type: "message",
+        id: "orphan-result",
+        timestamp: 10,
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: "orphaned tool output" }],
+          isError: false,
+          timestamp: 10,
+        },
+      },
+    );
+    writeLinearJsonl(earlier.sessionFilePath, records);
+
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const own = second.recovery!;
+    await second.close();
+    const marker = entryRecords(own.sessionFilePath).find(
+      (entry) => entry["customType"] === "volli.context.v1",
+    )!;
+    const carried = JSON.stringify(marker["data"]);
+    expect(carried).toContain("summary of earlier work");
+    expect(carried).toContain("kept tool output");
+    expect(carried).not.toContain("orphaned tool output");
+    expect(carried).not.toContain("call-1");
+  });
+
+  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457 review)", async () => {
+    const attachment = fixture();
+    const huge = "h".repeat(CONTEXT_CARRY_MAX_CHARS + 10_000);
+    const runtimeWith = (steps: Parameters<typeof scriptedStream>[0]) =>
+      createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream(steps)),
+      });
+    const first = await runtimeWith([
+      (emit) => {
+        emit.text("answer to the huge question");
+        emit.finish();
+      },
+      (emit) => {
+        emit.text("small answer");
+        emit.finish();
+      },
+    ]).startSession(attachment.spec);
+    // The oversized entry is the QUESTION, so the cut lands mid-turn and must
+    // move on to the next user turn rather than carry an answer without it.
+    await first.submitUserMessage(`huge question ${huge}`);
+    await first.submitUserMessage("small question");
+    const earlier = first.recovery!;
+    await first.close();
+
+    const second = await runtimeWith([]).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-2" },
+      carry: { ...earlier, attachmentId: "attachment-1", workspacePath: attachment.worktreePath },
+    });
+    const secondRef = second.recovery!;
+    await second.close();
+    const marker = (path: string) =>
+      entryRecords(path).find((entry) => entry["customType"] === "volli.context.v1")!;
+    const bounded = JSON.stringify(marker(secondRef.sessionFilePath)["data"]);
+    expect(bounded.length).toBeLessThan(CONTEXT_CARRY_MAX_CHARS);
+    expect(bounded).not.toContain("hhhhhhhhhh");
+    expect(bounded).not.toContain("huge question");
+    expect(bounded).not.toContain("answer to the huge question");
+    expect(bounded).toContain("small question");
+    expect(bounded).toContain("were too large to carry into this attachment and were left out");
+
+    // Reattach again from the carried attachment: one level, never nested.
+    const third = await runtimeWith([]).startSession({
+      ...attachment.spec,
+      identity: { ...attachment.spec.identity, attachmentId: "attachment-3" },
+      carry: { ...secondRef, attachmentId: "attachment-2", workspacePath: attachment.worktreePath },
+    });
+    const thirdRef = third.recovery!;
+    await third.close();
+    const flattened = marker(thirdRef.sessionFilePath)["data"] as { entries: { type: string }[] };
+    expect(flattened.entries.map((entry) => entry.type)).not.toContain("custom");
+    expect(JSON.stringify(flattened)).toContain("small question");
+    expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
   });
 
   it("recovers accepted prompt and retry receipts independently of the observation cursor", async () => {

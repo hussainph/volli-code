@@ -24,9 +24,10 @@
  *   `session_start` or `automation_run` that opened the work, a `session_send`
  *   that steered it, or an explicit `watch`. A person chatting with a Session
  *   an orchestrator once started therefore does not wake the orchestrator on
- *   every reply. A verdict raised mid-turn is held and delivered with that
- *   turn's end, because "signaled done" and "finished its turn" seconds apart
- *   are one fact to the watcher. A stop ends the watch.
+ *   every reply. A verdict is delivered like any other change: when it and
+ *   the turn's end land inside one coalescing window they share a notice, and
+ *   when they do not, the verdict is not held back for a turn end that may
+ *   never come. A stop ends the watch.
  * - A **Ticket** (`ticket-wake.ts`). Moves, comments and signals, for as long
  *   as the watch lives, except those the watcher made itself: a Board Session
  *   commenting on a Ticket it watches is not news to it.
@@ -83,7 +84,11 @@ import { readSessionAnswer } from "@volli/session-engine";
 
 import type { SubscribeSessionWake } from "./session-wake";
 import type { TicketWake } from "./ticket-wake";
-import { deliverHostNotice, errorText } from "./session-runtime/host-notice-delivery";
+import {
+  cutAtCodePoint,
+  deliverHostNotice,
+  errorText,
+} from "./session-runtime/host-notice-delivery";
 
 /** How long one watcher's changes are gathered before they are delivered as one notice. */
 export const WATCH_COALESCE_MS = 1_500;
@@ -115,8 +120,6 @@ export interface WatchSessionInput {
   kinds: readonly SessionAwaitKind[];
   /** Whether the end of the target's next turn should notify. */
   armTurn: boolean;
-  /** Whether the target has a turn open right now (verdicts are held for its end). */
-  turnActive: boolean;
 }
 
 export interface WatchTicketInput {
@@ -148,9 +151,6 @@ interface SessionWatch {
   title: string | null;
   kinds: Set<SessionAwaitKind>;
   turnArmed: boolean;
-  turnActive: boolean;
-  /** Verdicts raised mid-turn, delivered with that turn's end. */
-  held: Change[];
 }
 
 interface TicketWatch {
@@ -272,16 +272,13 @@ export function createWatches(ports: WatchesPorts): Watches {
             ]
           : ["It left no message."];
       }
-      const cut = answer.text.length > WATCH_ANSWER_NOTICE_LIMIT;
+      const shown = cutAtCodePoint(answer.text, WATCH_ANSWER_NOTICE_LIMIT);
       return [
         "What it said last follows.",
-        ...untrustedProse(
-          `Session ${handle} message`,
-          cut ? answer.text.slice(0, WATCH_ANSWER_NOTICE_LIMIT) : answer.text,
-        ),
-        ...(cut
+        ...untrustedProse(`Session ${handle} message`, shown),
+        ...(shown.length < answer.text.length
           ? [
-              `Cut at ${WATCH_ANSWER_NOTICE_LIMIT} of ${answer.text.length} characters; \`volli session answer ${handle}\` prints all of it.`,
+              `Cut at ${shown.length} of ${answer.text.length} characters; \`volli session answer ${handle}\` prints all of it.`,
             ]
           : []),
       ];
@@ -391,38 +388,20 @@ export function createWatches(ports: WatchesPorts): Watches {
       const watch = watcher.sessions.get(event.sessionId);
       if (watch === undefined) continue;
       switch (payload.kind) {
-        case "turn.started":
-          watch.turnActive = true;
-          break;
         case "turn.completed":
         case "turn.interrupted": {
-          watch.turnActive = false;
-          const held = watch.held.splice(0);
-          if (watch.turnArmed && watch.kinds.has("turn")) {
-            watch.turnArmed = false;
-            const change = sessionChange(watcher, watch, event);
-            enqueue(watcher, change === null ? held : [...held, change]);
-          } else {
-            enqueue(watcher, held);
-          }
+          if (!watch.turnArmed || !watch.kinds.has("turn")) break;
+          watch.turnArmed = false;
+          enqueue(watcher, [sessionChange(watcher, watch, event)!]);
           break;
         }
         case "session.signaled": {
-          if (!watch.kinds.has("verdict")) break;
-          const change = sessionChange(watcher, watch, event);
-          if (change === null) break;
-          if (watch.turnActive && watch.turnArmed && watch.kinds.has("turn")) {
-            watch.held.push(change);
-          } else {
-            enqueue(watcher, [change]);
-          }
+          if (watch.kinds.has("verdict")) enqueue(watcher, [sessionChange(watcher, watch, event)!]);
           break;
         }
         case "session.stopped": {
-          const held = watch.held.splice(0);
           watcher.sessions.delete(event.sessionId);
-          const change = watch.kinds.has("stopped") ? sessionChange(watcher, watch, event) : null;
-          enqueue(watcher, change === null ? held : [...held, change]);
+          if (watch.kinds.has("stopped")) enqueue(watcher, [sessionChange(watcher, watch, event)!]);
           prune(watcher);
           break;
         }
@@ -495,7 +474,6 @@ export function createWatches(ports: WatchesPorts): Watches {
       if (existing !== undefined) {
         for (const kind of input.kinds) existing.kinds.add(kind);
         existing.turnArmed ||= input.armTurn;
-        existing.turnActive ||= input.turnActive;
         if (input.title !== null) existing.title = input.title;
         return;
       }
@@ -504,8 +482,6 @@ export function createWatches(ports: WatchesPorts): Watches {
         title: input.title,
         kinds: new Set(input.kinds),
         turnArmed: input.armTurn,
-        turnActive: input.turnActive,
-        held: [],
       });
     },
     watchTicket(input) {
@@ -528,12 +504,7 @@ export function createWatches(ports: WatchesPorts): Watches {
       if (watcher === undefined) return 0;
       let removed = 0;
       for (const id of targets.sessions ?? []) {
-        const watch = watcher.sessions.get(id);
-        if (watch === undefined) continue;
-        // Verdicts already raised were owed before the watch ended.
-        enqueue(watcher, watch.held.splice(0));
-        watcher.sessions.delete(id);
-        removed += 1;
+        if (watcher.sessions.delete(id)) removed += 1;
       }
       for (const id of targets.tickets ?? []) {
         if (watcher.tickets.delete(id)) removed += 1;

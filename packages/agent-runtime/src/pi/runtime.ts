@@ -29,6 +29,7 @@ import {
   type AssistantMessage,
   type CredentialStore,
   type Models,
+  type ToolResultMessage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import {
@@ -79,7 +80,6 @@ import {
   compactionDue,
   compactionPathForModel,
   compactSession,
-  contextEntries,
   contextMessages,
   contextWindowOf,
   conversationPath,
@@ -95,6 +95,7 @@ import {
   providerCompactionFromDetails,
   projectOpenAICompaction,
   projectAnthropicCompaction,
+  readProviderCompaction,
   type NativeRequestObservation,
 } from "./provider-compaction";
 import { AuthorityEscalation } from "./escalation";
@@ -798,10 +799,12 @@ function reasoningElisionRecordedAfter(
 
 /**
  * The context marker a fresh attachment writes when it continues an earlier
- * one's conversation (VC-457). Its entries are that conversation as the model
- * last saw it — from the newest compaction on, reasoning dropped — so the
- * marker is the whole of what the new sidecar needs and the old one is never
- * read again.
+ * one's conversation (VC-457). Its entries are that conversation from the
+ * newest PORTABLE compaction on (see {@link carriedConversation}), reasoning
+ * dropped and bounded in size — so the marker is the whole of what the new
+ * sidecar needs and the old one is never read again. A carry of a carry holds
+ * the earlier marker's entries expanded, never the marker itself, so repeated
+ * reattaches flatten rather than nest.
  */
 interface ContextCarriedMarker {
   kind: "context-carried";
@@ -835,15 +838,39 @@ function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
 }
 
 /**
+ * The most a carry copies into a new sidecar, in serialized characters.
+ *
+ * Far above any provider's context window (a million-token window is roughly
+ * four million characters of prose only for the densest text, and a live
+ * request compacts long before it), so a conversation that fits a model is
+ * carried whole. What it bounds is the pathological case: an uncompacted
+ * transcript heavy with tool output or images, re-copied on every reattach.
+ * Past it the OLDEST turns are left out, at a user-turn boundary, and the
+ * model is told so.
+ */
+export const CONTEXT_CARRY_MAX_CHARS = 1_500_000;
+
+/**
  * An earlier attachment's conversation, read the way that attachment would
  * have replayed it, ready to be carried into a fresh one.
  *
  * The same three reads a resume makes — acceptance markers become user
  * messages, a settled reply history disagrees about is withheld, recorded
- * reasoning drops are applied — then cut to what the model last saw (the
- * newest compaction onward). Reasoning is dropped from all of it: a fresh
- * attachment is a new request chain, and "every thinking block before some
- * point" is the one removal every provider accepts.
+ * reasoning drops are applied. Then four things only a carry needs:
+ *
+ * - **Cut at the newest PORTABLE compaction**, not the newest compaction. A
+ *   provider-native checkpoint is opaque state bound to one model and route;
+ *   when the new attachment cannot replay it, `compactionPathForModel` drops it
+ *   and rebuilds from the history it replaced — which a resume still has on
+ *   disk, and a carry must therefore still hold. A prose summary is portable to
+ *   any model, so everything before one is safely left behind.
+ * - **Reasoning dropped** from all of it: a fresh attachment is a new request
+ *   chain, and "every thinking block before some point" is the one removal
+ *   every provider accepts.
+ * - **Bounded** at {@link CONTEXT_CARRY_MAX_CHARS}, oldest turns first.
+ * - **No orphaned tool results.** A withheld reply takes its tool calls with
+ *   it, and a result whose call is not in the carried history is one no
+ *   provider accepts.
  */
 function carriedConversation(entries: readonly Entry[]): Entry[] {
   const markers = entries
@@ -883,15 +910,74 @@ function carriedConversation(entries: readonly Entry[]): Entry[] {
     replayable: (entry) => recoverableMessage(entry) && !withheld.has(entry.id),
     carriedEntries: carriedEntriesOf,
   };
+  const path = conversationPath(withDroppedReasoning(entries), reader);
+  const portable = path.findLastIndex(
+    (entry) =>
+      entry.type === "compaction" && readProviderCompaction(entry.details).kind === "absent",
+  );
   const carried: Entry[] = [];
-  for (const entry of contextEntries(conversationPath(withDroppedReasoning(entries), reader))) {
+  for (const entry of portable < 0 ? path : path.slice(portable)) {
     carried.push(
       entry.type === "message"
         ? Object.assign({}, entry, { message: withoutReasoning(entry.message) })
         : entry,
     );
   }
-  return carried;
+  return withoutOrphanedToolResults(boundedCarry(carried));
+}
+
+/** The oldest turns left out until the carry fits, cut where a user turn begins. */
+function boundedCarry(entries: readonly Entry[]): Entry[] {
+  const sizes = entries.map((entry) => JSON.stringify(entry).length);
+  let total = sizes.reduce((sum, size) => sum + size, 0);
+  if (total <= CONTEXT_CARRY_MAX_CHARS) return [...entries];
+  let start = 0;
+  while (start < entries.length && total > CONTEXT_CARRY_MAX_CHARS) {
+    total -= sizes[start]!;
+    start += 1;
+  }
+  // Begin a whole turn: a user message (or a summary, which stands in for
+  // turns), so no reply or tool result is carried without what prompted it.
+  while (start < entries.length && !beginsTurn(entries[start]!)) start += 1;
+  const omitted = start;
+  const note: Entry = {
+    type: "message",
+    id: `volli-carry-omitted-${omitted}`,
+    parentId: null,
+    seq: 0,
+    timestamp: 0,
+    message: {
+      role: "user",
+      content: `[Volli: the ${omitted} oldest entries of this Session's earlier conversation were too large to carry into this attachment and were left out. The Session's transcript in the app still has them; this notice is from Volli, not your user.]`,
+      timestamp: 0,
+    },
+  };
+  return [note, ...entries.slice(start)];
+}
+
+function beginsTurn(entry: Entry): boolean {
+  return entry.type === "compaction" || (entry.type === "message" && entry.message.role === "user");
+}
+
+/** Tool results whose call is carried; the rest would be refused by every provider. */
+function withoutOrphanedToolResults(entries: readonly Entry[]): Entry[] {
+  const calls = new Set<string>();
+  const collect = (message: AgentMessage): void => {
+    if (message.role !== "assistant") return;
+    for (const block of (message as AssistantMessage).content) {
+      if (block.type === "toolCall") calls.add(block.id);
+    }
+  };
+  for (const entry of entries) {
+    if (entry.type === "message") collect(entry.message);
+    if (entry.type === "compaction") entry.retainedTail.forEach(collect);
+  }
+  return entries.filter(
+    (entry) =>
+      entry.type !== "message" ||
+      entry.message.role !== "toolResult" ||
+      calls.has((entry.message as ToolResultMessage).toolCallId),
+  );
 }
 
 /**
@@ -1549,7 +1635,8 @@ async function attachSession(
     // replay, a compaction, a resume after a relaunch — finds it in place. A
     // carry that cannot be read is not a failed attach: the Session opens
     // without it, as it always did, and says so below.
-    let carryFailure: string | undefined;
+    let carryFailure: string | undefined =
+      inputRecovery === undefined && spec.carry === undefined ? spec.carryUnreadable : undefined;
     let carried = false;
     if (inputRecovery === undefined && spec.carry !== undefined) {
       try {

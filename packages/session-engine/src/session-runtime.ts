@@ -1108,7 +1108,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     // request). Reattach doors ask for a replay without first reading history,
     // so a Session's first attach through one lands here.
     const continuity: SessionAttachmentContinuity =
-      request.command.continuity === "context_replay" && carryFrom === undefined
+      request.command.continuity === "context_replay" &&
+      (carryFrom === undefined || "unreadable" in carryFrom)
         ? "fresh"
         : request.command.continuity;
     const spec: NativeAttachmentSpec = {
@@ -3414,10 +3415,13 @@ function adapterIdentity(adapterId: string): AdapterIdentity {
 }
 
 /**
- * The newest closed attachment of this executor whose native binding can be
- * read, for a `context_replay` attach (VC-457). Undefined when there is none —
- * a Session that never bound a native identity has no conversation to carry,
- * and the attach then opens exactly as a fresh one would.
+ * The newest closed attachment of this executor that bound a native identity,
+ * for a `context_replay` attach (VC-457). Undefined when there is none — a
+ * Session that never bound one (a first attach, or only failed ones) has no
+ * conversation to carry, and the attach opens exactly as a fresh one would.
+ * A binding this build cannot read is reported as such rather than skipped:
+ * a conversation that existed and could not be carried is a fact the Session
+ * must be told, where one that never existed is not.
  */
 function priorAttachmentContext(
   projection: SessionProjection,
@@ -3429,9 +3433,8 @@ function priorAttachmentContext(
     try {
       const binding = unwrapNativeBinding(attachment.native);
       return { attachmentId: attachment.id, directory: binding.directory, native: binding.native };
-    } catch {
-      // An envelope this build cannot read carries nothing; an older one may.
-      continue;
+    } catch (error) {
+      return { attachmentId: attachment.id, unreadable: errorMessage(error) };
     }
   }
   return undefined;

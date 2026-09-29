@@ -1096,6 +1096,14 @@ export interface SessionRuntimeSpec {
    * conversation, carried context included.
    */
   carry?: RuntimeContextCarry;
+  /**
+   * Why an earlier attachment's conversation exists but cannot be carried —
+   * its recorded binding is not one this build can read (VC-457). The
+   * attachment opens fresh and raises the same Attention a carry that failed
+   * to read does, so "there was nothing to carry" and "there was, and it was
+   * lost" never look alike. Ignored beside {@link recovery} or {@link carry}.
+   */
+  carryUnreadable?: string;
   signal?: AbortSignal;
   /**
    * Refusals this Session already accrued, before this attachment existed.

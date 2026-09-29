@@ -1140,7 +1140,7 @@ describe("SessionRuntime native adapter contract", () => {
     expect(second.continuity).toBe("context_replay");
   });
 
-  it("carries nothing from another executor's, a failed, or an unreadable attachment (VC-457)", async () => {
+  it("skips another executor's and a failed attachment, and reports an unreadable one (VC-457)", async () => {
     const { runtime, engine, adapter } = composition();
     const created = await runtime.command({
       commandId: "command-create",
@@ -1154,14 +1154,6 @@ describe("SessionRuntime native adapter contract", () => {
       },
     });
     const sessionId = created.sessionId;
-    // A failed attach records no native binding.
-    adapter.attachFailure = new Error("no");
-    await runtime.command({
-      commandId: "command-attach-failed",
-      sessionId,
-      command: { kind: "adapter.attach", continuity: "context_replay" },
-    });
-    adapter.attachFailure = null;
     let occurredAt = 900;
     const closedAttachment = async (id: string, adapterId: string, native: unknown) => {
       await engine.observe({
@@ -1191,6 +1183,14 @@ describe("SessionRuntime native adapter contract", () => {
       });
     };
     await closedAttachment("unreadable", "fake", { id: "n", detail: { kind: "other" } });
+    // A failed attach, newer than it, records no native binding and is passed over.
+    adapter.attachFailure = new Error("no");
+    await runtime.command({
+      commandId: "command-attach-failed",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    adapter.attachFailure = null;
     await closedAttachment("terminal", "terminal", { id: "t", detail: null });
 
     await runtime.command({
@@ -1199,8 +1199,16 @@ describe("SessionRuntime native adapter contract", () => {
       command: { kind: "adapter.attach", continuity: "context_replay" },
     });
     const spec = adapter.specs.at(-1)!;
+    // A conversation that existed and cannot be read is told to the adapter,
+    // which raises it; the attachment itself is fresh.
     expect(spec.continuity).toBe("fresh");
-    expect(spec).not.toHaveProperty("carryFrom");
+    expect(spec.carryFrom).toEqual({
+      attachmentId: "unreadable",
+      unreadable: expect.stringContaining("native binding"),
+    });
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.continuity).toBe(
+      "fresh",
+    );
   });
 
   it("drops a released binding's tail instead of recording it against the closed attachment", async () => {

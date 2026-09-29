@@ -166,7 +166,6 @@ describe("watch", () => {
         title: "Title aaaa",
         kinds: ["turn", "verdict", "stopped"],
         armTurn: true,
-        turnActive: true,
       },
     ]);
     expect(h.tickets.map((ticket) => ticket.display)).toEqual(["VC-12", "VC-14"]);
@@ -252,12 +251,24 @@ describe("watch", () => {
       policy: resolveAuthorityPolicy({ actors: { session: { awaitableSessions: ["turn"] } } }),
     });
     expect(
-      watchOpenedSession(nothingNamed.ports, BOARD, {
-        sessionId: "x",
-        title: null,
-        turnActive: false,
-      }),
+      await watchOpenedSession(
+        nothingNamed.ports,
+        BOARD,
+        { sessionId: "x", title: null },
+        "started",
+      ),
     ).toContain("when its next turn ends");
+  });
+
+  it("arms nothing when one half of a combined call is refused by policy (VC-457 review)", async () => {
+    const h = harness({
+      policy: resolveAuthorityPolicy({ actors: { session: { awaitable: [] } } }),
+    });
+    expect((await h.call(watchTool, { sessions: "aaaaaaaa", tickets: "VC-12" })).text).toMatch(
+      /watch no Ticket facts, so nothing was watched/,
+    );
+    expect(h.sessions).toEqual([]);
+    expect(h.tickets).toEqual([]);
   });
 
   it("refuses when the project or runtime is gone", async () => {
@@ -276,13 +287,14 @@ describe("watch", () => {
 });
 
 describe("the automatic watch a Session-opening tool arms", () => {
-  it("arms the next turn and the verdicts for its caller, and words it", () => {
+  it("arms the next turn and the verdicts for its caller, and words it", async () => {
     const h = harness();
-    const line = watchOpenedSession(h.ports, BOARD, {
-      sessionId: "eeeeeeee-1",
-      title: "Started",
-      turnActive: true,
-    });
+    const line = await watchOpenedSession(
+      h.ports,
+      BOARD,
+      { sessionId: "eeeeeeee-1", title: "Started" },
+      "started",
+    );
     expect(line).toMatch(
       /^A notice from Volli will arrive in this Session when its next turn ends/,
     );
@@ -292,16 +304,51 @@ describe("the automatic watch a Session-opening tool arms", () => {
     ]);
   });
 
-  it("says nothing reports back when nothing can", () => {
+  it("says nothing reports back when nothing can", async () => {
     const h = harness({ runtime: false });
     expect(
-      watchOpenedSession(h.ports, BOARD, { sessionId: "x", title: null, turnActive: false }),
+      await watchOpenedSession(h.ports, BOARD, { sessionId: "x", title: null }, "started"),
     ).toMatch(/Nothing reports back/);
     const sub = harness();
     expect(
-      watchOpenedSession(sub.ports, SUBAGENT, { sessionId: "x", title: null, turnActive: false }),
+      await watchOpenedSession(sub.ports, SUBAGENT, { sessionId: "x", title: null }, "started"),
     ).toMatch(/Nothing reports back/);
     expect(sub.sessions).toEqual([]);
+  });
+
+  it("judges a steered target by the watch tool's own bound (VC-457 review)", async () => {
+    const h = harness();
+    // A Ticket Session holding session_send steers a Session it did not
+    // delegate: the explicit `watch` would refuse it, so the send arms nothing.
+    expect(
+      await watchOpenedSession(
+        h.ports,
+        TICKET,
+        { sessionId: "aaaaaaaa-1", title: null },
+        "steered",
+      ),
+    ).toMatch(/Nothing reports back/);
+    // Its own subagent it may watch.
+    expect(
+      await watchOpenedSession(
+        h.ports,
+        TICKET,
+        { sessionId: "bbbbbbbb-1", title: null },
+        "steered",
+      ),
+    ).toMatch(/A notice from Volli will arrive/);
+    // A target the engine cannot find, or no engine at all, arms nothing.
+    expect(
+      await watchOpenedSession(h.ports, BOARD, { sessionId: "missing", title: null }, "steered"),
+    ).toMatch(/Nothing reports back/);
+    h.ports.sessions = () => null;
+    expect(
+      await watchOpenedSession(h.ports, BOARD, { sessionId: "aaaaaaaa-1", title: null }, "steered"),
+    ).toMatch(/Nothing reports back/);
+    expect(h.sessions.map((watch) => watch.targetSessionId)).toEqual(["bbbbbbbb-1"]);
+    // A Session it STARTED, a Ticket Session may watch without a delegation.
+    await watchOpenedSession(h.ports, TICKET, { sessionId: "aaaaaaaa-1", title: null }, "started");
+    expect(h.sessions.map((watch) => watch.targetSessionId)).toEqual(["bbbbbbbb-1", "aaaaaaaa-1"]);
   });
 });
 

@@ -135,7 +135,7 @@ import {
 } from "@volli/session-engine";
 
 import type { DelegationRef } from "./delegation-policy";
-import { deliverHostNotice, errorText } from "./host-notice-delivery";
+import { cutAtCodePoint, deliverHostNotice, errorText } from "./host-notice-delivery";
 import type { NoticeDelivery } from "./host-notice-delivery";
 import type { StartSessionPorts } from "./start-session";
 import type { SessionModelOverride, Sessions } from "./sessions";
@@ -266,7 +266,7 @@ export function subagentNotice(input: {
     return `${head}\n${why}`;
   }
   const cut = text.length > SUBAGENT_ANSWER_NOTICE_LIMIT;
-  const shown = cut ? text.slice(0, SUBAGENT_ANSWER_NOTICE_LIMIT) : text;
+  const shown = cutAtCodePoint(text, SUBAGENT_ANSWER_NOTICE_LIMIT);
   return [
     head,
     input.state === "completed" ? "Its answer follows." : "What it said last follows.",
@@ -276,7 +276,7 @@ export function subagentNotice(input: {
     }),
     ...(cut
       ? [
-          `The answer was cut at ${SUBAGENT_ANSWER_NOTICE_LIMIT} of ${text.length} characters; \`volli session answer ${handle}\` prints all of it.`,
+          `The answer was cut at ${shown.length} of ${text.length} characters; \`volli session answer ${handle}\` prints all of it.`,
         ]
       : []),
   ].join("\n");
