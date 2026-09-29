@@ -13,6 +13,7 @@ import {
   useModelAccessClient,
   type ModelAccessClient,
 } from "@renderer/lib/model-access-client";
+import { useUiStore } from "@renderer/stores/ui";
 
 import { UsageLimitsPopover } from "./usage-limits-popover";
 
@@ -52,6 +53,9 @@ let root: Root | null = null;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The pin persists through the real ui store, whose writes go to main.
+  vi.stubGlobal("api", { appState: { set: vi.fn(async () => ({ ok: true }) as const) } });
+  useUiStore.setState({ usagePin: null });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -232,5 +236,67 @@ describe("UsageLimitsPopover", () => {
       await second;
     });
     expect(document.body.textContent).toContain("xAI");
+  });
+
+  it("pins a window from its row, and the glyph reports it until unpinned", async () => {
+    const anthropic: ModelAccessSnapshot["providers"][number] = {
+      ...SNAPSHOT.providers[0]!,
+      id: "anthropic",
+      label: "Anthropic",
+      usageLimits: {
+        checkedAt: NOW,
+        windows: [
+          {
+            id: "five_hour",
+            kind: "session",
+            label: "Session",
+            usedPercent: 37,
+            resetsAt: "2026-03-01T14:13:00.000Z",
+            windowDurationMins: 300,
+          },
+          {
+            id: "seven_day",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 4,
+            resetsAt: "2026-03-07T12:00:00.000Z",
+            windowDurationMins: 10_080,
+          },
+        ],
+      },
+    };
+    const inspect = vi
+      .fn<ModelAccessClient["inspect"]>()
+      .mockResolvedValue({ ...SNAPSHOT, providers: [...SNAPSHOT.providers, anthropic] });
+    await renderPopover(inspect);
+    // Unpinned, xAI is nearer to running out and owns the glyph.
+    expect(button("Usage limits").getAttribute("aria-label")).toMatch(
+      /^Usage limits, 4% left on xAI/,
+    );
+
+    await act(async () => button("Usage limits").click());
+    const trigger = [...document.querySelectorAll("button")].find((node) =>
+      node.textContent?.startsWith("Anthropic"),
+    );
+    await act(async () => trigger?.click());
+    await act(async () => button("Pin Session to the window bar").click());
+
+    expect(useUiStore.getState().usagePin).toEqual({
+      providerId: "anthropic",
+      windowIds: ["five_hour"],
+    });
+    expect(button("Usage limits").getAttribute("aria-label")).toBe(
+      "Usage limits, 63% left on Anthropic Session, pinned, 1 more metered",
+    );
+    expect(button("Unpin Session from the window bar").getAttribute("aria-pressed")).toBe("true");
+    // The collapsed row says which account holds the pin.
+    expect(document.querySelector('[aria-label="Pinned to the window bar"]')).not.toBeNull();
+
+    await act(async () => button("Unpin Session from the window bar").click());
+    expect(useUiStore.getState().usagePin).toBeNull();
+    expect(button("Usage limits").getAttribute("aria-label")).toMatch(
+      /^Usage limits, 4% left on xAI/,
+    );
+    expect(document.querySelector('[aria-label="Pinned to the window bar"]')).toBeNull();
   });
 });

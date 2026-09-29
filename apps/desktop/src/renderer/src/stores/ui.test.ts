@@ -469,6 +469,7 @@ describe("persistence", () => {
     store.getState().setCostVisible(false);
     store.getState().toggleRailFold("worktree");
     store.getState().dismissEnvironmentFault("login-path-unreadable");
+    store.getState().toggleUsagePin("anthropic", "five_hour");
 
     const persisted = JSON.parse(storage.getItem("volli:ui")!) as {
       state: Record<string, unknown>;
@@ -489,6 +490,7 @@ describe("persistence", () => {
       wordWrap: false,
       defaultExternalAppId: null,
       dismissedEnvironmentFaults: ["login-path-unreadable"],
+      usagePin: { providerId: "anthropic", windowIds: ["five_hour"] },
     });
     expect(persisted.state).not.toHaveProperty("detailsExpanded");
     // The New-ticket composer's terminal harness left with the terminal kickoff
@@ -1015,5 +1017,45 @@ describe("environment fault dismissals", () => {
       }),
     );
     expect(createUiStore(corrupt).getState().dismissedEnvironmentFaults).toEqual([]);
+  });
+});
+
+describe("usagePin", () => {
+  it("starts unpinned, so the glyph reports the account nearest to running out", () => {
+    expect(createUiStore(createMemoryStorage()).getState().usagePin).toBeNull();
+  });
+
+  it("pins, adds a second window, and unpins through the one toggle", () => {
+    const store = createUiStore(createMemoryStorage());
+    store.getState().toggleUsagePin("anthropic", "five_hour");
+    store.getState().toggleUsagePin("anthropic", "seven_day");
+    expect(store.getState().usagePin).toEqual({
+      providerId: "anthropic",
+      windowIds: ["five_hour", "seven_day"],
+    });
+    store.getState().toggleUsagePin("anthropic", "five_hour");
+    store.getState().toggleUsagePin("anthropic", "seven_day");
+    expect(store.getState().usagePin).toBeNull();
+  });
+
+  it("survives a relaunch, and a corrupt pin is no pin", async () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().toggleUsagePin("github-copilot", "premium");
+    const reloaded = createUiStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().usagePin).toEqual({
+      providerId: "github-copilot",
+      windowIds: ["premium"],
+    });
+
+    const corrupt = createMemoryStorage();
+    corrupt.setItem(
+      "volli:ui",
+      JSON.stringify({
+        state: { sidebarWidth: 320, uiScale: 1, usagePin: { providerId: "anthropic" } },
+        version: 1,
+      }),
+    );
+    expect(createUiStore(corrupt).getState().usagePin).toBeNull();
   });
 });
