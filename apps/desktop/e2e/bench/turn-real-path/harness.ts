@@ -609,7 +609,11 @@ async function compose(
         });
         const receipt = attached.receipt;
         if (receipt?.status !== "accepted" && receipt?.status !== "completed") {
-          throw new Error(`VC-456 bench: attach was not accepted (${receipt?.status ?? "none"})`);
+          const why =
+            receipt?.status === "rejected"
+              ? `${receipt.code}: ${receipt.detail ?? "no detail"}`
+              : (receipt?.status ?? "no receipt");
+          throw new Error(`VC-456 bench: attach was not accepted (${why})`);
         }
         const attachment = (await engine.listEvents({ sessionId })).findLast(
           (event) => event.payload.kind === "attachment.opened",
