@@ -40,6 +40,7 @@
  * conversation, `U`, or the row's own menu.
  */
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   displayTicketId,
   peekSummaryOf,
@@ -835,7 +836,15 @@ export function useSessionPeek(options: SessionPeekOptions): SessionPeekBinding 
   return {
     rowProps,
     scrollProps: { onScroll: () => dismiss("list-scroll") },
-    card,
+    // PORTALLED to the body, never drawn where the surface mounts it. The card
+    // is `position: fixed`, and fixed does not escape an ancestor's
+    // `clip-path`: the framed shell clips the left sidebar at its right edge
+    // (globals.css, `[data-volli-shell="framed"] [data-volli-sidebar]`), so a
+    // card drawn inside it existed, took focus and hit-tests, and painted
+    // nothing — found by the real-app probe (e2e/session-peek-shots.mjs), not
+    // by jsdom, which has no clipping. React keeps its own tree through the
+    // portal, so events still bubble to the surface exactly as before.
+    card: card === null ? null : createPortal(card, document.body),
     // The hold (D7): a pointer in this surface, or any card open, freezes moves.
     holding: pointerInside || shown !== null,
     shownRowId: shown?.rowId ?? null,

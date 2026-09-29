@@ -230,7 +230,8 @@ async function render(props: SurfaceProps): Promise<void> {
   });
 }
 
-const card = () => container.querySelector<HTMLElement>("[data-peek-card]");
+/** The card is portalled to the body, out of the surface that mounts it. */
+const card = () => document.querySelector<HTMLElement>("[data-peek-card]");
 const holding = () =>
   container.querySelector<HTMLElement>("[data-holding]")?.dataset.holding === "yes";
 const rowButton = (rowId: string) =>
@@ -416,7 +417,7 @@ describe("the pinned card's question (§3.3)", () => {
     await pressSpace(rowButton(SESSION_ROW));
 
     // Pin through the card's own footer button — the pointer path into answering.
-    const pin = [...container.querySelectorAll<HTMLButtonElement>("[data-peek-card] button")].find(
+    const pin = [...document.querySelectorAll<HTMLButtonElement>("[data-peek-card] button")].find(
       (button) => /Send|Answer/.test(button.textContent ?? ""),
     )!;
     await act(async () => {
@@ -435,5 +436,18 @@ describe("the pinned card's question (§3.3)", () => {
     expect(card()?.textContent).not.toContain("Recompute on scroll end");
     // What is left is a message to the same Session, not a stale form.
     expect(card()?.querySelector("textarea")).not.toBeNull();
+  });
+});
+
+describe("where the card is drawn", () => {
+  it("is portalled to the body, outside every ancestor that could clip it", async () => {
+    await render({ rowIds: [SESSION_ROW] });
+    await pressSpace(rowButton(SESSION_ROW));
+    const shown = card();
+    expect(shown).not.toBeNull();
+    // The framed shell clips the left sidebar with `clip-path`, which a
+    // `position: fixed` descendant does not escape — so the card must not be one.
+    expect(container.contains(shown)).toBe(false);
+    expect(shown?.parentElement).toBe(document.body);
   });
 });
