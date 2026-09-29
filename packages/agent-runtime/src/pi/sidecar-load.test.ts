@@ -22,7 +22,7 @@
  * Pi's own `SessionRepo` conformance suite runs against the patched repo as
  * well, so the patch is held to the contract upstream holds it to.
  */
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -237,6 +237,16 @@ async function snapshot(session: Session) {
   };
 }
 
+/** A file's bytes and inode, read through one descriptor so both describe the same file. */
+function readWithInode(path: string): { bytes: Buffer; inode: number } {
+  const descriptor = openSync(path, "r");
+  try {
+    return { bytes: readFileSync(descriptor), inode: fstatSync(descriptor).ino };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 async function onlyMetadata(repo: JsonlSessionRepo): Promise<JsonlSessionMetadata> {
   const listed = await repo.list({ cwd }, context);
   expect(listed).toHaveLength(1);
@@ -251,8 +261,7 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
     const written = await snapshot(writer);
     const path = writer.metadata.path;
     await writer.close(context);
-    const bytesBefore = readFileSync(path);
-    const inodeBefore = statSync(path).ino;
+    const { bytes: bytesBefore, inode: inodeBefore } = readWithInode(path);
     expect(bytesBefore.length).toBeGreaterThan(6_000_000);
     // The fixture really does exercise what the batching has to get right.
     const lines = bytesBefore.toString("utf8").split("\n");
@@ -266,8 +275,9 @@ describe("patched JSONL sidecar re-open (VC-462)", () => {
     expect(await snapshot(reopened)).toEqual(written);
     // Not torn, so the file is left exactly as it was — not even rewritten
     // with the same bytes, which would publish a new inode by rename.
-    expect(readFileSync(path).equals(bytesBefore)).toBe(true);
-    expect(statSync(path).ino).toBe(inodeBefore);
+    const after = readWithInode(path);
+    expect(after.bytes.equals(bytesBefore)).toBe(true);
+    expect(after.inode).toBe(inodeBefore);
 
     // The sequence continues where the writer stopped.
     const lastSeq = Math.max(
