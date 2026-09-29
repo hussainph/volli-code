@@ -16,7 +16,15 @@ import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model
 import { appApi, seedApp } from "../../renderer/lab/seed";
 
 import { ease, mix, progress } from "../kit/clock";
-import { FrameLayer, Supers, useFilm, useFixtures, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFixtures,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 
 const NOW = Date.parse("2026-03-01T12:00:00Z");
 const HOUR = 3_600_000;
@@ -118,6 +126,7 @@ function animatedLimits(t: number): UsageLimits {
   const fill = progress(t, 300, 1050, ease.outCubic);
   return {
     ...CODEX_LIMITS,
+    // oxlint-disable-next-line no-map-spread -- a two-window fixture, per frame
     windows: CODEX_LIMITS.windows.map((window) => ({
       ...window,
       usedPercent: mix(100, window.usedPercent, fill),
@@ -173,10 +182,14 @@ export function LimitsShot({ format }: { format: Format }) {
             className="flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-overlay"
             style={{ width: 380, height: 200, zoom: PANEL_ZOOM }}
           >
-            <div className="border-b border-border/50 px-3 py-2 text-ui font-medium">Usage limits</div>
+            <div className="border-b border-border/50 px-3 py-2 text-ui font-medium">
+              Usage limits
+            </div>
             <div className="flex items-center justify-between gap-2 border-b border-border/40 px-3 py-2">
               <span className="truncate text-ui font-medium">OpenAI Codex</span>
-              <span className="shrink-0 text-ui tabular-nums text-attention">{bindingLeft(limits)}% left</span>
+              <span className="shrink-0 text-ui tabular-nums text-attention">
+                {bindingLeft(limits)}% left
+              </span>
             </div>
             <div className="min-h-0 flex-1 px-3 py-3">
               <AccountUsage limits={limits} now={NOW} />

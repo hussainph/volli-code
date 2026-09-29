@@ -21,7 +21,15 @@ import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { ease, track } from "../kit/clock";
-import { FrameLayer, Supers, useFilm, useFixtures, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFixtures,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 import { project, seedShell, shellApi, ShellWindow } from "../kit/split-shell";
 
 /** The window, in lab CSS px. The rig in scripts/film/shots/split.mjs mirrors it. */
@@ -38,7 +46,11 @@ const RATIO: readonly (readonly [number, number])[] = [
 ];
 
 const BROWSER_TABS: BrowserTabState[] = [
-  { id: "docs", title: "Voltaic docs — Split view", url: "https://voltaic.example/docs/split-view" },
+  {
+    id: "docs",
+    title: "Voltaic docs — Split view",
+    url: "https://voltaic.example/docs/split-view",
+  },
   { id: "pricing", title: "Pricing — Voltaic", url: "https://voltaic.example/pricing" },
   { id: "changelog", title: "Changelog — Voltaic", url: "https://voltaic.example/changelog" },
   { id: "status", title: "Status — Voltaic", url: "https://status.voltaic.example" },

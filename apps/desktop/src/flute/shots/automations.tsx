@@ -19,7 +19,14 @@
  */
 import * as React from "react";
 import { Surface } from "@webprodigies/flute";
-import { NO_AUTOMATION_TRIGGER, TICKET_STATUS_LABELS, type Automation, type PendingArmedRun, type Ticket, type TicketStatus } from "@volli/shared";
+import {
+  NO_AUTOMATION_TRIGGER,
+  TICKET_STATUS_LABELS,
+  type Automation,
+  type PendingArmedRun,
+  type Ticket,
+  type TicketStatus,
+} from "@volli/shared";
 
 import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { useArmedRunStore } from "@renderer/components/automations/armed-run";
@@ -30,7 +37,16 @@ import { Badge } from "@renderer/components/ui/badge";
 
 import { ATLAS, ATLAS_LABELS, atlasTicket } from "../kit/atlas";
 import { ease, mix, progress } from "../kit/clock";
-import { FORMAT_SIZE, FrameLayer, Supers, useFilm, useFilmWallClock, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FORMAT_SIZE,
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFilmWallClock,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 
 // ---- layout (world px; the rigs mirror these) --------------------------------
 
@@ -44,9 +60,24 @@ const T = (title: number, number: number, status: TicketStatus, row: number) =>
 
 /** The three that move, in the order they sit in the stack. */
 const MOVERS: Ticket[] = [T(2, 9712, "todo", 1), T(8, 9709, "todo", 2), T(13, 9705, "todo", 3)];
-const TODO: Ticket[] = [T(0, 9716, "todo", 0), ...MOVERS, T(20, 9701, "todo", 4), T(5, 9698, "todo", 5)];
-const DOING: Ticket[] = [T(9, 9648, "doing", 0), T(19, 9644, "doing", 1), T(14, 9640, "doing", 2), T(22, 9637, "doing", 3)];
-const REVIEW: Ticket[] = [T(4, 9593, "needs_review", 0), T(15, 9590, "needs_review", 1), T(10, 9586, "needs_review", 2), T(17, 9581, "needs_review", 3)];
+const TODO: Ticket[] = [
+  T(0, 9716, "todo", 0),
+  ...MOVERS,
+  T(20, 9701, "todo", 4),
+  T(5, 9698, "todo", 5),
+];
+const DOING: Ticket[] = [
+  T(9, 9648, "doing", 0),
+  T(19, 9644, "doing", 1),
+  T(14, 9640, "doing", 2),
+  T(22, 9637, "doing", 3),
+];
+const REVIEW: Ticket[] = [
+  T(4, 9593, "needs_review", 0),
+  T(15, 9590, "needs_review", 1),
+  T(10, 9586, "needs_review", 2),
+  T(17, 9581, "needs_review", 3),
+];
 
 const NOW = 1_790_000_000_000;
 const automation = (id: string, name: string, columns: TicketStatus[] | null): Automation => ({
@@ -67,7 +98,12 @@ const OFFERED: Automation[] = [
 
 // ---- pieces -------------------------------------------------------------------
 
-function Card({ ticket, selected = false, activity = null, faded = 0 }: {
+function Card({
+  ticket,
+  selected = false,
+  activity = null,
+  faded = 0,
+}: {
   ticket: Ticket;
   selected?: boolean;
   activity?: TicketSessionActivity | null;
@@ -86,7 +122,12 @@ function Card({ ticket, selected = false, activity = null, faded = 0 }: {
   );
 }
 
-function Column({ index, count, children, stage }: {
+function Column({
+  index,
+  count,
+  children,
+  stage,
+}: {
   index: number;
   count: number;
   children: React.ReactNode;
@@ -105,7 +146,9 @@ function Column({ index, count, children, stage }: {
       content={
         <div className="flex w-72 flex-col rounded-lg bg-muted/30 px-2 pb-2">
           <div className="flex items-center gap-2 px-2 pt-2 pb-2" style={{ height: BOARD.header }}>
-            <span className="text-ui font-medium text-foreground">{TICKET_STATUS_LABELS[status]}</span>
+            <span className="text-ui font-medium text-foreground">
+              {TICKET_STATUS_LABELS[status]}
+            </span>
             <Badge variant="count">{count}</Badge>
           </div>
           <div className="flex flex-col gap-2">{children}</div>
@@ -153,7 +196,9 @@ export function PickerShot({ format }: { format: Format }) {
         {TODO.map((ticket) => {
           const moving = MOVERS.includes(ticket);
           if (moving && dropped) return null;
-          return <Card key={ticket.id} ticket={ticket} faded={moving ? 0.72 : 0} selected={moving} />;
+          return (
+            <Card key={ticket.id} ticket={ticket} faded={moving ? 0.72 : 0} selected={moving} />
+          );
         })}
       </Column>
       <Column index={1} count={dropped ? 7 : 4} stage={stage}>
@@ -179,7 +224,12 @@ export function PickerShot({ format }: { format: Format }) {
         }}
         content={
           <div style={{ opacity: dropped ? 0 : panelIn }}>
-            <ColumnOfferedPanel rows={OFFERED} expanded={expanded} highlighted={0} armedId="automation-implement" />
+            <ColumnOfferedPanel
+              rows={OFFERED}
+              expanded={expanded}
+              highlighted={0}
+              armedId="automation-implement"
+            />
           </div>
         }
       />
@@ -209,7 +259,10 @@ export function PickerShot({ format }: { format: Format }) {
                 <div
                   key={layer}
                   className="absolute inset-x-0 top-0 rounded-lg shadow-overlay"
-                  style={{ transform: `translate(${layer * 7}px, ${layer * 7}px)`, zIndex: 3 - layer }}
+                  style={{
+                    transform: `translate(${layer * 7}px, ${layer * 7}px)`,
+                    zIndex: 3 - layer,
+                  }}
                 >
                   <Card ticket={MOVERS[layer]} selected />
                 </div>
@@ -271,7 +324,13 @@ function useArmedWindows(untilClose: number | null) {
 
 /** The windows float in front of the board at the foot of Doing; `fixed`
  *  inside a Surface pins to the Surface's own box. */
-function ArmedWindowsSurface({ stage, settled = false }: { stage: { width: number; height: number }; settled?: boolean }) {
+function ArmedWindowsSurface({
+  stage,
+  settled = false,
+}: {
+  stage: { width: number; height: number };
+  settled?: boolean;
+}) {
   return (
     <Surface
       id="auto-armed"
@@ -322,7 +381,12 @@ export function ArmedShot({ format }: { format: Format }) {
       {/* Todo is off to the left of this framing: left out, so the super sits on void. */}
       <Column index={1} count={7} stage={stage}>
         {MOVERS.map((ticket, index) => (
-          <Card key={ticket.id} ticket={ticket} selected={t < ARMED.working} activity={activity(index)} />
+          <Card
+            key={ticket.id}
+            ticket={ticket}
+            selected={t < ARMED.working}
+            activity={activity(index)}
+          />
         ))}
         {DOING.map((ticket) => (
           <Card key={ticket.id} ticket={ticket} />

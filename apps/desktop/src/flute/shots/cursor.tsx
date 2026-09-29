@@ -98,7 +98,13 @@ function BrowserWindow({ t, holder }: { t: number; holder: BrowserTabHolder | nu
           label="Checkout — Voltaic"
           active
           tabStop
-          leading={<BrowserIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />}
+          leading={
+            <BrowserIcon
+              aria-hidden
+              weight="bold"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+          }
           badge={<BrowserHolderDot holder={holder} />}
           onActivate={noop}
           onClose={noop}
@@ -107,7 +113,13 @@ function BrowserWindow({ t, holder }: { t: number; holder: BrowserTabHolder | nu
           label="Pricing"
           active={false}
           tabStop={false}
-          leading={<BrowserIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />}
+          leading={
+            <BrowserIcon
+              aria-hidden
+              weight="bold"
+              className="size-3 shrink-0 text-muted-foreground"
+            />
+          }
           onActivate={noop}
           onClose={noop}
         />
@@ -179,7 +191,8 @@ export function CursorShot({ format }: { format: Format }) {
   const gesture =
     t < T.toPlan
       ? ("type" as const)
-      : (t >= T.clickPlan && t < T.clickPlan + 240) || (t >= T.clickContinue && t < T.clickContinue + 240)
+      : (t >= T.clickPlan && t < T.clickPlan + 240) ||
+          (t >= T.clickContinue && t < T.clickContinue + 240)
         ? ("click" as const)
         : t >= T.hover && t < T.clickContinue
           ? ("hover" as const)
@@ -190,7 +203,13 @@ export function CursorShot({ format }: { format: Format }) {
     <>
       <Surface
         id="browser"
-        style={{ position: "absolute", left: `calc(50% - ${WINDOW.width / 2}px)`, top: `calc(50% - ${WINDOW.height / 2}px)`, width: WINDOW.width, height: WINDOW.height }}
+        style={{
+          position: "absolute",
+          left: `calc(50% - ${WINDOW.width / 2}px)`,
+          top: `calc(50% - ${WINDOW.height / 2}px)`,
+          width: WINDOW.width,
+          height: WINDOW.height,
+        }}
         content={<BrowserWindow t={t} holder={holder} />}
       >
         <Surface

@@ -20,8 +20,16 @@ function limitsRig(format) {
     const at = (i) => mix(BUTTON[i], PANEL[i], travel);
     return {
       rotation: wide
-        ? { rotateX: mix(20, 14, travel) - 2 * drift, rotateY: mix(28, 18, travel) - 3 * drift, rotateZ: -2 }
-        : { rotateX: mix(18, 12, travel) - 2 * drift, rotateY: mix(16, 9, travel) - 2 * drift, rotateZ: -1 },
+        ? {
+            rotateX: mix(20, 14, travel) - 2 * drift,
+            rotateY: mix(28, 18, travel) - 3 * drift,
+            rotateZ: -2,
+          }
+        : {
+            rotateX: mix(18, 12, travel) - 2 * drift,
+            rotateY: mix(16, 9, travel) - 2 * drift,
+            rotateZ: -1,
+          },
       target: [at(0) + 30 * drift, at(1), at(2)],
       near: magnify(
         wide

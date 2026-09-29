@@ -57,7 +57,12 @@ function Mark({ t, height }: { t: number; height: number }) {
       aria-hidden
     >
       {BARS.map((bar, index) => {
-        const grow = progress(t, BEAT.bars + index * BEAT.barStagger, BEAT.bars + index * BEAT.barStagger + BEAT.barMs, ease.outExpo);
+        const grow = progress(
+          t,
+          BEAT.bars + index * BEAT.barStagger,
+          BEAT.bars + index * BEAT.barStagger + BEAT.barMs,
+          ease.outExpo,
+        );
         const h = bar.height * grow;
         return (
           <rect
@@ -68,7 +73,11 @@ function Mark({ t, height }: { t: number; height: number }) {
             height={h}
             rx={18}
             fill={CREAM}
-            opacity={progress(t, BEAT.bars + index * BEAT.barStagger, BEAT.bars + index * BEAT.barStagger + 90)}
+            opacity={progress(
+              t,
+              BEAT.bars + index * BEAT.barStagger,
+              BEAT.bars + index * BEAT.barStagger + 90,
+            )}
           />
         );
       })}
@@ -78,7 +87,13 @@ function Mark({ t, height }: { t: number; height: number }) {
         const land = progress(t, BEAT.doing, BEAT.doing + BEAT.doingMs, ease.outBack);
         const scale = mix(0.3, 1, land);
         const cx = DOING.x + DOING.width / 2;
-        const cy = mix(DOING.y - 18, DOING.y, progress(t, BEAT.doing, BEAT.doing + BEAT.doingMs, ease.outCubic)) + DOING.height / 2;
+        const cy =
+          mix(
+            DOING.y - 18,
+            DOING.y,
+            progress(t, BEAT.doing, BEAT.doing + BEAT.doingMs, ease.outCubic),
+          ) +
+          DOING.height / 2;
         return (
           <rect
             x={cx - (DOING.width * scale) / 2}
@@ -104,11 +119,15 @@ function Lockup({ t, format }: { t: number; format: Format }) {
   // frame instead of fading into a grey wash.
   const through = progress(t, BEAT.through, BEAT.through + BEAT.throughMs, ease.inCubic);
   const scale = mix(0.94, 1, settle) + 0.035 * push + 34 * through;
-  const markOpacity = 1 - progress(t, BEAT.through + BEAT.throughMs * 0.8, BEAT.through + BEAT.throughMs);
+  const markOpacity =
+    1 - progress(t, BEAT.through + BEAT.throughMs * 0.8, BEAT.through + BEAT.throughMs);
   const markHeight = portrait ? 380 : 330;
   // The gap between bars 1 and 2 (x 88–108, y ≈ 120 in the glyph's box), in
   // the lockup's own coordinates, measured from its top-left corner.
-  const gap = { x: 0.5 * LOCKUP_WIDTH[format] - (markHeight * 176) / 188 / 2 + (markHeight * (98 - 40)) / 188, y: (markHeight * (120 - 34)) / 188 };
+  const gap = {
+    x: 0.5 * LOCKUP_WIDTH[format] - (markHeight * 176) / 188 / 2 + (markHeight * (98 - 40)) / 188,
+    y: (markHeight * (120 - 34)) / 188,
+  };
   const textOut = progress(t, BEAT.leave, BEAT.leave + 240, ease.outCubic);
   const name = progress(t, BEAT.name, BEAT.name + BEAT.nameMs, ease.outExpo);
   const out = progress(t, BEAT.out, BEAT.out + BEAT.outMs, ease.outCubic);
@@ -126,10 +145,7 @@ function Lockup({ t, format }: { t: number; format: Format }) {
     >
       <Mark t={t} height={markHeight} />
       <div className="film-end-name-mask" style={{ opacity: 1 - textOut }}>
-        <div
-          className="film-end-name"
-          style={{ transform: `translateY(${(1 - name) * 105}%)` }}
-        >
+        <div className="film-end-name" style={{ transform: `translateY(${(1 - name) * 105}%)` }}>
           Volli 0.2
         </div>
       </div>

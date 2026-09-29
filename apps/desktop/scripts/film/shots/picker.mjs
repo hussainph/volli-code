@@ -41,16 +41,26 @@ function pickerRig(format) {
     const toPanel = progress(t, 500, PICKER.drop, ease.inOutCubic);
     const after = progress(t, PICKER.drop - 200, PICKER.duration, ease.inOutCubic);
     const stack = [mix(from[0], over[0], follow), mix(from[1], over[1], follow), 110];
-    const onPanel = [mix(stack[0], panel[0], toPanel), mix(stack[1], panel[1], toPanel), mix(110, 30, toPanel)];
+    const onPanel = [
+      mix(stack[0], panel[0], toPanel),
+      mix(stack[1], panel[1], toPanel),
+      mix(110, 30, toPanel),
+    ];
     const target = [0, 1, 2].map((i) => mix(onPanel[i], landed[i], after));
     const pose = (key) => mix(mix(a[key], b[key], toPanel), c[key], after);
     return {
       rotation: Object.fromEntries(
-        ["rotateX", "rotateY", "rotateZ"].map((axis) => [axis, mix(mix(a.rotation[axis], b.rotation[axis], toPanel), c.rotation[axis], after)]),
+        ["rotateX", "rotateY", "rotateZ"].map((axis) => [
+          axis,
+          mix(mix(a.rotation[axis], b.rotation[axis], toPanel), c.rotation[axis], after),
+        ]),
       ),
       target,
       near: pose("near"),
-      offset: [mix(mix(a.offset[0], b.offset[0], toPanel), c.offset[0], after), mix(mix(a.offset[1], b.offset[1], toPanel), c.offset[1], after)],
+      offset: [
+        mix(mix(a.offset[0], b.offset[0], toPanel), c.offset[0], after),
+        mix(mix(a.offset[1], b.offset[1], toPanel), c.offset[1], after),
+      ],
       focus: 0,
       fStop: 3.2,
       focalLength: 55,
@@ -62,7 +72,8 @@ function pickerRig(format) {
 export const shot = {
   key: "picker",
   title: "Pick what runs (⌥ picker)",
-  description: "Three selected cards dragged over Doing; ⌥ grows the Offered list; the stack lands.",
+  description:
+    "Three selected cards dragged over Doing; ⌥ grows the Offered list; the stack lands.",
   durationMs: PICKER.duration,
   perspective: 1400,
   nodes: [

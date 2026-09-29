@@ -32,7 +32,15 @@ import { ModelAccessSettings } from "@renderer/components/pages/model-access-set
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 import { appApi, seedApp } from "../../renderer/lab/seed";
 
-import { FrameLayer, Supers, useFilm, useFixtures, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFixtures,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 
 const MODELS: ModelAccessSnapshot["models"] = [
   {

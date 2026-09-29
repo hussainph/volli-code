@@ -18,6 +18,14 @@ const toolingIgnorePatterns = [
   // Vendored third-party agent skills (npx skills add) — reformatting would
   // drift them from their skills-lock.json content hashes.
   ".agents",
+  // Written by the Flute CLI (`flute init` / `flute sync`) and the film's
+  // recipe generator (VC-464): regenerated wholesale, so formatting them is
+  // churn the next sync undoes.
+  "apps/desktop/FLUTE.md",
+  "apps/desktop/src/flute/catalog.js",
+  "apps/desktop/src/flute/ProjectPreview.jsx",
+  "apps/desktop/src/flute/scenes/*.scene.json",
+  "apps/desktop/src/flute/kit/release-tickets.ts",
 ];
 
 export default defineConfig({

@@ -15,12 +15,32 @@ const columnCentre = (index) => index * (COLUMN + GAP) - WIDTH / 2 + COLUMN / 2;
 
 const POSES = {
   wide: {
-    start: { rotation: { rotateX: -10, rotateY: 30, rotateZ: 5 }, target: [columnCentre(1), TOP + 60, 0], offset: [-240, -140], near: 820 },
-    end: { rotation: { rotateX: -58, rotateY: 12, rotateZ: 14 }, target: [columnCentre(3), TOP + 1500, 0], offset: [300, -40], near: -240 },
+    start: {
+      rotation: { rotateX: -10, rotateY: 30, rotateZ: 5 },
+      target: [columnCentre(1), TOP + 60, 0],
+      offset: [-240, -140],
+      near: 820,
+    },
+    end: {
+      rotation: { rotateX: -58, rotateY: 12, rotateZ: 14 },
+      target: [columnCentre(3), TOP + 1500, 0],
+      offset: [300, -40],
+      near: -240,
+    },
   },
   tall: {
-    start: { rotation: { rotateX: -10, rotateY: 30, rotateZ: 4 }, target: [columnCentre(1), TOP + 60, 0], offset: [-120, -420], near: 760 },
-    end: { rotation: { rotateX: -60, rotateY: 6, rotateZ: 8 }, target: [columnCentre(2), TOP + 1500, 0], offset: [0, -380], near: -360 },
+    start: {
+      rotation: { rotateX: -10, rotateY: 30, rotateZ: 4 },
+      target: [columnCentre(1), TOP + 60, 0],
+      offset: [-120, -420],
+      near: 760,
+    },
+    end: {
+      rotation: { rotateX: -60, rotateY: 6, rotateZ: 8 },
+      target: [columnCentre(2), TOP + 1500, 0],
+      offset: [0, -380],
+      near: -360,
+    },
   },
 };
 
@@ -32,7 +52,10 @@ function scaleRig(format) {
     const p = progress(t, 0, 3800, (x) => ease.outCubic(x) * 0.8 + x * 0.2);
     const tip = progress(t, 0, 3000, ease.inOutCubic);
     const rotation = Object.fromEntries(
-      ["rotateX", "rotateY", "rotateZ"].map((axis) => [axis, mix(start.rotation[axis], end.rotation[axis], axis === "rotateX" ? tip : p)]),
+      ["rotateX", "rotateY", "rotateZ"].map((axis) => [
+        axis,
+        mix(start.rotation[axis], end.rotation[axis], axis === "rotateX" ? tip : p),
+      ]),
     );
     return {
       rotation,
@@ -51,7 +74,8 @@ function scaleRig(format) {
 export const shot = {
   key: "scale",
   title: "Fast at scale",
-  description: "A 10,000-ticket board as a cliff: real columns, real count badges, the unmounted rows falling away.",
+  description:
+    "A 10,000-ticket board as a cliff: real columns, real count badges, the unmounted rows falling away.",
   durationMs: 3800,
   perspective: 1400,
   nodes: [0, 1, 2, 3, 4].flatMap((i) => [{ id: `scale-${i}` }, { id: `scale-ghost-${i}` }]),

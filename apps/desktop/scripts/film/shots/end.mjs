@@ -14,8 +14,18 @@ const DURATION = 3800;
 const DIVE = 2600;
 
 const HOLD = {
-  wide: { rotation: { rotateX: 20, rotateY: -16, rotateZ: -4 }, offset: [0, 40], from: -2500, to: -2250 },
-  tall: { rotation: { rotateX: 20, rotateY: -12, rotateZ: -4 }, offset: [0, 60], from: -2300, to: -2050 },
+  wide: {
+    rotation: { rotateX: 20, rotateY: -16, rotateZ: -4 },
+    offset: [0, 40],
+    from: -2500,
+    to: -2250,
+  },
+  tall: {
+    rotation: { rotateX: 20, rotateY: -12, rotateZ: -4 },
+    offset: [0, 60],
+    from: -2300,
+    to: -2050,
+  },
 };
 
 function endRig(format) {
@@ -27,7 +37,10 @@ function endRig(format) {
     // holding, the bulk of the turn inside the dive, zero velocity at the end.
     const turn = progress(t, 0, DURATION, (x) => ease.inOutCubic(Math.max(0, (x - 0.35) / 0.65)));
     const rotation = Object.fromEntries(
-      ["rotateX", "rotateY", "rotateZ"].map((axis) => [axis, mix(hold.rotation[axis], macro.rotation[axis], turn)]),
+      ["rotateX", "rotateY", "rotateZ"].map((axis) => [
+        axis,
+        mix(hold.rotation[axis], macro.rotation[axis], turn),
+      ]),
     );
     const near =
       t <= DIVE
@@ -41,7 +54,10 @@ function endRig(format) {
       rotation,
       target,
       near,
-      offset: [mix(hold.offset[0], macro.offset[0], turn), mix(hold.offset[1], macro.offset[1], turn)],
+      offset: [
+        mix(hold.offset[0], macro.offset[0], turn),
+        mix(hold.offset[1], macro.offset[1], turn),
+      ],
       focus: mix(-2200, 0, rack),
       fStop: 2.4,
       focalLength: 60,
@@ -53,7 +69,8 @@ function endRig(format) {
 export const shot = {
   key: "end",
   title: "Volli 0.2 — end card",
-  description: "The Volli mark builds in front of the wall, then the camera dives into VC-239 — the hook's first frame.",
+  description:
+    "The Volli mark builds in front of the wall, then the camera dives into VC-239 — the hook's first frame.",
   durationMs: DURATION,
   perspective: 1400,
   nodes: WALL_NODES,

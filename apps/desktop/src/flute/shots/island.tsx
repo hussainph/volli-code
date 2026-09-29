@@ -81,7 +81,10 @@ const COLUMN = CHAT.width - 2 * CHAT_PAD;
 /** Each card's Surface box; the card sits on its bottom edge, the way it hangs above the pill. */
 export const CARD = {
   width: Math.round(COLUMN * 0.75),
-  height: { plan: 190, agents: 110, shells: 110, tabs: 110 } satisfies Record<IslandCluster, number>,
+  height: { plan: 190, agents: 110, shells: 110, tabs: 110 } satisfies Record<
+    IslandCluster,
+    number
+  >,
 };
 
 /* ---------------------------------------------------------------- fixtures */
@@ -148,8 +151,16 @@ function planOf(done: number): IslandPlan {
  * rather than written into a typed literal, so the fixture carries the field
  * whether or not this tree's `IslandAgent` has learned it yet.
  */
-const REVIEW_POLICY = { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" } as const;
-const AUDIT_POLICY = { providerId: "anthropic", modelId: "haiku-4.5", reasoningLevel: "low" } as const;
+const REVIEW_POLICY = {
+  providerId: "anthropic",
+  modelId: "sonnet-4.5",
+  reasoningLevel: "high",
+} as const;
+const AUDIT_POLICY = {
+  providerId: "anthropic",
+  modelId: "haiku-4.5",
+  reasoningLevel: "low",
+} as const;
 
 function agent(
   id: string,
@@ -213,7 +224,13 @@ function modelOf(phase: Phase): ActivityIslandModel {
  * not re-render at all.
  */
 const Settled = React.memo(
-  function Settled({ phase, render }: { phase: string; render: (phase: Phase) => React.ReactNode }) {
+  function Settled({
+    phase,
+    render,
+  }: {
+    phase: string;
+    render: (phase: Phase) => React.ReactNode;
+  }) {
     const [shown, setShown] = React.useState(phase);
     React.useLayoutEffect(() => {
       if (shown !== phase) setShown(phase);
@@ -304,11 +321,15 @@ function feedRows(model: ActivityIslandModel): BundleRow[] {
   const plan = model.plan!;
   return [
     tool("plan", "plan", `${planCount(plan)} steps`, true),
-    ...model.agents.map((a) => tool(a.id, "delegate", a.label, a.state === "working", { summary: "4 tools" })),
+    ...model.agents.map((a) =>
+      tool(a.id, "delegate", a.label, a.state === "working", { summary: "4 tools" }),
+    ),
     ...model.shells.map((s) =>
       tool(s.id, "run-command", s.command, s.state === "running", { exitCode: s.code ?? 0 }),
     ),
-    tool("tab", "fetch-url", "voltaic.example", model.tabs[1]!.state === "loading", { bytes: 14_200 }),
+    tool("tab", "fetch-url", "voltaic.example", model.tabs[1]!.state === "loading", {
+      bytes: 14_200,
+    }),
   ];
 }
 
@@ -334,7 +355,8 @@ function ChatPane({ model }: { model: ActivityIslandModel }) {
             <MessageContent className="gap-0">
               <div className="space-y-4">
                 <GuardedResponse>
-                  Planning it out. A subagent reviews the diff while the tests run in the background.
+                  Planning it out. A subagent reviews the diff while the tests run in the
+                  background.
                 </GuardedResponse>
                 <ActivityBundle rows={feedRows(model)} />
               </div>
@@ -348,7 +370,11 @@ function ChatPane({ model }: { model: ActivityIslandModel }) {
             value=""
             onValueChange={noop}
             models={COMPOSER_MODELS}
-            selection={{ providerId: "anthropic", modelId: "claude-sonnet-4-5", reasoningLevel: "high" }}
+            selection={{
+              providerId: "anthropic",
+              modelId: "claude-sonnet-4-5",
+              reasoningLevel: "high",
+            }}
             onSelectionChange={noop}
             working
             ready
@@ -405,7 +431,9 @@ function CardLayer({ cluster, model }: { cluster: IslandCluster; model: Activity
     const observer = new MutationObserver(adopt);
     observer.observe(document.body, { childList: true });
     // The shipped hover: React's onMouseEnter is synthesised from `mouseover`.
-    const anchor = anchors.current?.querySelector<HTMLElement>(`[data-island-cluster="${cluster}"]`);
+    const anchor = anchors.current?.querySelector<HTMLElement>(
+      `[data-island-cluster="${cluster}"]`,
+    );
     anchor?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }));
     adopt();
     return () => {
@@ -492,7 +520,12 @@ export function IslandShot({ format }: { format: Format }) {
       />
       <Surface
         id="island-pill"
-        style={place(0, PILL_TOP + PILL_HEIGHT - PILL_SURFACE.height, PILL_SURFACE.width, PILL_SURFACE.height)}
+        style={place(
+          0,
+          PILL_TOP + PILL_HEIGHT - PILL_SURFACE.height,
+          PILL_SURFACE.width,
+          PILL_SURFACE.height,
+        )}
         content={
           <div
             className="flex flex-col justify-end"

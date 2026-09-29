@@ -110,10 +110,19 @@ export function useFixtures(setup: { api?: ApiOverrides; seed?: () => void }): v
 /** The capture viewport Flute's ScenePreview renders into, once it exists. */
 function useCaptureViewport(): HTMLElement | null {
   const [element, setElement] = React.useState<HTMLElement | null>(null);
+  // Flute mounts the viewport around the scene, so it may not exist on this
+  // component's first commit: look again each frame until it does.
   React.useLayoutEffect(() => {
     if (element?.isConnected) return;
-    setElement(document.querySelector<HTMLElement>('[data-flute-capture="scene"]'));
-  });
+    let frame = 0;
+    const find = () => {
+      const found = document.querySelector<HTMLElement>('[data-flute-capture="scene"]');
+      if (found === null) frame = requestAnimationFrame(find);
+      else setElement(found);
+    };
+    find();
+    return () => cancelAnimationFrame(frame);
+  }, [element]);
   return element;
 }
 
@@ -216,48 +225,56 @@ function Super({ cue, t, format }: { cue: Cue; t: number; format: Format }) {
   const scrim = progress(t, cue.at, cue.at + 500, ease.outCubic) * (1 - out);
   return (
     <>
-    <div className="film-scrim" data-place={place} data-format={format} style={{ opacity: scrim }} />
-    <div
-      className="film-super"
-      data-place={place}
-      data-format={format}
-      style={{ opacity: 1 - out, transform: `translateY(${-24 * out}px)` }}
-    >
-      {cue.eyebrow !== undefined ? (
-        <div className="film-eyebrow" style={{ opacity: eyebrowIn }}>
-          {cue.eyebrow.slice(0, eyebrowChars)}
-          <span className="film-eyebrow-caret" style={{ opacity: eyebrowChars < cue.eyebrow.length ? 1 : 0 }} />
-        </div>
-      ) : null}
-      {cue.lines.map((line, index) => {
-        const p = progress(t, cue.at + 80 + index * 90, cue.at + 620 + index * 90, ease.outExpo);
-        return (
-          <div key={line} className="film-line-mask" style={{ fontSize: size }}>
-            <div
-              className="film-line"
-              style={{
-                transform: `translateY(${(1 - p) * 105}%)`,
-                letterSpacing: `${-0.045 + (1 - p) * 0.03}em`,
-              }}
-            >
-              <Line text={line} accent={cue.accent} accentColor={cue.accentColor} />
-            </div>
+      <div
+        className="film-scrim"
+        data-place={place}
+        data-format={format}
+        style={{ opacity: scrim }}
+      />
+      <div
+        className="film-super"
+        data-place={place}
+        data-format={format}
+        style={{ opacity: 1 - out, transform: `translateY(${-24 * out}px)` }}
+      >
+        {cue.eyebrow !== undefined ? (
+          <div className="film-eyebrow" style={{ opacity: eyebrowIn }}>
+            {cue.eyebrow.slice(0, eyebrowChars)}
+            <span
+              className="film-eyebrow-caret"
+              style={{ opacity: eyebrowChars < cue.eyebrow.length ? 1 : 0 }}
+            />
           </div>
-        );
-      })}
-      {cue.sub !== undefined ? (
-        <div
-          className="film-sub"
-          style={{
-            fontSize: Math.round(size * 0.54),
-            opacity: progress(t, cue.at + 300, cue.at + 700, ease.outCubic),
-            transform: `translateY(${(1 - progress(t, cue.at + 300, cue.at + 800, ease.outExpo)) * 18}px)`,
-          }}
-        >
-          {cue.sub}
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+        {cue.lines.map((line, index) => {
+          const p = progress(t, cue.at + 80 + index * 90, cue.at + 620 + index * 90, ease.outExpo);
+          return (
+            <div key={line} className="film-line-mask" style={{ fontSize: size }}>
+              <div
+                className="film-line"
+                style={{
+                  transform: `translateY(${(1 - p) * 105}%)`,
+                  letterSpacing: `${-0.045 + (1 - p) * 0.03}em`,
+                }}
+              >
+                <Line text={line} accent={cue.accent} accentColor={cue.accentColor} />
+              </div>
+            </div>
+          );
+        })}
+        {cue.sub !== undefined ? (
+          <div
+            className="film-sub"
+            style={{
+              fontSize: Math.round(size * 0.54),
+              opacity: progress(t, cue.at + 300, cue.at + 700, ease.outCubic),
+              transform: `translateY(${(1 - progress(t, cue.at + 300, cue.at + 800, ease.outExpo)) * 18}px)`,
+            }}
+          >
+            {cue.sub}
+          </div>
+        ) : null}
+      </div>
     </>
   );
 }

@@ -100,11 +100,14 @@ export function hermite(t, t0, t1, p0, p1, v0 = 0, v1 = 0) {
   );
 }
 
+const round = (v) => Math.round(v * 100) / 100;
+
 export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30, guard = [] }) {
   const times = [];
   // Integer steps, not accumulated floats: an accumulated 2200.0000001 would
   // round onto the final keyframe and duplicate it.
-  for (let i = 0; i * stepMs < durationMs - 0.5; i += 1) times.push(Math.round(i * stepMs * 1000) / 1000);
+  for (let i = 0; i * stepMs < durationMs - 0.5; i += 1)
+    times.push(Math.round(i * stepMs * 1000) / 1000);
   times.push(durationMs);
   const samples = times.map((t) => {
     const r = rig(t);
@@ -132,12 +135,13 @@ export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30, gu
       const [, , vz] = rotate(point, rotation);
       const depth = perspective - (vz - camera.z);
       if (depth < 120) {
-        console.warn(`  near-plane: t=${t.toFixed(0)} point ${JSON.stringify(point)} depth ${depth.toFixed(0)}`);
+        console.warn(
+          `  near-plane: t=${t.toFixed(0)} point ${JSON.stringify(point)} depth ${depth.toFixed(0)}`,
+        );
       }
     }
     return { t, camera, focus };
   });
-  const round = (v) => Math.round(v * 100) / 100;
   const tracks = [];
   for (const property of ["x", "y", "z", "rotateX", "rotateY", "rotateZ"]) {
     const values = samples.map((s) => round(s.camera[property]));
@@ -159,14 +163,30 @@ export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30, gu
   }
   const first = samples[0];
   return {
-    camera: { perspective, ...Object.fromEntries(Object.entries(first.camera).map(([k, v]) => [k, round(v)])) },
+    camera: {
+      perspective,
+      ...Object.fromEntries(Object.entries(first.camera).map(([k, v]) => [k, round(v)])),
+    },
     focus: Object.fromEntries(Object.entries(first.focus).map(([k, v]) => [k, round(v)])),
     tracks,
   };
 }
 
 /** One recipe document, in Flute's `src/flute/scenes/<id>.scene.json` shape. */
-export function recipe({ id, title, description, width, height, durationMs, perspective, rig, nodes, surfaceTracks = [], stepMs, guard }) {
+export function recipe({
+  id,
+  title,
+  description,
+  width,
+  height,
+  durationMs,
+  perspective,
+  rig,
+  nodes,
+  surfaceTracks = [],
+  stepMs,
+  guard,
+}) {
   const { camera, focus, tracks } = sampleRig({ durationMs, perspective, rig, stepMs, guard });
   return {
     version: 1,

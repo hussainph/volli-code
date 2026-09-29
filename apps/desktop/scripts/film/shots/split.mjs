@@ -45,7 +45,8 @@ function splitRig(format) {
 export const shot = {
   key: "split",
   title: "Split view",
-  description: "VC-202/333 — Home splits right, the main tab bar splits with it, the divider resizes.",
+  description:
+    "VC-202/333 — Home splits right, the main tab bar splits with it, the divider resizes.",
   durationMs: 1200,
   perspective: 1400,
   nodes: [{ id: "window" }],

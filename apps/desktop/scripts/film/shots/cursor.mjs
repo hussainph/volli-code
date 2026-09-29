@@ -64,11 +64,11 @@ function cursorRig(format) {
 }
 
 export const shot = {
-    key: "cursor",
-    title: "Agents drive the browser",
-    description: "VC-238/239 — the Session cursor types, picks a plan, clicks Continue and lets go.",
-    durationMs: 3800,
-    perspective: 1400,
-    nodes: [{ id: "browser" }, { id: "cursor-layer", parentId: "browser", transform: { z: 46 } }],
-    rig: cursorRig,
-  };
+  key: "cursor",
+  title: "Agents drive the browser",
+  description: "VC-238/239 — the Session cursor types, picks a plan, clicks Continue and lets go.",
+  durationMs: 3800,
+  perspective: 1400,
+  nodes: [{ id: "browser" }, { id: "cursor-layer", parentId: "browser", transform: { z: 46 } }],
+  rig: cursorRig,
+};

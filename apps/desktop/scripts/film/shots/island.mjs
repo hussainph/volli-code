@@ -45,10 +45,20 @@ const CONVERGE = { from: 2560, stagger: 70, duration: 760 };
 /** 0 = inside the pill, 1 = on its exploded slot. */
 function spread(id, t) {
   const i = GEO.order.indexOf(id);
-  const out = progress(t, EXPLODE.from + i * EXPLODE.stagger, EXPLODE.from + i * EXPLODE.stagger + EXPLODE.duration, ease.outQuart);
+  const out = progress(
+    t,
+    EXPLODE.from + i * EXPLODE.stagger,
+    EXPLODE.from + i * EXPLODE.stagger + EXPLODE.duration,
+    ease.outQuart,
+  );
   // The farthest layer leaves first, so all four land together.
   const j = GEO.order.length - 1 - i;
-  const back = progress(t, CONVERGE.from + j * CONVERGE.stagger, CONVERGE.from + j * CONVERGE.stagger + CONVERGE.duration, ease.inOutCubic);
+  const back = progress(
+    t,
+    CONVERGE.from + j * CONVERGE.stagger,
+    CONVERGE.from + j * CONVERGE.stagger + CONVERGE.duration,
+    ease.inOutCubic,
+  );
   return { out, back, s: out * (1 - back) };
 }
 
@@ -59,7 +69,7 @@ function layerState(id, t) {
   const dy = GEO.pill[1] - layer.cy;
   // Exploded, the deck packs tighter in y than its CSS slots (the depth
   // stagger keeps the cards apart), so the camera can come in close.
-  const packed = (STACK_MID + (layer.cy - STACK_MID) * PACK - 30) - layer.cy;
+  const packed = STACK_MID + (layer.cy - STACK_MID) * PACK - 30 - layer.cy;
   // A slow float while exploded keeps the stack alive between beats.
   const float = Math.sin((t / 1000) * 1.6 + GEO.order.indexOf(id)) * 6 * s;
   return {
@@ -77,7 +87,8 @@ function layerCenter(id, t) {
 }
 
 function pillState(t) {
-  const lift = progress(t, 520, 1300, ease.inOutCubic) * (1 - progress(t, 2600, 3300, ease.inOutCubic));
+  const lift =
+    progress(t, 520, 1300, ease.inOutCubic) * (1 - progress(t, 2600, 3300, ease.inOutCubic));
   // The landing: a small swell as the last card is absorbed.
   const swell = Math.sin(Math.PI * progress(t, 3180, 3620, ease.linear)) * 0.045;
   return { z: 2 + 26 * lift, scale: 1 + swell };
@@ -85,7 +96,8 @@ function pillState(t) {
 
 /** The chat's presence: full at rest, dimmed while the cards are out. */
 function chatOpacity(t) {
-  const dim = progress(t, 640, 1300, ease.inOutCubic) * (1 - progress(t, 2800, 3450, ease.inOutCubic));
+  const dim =
+    progress(t, 640, 1300, ease.inOutCubic) * (1 - progress(t, 2800, 3450, ease.inOutCubic));
   return mix(1, 0.12, dim);
 }
 
@@ -157,7 +169,15 @@ function islandRig(format) {
     const close = progress(t, 2550, 3700, ease.inOutCubic);
     const orbit = ease.inOutSine(clamp01((t + 1100) / 5300));
     const rotation = {
-      rotateX: track(t, [[0, f.rotateX[0]], [1500, f.rotateX[1]], [4000, f.rotateX[2]]], ease.inOutSine),
+      rotateX: track(
+        t,
+        [
+          [0, f.rotateX[0]],
+          [1500, f.rotateX[1]],
+          [4000, f.rotateX[2]],
+        ],
+        ease.inOutSine,
+      ),
       rotateY: mix(f.rotateY[0], f.rotateY[1], orbit),
       rotateZ: f.rotateZ,
     };
@@ -178,10 +198,16 @@ function islandRig(format) {
     // Near-plane guard over the moving layers' corners.
     for (const id of GEO.order) {
       const c = layerCenter(id, t);
-      for (const [dx, dy] of [[-228, -GEO.layers[id].h / 2], [228, GEO.layers[id].h / 2], [-228, GEO.layers[id].h / 2], [228, -GEO.layers[id].h / 2]]) {
+      for (const [dx, dy] of [
+        [-228, -GEO.layers[id].h / 2],
+        [228, GEO.layers[id].h / 2],
+        [-228, GEO.layers[id].h / 2],
+        [228, -GEO.layers[id].h / 2],
+      ]) {
         const v = rotate([c[0] + dx, c[1] + dy, c[2]], rotation)[2];
         const depth = 1400 - (v - (vzTarget - near));
-        if (depth < 180 && layerState(id, t).opacity > 0) console.warn(`  near-plane ${format} t=${t.toFixed(0)} ${id} depth ${depth.toFixed(0)}`);
+        if (depth < 180 && layerState(id, t).opacity > 0)
+          console.warn(`  near-plane ${format} t=${t.toFixed(0)} ${id} depth ${depth.toFixed(0)}`);
       }
     }
     return {
@@ -190,7 +216,16 @@ function islandRig(format) {
       near,
       offset,
       focus: vzTarget - vzFocus,
-      fStop: track(t, [[0, 3.2], [1000, 4.2], [2700, 4.2], [3800, 3.4]], ease.inOutSine),
+      fStop: track(
+        t,
+        [
+          [0, 3.2],
+          [1000, 4.2],
+          [2700, 4.2],
+          [3800, 3.4],
+        ],
+        ease.inOutSine,
+      ),
       focalLength: 60,
       maxBlur: 6,
     };
@@ -202,7 +237,6 @@ function surfaceTracks(format) {
   const times = [];
   for (let i = 0; i * step < 4000 - 0.5; i += 1) times.push(Math.round(i * step * 1000) / 1000);
   times.push(4000);
-  const round = (v) => Math.round(v * 1000) / 1000;
   const tracks = [];
   // Keyframes a straight line through its neighbours already implies are
   // dropped (within `eps`), so a recipe stays under Flute's file cap.
@@ -229,7 +263,11 @@ function surfaceTracks(format) {
     tracks.push({
       target: { kind: "surface", id },
       property,
-      keyframes: thin(values, eps).map((i) => ({ timeMs: times[i], value: values[i], easing: "linear" })),
+      keyframes: thin(values, eps).map((i) => ({
+        timeMs: times[i],
+        value: values[i],
+        easing: "linear",
+      })),
     });
   };
   for (const id of GEO.order) {
@@ -246,10 +284,18 @@ function surfaceTracks(format) {
   // fades out, so it stays dim until the super has gone.
   if (format === "tall") {
     add("island-pill", "opacity", (t) =>
-      mix(1, 0.15, progress(t, 2250, 2450, ease.inOutSine) * (1 - progress(t, 2780, 3050, ease.inOutSine))),
+      mix(
+        1,
+        0.15,
+        progress(t, 2250, 2450, ease.inOutSine) * (1 - progress(t, 2780, 3050, ease.inOutSine)),
+      ),
     );
   }
   return tracks;
+}
+
+function round(v) {
+  return Math.round(v * 1000) / 1000;
 }
 
 export const shot = {
@@ -259,11 +305,7 @@ export const shot = {
     "VC-246/268/269/270 — the Activity Island explodes into its real cards (plan, subagents, shells, Browser Tabs) and folds back into the pill.",
   durationMs: 4000,
   perspective: 1400,
-  nodes: [
-    { id: "chat" },
-    { id: "island-pill" },
-    ...GEO.order.map((id) => ({ id: `card-${id}` })),
-  ],
+  nodes: [{ id: "chat" }, { id: "island-pill" }, ...GEO.order.map((id) => ({ id: `card-${id}` }))],
   rig: islandRig,
   surfaceTracks,
 };

@@ -48,7 +48,10 @@ function hookRig(format) {
       rotation,
       target,
       near,
-      offset: [mix(macro.offset[0], end.offset[0], pull), mix(macro.offset[1], end.offset[1], pull)],
+      offset: [
+        mix(macro.offset[0], end.offset[0], pull),
+        mix(macro.offset[1], end.offset[1], pull),
+      ],
       // Focus stays on the hero card as the wall opens up, then racks out to
       // the wall's middle as the aperture closes down.
       focus: mix(0, 0, pull),

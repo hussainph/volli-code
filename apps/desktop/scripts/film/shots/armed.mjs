@@ -31,7 +31,10 @@ function armedRig(format) {
     const target = [0, 1, 2].map((i) => mix(WINDOWS[i], CARDS[i], move));
     return {
       rotation: Object.fromEntries(
-        ["rotateX", "rotateY", "rotateZ"].map((axis) => [axis, mix(a.rotation[axis], b.rotation[axis], move) + (axis === "rotateY" ? -3 * drift : 0)]),
+        ["rotateX", "rotateY", "rotateZ"].map((axis) => [
+          axis,
+          mix(a.rotation[axis], b.rotation[axis], move) + (axis === "rotateY" ? -3 * drift : 0),
+        ]),
       ),
       target,
       near: mix(a.near, b.near, move) + 60 * drift,
@@ -50,6 +53,11 @@ export const shot = {
   description: "Three countdown windows with Cancel drain; the rings go working, one goes waiting.",
   durationMs: ARMED.duration,
   perspective: 1400,
-  nodes: [{ id: "auto-col-0" }, { id: "auto-col-1" }, { id: "auto-col-2" }, { id: "auto-armed", transform: { z: 140 } }],
+  nodes: [
+    { id: "auto-col-0" },
+    { id: "auto-col-1" },
+    { id: "auto-col-2" },
+    { id: "auto-armed", transform: { z: 140 } },
+  ],
   rig: armedRig,
 };

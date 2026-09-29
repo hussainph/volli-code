@@ -23,7 +23,15 @@ import { Surface } from "@webprodigies/flute";
 import { CommandPalette } from "@renderer/components/command-palette";
 
 import { typed } from "../kit/clock";
-import { FrameLayer, Supers, useFilm, useFixtures, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFixtures,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 import { seedShell, shellApi, ShellWindow } from "../kit/split-shell";
 
 /** The window, in lab CSS px. Mirrored by scripts/film/shots/palette.mjs. */

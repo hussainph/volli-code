@@ -4,7 +4,13 @@
  * automation beats. Invented work, so nothing here reads as Volli's own
  * tickets; the path is not under /Users.
  */
-import { DEFAULT_HARNESS_ID, type Label, type Project, type Ticket, type TicketStatus } from "@volli/shared";
+import {
+  DEFAULT_HARNESS_ID,
+  type Label,
+  type Project,
+  type Ticket,
+  type TicketStatus,
+} from "@volli/shared";
 
 const NOW = 1_790_000_000_000;
 
@@ -22,12 +28,14 @@ export const ATLAS: Project = {
   updatedAt: NOW,
 };
 
-export const ATLAS_LABELS: Label[] = ["api", "web", "infra", "billing", "mobile", "search"].map((name) => ({
-  id: `lbl-atl-${name}`,
-  projectId: ATLAS.id,
-  name,
-  color: null,
-}));
+export const ATLAS_LABELS: Label[] = ["api", "web", "infra", "billing", "mobile", "search"].map(
+  (name) => ({
+    id: `lbl-atl-${name}`,
+    projectId: ATLAS.id,
+    name,
+    color: null,
+  }),
+);
 
 export const ATLAS_TITLES: [string, string[]][] = [
   ["Retry failed webhook deliveries with exponential backoff", ["api"]],
@@ -56,9 +64,14 @@ export const ATLAS_TITLES: [string, string[]][] = [
   ["Haptics on successful scan", ["mobile"]],
 ];
 
-
 /** One Atlas card: `title` indexes ATLAS_TITLES (wrapping), `number` is its ATL- number. */
-export function atlasTicket(title: number, number: number, status: TicketStatus, row: number, overrides: Partial<Ticket> = {}): Ticket {
+export function atlasTicket(
+  title: number,
+  number: number,
+  status: TicketStatus,
+  row: number,
+  overrides: Partial<Ticket> = {},
+): Ticket {
   const [name, labels] = ATLAS_TITLES[title % ATLAS_TITLES.length];
   return {
     id: `atl-${number}`,

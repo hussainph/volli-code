@@ -7,7 +7,15 @@
  * card, so the cut loops.
  */
 import { ease, progress } from "../kit/clock";
-import { FORMAT_SIZE, FrameLayer, Supers, useFilm, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FORMAT_SIZE,
+  FrameLayer,
+  Supers,
+  useFilm,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 import { Wall } from "../kit/wall";
 
 const CUES: Record<Format, Cue[]> = {

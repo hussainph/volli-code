@@ -35,8 +35,22 @@ const RELIEF = [10, -24, 18, -6, 30, -14, 0, 22, -30, 8, -18, 26, -8, 14];
  */
 const QUIET = /\b(mcp|terminal|xterm|notification|run once|peek|hover)/i;
 const QUIET_CELLS: [column: number, row: number][] = [
-  [0, 0], [13, 0], [1, 0], [12, 0], [0, 1], [13, 1], [2, 0], [11, 0],
-  [1, 1], [12, 1], [0, 2], [13, 2], [3, 0], [10, 0], [2, 1], [11, 1],
+  [0, 0],
+  [13, 0],
+  [1, 0],
+  [12, 0],
+  [0, 1],
+  [13, 1],
+  [2, 0],
+  [11, 0],
+  [1, 1],
+  [12, 1],
+  [0, 2],
+  [13, 2],
+  [3, 0],
+  [10, 0],
+  [2, 1],
+  [11, 1],
 ];
 
 function columnsOfTickets() {
@@ -45,8 +59,9 @@ function columnsOfTickets() {
   const quiet = others.filter((ticket) => QUIET.test(ticket.title));
   const loud = others.filter((ticket) => !QUIET.test(ticket.title));
   if (quiet.length > QUIET_CELLS.length) throw new Error("wall: add more QUIET_CELLS");
-  const grid: (typeof RELEASE_BOARD)[number][][] = Array.from({ length: WALL_COLUMNS }, (_, column) =>
-    Array.from({ length: column < 7 ? 13 : 12 }),
+  const grid: (typeof RELEASE_BOARD)[number][][] = Array.from(
+    { length: WALL_COLUMNS },
+    (_, column) => Array.from({ length: column < 7 ? 13 : 12 }),
   );
   grid[HERO.column][HERO.row] = hero;
   quiet.forEach((ticket, index) => {
@@ -100,7 +115,7 @@ export function Wall({
     <>
       {columns.map((cards, column) => (
         <Surface
-          key={column}
+          key={cards[0]!.ticket.id}
           id={`wall-${column}`}
           transform={{ z: RELIEF[column] }}
           style={{

@@ -36,21 +36,23 @@ export const ease = {
   },
 } satisfies Record<string, Ease>;
 
+/** One axis of a cubic Bézier from (0,0) to (1,1) with control values a, b. */
+const bezierAxis = (a: number, b: number, s: number) =>
+  3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
+
 /** A CSS cubic-bezier evaluated at progress `x`, by bisection on the x curve. */
 function bezier(x1: number, y1: number, x2: number, y2: number, x: number): number {
   if (x <= 0) return 0;
   if (x >= 1) return 1;
-  const curve = (a: number, b: number, s: number) =>
-    3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
   let lo = 0;
   let hi = 1;
   let s = x;
   for (let i = 0; i < 28; i += 1) {
     s = (lo + hi) / 2;
-    if (curve(x1, x2, s) < x) lo = s;
+    if (bezierAxis(x1, x2, s) < x) lo = s;
     else hi = s;
   }
-  return curve(y1, y2, s);
+  return bezierAxis(y1, y2, s);
 }
 
 /** Eased progress of `t` through the window `[from, to]`, clamped to 0..1. */

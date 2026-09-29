@@ -8,7 +8,13 @@
  * claims more than its title does. The project path is deliberately not under
  * /Users: nothing in frame may name a home directory.
  */
-import { DEFAULT_HARNESS_ID, type Label, type Project, type Ticket, type TicketStatus } from "@volli/shared";
+import {
+  DEFAULT_HARNESS_ID,
+  type Label,
+  type Project,
+  type Ticket,
+  type TicketStatus,
+} from "@volli/shared";
 
 import { RELEASE_TICKETS } from "./release-tickets";
 
@@ -54,10 +60,7 @@ function labelsFor(title: string): string[] {
 
 const PRIORITIES = ["high", "medium", "low", "medium"] as const;
 
-export function releaseTicket(
-  number: number,
-  overrides: Partial<Ticket> = {},
-): Ticket {
+export function releaseTicket(number: number, overrides: Partial<Ticket> = {}): Ticket {
   const source = RELEASE_TICKETS.find((ticket) => ticket.number === number);
   return {
     id: `vc-${number}`,
@@ -84,4 +87,6 @@ export function releaseTicket(
 }
 
 /** All 175, in the order their work first landed. */
-export const RELEASE_BOARD: Ticket[] = RELEASE_TICKETS.map((ticket) => releaseTicket(ticket.number));
+export const RELEASE_BOARD: Ticket[] = RELEASE_TICKETS.map((ticket) =>
+  releaseTicket(ticket.number),
+);

@@ -15,7 +15,11 @@ const PANE = { width: 560, height: 406 };
 /** Row centres in pane px, measured in the lab (offsetTop + half the control). */
 const ROW = { board: 71, utility: 131.5, ticket: 192.5, fast: 253.5, deep: 314.5, visual: 375.5 };
 /** Pane px → world px. */
-const world = (x, y) => [x * ZOOM - (PANE.width * ZOOM) / 2, y * ZOOM - (PANE.height * ZOOM) / 2, 0];
+const world = (x, y) => [
+  x * ZOOM - (PANE.width * ZOOM) / 2,
+  y * ZOOM - (PANE.height * ZOOM) / 2,
+  0,
+];
 
 /** Where the focus sits, in pane px: a hold on each tier, eased between. */
 function focusRow(t) {
@@ -42,9 +46,12 @@ function focusRow(t) {
  * when tan(rotateZ) = sin(rotateY)·cos(rotateX) / sin(rotateX). The rack then
  * lands on a whole row — label and model together — rather than a diagonal.
  */
+const r = (d) => (d * Math.PI) / 180;
+
 function level(rotateX, rotateY, bias = 0) {
-  const r = (d) => (d * Math.PI) / 180;
-  const rotateZ = (Math.atan((Math.sin(r(rotateY)) * Math.cos(r(rotateX))) / Math.sin(r(rotateX))) * 180) / Math.PI;
+  const rotateZ =
+    (Math.atan((Math.sin(r(rotateY)) * Math.cos(r(rotateX))) / Math.sin(r(rotateX))) * 180) /
+    Math.PI;
   return { rotateX, rotateY, rotateZ: rotateZ + bias };
 }
 
@@ -106,7 +113,8 @@ function modelsRig(format) {
 export const shot = {
   key: "models",
   title: "A model for every job",
-  description: "VC-259 — a close, raking survey down the real tier tree: Board, Utility, Ticket, then Fast / Deep / Visual.",
+  description:
+    "VC-259 — a close, raking survey down the real tier tree: Board, Utility, Ticket, then Fast / Deep / Visual.",
   durationMs: 1800,
   perspective: 1400,
   nodes: [{ id: "model-tree" }],

@@ -55,33 +55,32 @@ export const sessions = rehome(labSessions);
 export const chatSessions = rehome(labChatSessions);
 
 export const sessionRows: SessionListingRow[] = [
-  ...sessions.map(
-    (record): SessionListingRow => ({
-      kind: "terminal",
-      record,
-      usage: EMPTY_SESSION_USAGE_SUMMARY,
-      provenance: PERSON_STARTED,
-    }),
-  ),
-  ...chatSessions.map(
-    (record): SessionListingRow => ({
-      kind: "chat",
-      record,
-      usage: EMPTY_SESSION_USAGE_SUMMARY,
-      provenance: PERSON_STARTED,
-    }),
-  ),
+  ...sessions.map((record): SessionListingRow => ({
+    kind: "terminal",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  })),
+  ...chatSessions.map((record): SessionListingRow => ({
+    kind: "chat",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+  })),
 ];
 
 const ok = <T extends object>(value: T) => Promise.resolve({ ok: true as const, ...value });
 
 /** The app's bridge for the montage shots: the lab's, made quiet and path-safe. */
-export function shellApi(overrides: ApiOverrides = {}, browserTabs: BrowserTabState[] = []): ApiOverrides {
+export function shellApi(
+  overrides: ApiOverrides = {},
+  browserTabs: BrowserTabState[] = [],
+): ApiOverrides {
   const base = appApi as Record<string, Record<string, unknown>>;
   const merge = (namespace: string, extra: Record<string, unknown>) => ({
-    ...(base[namespace] ?? {}),
+    ...base[namespace],
     ...extra,
-    ...((overrides[namespace] as Record<string, unknown> | undefined) ?? {}),
+    ...(overrides[namespace] as Record<string, unknown> | undefined),
   });
   return {
     ...appApi,

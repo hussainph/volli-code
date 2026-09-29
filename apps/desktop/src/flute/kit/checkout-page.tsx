@@ -65,7 +65,13 @@ function Field({
         {value || placeholder}
         {caret ? (
           <span
-            style={{ display: "inline-block", width: 1.5, height: 18, marginLeft: 1, background: INK }}
+            style={{
+              display: "inline-block",
+              width: 1.5,
+              height: 18,
+              marginLeft: 1,
+              background: INK,
+            }}
           />
         ) : null}
       </div>

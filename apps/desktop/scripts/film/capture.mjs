@@ -37,7 +37,9 @@ const option = (name, fallback) => {
 };
 const out = option("--out", null);
 if (!sceneId || !out) {
-  console.error("usage: capture.mjs <scene-id> --out <file.mp4|dir> [--stills a,b,c] [--fps 60] [--dsf 2]");
+  console.error(
+    "usage: capture.mjs <scene-id> --out <file.mp4|dir> [--stills a,b,c] [--fps 60] [--dsf 2]",
+  );
   process.exit(2);
 }
 const port = Number(option("--port", "5188"));
@@ -45,14 +47,24 @@ const fps = Number(option("--fps", "60"));
 const dsf = Number(option("--dsf", "2"));
 const stills = option("--stills", null);
 const which = option("--browser", "chrome");
-const size = sceneId.endsWith("-tall") ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 };
+const size = sceneId.endsWith("-tall")
+  ? { width: 1080, height: 1920 }
+  : { width: 1920, height: 1080 };
 
 function executable() {
   const root = join(homedir(), "Library", "Caches", "ms-playwright");
   const dirs = readdirSync(root).toSorted().toReversed();
   if (which === "chrome") {
     for (const dir of dirs.filter((d) => /^chromium-\d+$/.test(d))) {
-      const app = join(root, dir, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+      const app = join(
+        root,
+        dir,
+        "chrome-mac-arm64",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing",
+      );
       if (existsSync(app)) return app;
     }
   }
@@ -81,32 +93,37 @@ await page.addInitScript(() => {
   });
 });
 await page.goto(url, { waitUntil: "load", timeout: 180_000 });
-await page.waitForFunction(() => typeof window.__FLUTE_CAPTURE__?.seek === "function", undefined, {
+// Flute's capture bridge: the same `seek` its own export drives.
+const BRIDGE = "__FLUTE_CAPTURE__";
+await page.waitForFunction((name) => typeof window[name]?.seek === "function", BRIDGE, {
   timeout: 180_000,
 });
 await page.evaluate(() => document.fonts.ready);
-const manifest = await page.evaluate(() => {
-  const bridge = window.__FLUTE_CAPTURE__;
+const manifest = await page.evaluate((name) => {
+  const bridge = window[name];
   return { durationMs: bridge.durationMs, selector: bridge.selector };
-});
+}, BRIDGE);
 const viewport = page.locator(manifest.selector);
 const rect = await viewport.boundingBox();
 if (rect === null) throw new Error("scene viewport not visible");
 const client = await page.context().newCDPSession(page);
 
 async function settleAt(timeMs) {
-  await page.evaluate(async (elapsed) => {
-    window.__FLUTE_CAPTURE__.seek(elapsed);
-    const want = String(elapsed);
-    const deadline = performance.now() + 5000;
-    while (document.documentElement.dataset.filmTime !== want) {
-      if (performance.now() > deadline) throw new Error(`scene never reached ${want}`);
+  await page.evaluate(
+    async ([name, elapsed]) => {
+      window[name].seek(elapsed);
+      const want = String(elapsed);
+      const deadline = performance.now() + 5000;
+      while (document.documentElement.dataset.filmTime !== want) {
+        if (performance.now() > deadline) throw new Error(`scene never reached ${want}`);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      // One more frame: Flute re-evaluates surfaces after they re-register.
       await new Promise((resolve) => requestAnimationFrame(resolve));
-    }
-    // One more frame: Flute re-evaluates surfaces after they re-register.
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-  }, timeMs);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    },
+    [BRIDGE, timeMs],
+  );
 }
 
 // Public-safety audit (VC-464: "check every frame"). Every frame's text — the
@@ -115,8 +132,14 @@ async function settleAt(timeMs) {
 // camera may not show, so a hit is a reason to look, not proof of a leak.
 const PRIVATE = [
   ["path under /Users", /\/Users\/[^\s"')]*/g],
-  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?!example\b|test\b|invalid\b)[A-Za-z]{2,}\b/g],
-  ["token", /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g],
+  [
+    "email",
+    /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?!example\b|test\b|invalid\b)[A-Za-z]{2,}\b/g,
+  ],
+  [
+    "token",
+    /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g,
+  ],
 ];
 const findings = new Map();
 async function audit(timeMs) {
@@ -177,21 +200,46 @@ if (stills !== null) {
   const ffmpeg = spawn(
     "ffmpeg",
     [
-      "-hide_banner", "-loglevel", "error", "-y",
-      "-f", "image2pipe", "-framerate", String(fps), "-vcodec", "png", "-i", "pipe:0",
-      "-an", "-c:v", "libx264", "-preset", "slow", "-crf", "12",
-      "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-frames:v", String(frames), out,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "image2pipe",
+      "-framerate",
+      String(fps),
+      "-vcodec",
+      "png",
+      "-i",
+      "pipe:0",
+      "-an",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "slow",
+      "-crf",
+      "12",
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      "-frames:v",
+      String(frames),
+      out,
     ],
     { stdio: ["pipe", "inherit", "inherit"] },
   );
   const done = new Promise((resolve, reject) =>
-    ffmpeg.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))),
+    ffmpeg.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)),
+    ),
   );
   const started = performance.now();
   for (let i = 0; i < frames; i += 1) {
     const time = Math.round((from + (i * 1000) / fps) * 1000) / 1000;
     const png = await frameAt(time);
-    if (!ffmpeg.stdin.write(png)) await new Promise((resolve) => ffmpeg.stdin.once("drain", resolve));
+    if (!ffmpeg.stdin.write(png))
+      await new Promise((resolve) => ffmpeg.stdin.once("drain", resolve));
     if (i % fps === 0) {
       const rate = (i + 1) / ((performance.now() - started) / 1000);
       process.stderr.write(`${sceneId}: ${i + 1}/${frames} frames (${rate.toFixed(1)} fps)\n`);
@@ -199,7 +247,11 @@ if (stills !== null) {
   }
   ffmpeg.stdin.end();
   await done;
-  console.log("wrote", out, `${frames} frames @ ${fps}fps, ${rect.width * dsf}x${rect.height * dsf}`);
+  console.log(
+    "wrote",
+    out,
+    `${frames} frames @ ${fps}fps, ${rect.width * dsf}x${rect.height * dsf}`,
+  );
 }
 if (findings.size === 0) console.log("privacy audit: clean (every captured frame's text)");
 else {

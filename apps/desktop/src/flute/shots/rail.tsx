@@ -17,7 +17,15 @@ import { TicketRail } from "@renderer/components/ticket/ticket-rail";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useUiStore } from "@renderer/stores/ui";
 
-import { FrameLayer, Supers, useFilm, useFixtures, Vignette, type Cue, type Format } from "../kit/film";
+import {
+  FrameLayer,
+  Supers,
+  useFilm,
+  useFixtures,
+  Vignette,
+  type Cue,
+  type Format,
+} from "../kit/film";
 import { project, seedShell, sessionRows, shellApi, tickets } from "../kit/split-shell";
 
 /** The rail column, in lab CSS px. */
@@ -28,20 +36,29 @@ const BASE_CHATS = sessionRows.filter((row) => row.kind === "chat");
 const CHAT_TEMPLATE = BASE_CHATS.find((row) => row.record.ticketId === "tkt-14") ?? BASE_CHATS[0]!;
 /** Two more chat Sessions on VLT-14 (fixture-only): one working, one idle. */
 const EXTRA_CHATS = [
-  { sessionId: "chat-14b", title: "Write the regression test for the debounce", activity: "working", minutesAgo: 0 },
-  { sessionId: "chat-14c", title: "Review the decoration diff", activity: "idle", minutesAgo: 12 },
-].map((extra) => ({
-  ...CHAT_TEMPLATE,
-  record: {
-    ...CHAT_TEMPLATE.record,
-    sessionId: extra.sessionId,
-    title: extra.title,
-    activity: extra.activity,
-    waitingOn: null,
-    live: true,
-    lastActivityAt: CHAT_TEMPLATE.record.lastActivityAt + (2 - extra.minutesAgo) * 60_000,
+  {
+    sessionId: "chat-14b",
+    title: "Write the regression test for the debounce",
+    activity: "working",
+    minutesAgo: 0,
   },
-})) as typeof BASE_CHATS;
+  { sessionId: "chat-14c", title: "Review the decoration diff", activity: "idle", minutesAgo: 12 },
+]
+  // One template, a few fields changed per row: a fixture list built once at
+  // module load, so the copy per row costs nothing that matters.
+  // oxlint-disable-next-line no-map-spread
+  .map((extra) => ({
+    ...CHAT_TEMPLATE,
+    record: {
+      ...CHAT_TEMPLATE.record,
+      sessionId: extra.sessionId,
+      title: extra.title,
+      activity: extra.activity,
+      waitingOn: null,
+      live: true,
+      lastActivityAt: CHAT_TEMPLATE.record.lastActivityAt + (2 - extra.minutesAgo) * 60_000,
+    },
+  })) as typeof BASE_CHATS;
 const CHAT_ROWS = [...BASE_CHATS, ...EXTRA_CHATS];
 const ok = <T extends object>(value: T) => Promise.resolve({ ok: true as const, ...value });
 const API = shellApi({
@@ -77,26 +94,26 @@ export function RailShot({ format }: { format: Format }) {
   // the moving 3D camera and throw the selected "Now" tab off its track.
   const content = useMemo(
     () => (
-          // A long delay: no tab tooltip can open inside a 1.2s shot.
-          <TooltipProvider delayDuration={60_000}>
-            <style>{HIDE}</style>
-            <div
-              data-film-rail=""
-              className="flex overflow-hidden rounded-[14px]"
-              style={{ width: RAIL.width, height: RAIL.height, background: "var(--canvas)" }}
-            >
-              <TicketRail
-                projectId={project.id}
-                ticket={TICKET}
-                creating={false}
-                onNewSession={noop}
-                onNewChat={noop}
-                onActivateSession={noop}
-                onActivateChat={noop}
-                activeTabId="overview"
-              />
-            </div>
-          </TooltipProvider>
+      // A long delay: no tab tooltip can open inside a 1.2s shot.
+      <TooltipProvider delayDuration={60_000}>
+        <style>{HIDE}</style>
+        <div
+          data-film-rail=""
+          className="flex overflow-hidden rounded-[14px]"
+          style={{ width: RAIL.width, height: RAIL.height, background: "var(--canvas)" }}
+        >
+          <TicketRail
+            projectId={project.id}
+            ticket={TICKET}
+            creating={false}
+            onNewSession={noop}
+            onNewChat={noop}
+            onActivateSession={noop}
+            onActivateChat={noop}
+            activeTabId="overview"
+          />
+        </div>
+      </TooltipProvider>
     ),
     [],
   );
