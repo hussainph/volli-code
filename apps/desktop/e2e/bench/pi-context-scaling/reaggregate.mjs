@@ -12,7 +12,7 @@ import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
-import { aggregateRun } from "./aggregate.mjs";
+import { aggregateRun, loadThresholdFor } from "./aggregate.mjs";
 import { markdownTables } from "./tables.mjs";
 
 const directory = resolve(process.argv[2] ?? "");
@@ -33,7 +33,7 @@ const header = Object.fromEntries(
 const aggregate = {
   ...header,
   reaggregatedAt: new Date().toISOString(),
-  ...aggregateRun(raw.launches, { loadThreshold: raw.environment.machine.cores * 1.5 }),
+  ...aggregateRun(raw.launches, { loadThreshold: loadThresholdFor(raw.environment.machine.cores) }),
 };
 await fs.writeFile(join(directory, "aggregate.json"), `${JSON.stringify(aggregate, null, 2)}\n`);
 await fs.writeFile(join(directory, "tables.md"), markdownTables(aggregate));

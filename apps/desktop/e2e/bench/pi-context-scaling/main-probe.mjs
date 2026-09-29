@@ -186,6 +186,32 @@ export function stopWindow() {
   };
 }
 
+/**
+ * Prove the tripwire is live in this process before trusting its silence: one
+ * deliberate Node connect and one deliberate Chromium fetch to TEST-NET-1 must
+ * both be refused and land in its self-test record.
+ */
+export async function tripwireSelfTest({ net: chromiumNet }) {
+  const state = globalThis.VOLLI_NETWORK_TRIPWIRE;
+  if (state === undefined) return { loaded: false, node: false, chromium: false };
+  const nodeNet = process.getBuiltinModule("node:net");
+  const before = state.selfTests.length;
+  state.selfTestArmed = true;
+  try {
+    await new Promise((resolve) => {
+      const socket = nodeNet.connect({ host: "192.0.2.1", port: 80 });
+      socket.once("error", resolve);
+      socket.once("close", resolve);
+    });
+    const node = state.selfTests.slice(before).some((attempt) => attempt.via === "node");
+    await chromiumNet.fetch("http://192.0.2.1/").catch(() => undefined);
+    const chromium = state.selfTests.slice(before).some((attempt) => attempt.via === "chromium");
+    return { loaded: true, node, chromium };
+  } finally {
+    state.selfTestArmed = false;
+  }
+}
+
 /** What the network tripwire saw in this process. */
 export function tripwireState() {
   const state = globalThis.VOLLI_NETWORK_TRIPWIRE;
@@ -194,6 +220,7 @@ export function tripwireState() {
     loaded: true,
     blocked: state.blocked,
     chromiumBlocked: state.chromiumBlocked,
+    selfTests: state.selfTests.length,
     allowedLoopback: state.allowedLoopback,
     allowedUnixSocket: state.allowedUnixSocket,
     chromiumAllowed: state.chromiumAllowed,

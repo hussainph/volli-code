@@ -125,11 +125,12 @@
     }
   },
   "failedLaunches": [],
-  "reaggregatedAt": "2026-09-29T16:33:26.333Z",
+  "reaggregatedAt": "2026-09-29T17:29:42.056Z",
+  "excludedFailedLaunches": 0,
   "arms": [
     {
       "key": "control",
-      "attached": 0,
+      "bound": 0,
       "historyEntries": 0,
       "launches": 6,
       "boundVerified": true,
@@ -598,11 +599,77 @@
             "pearson": 0.841
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.676,
+            "min": -6.058,
+            "max": -0.053
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -15.908,
+            "min": -47.962,
+            "max": -11.308
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -1.561,
+            "min": -7.128,
+            "max": -0.225
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -1.85,
+            "min": -10.9,
+            "max": 0
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -2,
+            "min": -16.3,
+            "max": 0
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.473,
+            "min": -4.067,
+            "max": 2.83
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -2.363,
+            "min": -28.082,
+            "max": 3.023
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.7,
+            "min": -5.216,
+            "max": 2.319
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -1,
+            "min": -5.9,
+            "max": 3.4
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.65,
+            "min": -9.3,
+            "max": 4.1
+          }
+        }
       }
     },
     {
       "key": "n1-h10",
-      "attached": 1,
+      "bound": 1,
       "historyEntries": 10,
       "launches": 6,
       "boundVerified": true,
@@ -1097,11 +1164,77 @@
             "pearson": 0.816
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.593,
+            "min": -2.314,
+            "max": 0.87
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -9.593,
+            "min": -39.051,
+            "max": 5.31
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 1.675,
+            "min": -3.223,
+            "max": 2.967
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 4.7,
+            "min": -0.9,
+            "max": 5.6
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.25,
+            "min": -7.6,
+            "max": 0.1
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.002,
+            "min": -3.314,
+            "max": 0.829
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -1.976,
+            "min": -10.674,
+            "max": 19.9
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.006,
+            "min": -5.924,
+            "max": 1.667
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0,
+            "min": -6.1,
+            "max": 1.8
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.05,
+            "min": -7.6,
+            "max": 2.5
+          }
+        }
       }
     },
     {
       "key": "n5-h10",
-      "attached": 5,
+      "bound": 5,
       "historyEntries": 10,
       "launches": 6,
       "boundVerified": true,
@@ -1612,11 +1745,77 @@
             "pearson": 0.861
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.595,
+            "min": -0.264,
+            "max": 1.504
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -13.627,
+            "min": -26.149,
+            "max": 2.908
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 1.246,
+            "min": -0.536,
+            "max": 8.806
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 4.1,
+            "min": 0.1,
+            "max": 6.3
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 3.5,
+            "min": -2.3,
+            "max": 28.4
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.05,
+            "min": -0.497,
+            "max": 0.284
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -3.547,
+            "min": -17.056,
+            "max": 12.354
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.089,
+            "min": -0.323,
+            "max": 0.913
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.1,
+            "min": -0.6,
+            "max": 0.9
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.1,
+            "min": -1.7,
+            "max": 2
+          }
+        }
       }
     },
     {
       "key": "n10-h10",
-      "attached": 10,
+      "bound": 10,
       "historyEntries": 10,
       "launches": 6,
       "boundVerified": true,
@@ -2127,11 +2326,77 @@
             "pearson": 0.67
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.545,
+            "min": -1.81,
+            "max": 3.15
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -7.954,
+            "min": -71.5,
+            "max": 59.449
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.531,
+            "min": -2.489,
+            "max": 7.381
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 2.6,
+            "min": 1.1,
+            "max": 9.8
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 2,
+            "min": -7.9,
+            "max": 12.4
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.543,
+            "min": -4.733,
+            "max": 1.69
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -2.245,
+            "min": -56.099,
+            "max": 46.014
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.454,
+            "min": -8.199,
+            "max": 1.128
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.55,
+            "min": -7.6,
+            "max": 2.3
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.1,
+            "min": -19.5,
+            "max": 2.5
+          }
+        }
       }
     },
     {
       "key": "n20-h10",
-      "attached": 20,
+      "bound": 20,
       "historyEntries": 10,
       "launches": 6,
       "boundVerified": true,
@@ -2650,11 +2915,77 @@
             "pearson": 0.674
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.592,
+            "min": 0.117,
+            "max": 1.587
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -2.611,
+            "min": -12.403,
+            "max": 16.376
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 1.593,
+            "min": 0.185,
+            "max": 7.362
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 2.7,
+            "min": 1.6,
+            "max": 13.3
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 5.2,
+            "min": 1.4,
+            "max": 8
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.011,
+            "min": -0.299,
+            "max": 0.047
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 0.045,
+            "min": -16.425,
+            "max": 44.261
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.007,
+            "min": -1.783,
+            "max": 1.535
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -0.1,
+            "min": -1.2,
+            "max": 1.2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.25,
+            "min": -2.1,
+            "max": 3.6
+          }
+        }
       }
     },
     {
       "key": "n1-h100",
-      "attached": 1,
+      "bound": 1,
       "historyEntries": 100,
       "launches": 6,
       "boundVerified": true,
@@ -3149,11 +3480,77 @@
             "pearson": 0.843
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.349,
+            "min": -1.049,
+            "max": 1.577
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -3.256,
+            "min": -21.938,
+            "max": 13.926
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 1.596,
+            "min": 0.781,
+            "max": 6.583
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 3.05,
+            "min": 0.8,
+            "max": 6.2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.1,
+            "min": -2.7,
+            "max": 16.5
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.574,
+            "min": -3.716,
+            "max": 0.179
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 8.095,
+            "min": -24.347,
+            "max": 22.086
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.956,
+            "min": -4.991,
+            "max": 0.048
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -1.45,
+            "min": -6.3,
+            "max": 0.3
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -2.25,
+            "min": -5.6,
+            "max": 0.2
+          }
+        }
       }
     },
     {
       "key": "n5-h100",
-      "attached": 5,
+      "bound": 5,
       "historyEntries": 100,
       "launches": 6,
       "boundVerified": true,
@@ -3664,11 +4061,77 @@
             "pearson": 0.921
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.466,
+            "min": -1.384,
+            "max": 0.829
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 1.786,
+            "min": -14.68,
+            "max": 23.691
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.897,
+            "min": -2.359,
+            "max": 5.173
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 2.85,
+            "min": -2.4,
+            "max": 6.5
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 3.85,
+            "min": -5.1,
+            "max": 9.7
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.064,
+            "min": -2.959,
+            "max": 2.487
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 6.132,
+            "min": -5.571,
+            "max": 31.007
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.065,
+            "min": -4.764,
+            "max": 4.112
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.15,
+            "min": -4.9,
+            "max": 3.9
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.25,
+            "min": -6.2,
+            "max": 6.2
+          }
+        }
       }
     },
     {
       "key": "n10-h100",
-      "attached": 10,
+      "bound": 10,
       "historyEntries": 100,
       "launches": 6,
       "boundVerified": true,
@@ -4187,11 +4650,77 @@
             "pearson": 0.736
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.87,
+            "min": -0.856,
+            "max": 1.12
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -2.187,
+            "min": -21.299,
+            "max": 28.099
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 3.967,
+            "min": -0.34,
+            "max": 7.915
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 5.7,
+            "min": 1.2,
+            "max": 12.9
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 3.75,
+            "min": -1.8,
+            "max": 28.3
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.545,
+            "min": -1.278,
+            "max": 3.25
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 0.479,
+            "min": -36.905,
+            "max": 33.374
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 2.16,
+            "min": -0.878,
+            "max": 4.68
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 2.75,
+            "min": -1.2,
+            "max": 3.9
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 2.15,
+            "min": -1.9,
+            "max": 7.5
+          }
+        }
       }
     },
     {
       "key": "n20-h100",
-      "attached": 20,
+      "bound": 20,
       "historyEntries": 100,
       "launches": 6,
       "boundVerified": true,
@@ -4702,11 +5231,77 @@
             "pearson": 0.636
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.668,
+            "min": -0.037,
+            "max": 0.876
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -1.296,
+            "min": -19.849,
+            "max": 17.547
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.904,
+            "min": -0.015,
+            "max": 3.769
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 2.65,
+            "min": 1.7,
+            "max": 5.1
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 1.85,
+            "min": 0.4,
+            "max": 4.7
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.01,
+            "min": -0.227,
+            "max": 0.199
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 0.766,
+            "min": -5.194,
+            "max": 24.642
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.003,
+            "min": -0.854,
+            "max": 0.445
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.1,
+            "min": -0.4,
+            "max": 1.2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.2,
+            "min": -1.5,
+            "max": 1
+          }
+        }
       }
     },
     {
       "key": "n1-h500",
-      "attached": 1,
+      "bound": 1,
       "historyEntries": 500,
       "launches": 6,
       "boundVerified": true,
@@ -5201,11 +5796,77 @@
             "pearson": 0.915
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.312,
+            "min": -0.426,
+            "max": 1.128
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -8.348,
+            "min": -53.051,
+            "max": 6.271
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 3.428,
+            "min": -0.33,
+            "max": 6.677
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 4.7,
+            "min": 2.6,
+            "max": 10.1
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 2.65,
+            "min": -0.1,
+            "max": 30.3
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.009,
+            "min": -1.392,
+            "max": 2.396
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -2.888,
+            "min": -40.239,
+            "max": 5.145
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.003,
+            "min": -1.174,
+            "max": 1.474
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0,
+            "min": -1.8,
+            "max": 2.1
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0,
+            "min": -1.5,
+            "max": 1.7
+          }
+        }
       }
     },
     {
       "key": "n5-h500",
-      "attached": 5,
+      "bound": 5,
       "historyEntries": 500,
       "launches": 6,
       "boundVerified": true,
@@ -5716,11 +6377,77 @@
             "pearson": 0.973
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.047,
+            "min": 0.874,
+            "max": 2.49
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -1.978,
+            "min": -22.143,
+            "max": 25.723
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 6.473,
+            "min": 2.329,
+            "max": 12.161
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 7.55,
+            "min": 4.2,
+            "max": 15.2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 8.55,
+            "min": -0.6,
+            "max": 18.5
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.023,
+            "min": -1.862,
+            "max": 1.452
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 8.978,
+            "min": -28.813,
+            "max": 123.683
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.044,
+            "min": -0.365,
+            "max": 1.989
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -0.3,
+            "min": -2.2,
+            "max": 1.4
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.4,
+            "min": -2.3,
+            "max": 3.8
+          }
+        }
       }
     },
     {
       "key": "n10-h500",
-      "attached": 10,
+      "bound": 10,
       "historyEntries": 500,
       "launches": 6,
       "boundVerified": true,
@@ -6239,11 +6966,77 @@
             "pearson": 0.808
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.451,
+            "min": 0.7,
+            "max": 2.03
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -7.279,
+            "min": -10.535,
+            "max": 14.176
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 5.708,
+            "min": 2.323,
+            "max": 6.204
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 5.85,
+            "min": 4.7,
+            "max": 7
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 6.85,
+            "min": 5.3,
+            "max": 15.4
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.063,
+            "min": -1.837,
+            "max": 1.708
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -5.906,
+            "min": -15.999,
+            "max": 7.471
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.063,
+            "min": -3.554,
+            "max": 1.194
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.2,
+            "min": -3.3,
+            "max": 2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.1,
+            "min": -5,
+            "max": 1.8
+          }
+        }
       }
     },
     {
       "key": "n20-h500",
-      "attached": 20,
+      "bound": 20,
       "historyEntries": 500,
       "launches": 6,
       "boundVerified": true,
@@ -6762,11 +7555,77 @@
             "pearson": 0.969
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.879,
+            "min": -0.016,
+            "max": 2.617
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 16.64,
+            "min": -9.216,
+            "max": 64.487
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 6.72,
+            "min": -0.584,
+            "max": 8.214
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 7.75,
+            "min": 0.9,
+            "max": 12.5
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 12.95,
+            "min": -0.3,
+            "max": 25.8
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.535,
+            "min": -1.89,
+            "max": 5.37
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 2.052,
+            "min": -14.889,
+            "max": 77.464
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.399,
+            "min": -3.258,
+            "max": 15.673
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -0.85,
+            "min": -3.6,
+            "max": 14.2
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.75,
+            "min": -5.3,
+            "max": 32
+          }
+        }
       }
     },
     {
       "key": "n1-h1500",
-      "attached": 1,
+      "bound": 1,
       "historyEntries": 1500,
       "launches": 6,
       "boundVerified": true,
@@ -7261,11 +8120,77 @@
             "pearson": 0.896
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.328,
+            "min": 0.35,
+            "max": 3.858
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 6.623,
+            "min": -3.015,
+            "max": 66.29
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 23.793,
+            "min": 15.538,
+            "max": 26.307
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 9.3,
+            "min": 3.1,
+            "max": 27
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 16.45,
+            "min": -3.5,
+            "max": 59.3
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.245,
+            "min": -0.12,
+            "max": 5.845
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 2.204,
+            "min": -17.613,
+            "max": 31.097
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 0.458,
+            "min": -0.136,
+            "max": 6.017
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0.65,
+            "min": -0.3,
+            "max": 6.3
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 0.05,
+            "min": -0.5,
+            "max": 3.6
+          }
+        }
       }
     },
     {
       "key": "n5-h1500",
-      "attached": 5,
+      "bound": 5,
       "historyEntries": 1500,
       "launches": 6,
       "boundVerified": true,
@@ -7776,11 +8701,77 @@
             "pearson": 0.932
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.704,
+            "min": 1.314,
+            "max": 2.523
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 14.746,
+            "min": -7.569,
+            "max": 20.382
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 19.037,
+            "min": 15.706,
+            "max": 21.739
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 20.9,
+            "min": 17.8,
+            "max": 23.5
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 16.6,
+            "min": 10.5,
+            "max": 21.2
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 0.216,
+            "min": 0.05,
+            "max": 2.405
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 10.162,
+            "min": 3.637,
+            "max": 19.595
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 2,
+            "min": 0.111,
+            "max": 2.4
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 1.6,
+            "min": 0.1,
+            "max": 2.8
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 3.45,
+            "min": 0.1,
+            "max": 9.2
+          }
+        }
       }
     },
     {
       "key": "n10-h1500",
-      "attached": 10,
+      "bound": 10,
       "historyEntries": 1500,
       "launches": 6,
       "boundVerified": true,
@@ -8291,11 +9282,77 @@
             "pearson": 0.778
           }
         }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 1.702,
+            "min": -1.245,
+            "max": 4.225
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 19.716,
+            "min": 12.124,
+            "max": 133.353
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 17.827,
+            "min": 12.741,
+            "max": 27.436
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 17,
+            "min": 12.8,
+            "max": 26.7
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 20.45,
+            "min": 6,
+            "max": 26.9
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.017,
+            "min": -1.311,
+            "max": 0.076
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 1.784,
+            "min": -4.964,
+            "max": 17.248
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.015,
+            "min": -1.406,
+            "max": 0.019
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 0,
+            "min": -2.8,
+            "max": 0.1
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.05,
+            "min": -3,
+            "max": 0.5
+          }
+        }
       }
     },
     {
       "key": "n20-h1500",
-      "attached": 20,
+      "bound": 20,
       "historyEntries": 1500,
       "launches": 6,
       "boundVerified": true,
@@ -8804,6 +9861,72 @@
           "loopVsEcho": {
             "bins": 366,
             "pearson": 0.849
+          }
+        }
+      },
+      "deltasVsIdle": {
+        "hydration": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": 2.545,
+            "min": 1.251,
+            "max": 3.148
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": 59.154,
+            "min": -1.622,
+            "max": 99.09
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": 19.368,
+            "min": 16.911,
+            "max": 22.929
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": 19.65,
+            "min": 17.9,
+            "max": 22.9
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": 20.9,
+            "min": 14.8,
+            "max": 30.5
+          }
+        },
+        "steady": {
+          "eventLoopDelayP95Ms": {
+            "n": 6,
+            "median": -0.146,
+            "min": -0.477,
+            "max": 0.958
+          },
+          "eventLoopDelayMaxMs": {
+            "n": 6,
+            "median": -5.488,
+            "min": -16.261,
+            "max": 19.12
+          },
+          "tickGapP95Ms": {
+            "n": 6,
+            "median": -0.136,
+            "min": -0.777,
+            "max": 3.814
+          },
+          "ipcEchoP95Ms": {
+            "n": 6,
+            "median": -0.55,
+            "min": -1.5,
+            "max": 5.5
+          },
+          "sessionRpcP95Ms": {
+            "n": 6,
+            "median": -0.95,
+            "min": -1.8,
+            "max": 9.4
           }
         }
       }
@@ -9901,6 +11024,9 @@
   },
   "tripwire": {
     "blocked": [],
-    "chromiumBlocked": []
+    "chromiumBlocked": [],
+    "selfTestsRecorded": 0,
+    "selfTestsPassed": 0,
+    "launches": 103
   }
 }

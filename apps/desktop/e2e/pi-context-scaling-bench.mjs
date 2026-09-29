@@ -69,16 +69,19 @@ import { promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 
 import { _electron } from "playwright-core";
-import { createServer } from "vite";
 
 import { seededRandom, seededShuffle } from "./bench/performance/deterministic.mjs";
-import { aggregateRun, armKey } from "./bench/pi-context-scaling/aggregate.mjs";
+import { hostMetadata } from "./bench/performance/run.mjs";
+import { forceTargetRefusal } from "./bench/performance/fixture.mjs";
+import { aggregateRun, armKey, loadThresholdFor } from "./bench/pi-context-scaling/aggregate.mjs";
+import { withGenerator } from "./bench/pi-context-scaling/generator.mjs";
 import {
   forceGc,
   installMainProbe,
   memorySnapshot,
   startWindow,
   stopWindow,
+  tripwireSelfTest,
   tripwireState,
 } from "./bench/pi-context-scaling/main-probe.mjs";
 import {
@@ -109,25 +112,23 @@ import {
 const execFileAsync = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const TRIPWIRE = join(here, "bench", "pi-context-scaling", "network-tripwire.cjs");
-const GENERATOR = join(
-  REPO,
-  "packages",
-  "agent-runtime",
-  "bench",
-  "context-scaling",
-  "sidecar-history.ts",
-);
 
 // ---- arguments -------------------------------------------------------------
 
 const numberList = (value) => value.split(",").map((item) => Number(item.trim()));
+
+function requireInteger(name, value, minimum) {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`--${name} must be an integer ≥ ${minimum}`);
+  }
+}
 
 function parseArgs(argv) {
   const options = {
     root: null,
     output: null,
     repetitions: 5,
-    attached: [1, 5, 10, 20],
+    bound: [1, 5, 10, 20],
     histories: [10, 100, 500, 1_500],
     windowMs: 6_000,
     settleMs: 6_000,
@@ -156,8 +157,12 @@ function parseArgs(argv) {
       case "--repetitions":
         options.repetitions = Number(take());
         break;
+      // `--attached` is the flag's first name, kept so the commands recorded
+      // in published runs still work: every fixture Session is attached, and
+      // what an arm varies is how many are BOUND in main.
+      case "--bound":
       case "--attached":
-        options.attached = numberList(take());
+        options.bound = numberList(take());
         break;
       case "--histories":
         options.histories = numberList(take());
@@ -186,7 +191,7 @@ function parseArgs(argv) {
       case "--help":
         console.log(
           "node apps/desktop/e2e/pi-context-scaling-bench.mjs [--repetitions 5] [--output DIR]\n" +
-            "  [--attached 1,5,10,20] [--histories 10,100,500,1500] [--window-ms 6000]\n" +
+            "  [--bound 1,5,10,20] [--histories 10,100,500,1500] [--window-ms 6000]\n" +
             "  [--settle-ms 6000] [--echo-pause-ms 5] [--rpc-pause-ms 25] [--seed 445]\n" +
             "  [--root DIR --reuse-fixture] [--keep]",
         );
@@ -197,16 +202,19 @@ function parseArgs(argv) {
     }
   }
   for (const [name, values] of [
-    ["attached", options.attached],
+    ["bound", options.bound],
     ["histories", options.histories],
   ]) {
     if (values.length === 0 || values.some((n) => !Number.isSafeInteger(n) || n < 1)) {
       throw new Error(`--${name} must be positive integers`);
     }
   }
-  if (!Number.isSafeInteger(options.repetitions) || options.repetitions < 1) {
-    throw new Error("--repetitions must be a positive integer");
-  }
+  requireInteger("repetitions", options.repetitions, 1);
+  requireInteger("window-ms", options.windowMs, 100);
+  requireInteger("settle-ms", options.settleMs, 0);
+  requireInteger("echo-pause-ms", options.echoPauseMs, 0);
+  requireInteger("rpc-pause-ms", options.rpcPauseMs, 0);
+  requireInteger("seed", options.seed, 0);
   return options;
 }
 
@@ -229,6 +237,35 @@ function scrubCredentialEnvironment() {
   delete process.env.ZDOTDIR;
   delete process.env.PI_CODING_AGENT_DIR;
   return removed.length;
+}
+
+/** Written into every root this bench creates; the only licence to delete one. */
+const ROOT_MARKER = "vc445-bench-root.json";
+
+/**
+ * `--root` names a directory this bench will `rm -rf`. Refuse the filesystem
+ * root, the home directory, the repository, a symlink and anything that looks
+ * like a checkout (VC-353's `forceTargetRefusal`), and refuse any non-empty
+ * directory this bench did not create itself.
+ */
+async function assertDisposableRoot(root) {
+  const target = resolve(root);
+  const stats = await fs.lstat(target).catch(() => null);
+  const entries = stats?.isDirectory() ? await fs.readdir(target) : [];
+  const refusal = forceTargetRefusal({
+    targetPath: target,
+    exists: stats !== null,
+    isDirectory: stats?.isDirectory() ?? false,
+    isSymlink: stats?.isSymbolicLink() ?? false,
+    // The marker check below replaces VC-353's own marker rule.
+    isEmpty: true,
+    hasPackageJson: entries.includes("package.json"),
+    hasGit: entries.includes(".git"),
+  });
+  if (refusal !== null) throw new Error(`refusing --root: ${refusal}`);
+  if (entries.length > 0 && !entries.includes(ROOT_MARKER)) {
+    throw new Error(`refusing --root: ${target} is non-empty and was not created by this bench`);
+  }
 }
 
 function profilePaths(root) {
@@ -262,6 +299,18 @@ function launchApp(paths) {
     args: ["-r", TRIPWIRE, APP_DIR, `--user-data-dir=${paths.userDataDir}`],
     env: environment,
   });
+}
+
+/**
+ * The tripwire must be loaded AND must have refused its own deliberate Node
+ * and Chromium requests, or its silence proves nothing.
+ */
+async function assertTripwireLive(app) {
+  const result = await app.evaluate(tripwireSelfTest);
+  if (!result.loaded || !result.node || !result.chromium) {
+    throw new Error(`the network tripwire is not live in Electron main: ${JSON.stringify(result)}`);
+  }
+  return result;
 }
 
 async function openWindow(app, paths) {
@@ -364,38 +413,25 @@ async function hostState() {
   };
 }
 
-function git(args) {
-  try {
-    return execFileSync("git", args, { cwd: REPO, encoding: "utf8" }).trim();
-  } catch {
-    return null;
-  }
-}
-
 async function environmentFacts() {
-  const [macos, build, model, battery] = await Promise.all([
-    sh("sw_vers", ["-productVersion"]),
-    sh("sw_vers", ["-buildVersion"]),
-    sh("sysctl", ["-n", "hw.model"]),
-    sh("pmset", ["-g", "batt"]),
-  ]);
+  const [meta, battery] = await Promise.all([hostMetadata(), sh("pmset", ["-g", "batt"])]);
   const require = createRequire(join(APP_DIR, "package.json"));
   const mainBundle = await fs.stat(join(APP_DIR, "dist-electron", "main.cjs"));
   return {
     machine: {
-      model,
-      cpu: os.cpus()[0]?.model ?? null,
-      cores: os.cpus().length,
-      memoryGiB: Math.round(os.totalmem() / 1024 ** 3),
-      macos,
-      macosBuild: build,
+      model: meta.device.model,
+      cpu: meta.device.cpu,
+      cores: meta.device.logicalCores,
+      memoryGiB: Math.round(meta.device.memoryBytes / 1024 ** 3),
+      macos: meta.os.macosVersion,
+      macosBuild: meta.os.macosBuild,
       power: battery,
     },
     build: {
-      gitSha: git(["rev-parse", "HEAD"]),
-      gitDirty: (git(["status", "--porcelain"]) ?? "").length > 0,
+      gitSha: meta.git.sha,
+      gitDirty: meta.git.dirty,
       electron: require("electron/package.json").version,
-      node: process.version,
+      node: meta.node,
       mainBundleBuiltAt: mainBundle.mtime.toISOString(),
       buildKind: "production bundle (pnpm run build), launched unpackaged through Playwright",
     },
@@ -461,8 +497,13 @@ async function findSidecars(sessionsRoot) {
 }
 
 async function prepare(options, paths) {
+  await assertDisposableRoot(paths.root);
   await fs.rm(paths.root, { recursive: true, force: true });
   await fs.mkdir(paths.userDataDir, { recursive: true });
+  await fs.writeFile(
+    join(paths.root, ROOT_MARKER),
+    `${JSON.stringify({ ticket: "VC-445", createdAt: new Date().toISOString() })}\n`,
+  );
   await fs.mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
   // The profile's only credential, and a fake one: a request that ever got as
   // far as a provider would carry this string and be refused by the tripwire.
@@ -473,16 +514,14 @@ async function prepare(options, paths) {
   );
   const project = await makeGitRepo(paths.root, "project-");
   const files = await writeSyntheticFiles(project, options.files, options.seed);
-  const maxAttached = Math.max(...options.attached);
+  const maxBound = Math.max(...options.bound);
 
   console.log(`prepare: launching the built app on ${paths.live}`);
   const app = await launchApp(paths);
   let fixture;
   try {
     const page = await openWindow(app, paths);
-    if (!(await app.evaluate(tripwireState)).loaded) {
-      throw new Error("the network tripwire did not load into Electron main");
-    }
+    await assertTripwireLive(app);
     await seedProjects(page, [
       { id: "vc445-context-scaling", name: "VC-445 Context Scaling", path: project, prefix: "CS" },
     ]);
@@ -519,7 +558,7 @@ async function prepare(options, paths) {
     const groups = {};
     for (const historyEntries of options.histories) {
       groups[historyEntries] = [];
-      for (let index = 0; index < maxAttached; index += 1) {
+      for (let index = 0; index < maxBound; index += 1) {
         const started = await page.evaluate(
           async ({ pid, title }) => {
             const created = await window.api.sessionRpc.request({
@@ -548,13 +587,16 @@ async function prepare(options, paths) {
     // so every Session must read live now. The run phase must read 0 after a
     // relaunch even though the ledger still holds all of them open.
     const census = await page.evaluate(bindingCensus, { projectId });
-    const expected = options.histories.length * maxAttached;
+    const expected = options.histories.length * maxBound;
     if (census.live !== expected || census.durableOpen !== expected) {
       throw new Error(
         `prepare census disagrees: ${JSON.stringify({ ...census, liveIds: undefined })}`,
       );
     }
     const tripwire = await app.evaluate(tripwireState);
+    if (tripwire.blocked.length + tripwire.chromiumBlocked.length > 0) {
+      throw new Error(`prepare tried to reach the network: ${JSON.stringify(tripwire)}`);
+    }
     fixture = {
       projectId,
       project,
@@ -571,15 +613,7 @@ async function prepare(options, paths) {
   // ---- grow the sidecars, outside the app, with the real runtime ----
   const sidecars = await findSidecars(join(paths.userDataDir, "pi-sessions"));
   const bySession = new Map(sidecars.map((sidecar) => [sidecar.identity.volliSessionId, sidecar]));
-  const vite = await createServer({
-    root: REPO,
-    appType: "custom",
-    server: { middlewareMode: true },
-    optimizeDeps: { noDiscovery: true },
-    logLevel: "error",
-  });
-  try {
-    const generator = await vite.ssrLoadModule(GENERATOR);
+  await withGenerator(async (generator) => {
     const catalogModel = generator.builtinCatalogModel(
       fixture.selection.providerId,
       fixture.selection.modelId,
@@ -619,9 +653,7 @@ async function prepare(options, paths) {
     });
     fixture.sidecars = Object.fromEntries(generated.map((result) => [result.sessionId, result]));
     fixture.generatorTripwire = globalThis.VOLLI_NETWORK_TRIPWIRE?.blocked ?? null;
-  } finally {
-    await vite.close();
-  }
+  });
   await fs.writeFile(paths.fixture, `${JSON.stringify(fixture, null, 2)}\n`);
   execFileSync("cp", ["-cR", paths.live, paths.pristine]);
   return fixture;
@@ -659,9 +691,7 @@ async function runLaunch(options, paths, fixture, arm, meta) {
     const page = await openWindow(app, paths);
     await sleep(options.settleMs);
     const probe = await app.evaluate(installMainProbe);
-    if (!(await app.evaluate(tripwireState)).loaded) {
-      throw new Error("the network tripwire did not load into Electron main");
-    }
+    const tripwireSelf = await assertTripwireLive(app);
     const before = await page.evaluate(bindingCensus, { projectId: fixture.projectId });
 
     // Warm, then an idle window that doubles as the last of the settle, then
@@ -674,7 +704,7 @@ async function runLaunch(options, paths, fixture, arm, meta) {
     const pre = await withFootprints(await app.evaluate(memorySnapshot));
 
     const sessionIds =
-      arm.attached === 0 ? [] : fixture.groups[arm.historyEntries].slice(0, arm.attached);
+      arm.bound === 0 ? [] : fixture.groups[arm.historyEntries].slice(0, arm.bound);
     const hydration = await measuredWindow(app, page, "hydration", options, async () => ({
       perSession: await page.evaluate(hydrateSessions, {
         sessionIds,
@@ -713,6 +743,7 @@ async function runLaunch(options, paths, fixture, arm, meta) {
       fullGcPauseMs: { pre: preGc.pausesMs, post: postGc.pausesMs },
       windows: { idle, hydration, steady },
       tripwire,
+      tripwireSelfTest: tripwireSelf,
     };
     const failures = [];
     if (before.live !== 0) failures.push(`${before.live} Sessions were bound before hydration`);
@@ -724,6 +755,8 @@ async function runLaunch(options, paths, fixture, arm, meta) {
       failures.push(`${unexpectedLive.length} unrequested Sessions bound`);
     if (hydration.perSession.some((entry) => !entry.ok))
       failures.push("a model.select request failed");
+    if (tripwire.blocked.length + tripwire.chromiumBlocked.length > 0)
+      failures.push("something tried to reach the network");
     record.failures = failures;
     return record;
   } finally {
@@ -732,11 +765,6 @@ async function runLaunch(options, paths, fixture, arm, meta) {
 }
 
 // ---- main ------------------------------------------------------------------
-
-/** Latency is re-derived without launches whose 1-minute load exceeded 1.5× the cores. */
-function loadThresholdFor(environment) {
-  return environment.machine.cores * 1.5;
-}
 
 async function main() {
   const options = parseArgs(process.argv);
@@ -751,19 +779,21 @@ async function main() {
 
   let fixture;
   if (options.reuseFixture) {
+    // Every launch deletes and re-clones `live/` inside this root.
+    await assertDisposableRoot(paths.root);
     fixture = JSON.parse(await fs.readFile(paths.fixture, "utf8"));
   } else {
     fixture = await prepare(options, paths);
   }
 
   const arms = [
-    { attached: 0, historyEntries: 0 },
+    { bound: 0, historyEntries: 0 },
     ...options.histories.flatMap((historyEntries) =>
-      options.attached.map((attached) => ({ attached, historyEntries })),
+      options.bound.map((bound) => ({ bound, historyEntries })),
     ),
   ];
   const heaviest = {
-    attached: Math.max(...options.attached),
+    bound: Math.max(...options.bound),
     historyEntries: Math.max(...options.histories),
   };
   const schedule = [{ arm: heaviest, rep: 0, warmup: true }];
@@ -822,7 +852,7 @@ async function main() {
       project: "synthetic git repo, generated TypeScript files",
       files: fixture.files.length,
       selection: fixture.selection,
-      sessionsPerHistory: Math.max(...options.attached),
+      sessionsPerHistory: Math.max(...options.bound),
       histories: Object.fromEntries(
         options.histories.map((historyEntries) => {
           const results = fixture.groups[historyEntries].map((id) => fixture.sidecars[id]);
@@ -845,7 +875,7 @@ async function main() {
       arm: launch.arm,
       failures: launch.failures,
     })),
-    ...aggregateRun(launches, { loadThreshold: loadThresholdFor(environment) }),
+    ...aggregateRun(launches, { loadThreshold: loadThresholdFor(environment.machine.cores) }),
   };
 
   if (options.output) {

@@ -6,28 +6,55 @@
  * (`aggregate.test.mjs`, on the bench lane only).
  *
  * Percentiles are VC-353's nearest-rank (`summarize` from the performance
- * matrix), so a p95 here means what it means in every other desktop baseline.
+ * matrix), so a p95 here means what it means in every other desktop baseline —
+ * including that below 20 samples a nearest-rank p95 IS the maximum. The
+ * tables mark those cells rather than let them pass as a tail estimate.
+ *
  * Two poolings are used and they are not interchangeable:
  *
- * - **Latency and loop-gap samples are pooled** across a arm's repetitions:
+ * - **Latency and loop-gap samples are pooled** across an arm's repetitions:
  *   every IPC round trip and every 10 ms tick gap is one sample, so the p95 is
  *   taken over hundreds or thousands of them.
- * - **Per-launch figures are summarized across launches**: memory, GC totals
- *   and the `monitorEventLoopDelay` histogram's own percentiles are one value
- *   per launch, and a p95 over five launches would only relabel the maximum.
- *   They are reported as median / min / max with `n` launches.
+ * - **Per-launch figures are summarized across launches**: memory, GC totals,
+ *   the `monitorEventLoopDelay` histogram's own percentiles and every
+ *   within-launch delta are one value per launch, reported as median / min /
+ *   max with `n` launches.
+ *
+ * A launch that failed any of the runner's checks (binding census, tripwire,
+ * a refused request) is counted and excluded, never summarized.
  */
 
 import { summarize } from "../performance/run.mjs";
 
 export const WINDOW_NAMES = Object.freeze(["idle", "hydration", "steady"]);
+/** Latency is re-derived without launches whose 1-minute load exceeded this many × cores. */
+export const LOAD_THRESHOLD_PER_CORE = 1.5;
+/** Below this many samples a nearest-rank p95 is the maximum. */
+export const P95_MIN_SAMPLES = 20;
+/** Correlation bin width. Cross-process epoch clocks align only to the millisecond. */
+export const CORRELATION_BIN_MS = 100;
+
 const MIB = 1024 * 1024;
 const round3 = (value) => Math.round(value * 1000) / 1000;
 const round4 = (value) => Math.round(value * 10_000) / 10_000;
 const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
 
+export function loadThresholdFor(cores) {
+  return cores * LOAD_THRESHOLD_PER_CORE;
+}
+
+/**
+ * How many Sessions the arm bound. Runs before the flag was renamed recorded
+ * it as `attached`; every Session in the fixture is attached, and the arm is
+ * about how many are BOUND, so new runs say so.
+ */
+export function boundOf(arm) {
+  return arm.bound ?? arm.attached;
+}
+
 export function armKey(arm) {
-  return arm.attached === 0 ? "control" : `n${arm.attached}-h${arm.historyEntries}`;
+  const bound = boundOf(arm);
+  return bound === 0 ? "control" : `n${bound}-h${arm.historyEntries}`;
 }
 
 /** Median, min and max of one value per launch. */
@@ -70,11 +97,11 @@ export function memoryFigures(snapshot) {
 
 /**
  * Pearson correlation of per-bin maxima: the worst main-loop gap and the worst
- * renderer→main round trip that STARTED in the same bin. Epoch clocks are
- * aligned only to the millisecond across processes, which is why the bins are
- * coarse (100 ms) and why only bins holding both kinds of sample count.
+ * renderer→main round trip that STARTED in the same bin. Only bins holding
+ * both kinds of sample count. Tick gaps, not the `monitorEventLoopDelay`
+ * histogram, carry this: a histogram has no timestamps to bin by.
  */
-export function binnedCorrelation(tickGaps, ipcSamples, binMs = 100) {
+export function binnedCorrelation(tickGaps, ipcSamples, binMs = CORRELATION_BIN_MS) {
   const bins = new Map();
   const bin = (epochMs) => Math.floor(epochMs / binMs);
   for (const [epochMs, gapMs] of tickGaps) {
@@ -112,8 +139,17 @@ export function binnedCorrelation(tickGaps, ipcSamples, binMs = 100) {
   return { bins: pairs.length, pearson };
 }
 
+/** Successful samples only: a failed request's latency measures the failure. */
+export function okSamples(samples) {
+  return samples.filter((sample) => sample[2] === 1);
+}
+
 function latencies(samples) {
-  return samples.filter((sample) => sample[2] === 1).map((sample) => sample[1]);
+  return okSamples(samples).map((sample) => sample[1]);
+}
+
+function p95(values) {
+  return summarize(values)?.p95 ?? Number.NaN;
 }
 
 function aggregateWindow(launches, name) {
@@ -122,7 +158,6 @@ function aggregateWindow(launches, name) {
   const tickGaps = windows.flatMap((window) => window.main.tickGaps);
   const echo = windows.flatMap((window) => window.renderer.echo);
   const rpc = windows.flatMap((window) => window.renderer.rpc);
-  const failures = [...echo, ...rpc].filter((sample) => sample[2] !== 1).length;
   return {
     launches: windows.length,
     wallMs: acrossLaunches(windows.map((window) => window.main.wallMs)),
@@ -136,18 +171,34 @@ function aggregateWindow(launches, name) {
     tickGapMs: summarize(tickGaps.map(([, gap]) => gap)),
     ipcEchoMs: summarize(latencies(echo)),
     sessionRpcMs: summarize(latencies(rpc)),
-    ipcFailures: failures,
+    ipcFailures: echo.length + rpc.length - okSamples(echo).length - okSamples(rpc).length,
     gc: {
       countPerLaunch: acrossLaunches(windows.map((window) => window.main.gc.count)),
       totalMsPerLaunch: acrossLaunches(windows.map((window) => window.main.gc.totalMs)),
       pauseMs: summarize(
-        windows.flatMap((window) => window.main.gc.entries.map((e) => e.durationMs)),
+        windows.flatMap((window) => window.main.gc.entries.map((entry) => entry.durationMs)),
       ),
     },
-    loopVsEcho: binnedCorrelation(
-      tickGaps,
-      echo.filter((sample) => sample[2] === 1),
-    ),
+    loopVsEcho: binnedCorrelation(tickGaps, okSamples(echo)),
+  };
+}
+
+/**
+ * Loop and IPC as DELTAS, paired inside each launch: a window's figure minus
+ * the same launch's idle window. Pairing removes whatever the host was doing
+ * during that launch, which on a shared machine is most of the variance.
+ */
+function windowDeltas(launches, name) {
+  const pairs = launches
+    .map((launch) => [launch.windows.idle, launch.windows[name]])
+    .filter(([idle, window]) => idle !== undefined && window !== undefined);
+  const delta = (read) => acrossLaunches(pairs.map(([idle, window]) => read(window) - read(idle)));
+  return {
+    eventLoopDelayP95Ms: delta((window) => window.main.eventLoopDelay.p95Ms),
+    eventLoopDelayMaxMs: delta((window) => window.main.eventLoopDelay.maxMs),
+    tickGapP95Ms: delta((window) => p95(window.main.tickGaps.map(([, gap]) => gap))),
+    ipcEchoP95Ms: delta((window) => p95(latencies(window.renderer.echo))),
+    sessionRpcP95Ms: delta((window) => p95(latencies(window.renderer.rpc))),
   };
 }
 
@@ -166,18 +217,19 @@ function aggregateMemory(launches) {
   return result;
 }
 
-/** Summarize one arm's non-warm-up launches. */
+/** Summarize one arm's measured, passing launches. */
 export function aggregateArm(arm, launches) {
+  const bound = boundOf(arm);
   const hydrations = launches.flatMap((launch) => launch.windows.hydration?.perSession ?? []);
   return {
     key: armKey(arm),
-    attached: arm.attached,
+    bound,
     historyEntries: arm.historyEntries,
     launches: launches.length,
     boundVerified: launches.every(
       (launch) =>
         launch.bindings.before.live === 0 &&
-        launch.bindings.after.live === arm.attached &&
+        launch.bindings.after.live === bound &&
         launch.bindings.after.unexpectedLive.length === 0,
     ),
     sidecar: {
@@ -214,8 +266,7 @@ export function aggregateArm(arm, launches) {
       appMetricsPost: acrossLaunches(launches.map((launch) => launch.memory.post.metrics.length)),
     },
     // The second forced full GC of each pair: a stop-the-world mark-compact of
-    // what is live, before hydration and after it. Absent from runs taken
-    // before the probe timed it.
+    // what is live, before hydration and after it.
     fullGcPauseMs: {
       pre: acrossLaunches(launches.map((launch) => launch.fullGcPauseMs?.pre?.[1] ?? Number.NaN)),
       post: acrossLaunches(launches.map((launch) => launch.fullGcPauseMs?.post?.[1] ?? Number.NaN)),
@@ -223,13 +274,20 @@ export function aggregateArm(arm, launches) {
     windows: Object.fromEntries(
       WINDOW_NAMES.map((name) => [name, aggregateWindow(launches, name)]),
     ),
+    deltasVsIdle: {
+      hydration: windowDeltas(launches, "hydration"),
+      steady: windowDeltas(launches, "steady"),
+    },
   };
 }
 
-/** Least-squares slope and intercept of y on x. */
+/**
+ * Least-squares slope and intercept of y on x. Fewer than three points is not
+ * a fit — two points always give r² = 1 — so it answers null.
+ */
 export function linearFit(points) {
   const usable = points.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
-  if (usable.length < 2) return null;
+  if (usable.length < 3) return null;
   const n = usable.length;
   const meanX = usable.reduce((sum, [x]) => sum + x, 0) / n;
   const meanY = usable.reduce((sum, [, y]) => sum + y, 0) / n;
@@ -252,16 +310,16 @@ export function linearFit(points) {
  * against the number of bound contexts, the control arm supplying N = 0.
  */
 export function contextCostFits(arms, metric = "mainHeapUsedMiB") {
-  const control = arms.find((arm) => arm.attached === 0);
+  const control = arms.find((arm) => arm.bound === 0);
   const histories = [
-    ...new Set(arms.filter((arm) => arm.attached > 0).map((arm) => arm.historyEntries)),
+    ...new Set(arms.filter((arm) => arm.bound > 0).map((arm) => arm.historyEntries)),
   ];
   return histories
     .toSorted((a, b) => a - b)
     .map((historyEntries) => {
       const points = arms
-        .filter((arm) => arm.attached > 0 && arm.historyEntries === historyEntries)
-        .map((arm) => [arm.attached, arm.memory[metric]?.delta?.median]);
+        .filter((arm) => arm.bound > 0 && arm.historyEntries === historyEntries)
+        .map((arm) => [arm.bound, arm.memory[metric]?.delta?.median]);
       if (control) points.push([0, control.memory[metric]?.delta?.median]);
       return { historyEntries, metric, fit: linearFit(points) };
     });
@@ -277,7 +335,7 @@ function groupByArm(launches) {
   }
   return [...byArm.values()]
     .map(({ arm, launches: group }) => aggregateArm(arm, group))
-    .toSorted((a, b) => a.historyEntries - b.historyEntries || a.attached - b.attached);
+    .toSorted((a, b) => a.historyEntries - b.historyEntries || a.bound - b.bound);
 }
 
 /** The worst 1-minute load average seen at either end of a launch. */
@@ -309,10 +367,16 @@ function loadSensitivity(measured, threshold) {
   };
 }
 
+export function launchFailed(launch) {
+  return (launch.failures?.length ?? 0) > 0;
+}
+
 export function aggregateRun(launches, { loadThreshold = Number.POSITIVE_INFINITY } = {}) {
-  const measured = launches.filter((launch) => !launch.warmup);
+  const nonWarmup = launches.filter((launch) => !launch.warmup);
+  const measured = nonWarmup.filter((launch) => !launchFailed(launch));
   const arms = groupByArm(measured);
   return {
+    excludedFailedLaunches: nonWarmup.length - measured.length,
     arms,
     fits: {
       mainHeapUsedMiB: contextCostFits(arms, "mainHeapUsedMiB"),
@@ -338,6 +402,13 @@ export function aggregateRun(launches, { loadThreshold = Number.POSITIVE_INFINIT
     tripwire: {
       blocked: launches.flatMap((launch) => launch.tripwire?.blocked ?? []),
       chromiumBlocked: launches.flatMap((launch) => launch.tripwire?.chromiumBlocked ?? []),
+      // Runs recorded before the self-test existed carry no result at all; they
+      // are counted apart rather than as failures.
+      selfTestsRecorded: launches.filter((launch) => launch.tripwireSelfTest !== undefined).length,
+      selfTestsPassed: launches.filter(
+        (launch) => launch.tripwireSelfTest?.node === true && launch.tripwireSelfTest?.chromium,
+      ).length,
+      launches: launches.length,
     },
   };
 }

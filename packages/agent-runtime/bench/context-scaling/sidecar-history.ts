@@ -21,7 +21,7 @@
  * with the bench's network tripwire loaded, against a disposable profile.
  */
 
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 
 import {
   createModels,
@@ -38,27 +38,35 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { createPiAgentRuntime } from "../../src/index";
 import type { ModelSelection, RuntimeRecoveryRef, SessionRuntimeSpec } from "@volli/shared";
 
-/** One Session whose sidecar should grow. Ids come from the desktop ledger's own sidecar. */
-export interface HistoryTarget {
+/** Where the runtime runs, and the model it runs as — shared by every entry point here. */
+export interface FixtureRuntime {
+  sessionDataDir: string;
+  workspacePath: string;
+  /** The Session's recorded selection. */
+  model: ModelSelection;
+  /** The catalog entry the desktop resolves that selection to, copied verbatim. */
+  catalogModel: Model<string>;
+}
+
+/** The Volli identity a sidecar is bound to. */
+export interface SidecarIdentityIds {
   sessionId: string;
   rootThreadId: string;
   attachmentId: string;
   projectId: string;
+}
+
+/** One Session whose sidecar should grow. Ids come from the desktop ledger's own sidecar. */
+export interface HistoryTarget extends SidecarIdentityIds {
   recovery: RuntimeRecoveryRef;
   /** Sidecar entries to reach (`kind: "entry"` records; header and value writes excluded). */
   targetEntries: number;
   seed: number;
 }
 
-export interface HistoryOptions {
-  sessionDataDir: string;
-  workspacePath: string;
+export interface HistoryOptions extends FixtureRuntime {
   /** Workspace-relative files the scripted `read` calls open. */
   files: readonly string[];
-  /** The Session's recorded selection. */
-  model: ModelSelection;
-  /** The catalog entry the desktop resolves that selection to, copied verbatim. */
-  catalogModel: Model<string>;
   targets: readonly HistoryTarget[];
   onProgress?: (done: number, total: number, result: HistoryResult) => void;
 }
@@ -289,19 +297,21 @@ function appendCounter(path: string): () => SidecarCounts {
   const counts: SidecarCounts = { entries: 0, messages: 0, customEntries: 0, bytes: 0 };
   let offset = 0;
   return () => {
-    const size = statSync(path).size;
-    if (size > offset) {
-      const buffer = Buffer.alloc(size - offset);
-      const handle = openSync(path, "r");
-      try {
-        readSync(handle, buffer, 0, buffer.length, offset);
-      } finally {
-        closeSync(handle);
+    // Stat the descriptor we read from, not the path: one open file answers
+    // both questions, so nothing can change between them.
+    const handle = openSync(path, "r");
+    try {
+      const size = fstatSync(handle).size;
+      if (size > offset) {
+        const buffer = Buffer.alloc(size - offset);
+        const read = readSync(handle, buffer, 0, buffer.length, offset);
+        const complete = buffer.subarray(0, read).lastIndexOf(0x0a) + 1;
+        countLines(buffer.subarray(0, complete).toString("utf8"), counts);
+        offset += complete;
+        counts.bytes = offset;
       }
-      const complete = buffer.lastIndexOf(0x0a) + 1;
-      countLines(buffer.subarray(0, complete).toString("utf8"), counts);
-      offset += complete;
-      counts.bytes = offset;
+    } finally {
+      closeSync(handle);
     }
     return { ...counts };
   };
@@ -333,7 +343,7 @@ function fauxRuntime(sessionDataDir: string, catalogModel: Model<string>) {
 }
 
 function projectSpec(
-  target: Pick<HistoryTarget, "sessionId" | "rootThreadId" | "attachmentId" | "projectId">,
+  target: SidecarIdentityIds,
   workspacePath: string,
   model: ModelSelection,
   recovery: RuntimeRecoveryRef | undefined,
@@ -362,13 +372,9 @@ function projectSpec(
  * standalone attach profile uses this; the Electron bench gets its sidecars
  * from the app's own `sessions.attach`.
  */
-export async function createSidecar(options: {
-  sessionDataDir: string;
-  workspacePath: string;
-  model: ModelSelection;
-  catalogModel: Model<string>;
-  identity: Pick<HistoryTarget, "sessionId" | "rootThreadId" | "attachmentId" | "projectId">;
-}): Promise<RuntimeRecoveryRef> {
+export async function createSidecar(
+  options: FixtureRuntime & { identity: SidecarIdentityIds },
+): Promise<RuntimeRecoveryRef> {
   const { runtime } = fauxRuntime(options.sessionDataDir, options.catalogModel);
   const handle = await runtime.startSession(
     projectSpec(options.identity, options.workspacePath, options.model, undefined),
@@ -380,16 +386,9 @@ export async function createSidecar(options: {
 }
 
 /** Re-attach to an existing sidecar and close it again: one Pi rehydration. */
-export async function reattachOnce(options: {
-  sessionDataDir: string;
-  workspacePath: string;
-  model: ModelSelection;
-  catalogModel: Model<string>;
-  target: Pick<
-    HistoryTarget,
-    "sessionId" | "rootThreadId" | "attachmentId" | "projectId" | "recovery"
-  >;
-}): Promise<number> {
+export async function reattachOnce(
+  options: FixtureRuntime & { target: SidecarIdentityIds & { recovery: RuntimeRecoveryRef } },
+): Promise<number> {
   const { runtime } = fauxRuntime(options.sessionDataDir, options.catalogModel);
   const started = performance.now();
   const handle = await runtime.startSession(
