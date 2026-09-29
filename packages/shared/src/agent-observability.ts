@@ -1,6 +1,9 @@
 /**
  * Metadata-only observability vocabulary for the Agent Runtime (VC-119).
  *
+ * The Agent Runtime emits almost all of it. The one exception is
+ * {@link TurnQueueEvent}, which only the Session runtime can measure (VC-455).
+ *
  * A side channel, never a participant: an {@link ObservabilitySink} may watch a
  * Session run, but nothing it does — or fails to do — can decide whether an
  * observation is persisted, whether a tool is allowed, or whether a turn
@@ -118,16 +121,20 @@ export interface TurnEvent {
  * {@link TurnEvent.durationMs} starts when the executor opens the turn, so
  * everything in front of that — waiting behind the Session's previous message,
  * a Session attach, the executor's own pre-turn work — was invisible. The
- * Session runtime is the one layer that sees both ends on one clock: it accepts
- * the message into its per-Session admission queue, and it records the
- * executor's `turn.started` fact that releases that admission. So it, not the
- * executor, emits this.
+ * Session runtime is the one layer that sees both ends on one clock: it
+ * receives the message into its per-Session admission queue, and it records
+ * the executor's `turn.started` fact that releases that admission. So it, not
+ * the executor, emits this.
+ *
+ * "Received" is the Session runtime receiving the Command, which is not a
+ * Receipt's `accepted` outcome, and once clients and the runtime run apart it
+ * is not the moment a person pressed send either.
  *
  * A separate envelope rather than a field on {@link TurnEvent} because the two
- * are measured by different layers: the executor's reducer never sees input
- * acceptance, and the Session runtime never sees the executor's run id. That
- * is also why `runId` is normally absent here — the envelope is an aggregate
- * measurement, not a span of a specific run.
+ * are measured by different layers: the executor's reducer never sees the
+ * Command arrive, and the Session runtime never sees the executor's run id.
+ * That is also why `runId` is normally absent here — the envelope is an
+ * aggregate measurement, not a span of a specific run.
  *
  * Emitted only when the runtime measured it: a message that joined a turn
  * already running, a turn replayed from recovery, or a turn nobody's admission
@@ -135,7 +142,7 @@ export interface TurnEvent {
  */
 export interface TurnQueueEvent {
   kind: "turn-queue";
-  /** Input accepted by the Session runtime → the turn it started opened. */
+  /** Message received by the Session runtime → the turn it started opened. */
   queuedMs: number;
   runId?: string;
 }
@@ -145,13 +152,13 @@ export interface TurnQueueEvent {
  *
  * Both readings come from one caller's clock; this function exists so the rule
  * — a backwards clock or a non-finite reading is unmeasured, not zero — has one
- * definition that the Session runtime and the VC-441 fixture share.
+ * definition, which the Session runtime uses and the VC-441 fixture reuses.
  */
 export function turnQueueEvent(input: {
-  acceptedAt: number;
+  receivedAt: number;
   turnStartedAt: number;
 }): TurnQueueEvent | null {
-  const queuedMs = measuredDuration(input.turnStartedAt - input.acceptedAt);
+  const queuedMs = measuredDuration(input.turnStartedAt - input.receivedAt);
   return queuedMs === undefined ? null : { kind: "turn-queue", queuedMs };
 }
 
@@ -252,8 +259,11 @@ export interface CompactionEvent {
    * The reducer's first `compaction-progress` for this reason → this outcome
    * (VC-455). Compaction is synchronous-heavy work on the same event loop as
    * every other Session's turn, so it is worth seeing apart from the turn it
-   * sits inside. Absent when no progress was seen — a `checkpoint` failure runs
-   * no work, and a reducer attached after the work began saw only its end.
+   * sits inside. A compaction whose work threw closes its progress before its
+   * failure is recorded, so its span ends at that `finished` marker instead.
+   * Absent when no progress was seen — a `checkpoint` failure runs no work, a
+   * failure before the work started has none, and a reducer attached after the
+   * work began saw only its end.
    */
   durationMs?: number;
   runId?: string;
@@ -351,10 +361,20 @@ export class ObservabilityReducer {
   /**
    * When the first `compaction-progress` for each reason arrived. Keyed by
    * reason because that is all a progress observation carries, and the runtime
-   * runs at most one compaction at a time; a `finished` progress with no
-   * outcome (Pi found nothing to compact, or the work threw) forgets it.
+   * runs at most one compaction at a time.
    */
   #compactionStartedAt = new Map<CompactionReason, number>();
+  /**
+   * Work that ended with a `finished` progress instead of an outcome.
+   *
+   * Two runtime paths do that: Pi found nothing to compact (no outcome
+   * follows), and the work threw (the failure is recorded right after, by the
+   * caller that caught it). Only the second has an outcome to attach the span
+   * to, and it is the very next observation — so the span is offered to
+   * exactly that one and discarded by anything else, rather than being kept
+   * around for some later, unrelated failure to claim.
+   */
+  #finishedCompaction: { reason: CompactionReason; durationMs: number } | null = null;
 
   /**
    * An explicit field, not a constructor parameter property.
@@ -372,6 +392,8 @@ export class ObservabilityReducer {
   }
 
   reduce(observation: RuntimeObservation): ObservabilityEvent | null {
+    const finishedCompaction = this.#finishedCompaction;
+    this.#finishedCompaction = null;
     switch (observation.kind) {
       case "turn": {
         if (observation.state === "started") {
@@ -434,7 +456,11 @@ export class ObservabilityReducer {
         const startedAt = this.#compactionStartedAt.get(observation.reason);
         this.#compactionStartedAt.delete(observation.reason);
         const durationMs =
-          startedAt === undefined ? undefined : measuredDuration(this.#now() - startedAt);
+          startedAt !== undefined
+            ? measuredDuration(this.#now() - startedAt)
+            : finishedCompaction?.reason === observation.reason
+              ? finishedCompaction.durationMs
+              : undefined;
         const measured = durationMs === undefined ? {} : { durationMs };
         if (observation.state === "failed") {
           return { kind: "compaction", outcome: "failed", reason: observation.reason, ...measured };
@@ -456,7 +482,13 @@ export class ObservabilityReducer {
             this.#compactionStartedAt.set(observation.reason, this.#now());
           }
         } else {
+          const startedAt = this.#compactionStartedAt.get(observation.reason);
           this.#compactionStartedAt.delete(observation.reason);
+          const durationMs =
+            startedAt === undefined ? undefined : measuredDuration(this.#now() - startedAt);
+          if (durationMs !== undefined) {
+            this.#finishedCompaction = { reason: observation.reason, durationMs };
+          }
         }
         return null;
       case "attachment":

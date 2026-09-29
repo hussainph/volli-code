@@ -394,8 +394,10 @@ export function analyzeTurn(input: {
     terminal?.event.kind === "turn" ? (terminal.event.durationMs ?? null) : null;
   const firstMessageToCompletionMs =
     completionAt === undefined ? null : round(completionAt - input.submittedAt);
-  // Read from VC-119's own turn-queue envelope, not from the fixture's clock:
-  // absent means the queue was not measured, never that it was zero.
+  // Read from the turn-queue envelope rather than by subtracting two fixture
+  // timestamps, so a missing envelope reads as unmeasured, never as zero. In
+  // this fixture the envelope still times the fixture's own dispatch timer,
+  // not a Volli queue (see the file header).
   const turnQueues = input.events.flatMap(({ event }) =>
     event.kind === "turn-queue" ? [event] : [],
   );
@@ -689,9 +691,10 @@ export async function runScriptedTurn(input: {
   await scheduledTimer(submittedAt + DISPATCH_DELAY_MS, "dispatch", timerLateness);
   const turnStartedAt = performance.now();
   await observe({ kind: "turn", state: "started", turnId });
-  // The Session runtime's measurement, built by the same function it uses. The
-  // fixture has no admission queue, so what this times is its dispatch timer.
-  const queued = turnQueueEvent({ acceptedAt: submittedAt, turnStartedAt });
+  // Built by the same function the Session runtime uses, but around the
+  // fixture's own dispatch timer: there is no admission queue here, so this is
+  // not a measurement of Volli (VC-456 runs the real SessionRuntime path).
+  const queued = turnQueueEvent({ receivedAt: submittedAt, turnStartedAt });
   if (queued !== null) sink.record({ ...queued, runId });
   const wrappedStream = instrumentStreamFn(standInStreamFn(timerLateness), {
     sink,
@@ -962,13 +965,13 @@ function formatMarkdown(report: {
     `Fixture: \`${report.fixtureVersion}\` · generated ${report.generatedAt}.\n\n` +
     `Reproduction: \`pnpm -C packages/agent-runtime bench:turn-to-completion -- --output ../../performance-results/vc-441-agent-turn-time --repetitions ${repetitions} --concurrencies ${concurrencies.join(",")}\`.\n\n` +
     `"Concurrent" is the number of scripted turns in flight at once in one Node process, each standing in for one working Session. No Volli Session, Session runtime queue, ledger, or agent loop is created. The runner starts ${repetitions} measured waves after ${WARMUP_WAVES} discarded warm-up wave(s) at each concurrency. Summary values use individual completed turns as samples; turns in a wave share one host interval and are not independent. Percentiles are nearest-rank, using rank ceil(0.95 × n) for p95.\n\n` +
-    `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Submission → turn start p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Compaction p50 / p95 | Unaccounted gap (runtime turn) p50 / p95 | Unaccounted gap (first message) p50 / p95 | Event-loop delay p95 / max (ms) | Authority timer lateness min / p50 / p95 (ms, signed) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
+    `| Concurrent turns | Turns (n) | Waves | First message → completion p50 / p95 | Runtime turn p50 / p95 | Fixture dispatch → turn start (turn-queue, synthetic) p50 / p95 | Provider attempt duration p50 / p95 | TTFT p50 / p95 | read tool per-turn p50 / p95 | bash tool per-turn p50 / p95 | MCP-like batch p50 / p95 | Authority wait p50 / p95 | Compaction p50 / p95 | Unaccounted gap (runtime turn) p50 / p95 | Unaccounted gap (first message) p50 / p95 | Event-loop delay p95 / max (ms) | Authority timer lateness min / p50 / p95 (ms, signed) | Runner CPU (% one core) | Host load avg 1m | Peak runner RSS (MiB) |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${arms}\n\n` +
     `## Method and limits\n\n` +
     `- Each scripted turn uses the real VC-119 \`instrumentStreamFn\`, \`ObservabilityReducer\`, and \`teeObservationsToSink\`. The provider stand-in is an in-process Pi event stream driven by fixed local timers; it opens no socket and makes no provider request. The same script runs at concurrency ${concurrencies.join(", ")}.\n` +
     `- Each turn scripts ${ATTEMPT_PLAN.length} model attempts (${attemptShape}; the error is a synthetic invalid request), ${TOOL_IDS.length} tools in one tool round (CPU-fixture \`read\` and \`bash\`, plus a latency-bound MCP-like batch whose children wait ${MCP_BATCH_LATENCIES_MS.join("/")} ms concurrently on in-memory timers), a ${AUTHORITY_WAIT_MS} ms authority wait, one overflow-compaction event, a ${RETRY_BACKOFF_MS} ms retry backoff, and a ${DISPATCH_DELAY_MS} ms dispatch timer. The batch's unknown native name is reported only as the bounded \`fetch-url\` activity class. Attempt, tool, tool-round, wait, compaction, and retry counts and the causal event order are checked against the script.\n` +
     `- The MCP-like batch is not a proxy for real MCP/serverless quotas or a browser-backed app tool; do not extrapolate the \`read\`/\`bash\` figures to those tools.\n` +
     `- Provider-attempt duration and TTFT are the runtime instrument's measurements of the stand-in. Timer lateness is signed per timer (negative = Node fired it before its \`performance.now()\` target) and reported per timer kind in \`benchmark.json\`; it and Node's event-loop-delay histogram are local host-delay indicators and are not subtracted from provider duration. CPU, RSS, and heap are for the benchmark runner process—not Electron or a production Session.\n` +
-    `- Compaction time is the VC-119 compaction envelope's \`durationMs\` (VC-455): the real reducer times the overflow compaction from its \`compaction-progress\` marker to its outcome. Submission → turn start is the VC-119 \`turn-queue\` envelope's \`queuedMs\`, built by the same \`turnQueueEvent\` the Session runtime emits it with; because this fixture has no Session runtime, the queue it times is only its own ${DISPATCH_DELAY_MS} ms dispatch timer, not Volli's admission queue or an attach (VC-456 runs the real path).\n` +
+    `- Compaction time is the VC-119 compaction envelope's \`durationMs\` (VC-455): the real reducer times the overflow compaction from its \`compaction-progress\` marker to its outcome. Fixture dispatch → turn start is the VC-119 \`turn-queue\` envelope's \`queuedMs\`, built by the same \`turnQueueEvent\` the Session runtime emits it with; because this fixture has no Session runtime, the queue it times is only its own ${DISPATCH_DELAY_MS} ms dispatch timer, not Volli's admission queue or an attach (VC-456 runs the real path).\n` +
     `- Unaccounted gap (runtime turn) is runtime-turn wall time minus the union of known provider, tool-execution, authority-wait and compaction intervals, so retry backoff and orchestration are what remain. Unaccounted gap (first message) is first message → completion minus the same union plus the turn-queue interval. Missing spans make both incomplete; absent values are null, never zero.\n` +
     `- The request context, stream deltas, error message, tool subject, input and output all carry a private-content canary; none of it reaches the output. The telemetry exporter stays off; no Session database, collector, or person’s profile is read.\n` +
     `- These results describe only this synthetic timer/CPU workload on the recorded host. They cannot establish real provider inference time, remote/provider queueing, quotas/rate limits, network variation, production Session resource costs, or how real tool commands scale.\n\n` +

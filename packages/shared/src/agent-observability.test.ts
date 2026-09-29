@@ -512,12 +512,14 @@ describe("ObservabilityReducer compaction duration (VC-455)", () => {
       tokensBefore: 2,
       tokensAfter: 1,
     };
-    // Pi found nothing to compact: progress finished, no outcome followed.
+    // Pi found nothing to compact: progress finished, no outcome followed, and
+    // the Session moved on to something else.
     reducer.reduce({ kind: "compaction-progress", state: "started", reason: "manual" });
     tick = 10;
     expect(
       reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "manual" }),
     ).toBeNull();
+    reducer.reduce({ kind: "turn", state: "started", turnId: "t1" });
     tick = 500;
     expect(reducer.reduce(compacted)).not.toHaveProperty("durationMs");
     // A measured outcome consumes its start, so a replay has no duration.
@@ -525,6 +527,42 @@ describe("ObservabilityReducer compaction duration (VC-455)", () => {
     tick = 530;
     expect(reducer.reduce(compacted)).toMatchObject({ durationMs: 30 });
     expect(reducer.reduce(compacted)).not.toHaveProperty("durationMs");
+  });
+
+  it("times work that threw by its finished marker, for the failure recorded right after", () => {
+    // The runtime's own order when a threshold summary throws: it closes the
+    // progress marker, rethrows, and the caller that catches records the
+    // failure. The work ran; its span ends where the marker closed.
+    let tick = 0;
+    const reducer = new ObservabilityReducer(() => tick);
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "threshold" });
+    tick = 30;
+    reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "threshold" });
+    tick = 90;
+    expect(
+      reducer.reduce({
+        kind: "compaction",
+        state: "failed",
+        reason: "threshold",
+        message: SENSITIVE,
+      }),
+    ).toEqual({ kind: "compaction", outcome: "failed", reason: "threshold", durationMs: 30 });
+  });
+
+  it("offers a finished span to the next outcome of the same reason only", () => {
+    let tick = 0;
+    const reducer = new ObservabilityReducer(() => tick);
+    const failed = (reason: "threshold" | "overflow") =>
+      reducer.reduce({ kind: "compaction", state: "failed", reason, message: "x" });
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "threshold" });
+    tick = 30;
+    reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "threshold" });
+    expect(failed("overflow")).not.toHaveProperty("durationMs");
+    // Consumed by the first outcome it met, whether or not it matched.
+    expect(failed("threshold")).not.toHaveProperty("durationMs");
+    // A finish it never saw start leaves nothing to offer.
+    reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "threshold" });
+    expect(failed("threshold")).not.toHaveProperty("durationMs");
   });
 
   it("refuses a duration from a clock that stepped backwards", () => {
@@ -535,26 +573,34 @@ describe("ObservabilityReducer compaction duration (VC-455)", () => {
     expect(
       reducer.reduce({ kind: "compaction", state: "failed", reason: "overflow", message: "x" }),
     ).not.toHaveProperty("durationMs");
+    // Nor from a finished marker read on that clock.
+    tick = 100;
+    reducer.reduce({ kind: "compaction-progress", state: "started", reason: "overflow" });
+    tick = 90;
+    reducer.reduce({ kind: "compaction-progress", state: "finished", reason: "overflow" });
+    expect(
+      reducer.reduce({ kind: "compaction", state: "failed", reason: "overflow", message: "x" }),
+    ).not.toHaveProperty("durationMs");
   });
 });
 
 describe("turnQueueEvent (VC-455)", () => {
-  it("measures acceptance to turn start as a bare duration", () => {
-    expect(turnQueueEvent({ acceptedAt: 1_000, turnStartedAt: 1_240 })).toEqual({
+  it("measures a message's arrival to its turn's start as a bare duration", () => {
+    expect(turnQueueEvent({ receivedAt: 1_000, turnStartedAt: 1_240 })).toEqual({
       kind: "turn-queue",
       queuedMs: 240,
     });
     // A turn that opened in the same tick waited zero, which is a measurement.
-    expect(turnQueueEvent({ acceptedAt: 5, turnStartedAt: 5 })).toEqual({
+    expect(turnQueueEvent({ receivedAt: 5, turnStartedAt: 5 })).toEqual({
       kind: "turn-queue",
       queuedMs: 0,
     });
   });
 
   it("reports nothing, never zero, when the clock cannot be trusted", () => {
-    expect(turnQueueEvent({ acceptedAt: 1_000, turnStartedAt: 999 })).toBeNull();
-    expect(turnQueueEvent({ acceptedAt: Number.NaN, turnStartedAt: 1 })).toBeNull();
-    expect(turnQueueEvent({ acceptedAt: 0, turnStartedAt: Number.POSITIVE_INFINITY })).toBeNull();
+    expect(turnQueueEvent({ receivedAt: 1_000, turnStartedAt: 999 })).toBeNull();
+    expect(turnQueueEvent({ receivedAt: Number.NaN, turnStartedAt: 1 })).toBeNull();
+    expect(turnQueueEvent({ receivedAt: 0, turnStartedAt: Number.POSITIVE_INFINITY })).toBeNull();
   });
 });
 

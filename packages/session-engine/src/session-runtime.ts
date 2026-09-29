@@ -751,17 +751,24 @@ const OVERLAY_CACHE_LIMIT = 8;
 /**
  * The message a Session's admission is currently held for.
  *
- * `acceptedAt` is read when {@link DefaultSessionRuntime.command} first sees
+ * `receivedAt` is read when {@link DefaultSessionRuntime.command} first sees
  * the message — before it waits behind the Session's previous message, before
  * any attach — and `dispatched` turns true only once this very command is handed
  * to the executor. A `turn.started` that releases the admission is this
  * message's turn only when it arrives after that hand-off; the queue time is
- * then measured on this runtime's one clock (VC-455).
+ * then measured on this runtime's one clock (VC-455). "Received", not
+ * "accepted": acceptance is a Receipt outcome, and this is only arrival.
+ *
+ * Known limit: the executor does not say which Command opened a turn. If an
+ * unrelated turn start (an `executor.retry`) releases one message early, the
+ * next message can be dispatched while the first one's own turn is still to
+ * open, and that turn is then measured as the second message's. That needs a
+ * turn start that names its Command, which the runtime port does not carry.
  */
 interface MessageAdmission {
   readonly commandId: string;
   /** Null when no observability sink is attached: nothing to measure for. */
-  readonly acceptedAt: number | null;
+  readonly receivedAt: number | null;
   readonly release: () => void;
   dispatched: boolean;
 }
@@ -872,15 +879,15 @@ class DefaultSessionRuntime implements SessionRuntime {
       "sessionId" in request && request.command.kind === "message.submit"
         ? Promise.withResolvers<void>()
         : null;
-    // Input acceptance, for the queue measurement: read here, before this
-    // message waits behind anything, so that wait is inside the span.
+    // The message's arrival, for the queue measurement: read here, before it
+    // waits behind anything, so that wait is inside the span.
     const held: MessageAdmission | null =
       admission === null
         ? null
         : {
             commandId: request.commandId,
             // Only a runtime with somewhere to send it reads the clock for it.
-            acceptedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
+            receivedAt: this.ports.observability === undefined ? null : this.ports.clock.now(),
             release: admission.resolve,
             dispatched: false,
           };
@@ -934,10 +941,10 @@ class DefaultSessionRuntime implements SessionRuntime {
    */
   #recordTurnQueue(sessionId: string): void {
     const admission = this.#messageAdmissions.get(sessionId);
-    if (admission === undefined || !admission.dispatched || admission.acceptedAt === null) return;
+    if (admission === undefined || !admission.dispatched || admission.receivedAt === null) return;
     try {
       const event = turnQueueEvent({
-        acceptedAt: admission.acceptedAt,
+        receivedAt: admission.receivedAt,
         turnStartedAt: this.ports.clock.now(),
       });
       if (event !== null) this.ports.observability?.record(event);

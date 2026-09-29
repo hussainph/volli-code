@@ -235,8 +235,11 @@ export function observabilitySpan(event: ObservabilityEvent): ObservabilitySpan 
         attributes: present({ ...runId, [`${VOLLI}.turn.outcome`]: event.outcome }),
       };
     // The wait in front of a turn, measured by the Session runtime rather than
-    // the executor (VC-455) — its own span, because it ends where the turn
-    // span begins and belongs to neither the turn nor the provider.
+    // the executor (VC-455). Its own span, because it belongs to neither the
+    // turn nor the provider. The Session runtime has no run id, so the span is
+    // not in its turn's trace — like a `dropped` span, it is placed on the
+    // timeline ending where the turn began, and the histogram below is what
+    // aggregates it.
     case "turn-queue":
       return {
         name: "volli.agent.turn.queue",
@@ -415,7 +418,9 @@ function metric(
 
 /**
  * The bucket boundaries the GenAI convention prescribes for the two metrics
- * whose names Volli borrows.
+ * whose names Volli borrows. Volli's own duration histograms (compaction and
+ * turn queue, VC-455) reuse the duration boundaries, which span the same
+ * tens-of-milliseconds to tens-of-seconds range those waits live in.
  *
  * Quoted from the same convention revision as the attribute names. Without
  * them the SDK applies its own default boundaries, which are tuned for

@@ -8810,8 +8810,10 @@ describe("compacting because somebody asked", () => {
     // refused message — the one thing this path promises never to do.
     const attachment = fixture();
     const calls: ProviderCall[] = [];
+    const events: ObservabilityEvent[] = [];
     const runtime = createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
+      observability: { record: (event) => void events.push(event) },
       models: modelsWithStream(
         scriptedStream([
           recording(calls, settlesHolding("first answer", 200_000)),
@@ -8839,6 +8841,11 @@ describe("compacting because somebody asked", () => {
       expect.objectContaining({ state: "failed", reason: "threshold" }),
       expect.objectContaining({ state: "failed", reason: "threshold" }),
     ]);
+    // It threw before any summary work began, so there is no span to report
+    // (VC-455): the failures are exported without a duration, not with zero.
+    const exported = events.filter((event) => event.kind === "compaction");
+    expect(exported).toHaveLength(2);
+    for (const event of exported) expect(event).not.toHaveProperty("durationMs");
     expect(attentions(attachment.observations)).toEqual([]);
     await handle.close();
   });

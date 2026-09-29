@@ -5183,7 +5183,7 @@ function submit(runtime: SessionRuntime, sessionId: string, id: string, text = "
 }
 
 describe("SessionRuntime turn queue time (VC-455)", () => {
-  it("measures acceptance, the wait behind a busy Session, and dispatch, up to the turn's start", async () => {
+  it("measures arrival, the wait behind a busy Session, and dispatch, up to the turn's start", async () => {
     const clock = manualClock();
     const { events, sink } = recordingSink();
     const { runtime, adapter } = composition({ clock, observability: sink });
@@ -5197,7 +5197,7 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
     clock.at = 1_000;
     const first = submit(runtime, sessionId, "first", "PRIVATE-first-message");
     await dispatches[0]!.promise;
-    // Accepted now, then held behind the first message's admission.
+    // Received now, then held behind the first message's admission.
     clock.at = 1_010;
     const second = submit(runtime, sessionId, "second", "PRIVATE-second-message");
     clock.at = 1_040;
@@ -5261,16 +5261,86 @@ describe("SessionRuntime turn queue time (VC-455)", () => {
     expect(events).toEqual([]);
   });
 
-  it("measures nothing for a message that joined a running turn, or for a replayed start", async () => {
+  it("measures nothing for a message that joined a running turn", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const { runtime, adapter } = composition({ clock, observability: sink });
+    const sessionId = await createAndAttach(runtime);
+    const dispatches = [new Gate(), new Gate()];
+    let dispatchCount = 0;
+    adapter.dispatchStarted = () => dispatches[dispatchCount++]?.resolve();
+    const releaseDispatch = new Gate();
+    adapter.dispatchGate = releaseDispatch.promise;
+
+    const running = submit(runtime, sessionId, "running");
+    await dispatches[0]!.promise;
+    clock.at = 1_010;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-running" });
+    // Received while that turn runs, and handed to the executor, which folds it
+    // into the running turn: no turn of its own ever opens for it. The running
+    // turn's end is not its start.
+    clock.at = 1_020;
+    const joined = submit(runtime, sessionId, "joined");
+    await dispatches[1]!.promise;
+    clock.at = 1_050;
+    await adapter.emit({ kind: "turn", state: "completed", turnId: "turn-running" });
+    releaseDispatch.resolve();
+    await Promise.all([running, joined]);
+
+    expect(events).toEqual([{ kind: "turn-queue", queuedMs: 10 }]);
+  });
+
+  it("does not credit a message with a turn that opened before its own dispatch", async () => {
+    const clock = manualClock();
+    const { events, sink } = recordingSink();
+    const store = createInMemoryTranscriptArtifactStore();
+    const holds: Array<{ started: Gate; release: Gate }> = [];
+    const { runtime, adapter } = composition({
+      clock,
+      observability: sink,
+      artifacts: {
+        write: async (artifact) => {
+          const hold = holds.shift();
+          if (hold !== undefined) {
+            hold.started.resolve();
+            await hold.release.promise;
+          }
+          return store.write(artifact);
+        },
+        read: (reference) => store.read(reference),
+      },
+    });
+    const sessionId = await createAndAttach(runtime);
+    const first = { started: new Gate(), release: new Gate() };
+    const second = { started: new Gate(), release: new Gate() };
+    holds.push(first, second);
+
+    const firstMessage = submit(runtime, sessionId, "first");
+    await first.started.promise;
+    // An unrelated start releases the first message early, so the second is
+    // admitted while the first has still not reached the executor.
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-unrelated" });
+    const secondMessage = submit(runtime, sessionId, "second");
+    await second.started.promise;
+    first.release.resolve();
+    await firstMessage;
+    // The first message's own turn opens while the second is still being
+    // recorded. It is not the second message's turn.
+    clock.at = 1_070;
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-first" });
+    second.release.resolve();
+    await secondMessage;
+
+    expect(adapter.dispatches).toBe(2);
+    expect(events).toEqual([]);
+  });
+
+  it("measures nothing for a replayed start", async () => {
     const clock = manualClock();
     const { events, sink } = recordingSink();
     const { runtime, adapter } = composition({ clock, observability: sink });
     const sessionId = await createAndAttach(runtime);
     const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
-
-    // Delivered into a turn already running: the executor opens no turn for it.
-    await submit(runtime, sessionId, "joined");
-    expect(adapter.dispatches).toBe(1);
 
     // A start recovered by reconciliation is history, not a clock reading.
     const dispatchStarted = new Gate();

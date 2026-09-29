@@ -315,7 +315,8 @@ describe("VC-441 fixture turn analysis", () => {
     expect(sample.authorityWaitCount).toBe(1);
     expect(sample.authorityWaitMs).toBeGreaterThan(0);
     expect(sample.compactionCount).toBe(1);
-    // VC-455: both new measurements come from VC-119's envelopes.
+    // VC-455: both are read from VC-119 envelopes. Compaction is timed by the
+    // real reducer; the queue envelope still wraps the fixture's dispatch timer.
     expect(sample.compactionDurationMs).toBeGreaterThan(0);
     expect(sample.submissionToTurnStartMs).not.toBeNull();
     expect(sample.firstMessageUnaccountedGapMs).not.toBeNull();
