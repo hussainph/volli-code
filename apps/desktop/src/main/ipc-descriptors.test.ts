@@ -1513,6 +1513,65 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  // VC-30: the read receipt a person marks, and the peek card's one pull.
+  describe("volli:session-read-set", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-read-set"];
+
+    it("accepts a mark in either direction", () => {
+      expect(guard([{ sessionId: "s1", unread: true }])).toBe(true);
+      expect(guard([{ sessionId: "s1", unread: false }])).toBe(true);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ sessionId: "s1", unread: true }, "extra"])).toBe(false);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a missing or empty sessionId", () => {
+      expect(guard([{ sessionId: 1, unread: true }])).toBe(false);
+      expect(guard([{ sessionId: "", unread: true }])).toBe(false);
+    });
+
+    it("rejects an unread that is not a boolean", () => {
+      expect(guard([{ sessionId: "s1", unread: "yes" }])).toBe(false);
+      expect(guard([{ sessionId: "s1" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session read state");
+    });
+  });
+
+  describe("volli:session-peek-content", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-peek-content"];
+
+    it("accepts a Session id — the whole ask", () => {
+      expect(guard([{ sessionId: "s1" }])).toBe(true);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ sessionId: "s1" }, "extra"])).toBe(false);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard(["s1"])).toBe(false);
+    });
+
+    it("rejects a missing or empty sessionId", () => {
+      expect(guard([{ sessionId: 1 }])).toBe(false);
+      expect(guard([{ sessionId: "" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session peek");
+    });
+  });
+
   // VC-269: the person's stop.
   describe("volli:session-stop", () => {
     const { guard, invalidError } = DATA_IPC["volli:session-stop"];
