@@ -124,7 +124,7 @@ export type HarnessConfigInjection =
    * — and `cursor-agent` reads hooks from somewhere else entirely, so every hook
    * Volli wrote through this kind was unreachable. The generic name is what let
    * the mistake survive unexamined. No built-in declares it any more;
-   * `docs/plans/harness-architecture-v2.md` §1 replaces it with one BYO
+   * harness architecture v2 replaces it with one BYO
    * mechanism (`hook-file`), and until that lands this stays, because a
    * registered manifest may already declare it.
    */

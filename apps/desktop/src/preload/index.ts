@@ -1013,7 +1013,7 @@ const api = {
     },
   },
   /**
-   * Bring-your-own harness trust (docs/plans/harness-events.md §Trust). A
+   * Bring-your-own harness trust. A
    * manifest on disk declares a command line Volli will execute and stays inert
    * until a human confirms it; these two calls are the question and the answer.
    */
@@ -1509,7 +1509,7 @@ const api = {
       override: ProjectThemeOverride | null,
     ): Promise<ThemeSetProjectResult> => invoke("volli:theme-set-project", { projectId, override }),
     /**
-     * The canvas (docs/plans/arc-theming-migration.md): five writes, no reads.
+     * The canvas: five writes, no reads.
      * Everything these persist comes back through `data.bootstrap()` — the
      * global canvas and appearance as `app_state` rows, a project's as columns
      * on its row — so there is deliberately no `canvas.state()` twin.

@@ -1,6 +1,6 @@
 /**
  * WHICH TABS EACH PANE DRAWS — the surface's one strip, cut into per-pane
- * strips (VC-202, `docs/plans/split-view.md` §3).
+ * strips (VC-202).
  *
  * A split surface still composes and arranges ONE list of tabs: the same
  * descriptors, built the same way, whether or not anything is split. All the

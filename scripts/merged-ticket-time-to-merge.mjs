@@ -19,9 +19,9 @@
  * READ-ONLY, BY CONSTRUCTION. The ledger is opened with better-sqlite3's
  * `readonly` flag on the live database — never a copy, never a write, no
  * migration, no settings touched, no Session disturbed — and git is used only
- * through `log`/`rev-list`. `--write` writes nothing but this repository's own
- * `docs/research/perf/` artifacts. The one measurement it will never take is a
- * live workload: no inference is launched, so nothing here costs a token.
+ * through `log`/`rev-list`. `--write` writes nothing but its own artifacts
+ * under the gitignored `performance-results/`. The one measurement it will
+ * never take is a live workload: no inference is launched, so nothing here costs a token.
  *
  * WHY THE TWO SOURCES ARE BOTH NEEDED. The ledger knows when a Session first
  * received a message; it does not know when anything merged (a `done` column and
@@ -77,7 +77,7 @@ import {
 } from "./merged-ticket-time-breakdown.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT_DIR = join(REPO_ROOT, "docs/research/perf/merged-ticket-time-to-merge");
+const OUT_DIR = join(REPO_ROOT, "performance-results/merged-ticket-time-to-merge");
 
 /**
  * Electron's `userData` for the packaged app. Named from `homedir()` rather

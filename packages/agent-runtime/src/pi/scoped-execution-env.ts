@@ -448,7 +448,7 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  *
  * The runtime hands Pi its own uncontained environment now, so this reaches a
  * Session only through an injected `executionEnvFactory`. It is kept whole
- * because `docs/plans/authority-two-axis-rearchitecture.md` rebuilds the
+ * because the two-axis authority rearchitecture rebuilds the
  * boundary on it, and a boundary is a bad thing to delete and rewrite from
  * memory.
  *

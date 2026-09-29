@@ -4391,7 +4391,7 @@ describe("SessionRuntime native adapter contract", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The transient overlay (docs/plans/delta-frames.md, "Engine"). Nothing below
+// The transient overlay (delta frames). Nothing below
 // this line may cost a durable write: a delta is what the assistant is saying
 // right now, and only a settle point is what it said.
 // ---------------------------------------------------------------------------

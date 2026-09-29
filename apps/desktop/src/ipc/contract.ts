@@ -578,7 +578,7 @@ export interface RetentionTtlSetInput {
   days: number;
 }
 
-// ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
+// ---- file-channel input shapes (global artifacts) --------------------------
 
 /**
  * The scope pair the index is listed for — the same `{ projectId, ticketId }`
@@ -859,7 +859,7 @@ export interface VolliDataIpcContract {
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
-  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` runs implicitly
+  // Ticket worktrees. `ensure` runs implicitly
   // inside terminal-create (§1) and on a Session boot; `worktree-recreate`
   // below is its ONE explicit door, for putting back a checkout that something
   // outside the app deleted (VC-113).
@@ -911,7 +911,7 @@ export interface VolliDataIpcContract {
     result: WorktreeTrimSettingsResult;
   };
 
-  // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
+  // Done flow: the
   // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
   // `commit` records an event; `push-pr` composes fetch→push→PR and is async.
   "volli:worktree-status": { args: [input: TicketIdInput]; result: WorktreeStatusResult };
@@ -969,7 +969,7 @@ export interface VolliDataIpcContract {
 export type DataIpcChannel = keyof VolliDataIpcContract;
 
 /**
- * Global artifacts + `@file` refs (docs/plans/global-artifacts.md), the
+ * Global artifacts + `@file` refs, the
  * Project Files workspace (issue #106), and Files' external-app launch/reveal
  * surface — the file channels `src/main/volli-fs.ts` owns.
  */
@@ -1056,7 +1056,7 @@ export interface UnsavedDocumentsReport {
   names: readonly string[];
 }
 
-// ---- bring-your-own harness trust (docs/plans/harness-events.md §Trust) ----
+// ---- bring-your-own harness trust ------------------------------------------
 
 /**
  * A manifest Volli found on disk and will not launch until someone confirms it,
@@ -1369,7 +1369,7 @@ export interface ThemeStatePayload {
   terminal: GhosttyAppearancePayload;
 }
 
-// ---- canvas theming writes (docs/plans/arc-theming-migration.md) ------------
+// ---- canvas theming writes --------------------------------------------------
 // WRITES ONLY. There is no `volli:canvas-state` read channel and there must not
 // be one: the global canvas, the global appearance and the first-paint hint are
 // `app_state` rows, and every project's canvas is a `projects` column — so
@@ -3185,7 +3185,7 @@ export type UsageReportResult = Result<{ report: SessionUsageReport }>;
  */
 export type VenueSnapshotResult = Result<{ reading: VenueReading }>;
 
-// ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
+// ---- global artifacts + @file refs -----------------------------------------
 
 /**
  * The file index the `@` picker and quick-open rank over — returned by
@@ -3365,7 +3365,7 @@ export interface DirChangedEvent extends FinalWatchEvent {
   relPath: string;
 }
 
-// ---- ticket worktrees (docs/plans/worktree-support.md) ---------------------
+// ---- ticket worktrees ------------------------------------------------------
 
 /**
  * The transient lifecycle of a worktree `ensure` pipeline. NEVER persisted —
@@ -3765,7 +3765,7 @@ export type OrphanProcessPolicyResult = Result<{ policy: AutoReapPolicy }>;
  */
 export type WorktreeRecreateResult = Result<{ worktreePath: string }>;
 
-// ---- Done flow (docs/plans/done-flow.md) -----------------------------------
+// ---- Done flow -------------------------------------------------------------
 
 /**
  * The finer Details-rail worktree status (done-flow §7 "dirty predicate

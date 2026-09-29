@@ -1,5 +1,5 @@
 /**
- * The materialize step (VC-50, `docs/plans/attachments.md`), replacing
+ * The materialize step (VC-50), replacing
  * `attachment-materialize.ts`: at session boot, every Blob linked to the
  * Session — through its Ticket and through the Session itself — is copied into
  * a gitignored `.volli/attachments/` dir inside the SESSION's checkout (the

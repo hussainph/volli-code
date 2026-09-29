@@ -1,6 +1,6 @@
 /**
  * SPLIT VIEW — how one tabbed surface's tabs are spread over several panes
- * (VC-202, `docs/plans/split-view.md` §1).
+ * (VC-202).
  *
  * Both tabbed surfaces (Home, and a ticket workspace) already own one ordered
  * strip of tabs and one active tab. A split view sits BESIDE that, exactly as

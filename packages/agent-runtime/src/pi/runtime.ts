@@ -560,7 +560,7 @@ function durableMessage(message: AgentMessage): AgentMessage {
  * Images ride alongside the text as `ImageContent`, which is the only form a
  * model can actually look at (VC-50). They persist into Pi's recovery sidecar
  * with the message, which is exactly why attaching is bounded by a per-image
- * ceiling AND a per-session budget upstream — see `docs/plans/attachments.md`.
+ * ceiling AND a per-session budget upstream.
  *
  * The shapes below are read back by {@link isPersistedUserContent}, which has
  * to recognize every one of them: the two functions are one decision written

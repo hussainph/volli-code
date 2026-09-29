@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance smoke for SPLIT VIEW — panes on a tabbed surface
- * (VC-202, `docs/plans/split-view.md`). Drives the REAL packaged renderer
+ * (VC-202). Drives the REAL packaged renderer
  * through Playwright against a scratch SQLite database (`VOLLI_DB_PATH`) + an
  * isolated user-data dir, over a REAL git repository and a REAL ticket
  * worktree cut from it.

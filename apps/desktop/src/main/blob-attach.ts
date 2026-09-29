@@ -1,5 +1,5 @@
 /**
- * The attach gesture, end to end (VC-50, `docs/plans/attachments.md`).
+ * The attach gesture, end to end (VC-50).
  *
  * One entry point behind every way a file can arrive — the native picker, a
  * drop, a paste — because the interesting decision is the same in all three and
@@ -101,7 +101,7 @@ function megabytes(bytes: number): string {
  * spec material read once from disk; a Session's images are inlined into a
  * conversation that Pi replays from its sidecar on every attach, so their cost
  * recurs for the life of the Session. That recurrence is the whole reason the
- * budget exists (`docs/plans/attachments.md`), and it is what a Ticket does not
+ * budget exists, and it is what a Ticket does not
  * have.
  */
 function assertFitsSessionBudget(

@@ -213,7 +213,7 @@ const AUTHORITY_SOURCES: Record<RuntimeSessionRole, string> = {
  * instructed against because this instruction is still effectively the only
  * layer: containment is off, and the authority gate defaults to `observe`, which
  * pins a Snapshot and refuses nothing
- * (docs/plans/authority-two-axis-rearchitecture.md). Loosening the write side
+ * (the two-axis authority rearchitecture). Loosening the write side
  * waits for that plan's slices 1–2, so instruction-loosening and enforcement
  * land as a pair. The credentials sentence previews slice 1's secrets
  * denylist, so instruction and future enforcement converge on one shape.

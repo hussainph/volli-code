@@ -185,7 +185,7 @@ describe("the repository's own markdown", () => {
   ];
 
   it("is a corpus worth calling one", () => {
-    expect(files.length).toBeGreaterThan(20);
+    expect(files.length).toBeGreaterThan(10);
   });
 
   it("opens in Document view except where a named construct refuses it", () => {
@@ -206,7 +206,7 @@ describe("the repository's own markdown", () => {
 
   // The same corpus projection as the sweep below, and likewise slower when
   // coverage instrumentation shares the machine with the full renderer suite.
-  it("conceals 13k spans across the corpus, and that is what is sampled below", () => {
+  it("conceals 4k spans across the corpus, and that is what is sampled below", () => {
     const spans = files
       .map(read)
       .filter((text) => documentViewRefusal(text) === null)
@@ -215,14 +215,15 @@ describe("the repository's own markdown", () => {
           total + concealedSpans(projectMarkdown({ text, selection: [], focused: false })).length,
         0,
       );
-    expect(spans).toBeGreaterThan(10_000);
+    expect(spans).toBeGreaterThan(3_000);
   }, 30_000);
 
   it("hides nothing in an accepted file that the caret cannot bring back", () => {
     // SAMPLED, deliberately: the property is per-span and the corpus holds
-    // ~13,500 of them, which is 40 seconds of re-projection — too slow to sit
-    // in the suite. The exhaustive run was made once while writing this (all
-    // 13,505 spans in all 36 accepted files, green); what stays is an even
+    // ~4,300 of them (VC-460 pruned docs/ from ~13,500), still seconds of
+    // re-projection — too slow to sit in the suite. The exhaustive run was made
+    // once while writing this (all 13,505 spans in the then 36 accepted files,
+    // green); what stays is an even
     // spread through every file, which is what would catch a projection change
     // that started swallowing something.
     for (const file of files) {
