@@ -102,7 +102,9 @@ export function hermite(t, t0, t1, p0, p1, v0 = 0, v1 = 0) {
 
 export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30, guard = [] }) {
   const times = [];
-  for (let t = 0; t < durationMs; t += stepMs) times.push(Math.round(t * 1000) / 1000);
+  // Integer steps, not accumulated floats: an accumulated 2200.0000001 would
+  // round onto the final keyframe and duplicate it.
+  for (let i = 0; i * stepMs < durationMs - 0.5; i += 1) times.push(Math.round(i * stepMs * 1000) / 1000);
   times.push(durationMs);
   const samples = times.map((t) => {
     const r = rig(t);
