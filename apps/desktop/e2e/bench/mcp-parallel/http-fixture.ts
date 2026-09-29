@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
+import { sleep } from "@volli/agent-runtime/bench/mcp-parallel";
 
 export interface FixtureMcpServerOptions {
   id: string;
@@ -36,28 +37,10 @@ export interface FixtureMcpServer {
   readonly peakConcurrency: number;
   readonly sideEffectCount: number;
   readonly activeCalls: number;
+  /** True once the HTTP server has stopped listening. */
+  readonly closed: boolean;
   resetMeasurements(): void;
   close(): Promise<void>;
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout>;
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("fixture request cancelled"));
-    };
-    timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 export async function startFixtureMcpServer(
@@ -181,6 +164,9 @@ export async function startFixtureMcpServer(
     },
     get activeCalls() {
       return active;
+    },
+    get closed() {
+      return !server.listening;
     },
     resetMeasurements() {
       calls.length = 0;

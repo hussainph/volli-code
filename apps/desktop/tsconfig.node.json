@@ -15,8 +15,6 @@
     "src/ipc/**/*",
     "src/main/**/*",
     "src/preload/**/*",
-    "e2e/bench/mcp-parallel/**/*.ts",
-    "vite.mcp-parallel-bench.config.ts",
     "vite.config.ts",
     "scripts/dev-constants.mjs"
   ]

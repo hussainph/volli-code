@@ -7,10 +7,14 @@
  * desktop `McpSessionHost` and protocol client, connected to local Streamable
  * HTTP fixture servers. Nothing here is imported by the shipping app.
  */
+import { tmpdir } from "node:os";
 import {
+  peakConcurrency,
   runScriptedMcpTurn,
+  sleep,
   type BatchShape,
   type McpParallelAllowlist,
+  type ToolSample,
 } from "@volli/agent-runtime/bench/mcp-parallel";
 import {
   mcpProviderToolName,
@@ -56,13 +60,11 @@ export interface McpRunResult {
   resultOrder: string[];
   completionOrder: string[];
   peakConcurrency: number;
-  perServerPeak: number[];
   fixturePeakPerServer: number[];
   fixtureCalls: number;
   cleanup: boolean;
   openClients: number;
   closedClients: number;
-  fixtureServersClosed: boolean;
   serverErrorKinds: Record<string, number>;
 }
 
@@ -76,27 +78,7 @@ export const FIXTURE_READ_ALLOWLIST: McpParallelAllowlist = new Set([
 ]);
 const monotonicNow = (): number => performance.now();
 
-function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout>;
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("MCP fixture startup cancelled"));
-    };
-    timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function fixtureDefinition(
+export function fixtureDefinition(
   serverId: string,
   serverName: string,
   toolName = "fixture_read",
@@ -112,20 +94,44 @@ function fixtureDefinition(
   };
 }
 
-function highestOverlap(samples: readonly { startedAt: number; endedAt: number }[]): number {
-  const edges = samples
-    .flatMap((sample) => [
-      { at: sample.startedAt, delta: 1 },
-      { at: sample.endedAt, delta: -1 },
-    ])
-    .toSorted((left, right) => left.at - right.at || left.delta - right.delta);
-  let current = 0;
-  let highest = 0;
-  for (const edge of edges) {
-    current += edge.delta;
-    highest = Math.max(highest, current);
-  }
-  return highest;
+export function fixtureDraft(fixture: FixtureMcpServer, name: string): McpServerDraft {
+  return {
+    id: fixture.id,
+    name,
+    enabled: true,
+    transport: { type: "streamable-http", url: fixture.url },
+  };
+}
+
+/** Client lifecycle as the harness saw it, for the cleanup checks. */
+export interface ClientCounters {
+  opened: number;
+  closed: number;
+}
+
+/**
+ * The real protocol client opener, counted, with an optional synthetic delay
+ * before each server's first attach (the "cold" regime).
+ */
+export function countingOpen(
+  counters: ClientCounters,
+  coldStartMs = 0,
+): NonNullable<McpSessionHostOptions["open"]> {
+  const attached = new Set<string>();
+  return async (server, workspace, signal) => {
+    if (coldStartMs > 0 && !attached.has(server.id)) await sleep(coldStartMs, signal);
+    const client = await openMcpProtocolClient(server, workspace, signal);
+    attached.add(server.id);
+    counters.opened += 1;
+    return {
+      listTools: client.listTools,
+      callTool: client.callTool,
+      close: async () => {
+        counters.closed += 1;
+        await client.close();
+      },
+    };
+  };
 }
 
 function toolDefinitionsFor(servers: readonly FixtureMcpServer[]): McpToolDefinition[] {
@@ -136,16 +142,8 @@ function toolDefinitionsFor(servers: readonly FixtureMcpServer[]): McpToolDefini
 export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResult> {
   const fixtures: FixtureMcpServer[] = [];
   let host: McpSessionHost | undefined;
-  const clientsOpened = new Set<string>();
-  let openClients = 0;
-  let closedClients = 0;
-  let cleanup = false;
-  const toolTrace: Array<{
-    toolCallId: string;
-    serverId: string;
-    startedAt: number;
-    endedAt: number;
-  }> = [];
+  const clients: ClientCounters = { opened: 0, closed: 0 };
+  const toolTrace: Array<ToolSample & { serverId: string }> = [];
 
   try {
     for (let index = 0; index < scenario.serverCount; index += 1) {
@@ -165,29 +163,11 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
       );
     }
 
-    const servers: McpServerDraft[] = fixtures.map((fixture, index) => ({
-      id: fixture.id,
-      name: `VC-444 local fixture ${index + 1}`,
-      enabled: true,
-      transport: { type: "streamable-http", url: fixture.url },
-    }));
-    const open: NonNullable<McpSessionHostOptions["open"]> = async (server, workspace, signal) => {
-      if (scenario.startup === "cold" && !clientsOpened.has(server.id)) {
-        await abortableDelay(scenario.coldStartMs, signal);
-      }
-      const client = await openMcpProtocolClient(server, workspace, signal);
-      clientsOpened.add(server.id);
-      openClients += 1;
-      return {
-        listTools: client.listTools,
-        callTool: client.callTool,
-        close: async () => {
-          closedClients += 1;
-          await client.close();
-        },
-      };
-    };
-    const activeHost = new McpSessionHost({ workspacePath: process.cwd(), servers, open });
+    const servers = fixtures.map((fixture, index) =>
+      fixtureDraft(fixture, `VC-444 local fixture ${index + 1}`),
+    );
+    const open = countingOpen(clients, scenario.startup === "cold" ? scenario.coldStartMs : 0);
+    const activeHost = new McpSessionHost({ workspacePath: tmpdir(), servers, open });
     host = activeHost;
     const definitions = toolDefinitionsFor(fixtures);
 
@@ -213,6 +193,7 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
           return await activeHost.port.call(request, signal);
         } finally {
           toolTrace.push({
+            tool: request.toolName,
             toolCallId: request.toolCallId,
             serverId: request.serverId,
             startedAt,
@@ -239,22 +220,17 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
       }
     }
     const toolTimeMs = toolTrace.reduce((sum, call) => sum + call.endedAt - call.startedAt, 0);
-    const peakConcurrency = highestOverlap(toolTrace);
-    const perServerPeak = fixtures.map((server) =>
-      highestOverlap(
-        toolTrace
-          .filter((call) => call.serverId === server.id)
-          .map(({ startedAt: callStart, endedAt: callEnd }) => ({
-            startedAt: callStart,
-            endedAt: callEnd,
-          })),
-      ),
-    );
+    const peak = peakConcurrency(toolTrace);
     const retryCount = toolTrace.length - new Set(toolTrace.map((call) => call.toolCallId)).size;
 
     await activeHost.close();
     await Promise.all(fixtures.map((server) => server.close()));
-    cleanup = closedClients === openClients && fixtures.length === scenario.serverCount;
+    // Every client the host opened was closed, and every fixture server has
+    // actually stopped listening — not merely been asked to.
+    const cleanup =
+      clients.opened > 0 &&
+      clients.closed === clients.opened &&
+      fixtures.every((server) => server.closed);
 
     return {
       elapsedMs: turn.elapsedMs,
@@ -269,14 +245,12 @@ export async function runMcpScenario(scenario: McpScenario): Promise<McpRunResul
       expectedOrder: turn.expectedOrder,
       resultOrder: turn.resultOrder,
       completionOrder: turn.completionOrder,
-      peakConcurrency,
-      perServerPeak,
+      peakConcurrency: peak,
       fixturePeakPerServer: fixtures.map((server) => server.peakConcurrency),
       fixtureCalls: serverCalls.length,
       cleanup,
-      openClients,
-      closedClients,
-      fixtureServersClosed: cleanup,
+      openClients: clients.opened,
+      closedClients: clients.closed,
       serverErrorKinds,
     };
   } catch (error) {
@@ -314,8 +288,27 @@ export function quantile(values: readonly number[], q: number): number {
   return sorted[rank]!;
 }
 
+/**
+ * Nearest-rank p95 is the maximum for fewer than 20 samples, so a smaller run
+ * labels its tail "max" rather than claiming a percentile it cannot resolve
+ * (docs/performance-benchmark.md).
+ */
+export function tailLabel(samples: number): "p95" | "max" {
+  return samples >= 20 ? "p95" : "max";
+}
+
 export function p50p95(values: readonly number[]): string {
   return `${quantile(values, 0.5).toFixed(1)}/${quantile(values, 0.95).toFixed(1)}`;
+}
+
+function resultVolume(run: McpRunResult) {
+  return {
+    bytes: run.resultBytes,
+    tokens: run.resultTokens,
+    toolErrors: run.toolErrors,
+    fixtureErrors: run.fixtureErrors,
+    serverErrorKinds: run.serverErrorKinds,
+  };
 }
 
 export function assertSameBatchedOutcome(seq: McpRunResult, par: McpRunResult): void {
@@ -329,7 +322,9 @@ export function assertSameBatchedOutcome(seq: McpRunResult, par: McpRunResult): 
     throw new Error("Pi execution mode changed the same scripted provider request/token count.");
   }
   if (seq.resultBytes !== par.resultBytes || seq.resultTokens !== par.resultTokens) {
-    throw new Error("Parallel and sequential runs returned different fixture result volume.");
+    throw new Error(
+      `Parallel and sequential runs returned different fixture result volume: ${JSON.stringify({ sequential: resultVolume(seq), parallel: resultVolume(par) })}`,
+    );
   }
   if (seq.fixtureCalls !== par.fixtureCalls || seq.fixtureErrors !== par.fixtureErrors) {
     throw new Error("Pi execution mode changed the number or outcome of fixture MCP calls.");

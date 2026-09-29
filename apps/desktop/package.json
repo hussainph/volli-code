@@ -20,7 +20,7 @@
     "check:library-validation": "node scripts/check-library-validation.mjs --self-test && node scripts/check-library-validation.mjs",
     "check:node-version": "node scripts/check-node-version.mjs --self-test && node scripts/check-node-version.mjs",
     "digest:session-storage": "node --experimental-strip-types scripts/session-storage-digest.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false && tsc --noEmit -p tsconfig.bench.json",
     "test": "vp test run",
     "test:performance-harness": "vp test run --config vite.bench.config.ts",
     "bench:mcp-parallel": "vp test run --config vite.mcp-parallel-bench.config.ts",

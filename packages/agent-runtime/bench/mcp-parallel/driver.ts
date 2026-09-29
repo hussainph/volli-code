@@ -16,8 +16,12 @@ import { Type, type Model } from "@earendil-works/pi-ai";
 import type { McpToolDefinition, RuntimeMcpPort } from "@volli/shared";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 
+import { applyToolDispatch } from "../../src/pi/tool-dispatch";
 import { createMcpTool } from "../../src/pi/tools";
 import { scriptedProvider, sleep, type ScriptedReply } from "../parallel-tools/harness";
+
+// The VC-245 primitives the app-side composition reuses rather than copies.
+export { peakConcurrency, sleep, type ToolSample } from "../parallel-tools/harness";
 
 export type BatchShape = "batched" | "unbatched";
 
@@ -37,22 +41,36 @@ const FIXTURE_MODEL = {
 export type McpParallelAllowlist = ReadonlySet<string>;
 
 /**
- * Wrap one MCP definition as a Pi tool under a host-authored trust policy.
- *
- * Only exact allowlist membership leaves the tool eligible to overlap. The
- * definition's description, annotations or any "read-only" claim are
- * third-party data and never select concurrency; everything else is marked
- * `sequential`, which makes Pi run the whole batch that contains it serially.
+ * Apply the same dispatch policy the runtime's fixture factory uses
+ * (`src/pi/tool-dispatch.ts`) to a bench tool set: in `parallel` mode only MCP
+ * tools whose exact `serverId:toolName` is on the host-authored allowlist stay
+ * eligible to overlap, and every other tool — local ones included — is marked
+ * `sequential`, which makes Pi run the whole batch containing it serially. The
+ * definition's description, annotations or "read-only" claim never count.
  */
+function dispatchTools(
+  tools: readonly AgentTool[],
+  definitions: readonly McpToolDefinition[],
+  mode: ToolExecutionMode,
+  allowlist: McpParallelAllowlist,
+): { tools: AgentTool[]; toolExecution: ToolExecutionMode } {
+  return applyToolDispatch(
+    tools,
+    definitions,
+    mode === "parallel"
+      ? { mode: "parallel", mcpReadAllowlist: allowlist }
+      : { mode: "sequential" },
+  );
+}
+
+/** One MCP definition as the Pi tool a `parallel` fixture run would dispatch. */
 export function fixtureMcpTool(
   definition: McpToolDefinition,
   port: RuntimeMcpPort,
   allowlist: McpParallelAllowlist,
 ): AgentTool {
   const tool = createMcpTool({ definition, port }) as AgentTool;
-  return allowlist.has(`${definition.serverId}:${definition.toolName}`)
-    ? tool
-    : { ...tool, executionMode: "sequential" };
+  return dispatchTools([tool], [definition], "parallel", allowlist).tools[0]!;
 }
 
 function makeReplies(
@@ -112,64 +130,94 @@ export interface ScriptedMcpTurnResult {
   completionOrder: string[];
 }
 
-/** Run one real Pi Agent turn whose MCP tools call `spec.port`. */
-export async function runScriptedMcpTurn(
-  spec: ScriptedMcpTurnSpec,
-): Promise<ScriptedMcpTurnResult> {
-  const tools = spec.definitions.map((definition) =>
-    fixtureMcpTool(definition, spec.port, spec.allowlist),
-  );
-  const { streamFn, record } = scriptedProvider(
-    makeReplies(spec.definitions, spec.batchSize, spec.batchShape),
-    { latencyMs: spec.providerLatencyMs, usage: { input: 1_000, output: 60 } },
-  );
-  const expectedOrder = Array.from({ length: spec.batchSize }, (_, index) =>
-    spec.batchShape === "batched" ? `tc-1-${index}` : `tc-${index + 1}-0`,
-  );
+interface BatchTurn {
+  elapsedMs: number;
+  providerRequests: number;
+  providerTokens: number;
+  resultBytes: number;
+  resultTokens: number;
+  toolErrors: number;
+  resultOrder: string[];
+  completionOrder: string[];
+}
+
+/** One real Pi Agent prompt over scripted replies, recording result lineage. */
+async function runBatchTurn(input: {
+  tools: AgentTool[];
+  toolExecution: ToolExecutionMode;
+  replies: ScriptedReply[];
+  providerLatencyMs: number;
+}): Promise<BatchTurn> {
+  const { streamFn, record } = scriptedProvider(input.replies, {
+    latencyMs: input.providerLatencyMs,
+    usage: { input: 1_000, output: 60 },
+  });
   const agent = new Agent({
     initialState: {
       systemPrompt: "Fixture-only MCP parallel-dispatch measurement.",
       model: FIXTURE_MODEL,
-      tools,
+      tools: input.tools,
       messages: [],
     },
     streamFn,
-    // The opt-in exists only in this fixture driver. The production runtime
-    // still passes sequential at its Agent construction site.
-    toolExecution: spec.mode,
+    // A bare Agent, not `attachSession`: approval, the Agent Tool Surface and
+    // durable tool events are outside these timings. The runtime's own
+    // fixture factory covers the same policy through the real attach path.
+    toolExecution: input.toolExecution,
   });
 
-  const resultOrder: string[] = [];
-  const completionOrder: string[] = [];
-  let resultBytes = 0;
-  let resultTokens = 0;
-  let toolErrors = 0;
+  const turn: BatchTurn = {
+    elapsedMs: 0,
+    providerRequests: 0,
+    providerTokens: 0,
+    resultBytes: 0,
+    resultTokens: 0,
+    toolErrors: 0,
+    resultOrder: [],
+    completionOrder: [],
+  };
   agent.subscribe((event) => {
     if (event.type === "tool_execution_end") {
-      completionOrder.push(event.toolCallId);
+      turn.completionOrder.push(event.toolCallId);
     } else if (event.type === "message_end" && event.message.role === "toolResult") {
       const volume = resultVolume(event.message);
-      resultOrder.push(event.message.toolCallId);
-      resultBytes += volume.bytes;
-      resultTokens += volume.tokens;
-      if (volume.isError) toolErrors += 1;
+      turn.resultOrder.push(event.message.toolCallId);
+      turn.resultBytes += volume.bytes;
+      turn.resultTokens += volume.tokens;
+      if (volume.isError) turn.toolErrors += 1;
     }
   });
 
   const startedAt = performance.now();
   await agent.prompt("Run the synthetic MCP fixture task.");
-  const elapsedMs = performance.now() - startedAt;
-  return {
-    elapsedMs,
-    providerRequests: record.calls,
-    providerTokens: record.totalTokens,
-    resultBytes,
-    resultTokens,
-    toolErrors,
-    expectedOrder,
-    resultOrder,
-    completionOrder,
-  };
+  turn.elapsedMs = performance.now() - startedAt;
+  turn.providerRequests = record.calls;
+  turn.providerTokens = record.totalTokens;
+  return turn;
+}
+
+/** Run one real Pi Agent turn whose MCP tools call `spec.port`. */
+export async function runScriptedMcpTurn(
+  spec: ScriptedMcpTurnSpec,
+): Promise<ScriptedMcpTurnResult> {
+  const { tools, toolExecution } = dispatchTools(
+    spec.definitions.map(
+      (definition) => createMcpTool({ definition, port: spec.port }) as AgentTool,
+    ),
+    spec.definitions,
+    spec.mode,
+    spec.allowlist,
+  );
+  const turn = await runBatchTurn({
+    tools,
+    toolExecution,
+    replies: makeReplies(spec.definitions, spec.batchSize, spec.batchShape),
+    providerLatencyMs: spec.providerLatencyMs,
+  });
+  const expectedOrder = Array.from({ length: spec.batchSize }, (_, index) =>
+    spec.batchShape === "batched" ? `tc-1-${index}` : `tc-${index + 1}-0`,
+  );
+  return { ...turn, expectedOrder };
 }
 
 /** Hooks the negative control uses to observe overlap across both side effects. */
@@ -190,25 +238,27 @@ export interface MixedSideEffectSpec {
 }
 
 export interface MixedSideEffectResult {
+  localEditExecutionMode: AgentTool["executionMode"];
   mcpExecutionMode: AgentTool["executionMode"];
   resultOrder: string[];
 }
 
 /**
- * The negative control: one emitted batch of local edit → MCP mutation →
- * local edit, run with Pi in `parallel` mode. A single sequential tool in the
- * batch must make Pi run the whole batch in source order.
+ * The negative control: one emitted batch of local edit → MCP call → local
+ * edit, run with Pi in `parallel` mode under the fixture dispatch policy. The
+ * local edit is never allowlisted, so Pi must run the whole batch in source
+ * order even when the MCP call itself is an allowlisted read.
  */
 export async function runMixedSideEffectTurn(
   spec: MixedSideEffectSpec,
 ): Promise<MixedSideEffectResult> {
-  const mcpTool = fixtureMcpTool(spec.mcpDefinition, spec.port, spec.allowlist);
+  // Deliberately declares no `executionMode`, exactly like Volli's built-in
+  // file tools: the dispatch policy, not the tool, has to serialize it.
   const localEdit: AgentTool = {
     name: "fixture_local_edit",
     label: "fixture local edit",
     description: "Writes only to this disposable benchmark file.",
     parameters: Type.Object({ value: Type.String() }),
-    executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
       const startedAt = performance.now();
       spec.probe.enter();
@@ -223,8 +273,17 @@ export async function runMixedSideEffectTurn(
       }
     },
   };
-  const { streamFn } = scriptedProvider(
-    [
+  const { tools, toolExecution } = dispatchTools(
+    [localEdit, createMcpTool({ definition: spec.mcpDefinition, port: spec.port }) as AgentTool],
+    [spec.mcpDefinition],
+    "parallel",
+    spec.allowlist,
+  );
+  const mcpTool = tools[1]!;
+  const turn = await runBatchTurn({
+    tools,
+    toolExecution,
+    replies: [
       {
         toolCalls: [
           { name: localEdit.name, args: { value: "first" } },
@@ -234,24 +293,11 @@ export async function runMixedSideEffectTurn(
       },
       { text: "fixture side effects complete" },
     ],
-    { latencyMs: 0 },
-  );
-  const agent = new Agent({
-    initialState: {
-      systemPrompt: "Fixture negative control.",
-      model: FIXTURE_MODEL,
-      tools: [localEdit, mcpTool],
-      messages: [],
-    },
-    streamFn,
-    toolExecution: "parallel",
+    providerLatencyMs: 0,
   });
-  const resultOrder: string[] = [];
-  agent.subscribe((event) => {
-    if (event.type === "message_end" && event.message.role === "toolResult") {
-      resultOrder.push(event.message.toolCallId);
-    }
-  });
-  await agent.prompt("Run the mixed fixture negative control.");
-  return { mcpExecutionMode: mcpTool.executionMode, resultOrder };
+  return {
+    localEditExecutionMode: tools[0]!.executionMode,
+    mcpExecutionMode: mcpTool.executionMode,
+    resultOrder: turn.resultOrder,
+  };
 }

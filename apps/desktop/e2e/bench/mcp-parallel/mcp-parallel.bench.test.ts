@@ -4,44 +4,27 @@
  * for a smoke). It is outside the desktop app's default test projects.
  */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixtureMcpTool, runMixedSideEffectTurn } from "@volli/agent-runtime/bench/mcp-parallel";
-import {
-  mcpProviderToolName,
-  type McpServerDraft,
-  type McpToolDefinition,
-  type RuntimeMcpCall,
-  type RuntimeMcpPort,
-} from "@volli/shared";
+import type { RuntimeMcpCall, RuntimeMcpPort } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { openMcpProtocolClient } from "../../../src/main/mcp/client";
 import { McpSessionHost } from "../../../src/main/mcp/session-host";
-import { FIXTURE_READ_ALLOWLIST, runMcpScenario } from "./harness";
+import {
+  countingOpen,
+  fixtureDefinition,
+  fixtureDraft,
+  FIXTURE_READ_ALLOWLIST,
+  runMcpScenario,
+  type ClientCounters,
+} from "./harness";
 import { startFixtureMcpServer } from "./http-fixture";
 import { buildMcpBenchReport, DEFAULT_REPEATS } from "./report";
 
-function definition(serverId: string, serverName: string, toolName: string): McpToolDefinition {
-  return {
-    serverId,
-    toolName,
-    providerName: mcpProviderToolName(serverId, serverName, toolName),
-    description: "Read-only according to this untrusted fixture description.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  };
-}
-
-function draft(serverId: string, name: string, url: string): McpServerDraft {
-  return {
-    id: serverId,
-    name,
-    enabled: true,
-    transport: { type: "streamable-http", url },
-  };
-}
-
 describe("VC-444 fixture-only MCP parallel pilot", () => {
-  it("prints p50/p95 results across network, startup, server-count and batch-size regimes", async () => {
+  it("prints p50/tail results across network, startup, server-count and batch-size regimes", async () => {
     const repeats = Number(process.env.MCP_PARALLEL_BENCH_REPEATS ?? DEFAULT_REPEATS);
     const report = await buildMcpBenchReport(repeats);
     console.log(`\n${report.text}\n`);
@@ -91,56 +74,52 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
   }, 600_000);
 
   it("records per-server connection and rate limits without blind retries", async () => {
-    const limited = await runMcpScenario({
+    const stress = {
       latencyMs: 20,
       serverCount: 2,
       startup: "warm",
       batchSize: 16,
       batchShape: "batched",
-      mode: "parallel",
       providerLatencyMs: 0,
       coldStartMs: 0,
       maxConcurrent: 2,
       maxRequestsPerWindow: 6,
       rateWindowMs: 100,
-    });
+    } as const;
+    const limited = await runMcpScenario({ ...stress, mode: "parallel" });
+    const serial = await runMcpScenario({ ...stress, mode: "sequential" });
     console.log(
       `VC-444 limit stress (two servers, n=16, per-server maxConcurrent=2, 6 calls/100ms): ` +
-        `${limited.fixtureErrors} fixture errors (${JSON.stringify(limited.serverErrorKinds)}), ` +
-        `${limited.retryCount} retries, per-server peaks ${limited.fixturePeakPerServer.join(",")}.`,
+        `parallel ${limited.fixtureErrors} fixture errors (${JSON.stringify(limited.serverErrorKinds)}), ` +
+        `${limited.retryCount} retries, per-server peaks ${limited.fixturePeakPerServer.join(",")}; ` +
+        `sequential ${serial.fixtureErrors} fixture errors (${JSON.stringify(serial.serverErrorKinds)}).`,
     );
 
     expect(limited.fixtureErrors).toBeGreaterThan(0);
     expect(limited.serverErrorKinds["connection-limited"]).toBeGreaterThan(0);
     expect(limited.serverErrorKinds["rate-limited"]).toBeGreaterThan(0);
     expect(limited.fixturePeakPerServer).toEqual([2, 2]);
+    // Counted at the servers, below the host: a retry anywhere in the stack
+    // would show up here as more than one server call per model tool call.
+    expect(limited.fixtureCalls).toBe(16);
     expect(limited.retryCount).toBe(0);
     expect(limited.cleanup).toBe(true);
-    expect(limited.openClients).toBe(limited.closedClients);
+    // The same batch run one call at a time never trips the in-flight cap.
+    expect(serial.serverErrorKinds["connection-limited"]).toBeUndefined();
+    expect(serial.fixturePeakPerServer).toEqual([1, 1]);
+    expect(serial.fixtureCalls).toBe(16);
+    expect(serial.cleanup).toBe(true);
   }, 30_000);
 
   it("propagates cancellation through the Volli MCP wrapper and attachment host", async () => {
     const fixture = await startFixtureMcpServer({ id: "vc444-cancel", latencyMs: 500 });
-    const server = draft(fixture.id, "local cancellation fixture", fixture.url);
-    let opened = 0;
-    let closed = 0;
+    const clients: ClientCounters = { opened: 0, closed: 0 };
     const host = new McpSessionHost({
-      workspacePath: process.cwd(),
-      servers: [server],
-      open: async (serverDraft, workspace, signal) => {
-        const client = await openMcpProtocolClient(serverDraft, workspace, signal);
-        opened += 1;
-        return {
-          listTools: client.listTools,
-          callTool: client.callTool,
-          close: async () => {
-            closed += 1;
-            await client.close();
-          },
-        };
-      },
+      workspacePath: tmpdir(),
+      servers: [fixtureDraft(fixture, "local cancellation fixture")],
+      open: countingOpen(clients),
     });
-    const mcpDefinition = definition(fixture.id, "local cancellation fixture", "fixture_read");
+    const mcpDefinition = fixtureDefinition(fixture.id, "local cancellation fixture");
     const tool = fixtureMcpTool(mcpDefinition, host.port, FIXTURE_READ_ALLOWLIST);
     const controller = new AbortController();
     let abortToSettleMs = 0;
@@ -159,11 +138,11 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
       await fixture.close();
     }
 
-    expect(opened).toBe(1);
-    expect(closed).toBe(1);
+    expect(clients).toEqual({ opened: 1, closed: 1 });
+    expect(fixture.closed).toBe(true);
     console.log(
       `VC-444 cancellation: server abort observed, active calls drained to 0, ` +
-        `client closed ${closed}/${opened}; caller settled in ${abortToSettleMs.toFixed(1)}ms.`,
+        `client closed ${clients.closed}/${clients.opened}; caller settled in ${abortToSettleMs.toFixed(1)}ms.`,
     );
   }, 10_000);
 
@@ -181,15 +160,15 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
       label: "an allowlisted MCP read",
       serverId: "vc444-fixture-1",
       toolName: "fixture_read",
-      // Eligible to overlap on its own, but one sequential local edit in the
-      // same emitted batch makes Pi run the whole batch serially.
+      // Eligible to overlap on its own, but the local edit in the same emitted
+      // batch is not allowlisted, so Pi runs the whole batch serially.
       mcpExecutionMode: undefined,
       sideEffects: 0,
     },
   ] as const)(
     "serializes local-file edits mixed with $label despite parallel Agent mode",
     async ({ serverId, toolName, mcpExecutionMode, sideEffects }) => {
-      const workspace = mkdtempSync(join(process.cwd(), ".vc444-mcp-negative-control-"));
+      const workspace = mkdtempSync(join(tmpdir(), "vc444-mcp-negative-control-"));
       const filePath = join(workspace, "fixture.txt");
       const fixture = await startFixtureMcpServer({
         id: serverId,
@@ -197,11 +176,11 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
         sideEffect: true,
       });
       const host = new McpSessionHost({
-        workspacePath: process.cwd(),
-        servers: [draft(fixture.id, "local side-effect fixture", fixture.url)],
+        workspacePath: workspace,
+        servers: [fixtureDraft(fixture, "local side-effect fixture")],
         open: openMcpProtocolClient,
       });
-      const mcpDefinition = definition(fixture.id, "local side-effect fixture", toolName);
+      const mcpDefinition = fixtureDefinition(fixture.id, "local side-effect fixture", toolName);
       const events: string[] = [];
       const intervals: Array<{ startedAt: number; endedAt: number }> = [];
       let live = 0;
@@ -236,6 +215,9 @@ describe("VC-444 fixture-only MCP parallel pilot", () => {
           filePath,
           probe: { enter, exit, record: (event) => events.push(event) },
         });
+        // The local edit declares no mode of its own, like Volli's built-in
+        // file tools; the dispatch policy is what marks it sequential.
+        expect(run.localEditExecutionMode).toBe("sequential");
         expect(run.mcpExecutionMode).toBe(mcpExecutionMode);
         expect(peak).toBe(1);
         expect(events).toEqual(["file:first", `mcp:${toolName}`, "file:last"]);

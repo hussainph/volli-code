@@ -3,6 +3,7 @@ import {
   p50p95,
   quantile,
   runScenarioRepeats,
+  tailLabel,
   type McpRunResult,
   type McpScenario,
 } from "./harness";
@@ -52,16 +53,16 @@ function completionDivergence(results: readonly McpRunResult[]): string {
   return `${different}/${results.length}`;
 }
 
-function formatTimingRows(rows: readonly ReportRow[]): string {
+function formatTimingRows(rows: readonly ReportRow[], tail: string): string {
   return table(
     [
       "network/server/start/n",
-      "seq wall p50/p95",
-      "seq tool p50/p95",
-      "par wall p50/p95",
-      "par tool p50/p95",
-      "unbatch wall p50/p95",
-      "unbatch tool p50/p95",
+      `seq wall p50/${tail}`,
+      `seq tool p50/${tail}`,
+      `par wall p50/${tail}`,
+      `par tool p50/${tail}`,
+      `unbatch wall p50/${tail}`,
+      `unbatch tool p50/${tail}`,
     ],
     rows.map((row) => [
       row.label,
@@ -142,7 +143,7 @@ export async function buildMcpBenchReport(repeats = DEFAULT_REPEATS): Promise<Mc
               results.parallel[index]!,
               results.unbatched[index]!,
             ]) {
-              if (!run.cleanup || !run.fixtureServersClosed) {
+              if (!run.cleanup) {
                 throw new Error(
                   `MCP client/server cleanup failed for ${latencyMs}/${serverCount}/${startup}/${batchSize}`,
                 );
@@ -164,18 +165,19 @@ export async function buildMcpBenchReport(repeats = DEFAULT_REPEATS): Promise<Mc
     }
   }
 
+  const tail = tailLabel(repeats);
   const out = [
     "# VC-444 local MCP parallel-dispatch fixture benchmark",
     "",
-    `- Repeats per cell: ${repeats}; p50/p95 are nearest-rank milliseconds over task wall time and summed MCP tool-call time.`,
+    `- Repeats per cell: ${repeats}; p50/${tail} are nearest-rank milliseconds over task wall time and summed MCP tool-call time${tail === "max" ? " (fewer than 20 samples cannot resolve a p95, so the tail is the maximum)" : ""}.`,
     `- Synthetic provider: fixed replies (not model propensity), ${PROVIDER_LATENCY_MS}ms per request, 1,000 input + 60 output tokens per request.`,
-    `- Local Streamable HTTP MCP server: network-like per-call delays ${NETWORK_LATENCIES_MS.join("/ ")}ms; cold attach adds ${COLD_START_MS}ms per server; warm cells pre-open and reuse the host's cached client.`,
+    `- Local Streamable HTTP MCP server: network-like per-call delays ${NETWORK_LATENCIES_MS.join("/")}ms on the first server; a second server adds max(5ms, latency/4) (${NETWORK_LATENCIES_MS.map((ms) => ms + Math.max(5, ms / 4)).join("/")}ms) so completions interleave; cold attach adds ${COLD_START_MS}ms per server; warm cells pre-open and reuse the host's cached client.`,
     "- Every sequential/parallel pair receives the same single-reply model batch; unbatched control emits the same N calls over N replies.",
     "- Baseline fixture has no rate/connection cap; constrained-limit stress is reported separately by the test. All result token counts use o200k_base on the Volli wrapper's tool-result text.",
     "",
-    "## Task wall time and MCP tool time (p50/p95 ms)",
+    `## Task wall time and MCP tool time (p50/${tail} ms)`,
     "",
-    formatTimingRows(rows),
+    formatTimingRows(rows, tail),
     "",
     "## Provider, result, errors, ordering and cleanup",
     "",
