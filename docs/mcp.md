@@ -319,11 +319,12 @@ Session has no Ticket to comment on.
 
 Each Session attachment opens one connection per server, lazily, and every call
 that Session makes to the server shares it. A call that is stopped, or that the
-server answers with an error, leaves that connection in place for the others.
-The connection is replaced only when the transport itself fails — a closed pipe,
-a dropped socket, an HTTP status that ends the protocol session — and even then
-it is closed only after the last call still running on it finishes. The
-connection is closed when the attachment closes.
+server answers with an error — including an HTTP 429 or 5xx — leaves that
+connection in place for the others. The connection is replaced only when it has
+failed: a closed pipe, a dropped socket, an HTTP 400 or 404 that ends the
+protocol session, or a call that got no answer within its 30-second deadline.
+Even then the old connection is closed only after the last call still running
+on it finishes. Every connection is closed when the attachment closes.
 
 ### Every Session shares one bound per server
 
@@ -337,7 +338,10 @@ server says about itself raises or lowers the bound, and no call is ever
 retried.
 
 Ordinary Sessions run one tool call at a time, so the bound only comes into
-play when several Sessions call the same server at once.
+play when several Sessions call the same server at once. A call that waited a
+second or more for it is logged in the main-process log, so a queued call is
+not mistaken for a slow server. The bound belongs to one configured server: the
+same endpoint configured in two projects is two servers with a bound each.
 
 ### Parallel reads (developer-only)
 
@@ -357,7 +361,13 @@ VOLLI_DEV_MCP_PARALLEL='{
   any `readOnlyHint` are never consulted.
 - Sessions **created** while the variable is set are marked with that list, and
   the marks are frozen into the Session like the rest of its tools. A subagent
-  Session inherits its parent's marks along with its tools.
+  Session inherits its parent's marks along with its tools. Every new root
+  Session in that launch is marked the same way; there is no per-Session
+  choice.
+- When a Session attaches, each frozen mark is kept only if that exact tool is
+  still in `reads`. Taking a tool off the list stops it running in parallel
+  everywhere at the next launch. Adding a tool never marks a Session that was
+  born without it.
 - A reply runs in parallel only if **every** call in it is a marked read. Any
   other call in the same reply — a file edit, a shell command, a verb, a browser
   action, an unmarked MCP tool — makes the whole reply run one call at a time,
@@ -397,7 +407,7 @@ VOLLI_DEV_MCP_PARALLEL='{
 | Shared per-server bound | `packages/agent-runtime/src/mcp/server-budget.ts` |
 | Parallel-read marks | `withParallelReadEligibility` in `packages/shared/src/mcp.ts` |
 | Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |
-| Developer opt-in | `apps/desktop/src/main/mcp/parallel-dev-config.ts` |
+| Developer opt-in, stamping, attach narrowing, budget binding | `apps/desktop/src/main/mcp/parallel-dev-config.ts`, `dispatch-policy.ts` |
 | Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
 | Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
