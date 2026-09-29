@@ -16,7 +16,7 @@ import { createInMemorySessionLedger, createSessionEngine } from "./index";
  * its cache entry survives. That sharing is the cache's whole value, and it is
  * also the hazard: one mutating caller would rewrite every later read. VC-393
  * asked for the fix to be chosen by MEASURING the candidates against the entry
- * weights in `docs/research/perf/session-listing-vc388.md` (5.6 KB for an
+ * weights VC-388 measured (5.6 KB for an
  * ordinary Session, 79.8 KB for a deliberately extreme one), rather than by
  * arguing about them. This is that measurement.
  *

@@ -324,7 +324,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * installs it today.
  *
  * `ScopedExecutionEnv` is the boundary that used to be installed here and the
- * one `docs/plans/authority-two-axis-rearchitecture.md` rebuilds on. It is kept
+ * one the two-axis authority rearchitecture rebuilds on. It is kept
  * whole, with the stricter {@link scopedEnvironment} it was written against;
  * nothing wires it up.
  *

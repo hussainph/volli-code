@@ -8,8 +8,6 @@
  *   VOLLI_JAEGER_INTEGRATION=1 pnpm -C apps/desktop exec vp test run \
  *     src/main/observability/jaeger.integration.test.ts
  *
- * See docs/observability-smoke.md.
- *
  * Every event here is fabricated. Nothing in this file reads a Session, a
  * Ticket, a transcript or a credential — the point is to prove the wire, and a
  * smoke test that needed real agent traffic would be a smoke test nobody could

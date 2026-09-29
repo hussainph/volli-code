@@ -24,6 +24,9 @@ const toolingIgnorePatterns = [
   // Vendored third-party agent skills (npx skills add) — reformatting would
   // drift them from their skills-lock.json content hashes.
   ".agents",
+  // The Document-view markdown corpus keeps the exact variants (`*` vs `_`,
+  // Setext underlines, tilde fences) a formatter exists to normalise away.
+  "apps/desktop/src/renderer/src/editor/__fixtures__",
 ];
 
 export default defineConfig({

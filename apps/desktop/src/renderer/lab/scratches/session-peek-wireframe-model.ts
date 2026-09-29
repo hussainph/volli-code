@@ -1,7 +1,7 @@
 /**
  * VC-30 — the peek's state machine, lifted out of the view.
  *
- * `docs/plans/hover-peek-wireframe.excalidraw` (v2) argues about RULES, not
+ * The hover-peek wireframe (v2) argues about RULES, not
  * pixels: hover reads and never acts, a pin survives the pointer walking away,
  * a dismissal suppresses the next accidental open, an answer exists only after
  * an explicit Send. Every one of those is a statement about state over time,

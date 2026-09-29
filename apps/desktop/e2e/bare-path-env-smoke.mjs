@@ -6,10 +6,9 @@
  * `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else, no homebrew, no user dirs,
  * no shell-rc PATH additions visible on `process.env.PATH`.
  *
- * This began as readiness-doc blocker A4
- * (`docs/plans/session-ui-migration-readiness.md`) about the OpenCode model
- * browser, and it kept the name `opencode-env-smoke` long after that stopped
- * being what it proved. The structured runtime is Pi now and runs in-process,
+ * This began as a session-UI migration readiness blocker (A4) about the
+ * OpenCode model browser, and it kept the name `opencode-env-smoke` long after
+ * that stopped being what it proved. The structured runtime is Pi now and runs in-process,
  * so there is no spawned server whose PATH could be wrong. What survives is the
  * part that was never OpenCode-specific and still guards a shipping feature:
  * harness wrapper generation for the TERMINAL companions, which walks the LOGIN

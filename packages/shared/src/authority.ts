@@ -12,7 +12,7 @@
  * boundary does not ship. The Seatbelt sandbox that used to sit under it is no
  * longer installed, so a Session's tools carry the authority of whoever is
  * running Volli. That is a deliberate decision to run Pi at its own defaults,
- * not an erosion — and `docs/plans/authority-two-axis-rearchitecture.md` is
+ * not an erosion — and the two-axis authority rearchitecture is
  * where both axes come back.
  *
  * The gate itself is wired now. VC-44 made `@volli/shared`'s
@@ -295,7 +295,7 @@ export interface AuthoritySnapshot {
    * no longer for the reason originally written here: that with the network
    * denied and the filesystem scoped, the categories a classifier is best at
    * were largely unreachable. Both premises are gone, and
-   * `docs/plans/authority-two-axis-rearchitecture.md` names that argument as the
+   * the two-axis authority rearchitecture names that argument as the
    * mistake the whole rework exists to undo — containment was one dial doing two
    * jobs.
    *
@@ -548,7 +548,7 @@ export type AuthorityDenialCause =
  *
  * They stay refusals rather than becoming allowances: the read is still worth
  * stopping to confirm, and slice 1 of
- * `docs/plans/authority-two-axis-rearchitecture.md` replaces the question with
+ * the two-axis authority rearchitecture replaces the question with
  * one coherent read policy for both layers (VC-45). Until then a person can say
  * yes, which is the honest state of a boundary with nothing underneath it.
  *

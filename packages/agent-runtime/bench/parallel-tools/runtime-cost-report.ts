@@ -232,7 +232,7 @@ function positiveInteger(value: string | undefined): number | null {
 /**
  * The two arms this bench has, named rather than hidden behind a flag.
  *
- * `published` is the arm every number in `docs/research/` was taken at, and
+ * `published` is the arm every published number was taken at, and
  * the only arm whose figures may be quoted. `probe` is the fast regression
  * lane: same fixture and same code path, small enough to sit in the default
  * bench run, and honest about the fact that its batches are too short to

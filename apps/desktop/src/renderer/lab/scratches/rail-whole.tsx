@@ -325,7 +325,7 @@ const REPOSITORY_FILES: readonly string[] = [
   "apps/desktop/src/renderer/src/components/ticket/ticket-rail.tsx",
   "apps/desktop/src/renderer/src/editor/diff-decorations.ts",
   "docs/DESIGN.md",
-  "docs/plans/fullscreen-placement.md",
+  "docs/licensing/notice-inputs.md",
   "packages/shared/src/tickets.ts",
 ];
 

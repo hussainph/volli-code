@@ -7,8 +7,8 @@
  * Electron's app-private CDP client. That transport choice is the security
  * architecture: no `--remote-debugging-port` is ever opened, so there is no
  * loopback endpoint through which another local process could reach this tab
- * (or, far worse, the app's own privileged renderer). See
- * docs/research/browser-tooling-vc-110.md and the VC-110 decision comment.
+ * (or, far worse, the app's own privileged renderer). See the VC-110 decision
+ * comment.
  *
  * Acting is by handle, never by selector: a read prints `eN → backendDOMNodeId`
  * and an action resolves through that map, so what gets clicked is the element

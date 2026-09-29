@@ -12,8 +12,7 @@
  * (provider, model, API family). There is deliberately no free-form string
  * anywhere in the union — no prompt, no path, no command, no tool argument, no
  * diagnostic prose — so the privacy policy is enforced by construction rather
- * than by redaction. See docs/research/agent-observability-oss-options.md for
- * the boundary this implements.
+ * than by redaction.
  */
 
 import type { ActivityKind } from "./session-activity";

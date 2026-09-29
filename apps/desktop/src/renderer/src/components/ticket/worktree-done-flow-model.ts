@@ -1,6 +1,6 @@
 /**
  * Pure resolver for the Done-flow rail's single adaptive split button
- * (docs/plans/done-flow.md "UI", decision #45). Given the latest worktree
+ * (decision #45). Given the latest worktree
  * status, the ticket's durable `prUrl`, and the local busy stage, it returns the
  * one primary action (label + disabled reason) and the always-listed chevron
  * menu (each verb with its own disabled reason). Raw status is formatted here,

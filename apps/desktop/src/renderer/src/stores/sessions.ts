@@ -800,7 +800,7 @@ export const useSessionsStore = createSessionsStore();
 
 /**
  * Wires the single `api.sessions.onHarnessEvent` subscription into the store —
- * the renderer end of the involuntary channel (docs/plans/harness-events.md).
+ * the renderer end of the involuntary channel.
  * Mount once from an always-mounted site, the same reasoning as
  * `subscribeWorktreePhases`: `SessionsLayer` is the one component alive for the
  * whole app session, and every live terminal already routes through it. Returns

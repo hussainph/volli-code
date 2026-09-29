@@ -194,8 +194,7 @@ providers that were updated by the other process.
 
 Exact pin, no ranges. Version bumps are deliberate and recorded in the commit
 that makes them, together with the tag and commit hash above. Forking or
-vendoring Pi requires a concrete, documented need per
-`docs/plans/pi-native-ticket-session.md`.
+vendoring Pi requires a concrete, documented need.
 
 ## Deliberate Session 3 boundary
 

@@ -20,8 +20,8 @@
  * structured (chat) Session — has no honest record here at all, and
  * `terminalSessionRecord` returns `null` for one rather than fabricating a
  * `harnessId: "claude-code"` that read every structured Session out of a
- * listing as a never-ending terminal (see
- * `docs/plans/session-ui-migration-readiness.md`, blocker B4). Do not add a
+ * listing as a never-ending terminal (session-UI migration readiness blocker
+ * B4). Do not add a
  * field to this interface expecting the ledger to carry it; add it to the
  * attachment the projection reads.
  *

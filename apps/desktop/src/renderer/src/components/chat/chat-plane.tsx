@@ -2011,8 +2011,7 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * cache now answer variable heights better, but they do not answer this plane's
  * scroller ownership or disclosure-driven height changes. With the document
  * already bounded to 60 rows, their observers, estimates and correction state
- * cost more than they save. The sourced verdict and the conditions that would
- * reopen it are in `docs/research/perf/react-zustand-streaming.md` §3.
+ * cost more than they save.
  *
  * WHAT THE READER SEES. At rest, the last {@link TRANSCRIPT_TAIL_ROWS} rows.
  * Above them, "Show earlier" — and the same sentinel the button sits on pages

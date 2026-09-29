@@ -1,6 +1,6 @@
 /**
- * End-to-end acceptance smoke for the CANVAS theming system
- * (docs/plans/arc-theming-migration.md). Replaces `theming-smoke.mjs`, which
+ * End-to-end acceptance smoke for the CANVAS theming system (the arc theming
+ * migration). Replaces `theming-smoke.mjs`, which
  * entered every one of its 27 cases through the theme picker that migration
  * deleted — the assertions mostly survived, the harness did not.
  *

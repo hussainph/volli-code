@@ -58,7 +58,7 @@
  *
  * Nothing in here collapses the rail. That is deliberate, not an omission — a
  * panel cannot reopen itself, so the collapse control lives outside it, in the
- * tab strip's corner (docs/plans/fullscreen-placement.md).
+ * tab strip's corner.
  *
  * Page-content seam for the navigators:
  *   - Pass `filesContent` / `changesContent` to replace the empty placeholders.
