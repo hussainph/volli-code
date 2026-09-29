@@ -412,8 +412,11 @@ describe("nextInFlightTools", () => {
 });
 
 describe("declaredToolTimeoutMs", () => {
-  it("reads bash's timeout in seconds and nothing else", () => {
+  it("reads bash's timeout and the awaits' timeoutSeconds, in seconds, and nothing else", () => {
     expect(declaredToolTimeoutMs("bash", { command: "sleep 5", timeout: 90 })).toBe(90_000);
+    expect(declaredToolTimeoutMs("ticket_await", { timeoutSeconds: 600 })).toBe(600_000);
+    expect(declaredToolTimeoutMs("session_await", { timeoutSeconds: 30 })).toBe(30_000);
+    expect(declaredToolTimeoutMs("session_await", { timeout: 30 })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { command: "sleep 5" })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { timeout: 0 })).toBeNull();
     expect(declaredToolTimeoutMs("bash", { timeout: "90" })).toBeNull();
@@ -434,5 +437,10 @@ describe("declaredToolTimeoutMs", () => {
       SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS,
     );
     expect(inFlightToolAllowanceMs(tool("session_await"), T)).toBe(Number.POSITIVE_INFINITY);
+    // A timed await is bounded by its own limit: one still parked well past it
+    // is the runtime failing to end it.
+    expect(inFlightToolAllowanceMs(tool("ticket_await", HOUR), T)).toBe(
+      HOUR + SESSION_WATCHDOG_TOOL_TIMEOUT_MARGIN_MS,
+    );
   });
 });

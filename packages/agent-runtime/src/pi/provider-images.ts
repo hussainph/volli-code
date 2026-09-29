@@ -38,7 +38,9 @@
  * {@link EVICTION_STEP} images, and that rounding is for the prompt cache: an
  * eviction rewrites an early message, so evicting exactly one more image per
  * turn would bust the cached prefix on every turn of a long Session. In steps,
- * the prefix is rewritten once per step and is byte-stable in between.
+ * the prefix is rewritten once per step and is byte-stable in between. A step
+ * that would reach every image falls back to the exact count: ten large
+ * screenshots one byte over budget lose the oldest, not all ten.
  *
  * **Prompt-cache safety.** The same image under the same profile always
  * becomes the same bytes (`image-fit.ts` is deterministic), an already-legal
@@ -136,9 +138,15 @@ function profileFor(limits: ProviderImageLimits, count: number): Required<ImageF
   };
 }
 
-/** The fewest oldest images that must go, rounded up to a whole step. */
+/**
+ * The fewest oldest images that must go, rounded up to a whole step — unless
+ * the step would take every image, when the cache is not worth the newest
+ * ones and exactly as many go as must.
+ */
 function evictionCount(atLeast: number, total: number): number {
-  return Math.min(total, Math.ceil(Math.max(0, atLeast) / EVICTION_STEP) * EVICTION_STEP);
+  const exact = Math.min(total, Math.max(0, atLeast));
+  const rounded = Math.ceil(exact / EVICTION_STEP) * EVICTION_STEP;
+  return rounded < total ? rounded : exact;
 }
 
 type ImageOutcome = { kind: "keep" } | { kind: "replace"; image: ImageContent } | { kind: "omit" };
@@ -268,35 +276,47 @@ export function createProviderImageGuard(
       const byCount = evictionCount(slots.length - limits.maxImagesPerRequest, slots.length);
       const profile = profileFor(limits, slots.length - byCount);
 
+      // Newest first, and only until the budget is spent: every image older
+      // than the one that overflows it goes anyway, so fitting it would hold a
+      // re-encoded copy nothing sends. What one request holds is then about
+      // its own budget however long the history is. The answer is the one an
+      // oldest-first walk gives — the fewest oldest images whose removal
+      // brings the rest under budget — because sizes are never negative.
+      //
       // Sequential on purpose: a 4K screenshot decodes to ~28 MB of raster,
       // and a first request after a long Session resumes may carry dozens.
       // Every later request is a memo hit, so the latency is paid once.
-      const outcomes: ImageOutcome[] = [];
-      for (const slot of slots.slice(byCount)) outcomes.push(await outcomeFor(slot.image, profile));
-      const sizes = outcomes.map((outcome, index) =>
-        outcome.kind === "keep"
-          ? slots[byCount + index]!.image.data.length
-          : outcome.kind === "replace"
-            ? outcome.image.data.length
-            : 0,
-      );
-      let total = sizes.reduce((sum, size) => sum + size, 0);
+      const outcomes = new Map<number, ImageOutcome>();
+      let total = 0;
       let byBytes = byCount;
-      while (total > limits.requestImageBudgetBytes) {
-        total -= sizes[byBytes - byCount]!;
-        byBytes += 1;
+      for (let index = slots.length - 1; index >= byCount; index -= 1) {
+        const image = slots[index]!.image;
+        const outcome = await outcomeFor(image, profile);
+        total +=
+          outcome.kind === "keep"
+            ? image.data.length
+            : outcome.kind === "replace"
+              ? outcome.image.data.length
+              : 0;
+        if (total > limits.requestImageBudgetBytes) {
+          byBytes = index + 1;
+          break;
+        }
+        outcomes.set(index, outcome);
       }
       const evicted = evictionCount(byBytes, slots.length);
 
       const edits = new Map<number, Map<number, ImageContent | TextContent>>();
       slots.forEach((slot, index) => {
-        const outcome = outcomes[index - byCount];
+        // Every image the eviction keeps was fitted: `evicted` never falls
+        // below the point the budget walk stopped at.
+        const outcome = index < evicted ? null : outcomes.get(index)!;
         const replacement: ImageContent | TextContent | undefined =
-          index < evicted
+          outcome === null
             ? { type: "text", text: EVICTED_IMAGE_TEXT }
-            : outcome!.kind === "replace"
+            : outcome.kind === "replace"
               ? outcome.image
-              : outcome!.kind === "omit"
+              : outcome.kind === "omit"
                 ? { type: "text", text: UNUSABLE_IMAGE_TEXT }
                 : undefined;
         if (replacement === undefined) return;

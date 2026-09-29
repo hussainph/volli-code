@@ -23,6 +23,24 @@ describe("createSuspendClock", () => {
     expect(clock.suspendedMsWithin(1_000 + 3 * HOUR, now)).toBe(0);
   });
 
+  it("closes a sleep whose resume never came at the first sign someone is back", () => {
+    for (const awake of ["unlock-screen", "user-did-become-active"]) {
+      const power = new EventEmitter();
+      let now = 1_000;
+      const clock = createSuspendClock(power, () => now);
+      power.emit("suspend");
+      now += HOUR;
+      power.emit(awake);
+      now += 2 * HOUR;
+      // Only the hour before the person came back was sleep; the silence after
+      // it is the watchdog's to judge.
+      expect(clock.suspendedMsWithin(0, now)).toBe(HOUR);
+      // And the resume that finally arrives adds nothing.
+      power.emit("resume");
+      expect(clock.suspendedMsWithin(0, now)).toBe(HOUR);
+    }
+  });
+
   it("defaults to the wall clock", () => {
     const power = new EventEmitter();
     const clock = createSuspendClock(power);

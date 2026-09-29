@@ -28,12 +28,15 @@
  * known whether the retry was refused. So the settle is written after it: a
  * refusal is recorded (and told) as one, and a resumed run as resumed. A crash
  * in between leaves the retry command on the ledger, which the next launch's
- * verdict reads as "already fired" and settles.
+ * verdict settles from its receipt — or, with no receipt to read, issues again
+ * under the same id. A retry the engine could only answer `unreconciled` is left
+ * unsettled for that same next look, never recorded as resumed.
  *
  * Failures are reported through `onError` and never propagated: a pass that
  * throws must not take the host down, and the next tick looks again.
  */
 import {
+  scheduledResumeFireAt,
   scheduledResumeSettleCommandId,
   scheduledResumeVerdict,
   sessionNotificationItem,
@@ -92,11 +95,15 @@ export interface ScheduledResumeHost {
   settled(): Promise<void>;
 }
 
+/**
+ * What a skip tells the person. `continued` is absent on purpose: the person
+ * took the Session back themselves, and a notification hours later about
+ * their own act says nothing they do not know.
+ */
 const SKIP_REASON_TEXT: Record<
-  Extract<ScheduledResumeOutcome, { kind: "skipped" }>["reason"],
+  Exclude<Extract<ScheduledResumeOutcome, { kind: "skipped" }>["reason"], "continued">,
   string
 > = {
-  continued: "was continued before its resume",
   superseded: "was passed over for a newer Session on its ticket",
   ended: "was stopped before its resume",
   refused: "could not be resumed",
@@ -148,7 +155,13 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
     });
     // A settle the engine refused lost a race — the person cancelled in the
     // same moment — and there is nothing to tell them about their own act.
-    if (outcome.kind !== "skipped" || result.receipt?.status !== "completed") return;
+    if (
+      outcome.kind !== "skipped" ||
+      outcome.reason === "continued" ||
+      result.receipt?.status !== "completed"
+    ) {
+      return;
+    }
     const name = projection.session.title ?? `Session ${shortSessionId(sessionId)}`;
     ports.notify?.({
       producer: "scheduled-resume-skipped",
@@ -177,10 +190,21 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
           sessionId: retry.sessionId,
           command: { kind: "executor.retry", attachmentId: retry.attachmentId },
         });
-        outcome =
-          result.receipt?.status === "rejected"
-            ? { kind: "skipped", reason: "refused", detail: result.receipt.detail }
-            : { kind: "resumed", retryCommandId: retry.retryCommandId };
+        const receipt = result.receipt;
+        if (receipt?.status === "rejected") {
+          // The engine re-judges a scheduled retry as it records it; a person
+          // who took the Session back in the meantime is told that, not a
+          // refusal.
+          outcome = {
+            kind: "skipped",
+            reason: receipt.code === "resume_continued" ? "continued" : "refused",
+            detail: receipt.detail,
+          };
+        } else if (receipt?.status === "accepted" || receipt?.status === "completed") {
+          outcome = { kind: "resumed", retryCommandId: retry.retryCommandId };
+        } else {
+          return;
+        }
       } catch (error) {
         // A host shutting down ends the run it was waiting on; the retry
         // command is on the ledger, and the next launch settles it.
@@ -209,7 +233,8 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
     if (inFlight.has(pending.id)) return null;
     // Not due, and nothing to settle: the verdict would say wait, and asking
     // it would cost a fold of every Session on the Ticket for nothing.
-    if (!pending.fired && now() < pending.resumeAt) return pending.resumeAt;
+    const fireAt = scheduledResumeFireAt(pending.resumeAt);
+    if (!pending.fired && now() < fireAt) return fireAt;
     const { ticketId, projectId } = projection.session;
     const ticketSessions =
       ticketId === null ? [] : await ports.ticketSessions({ projectId, ticketId });

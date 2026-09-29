@@ -720,7 +720,7 @@ describe("sessionBlocker", () => {
     expect(drawn).toEqual([
       ["Sign-in required", "Settings"],
       ["Configuration invalid", "Settings"],
-      ["Reconnecting", "Retry"],
+      ["Reconnecting", null],
       ["Disconnected", "Retry"],
       ["Context limit reached", null],
       ["Turn interrupted", null],

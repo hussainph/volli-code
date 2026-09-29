@@ -2127,8 +2127,16 @@ async function attachSession(
       wakeBackoff?.();
     });
 
-    /** A wait the turn can be taken out of, rather than one it has to sit through. */
+    /**
+     * A wait the turn can be taken out of, rather than one it has to sit through.
+     *
+     * Both waits begin after an await (the notice they follow is written
+     * first), and a Stop that lands there finds no wait to cancel yet — so each
+     * re-reads `interrupting` before it starts, rather than sitting out a wait
+     * nobody is left to want.
+     */
     const waitBeforeRetry = async (ms: number): Promise<void> => {
+      if (interrupting) return;
       await new Promise<void>((wake) => {
         const timer = setTimeout(wake, ms);
         cancelBackoff = () => {
@@ -2151,6 +2159,7 @@ async function attachSession(
      * charged to the online budget rather than retried for free.
      */
     const waitForNetwork = async (runSignal: AbortSignal): Promise<boolean> => {
+      if (interrupting) return false;
       const waiting = new AbortController();
       const stop = (): void => waiting.abort();
       cancelBackoff = stop;

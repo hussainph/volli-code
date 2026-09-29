@@ -16,7 +16,7 @@ import {
   type SessionEngine,
   type SessionRuntime,
 } from "@volli/session-engine";
-import { pendingScheduledResume, type SessionCommand } from "@volli/shared";
+import { pendingScheduledResume, scheduledResumeFireAt, type SessionCommand } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { NotificationRequest } from "../notifications/dispatch";
@@ -24,6 +24,8 @@ import { createScheduledResumeHost, SCHEDULED_RESUME_TICK_MS } from "./scheduled
 
 const venue = { id: "machine-1", kind: "local" as const };
 const RESET = 1_000_000;
+/** When the host fires a schedule for {@link RESET}: the grace after it. */
+const FIRE_AT = scheduledResumeFireAt(RESET);
 
 class Executor implements NativeHarnessAdapter {
   readonly id = "pi";
@@ -198,7 +200,7 @@ describe("the scheduled-resume host", () => {
     // Sleeps no longer than a tick, however far away the reset is.
     expect(delays.at(-1)).toBe(SCHEDULED_RESUME_TICK_MS);
 
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
     await resumeHost.pass();
     await resumeHost.settled();
 
@@ -223,7 +225,7 @@ describe("the scheduled-resume host", () => {
     const session = await stoppedSession(w);
     await schedule(w, session);
     const { resumeHost, delays } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET - 5_000;
+    w.clock.now = FIRE_AT - 5_000;
 
     await resumeHost.start();
 
@@ -236,7 +238,7 @@ describe("the scheduled-resume host", () => {
     const session = await stoppedSession(w);
     await schedule(w, session);
     const { resumeHost } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await Promise.all([resumeHost.start(), resumeHost.pass(), resumeHost.pass()]);
     await resumeHost.settled();
@@ -254,7 +256,7 @@ describe("the scheduled-resume host", () => {
     const run = Promise.withResolvers<void>();
     w.executor.retryGate = run.promise;
     const { resumeHost } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
     // The run is going: another pass neither fires again nor settles early.
@@ -283,7 +285,7 @@ describe("the scheduled-resume host", () => {
           ? run.promise.then(() => Promise.reject(new Error("runtime closed")))
           : w.runtime.command(request),
     );
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
     resumeHost.stop();
@@ -305,7 +307,7 @@ describe("the scheduled-resume host", () => {
           ? Promise.reject(new Error("binding lost"))
           : w.runtime.command(request),
     );
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
     await resumeHost.settled();
@@ -325,7 +327,7 @@ describe("the scheduled-resume host", () => {
     first.resumeHost.stop();
 
     // The app was closed through the reset; the next launch's first pass fires it.
-    w.clock.now = RESET + 3_600_000;
+    w.clock.now = FIRE_AT + 3_600_000;
     const second = host(w, async () => [session.sessionId]);
     await second.resumeHost.start();
     await second.resumeHost.settled();
@@ -366,7 +368,7 @@ describe("the scheduled-resume host", () => {
       command: { kind: "resume.cancel", scheduleId: "schedule-1" },
     });
     const { resumeHost, notifications, delays } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
     await resumeHost.settled();
@@ -378,7 +380,7 @@ describe("the scheduled-resume host", () => {
     expect(delays.at(-1)).toBe(SCHEDULED_RESUME_TICK_MS);
   });
 
-  it("skips, durably and aloud, a Session the person continued", async () => {
+  it("skips, durably and quietly, a Session the person continued", async () => {
     const w = world();
     const session = await stoppedSession(w);
     await schedule(w, session);
@@ -388,7 +390,7 @@ describe("the scheduled-resume host", () => {
       command: { kind: "executor.retry", attachmentId: session.attachmentId },
     });
     const { resumeHost, notifications } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
 
@@ -397,14 +399,74 @@ describe("the scheduled-resume host", () => {
     expect((await settleOf(w, session.sessionId))?.intent).toMatchObject({
       outcome: { kind: "skipped", reason: "continued" },
     });
-    expect(notifications).toEqual([
-      expect.objectContaining({
-        producer: "scheduled-resume-skipped",
-        title: "Resume skipped",
-        body: "Implementer was continued before its resume.",
-        target: expect.objectContaining({ kind: "session", sessionId: session.sessionId }),
-      }),
-    ]);
+    // The person took it back themselves; telling them so hours later is noise.
+    expect(notifications).toEqual([]);
+  });
+
+  it("lets a person who acts between the decision and the retry have the last word", async () => {
+    const w = world();
+    const session = await stoppedSession(w);
+    await schedule(w, session);
+    // The host decided to fire; the person retried by hand before its retry landed.
+    const { resumeHost, notifications } = host(
+      w,
+      async () => [session.sessionId],
+      async (request) => {
+        if (request.commandId === "schedule-1:resume") {
+          await w.runtime.command({
+            commandId: "retry-by-hand",
+            sessionId: session.sessionId,
+            command: { kind: "executor.retry", attachmentId: session.attachmentId },
+          });
+        }
+        return w.runtime.command(request);
+      },
+    );
+    w.clock.now = FIRE_AT;
+
+    await resumeHost.start();
+    await resumeHost.settled();
+
+    expect(w.executor.retries().map(({ commandId }) => commandId)).toEqual(["retry-by-hand"]);
+    expect((await settleOf(w, session.sessionId))?.intent).toMatchObject({
+      outcome: { kind: "skipped", reason: "continued" },
+    });
+    expect(notifications).toEqual([]);
+  });
+
+  it("never records a retry it got no answer to as resumed; the ledger's receipt decides", async () => {
+    const w = world();
+    const session = await stoppedSession(w);
+    await schedule(w, session);
+    const issued: string[] = [];
+    const { resumeHost } = host(
+      w,
+      async () => [session.sessionId],
+      async (request) => {
+        const result = await w.runtime.command(request);
+        if (request.commandId !== "schedule-1:resume") return result;
+        // Answered with nothing — the shape a delivery the engine could not
+        // reconcile leaves.
+        issued.push(request.commandId);
+        return { ...result, receipt: null };
+      },
+    );
+    w.clock.now = FIRE_AT;
+
+    await resumeHost.start();
+    await resumeHost.settled();
+    expect(await settleOf(w, session.sessionId)).toBeUndefined();
+
+    // The next look reads what the ledger recorded, and settles from that
+    // without issuing the retry again.
+    await resumeHost.pass();
+    await resumeHost.settled();
+
+    expect(issued).toEqual(["schedule-1:resume"]);
+    expect(w.executor.retries()).toHaveLength(1);
+    expect((await settleOf(w, session.sessionId))?.intent).toMatchObject({
+      outcome: { kind: "resumed", retryCommandId: "schedule-1:resume" },
+    });
   });
 
   it("skips a Session another on its Ticket moved past after the schedule", async () => {
@@ -418,7 +480,7 @@ describe("the scheduled-resume host", () => {
       command: { kind: "executor.retry", attachmentId: newer.attachmentId },
     });
     const { resumeHost, notifications } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
 
@@ -442,7 +504,7 @@ describe("the scheduled-resume host", () => {
       provenance: { source: { kind: "user", id: "person", detail: null }, venue },
     });
     const { resumeHost, notifications } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
 
@@ -461,7 +523,7 @@ describe("the scheduled-resume host", () => {
     await schedule(w, session);
     w.executor.retryAnswer = "rejected";
     const { resumeHost, notifications } = host(w, async () => [session.sessionId]);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
 
     await resumeHost.start();
     await resumeHost.settled();
@@ -484,7 +546,7 @@ describe("the scheduled-resume host", () => {
     const before = delays.length;
 
     await schedule(w, session);
-    w.clock.now = RESET - 30_000;
+    w.clock.now = FIRE_AT - 30_000;
     resumeHost.observe((await w.runtime.projection(session)).projection);
     await resumeHost.settled();
     // Seen at once, and the timer re-armed at the reset.
@@ -501,7 +563,7 @@ describe("the scheduled-resume host", () => {
       command: { kind: "resume.cancel", scheduleId: "schedule-1" },
     });
     resumeHost.observe((await w.runtime.projection(session)).projection);
-    w.clock.now = RESET;
+    w.clock.now = FIRE_AT;
     await resumeHost.pass();
     expect(w.executor.retries()).toEqual([]);
     resumeHost.stop();

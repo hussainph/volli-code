@@ -998,11 +998,11 @@ function providerRecovery(input: {
  *   without submitting the user's message again. Both halves are offered to
  *   every Session: the sign-in no longer depends on a manual Ticket terminal
  *   being there to hand off to, so neither does the Retry that follows it.
- * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
- *   The first two are a connection to re-establish, which is exactly what
- *   `recover` does. A rate limit gets one because the wait is the whole fix; the
- *   provider's own time is shown when it sent one, and an absent one stays
- *   absent rather than becoming a guess.
+ * - **Retry** — `adapter_disconnected` and `rate_limited`. The first is a
+ *   connection to re-establish, which is exactly what `recover` does. A rate
+ *   limit gets one because the wait is the whole fix; the provider's own time is
+ *   shown when it sent one, and an absent one stays absent rather than becoming
+ *   a guess.
  * - **Retry of the run** — `adapter_unrecoverable`. The kind is named for having
  *   no *automatic* recovery, and by the time it is raised the runtime has spent
  *   every attempt it makes on its own; the run itself is still there to try
@@ -1010,7 +1010,10 @@ function providerRecovery(input: {
  *   connection that never dropped. When a spent allowance with a stated reset
  *   stopped it, a scheduled resume sits beside the Retry — see
  *   {@link stoppedRunBlocker}.
- * - **No recovery** — `context_limit_reached` (the runtime has already compacted
+ * - **No recovery** — `transport_retrying` (the runtime is already reconnecting
+ *   on its own, waiting for the network or backing off, and `recover` would
+ *   neither cut that wait short nor add a retry to it — a button there promises
+ *   an act that does nothing); `context_limit_reached` (the runtime has already compacted
  *   this Session and been refused again, so there is nothing left to summarize);
  *   `quota_exhausted` (a spent allowance is not retryable and no local setting
  *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
@@ -1049,7 +1052,7 @@ function attentionBlocker(
         dismiss: dismissAttention,
       });
     case "transport_retrying":
-      return { message: "Reconnecting", detail, tone: "waiting", action: retry };
+      return { message: "Reconnecting", detail, tone: "waiting", action: null };
     case "adapter_disconnected":
       return errorBlocker(
         { message: "Disconnected", detail, action: retry },

@@ -167,7 +167,7 @@ const TRANSPORT_SIGNAL =
  * sentence says the usage limit was reached is a quota, not a throttle.
  */
 const QUOTA_SIGNAL =
-  /(usage limit|out of (?:extra )?usage|quota|insufficient[_ ]balance|credit balance|billing|spending limit)/i;
+  /(usage limit|out of (?:extra )?(?:usage|credits?)|quota|insufficient[_ ](?:balance|credits?|funds)|credit balance|billing|spending limit|payment required)/i;
 
 /**
  * A provider asking the caller to slow down. Transient — the same request
@@ -277,6 +277,10 @@ export function isTransientTransportFailure(failure: RuntimeFailure): boolean {
   const status = leadingStatus(text);
   if (status !== undefined && TRANSIENT_STATUSES.has(status)) return true;
   if (status === 429 || THROTTLE_SIGNAL.test(text)) return true;
+  // Any other 4xx is the provider refusing THIS request, and whatever words
+  // its body quotes back — a tool's `timeout` parameter, a field named
+  // `network` — are about the request, not the wire.
+  if (status !== undefined && status >= 400 && status < 500) return false;
   return TRANSPORT_SIGNAL.test(text);
 }
 

@@ -20,10 +20,22 @@ import {
   suspendedMsWithin,
 } from "@volli/shared";
 
-/** The two announcements this reads; Electron's `powerMonitor` satisfies it. */
+/** The announcements this reads; Electron's `powerMonitor` satisfies it. */
 export interface PowerEvents {
-  on(event: "suspend" | "resume", listener: () => void): unknown;
+  on(
+    event: "suspend" | "resume" | "unlock-screen" | "user-did-become-active",
+    listener: () => void,
+  ): unknown;
 }
+
+/**
+ * Every announcement that proves the machine is awake. `resume` is the one
+ * that should close a sleep; the other two close one it never delivered — an
+ * aborted sleep, say — because a sleep left open would count every later
+ * silence as sleep and mute the watchdog for the life of the process. A
+ * person unlocking the screen is not asleep.
+ */
+const AWAKE_EVENTS = ["resume", "unlock-screen", "user-did-become-active"] as const;
 
 export interface SuspendClock {
   /** Milliseconds the machine was suspended inside `[from, to]`. */
@@ -38,9 +50,11 @@ export function createSuspendClock(
   power.on("suspend", () => {
     ledger = suspendLedgerSuspended(ledger, now());
   });
-  power.on("resume", () => {
-    ledger = suspendLedgerResumed(ledger, now());
-  });
+  for (const event of AWAKE_EVENTS) {
+    power.on(event, () => {
+      ledger = suspendLedgerResumed(ledger, now());
+    });
+  }
   return {
     suspendedMsWithin: (from, to) => suspendedMsWithin(ledger, from, to),
   };

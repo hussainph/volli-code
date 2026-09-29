@@ -95,6 +95,29 @@ describe("createConnectivityPort", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("holds one platform listener per event however many attachments and waits listen", async () => {
+    const host = platform(false);
+    const woken = vi.fn();
+    const unsubscribes = Array.from({ length: 20 }, () => host.port.onResume(woken));
+    const stops = Array.from({ length: 20 }, () => new AbortController());
+    const waits = stops.map((stop) =>
+      host.port.waitUntilOnline(stop.signal).catch(() => undefined),
+    );
+    expect(host.powerMonitor.listenerCount("resume")).toBe(1);
+    expect(host.powerMonitor.listenerCount("unlock-screen")).toBe(1);
+
+    host.powerMonitor.emit("resume");
+    expect(woken).toHaveBeenCalledTimes(20);
+
+    for (const stop of stops) stop.abort();
+    await Promise.all(waits);
+    expect(host.powerMonitor.listenerCount("unlock-screen")).toBe(0);
+    for (const unsubscribe of unsubscribes) unsubscribe();
+    // A second unsubscribe is harmless.
+    unsubscribes[0]!();
+    expect(host.powerMonitor.listenerCount("resume")).toBe(0);
+  });
+
   it("reports wakes until unsubscribed", () => {
     const host = platform(true);
     const listener = vi.fn();

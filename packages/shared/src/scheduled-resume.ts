@@ -43,7 +43,11 @@ export interface ScheduledResume {
   retryCommandId: string;
   /** Whether that retry has already been issued (its settle may not be recorded yet). */
   fired: boolean;
-  /** Whether the Session was continued by hand after the schedule was made. */
+  /**
+   * Whether the Session was continued by hand after the schedule was made. A
+   * command the engine refused continued nothing and is not counted; one still
+   * awaiting its receipt is, because it may yet start work.
+   */
   continued: boolean;
 }
 
@@ -60,6 +64,19 @@ export interface ScheduledResume {
  */
 export function scheduledResumeRetryCommandId(scheduleId: string): string {
   return `${scheduleId}:resume`;
+}
+
+/**
+ * How long after the stated reset a resume fires. A provider states its reset
+ * to the second and this machine's clock is not the provider's: a retry that
+ * lands a few seconds early is refused on the same spent allowance. The durable
+ * `resumeAt` stays the stated reset; only the fire waits this out.
+ */
+export const SCHEDULED_RESUME_GRACE_MS = 60_000;
+
+/** When the host fires a schedule stated for `resumeAt`. */
+export function scheduledResumeFireAt(resumeAt: number): number {
+  return resumeAt + SCHEDULED_RESUME_GRACE_MS;
 }
 
 /**
@@ -106,8 +123,7 @@ const CONTINUES_SESSION: Readonly<Record<SessionCommandIntent["kind"], boolean>>
 export function pendingScheduledResume(
   projection: Pick<SessionProjection, "commands" | "receipts">,
 ): ScheduledResume | null {
-  const receipts = new Map<string, CommandReceipt>();
-  for (const receipt of projection.receipts) receipts.set(receipt.commandId, receipt);
+  const receipts = latestReceipts(projection.receipts);
   const accepted = (command: SessionCommand): boolean => {
     const status = receipts.get(command.id)?.status;
     return status === "completed" || status === "accepted";
@@ -142,9 +158,19 @@ export function pendingScheduledResume(
     retryCommandId,
     fired: later.some((candidate) => candidate.id === retryCommandId),
     continued: later.some(
-      (candidate) => candidate.id !== retryCommandId && CONTINUES_SESSION[candidate.intent.kind],
+      (candidate) =>
+        candidate.id !== retryCommandId &&
+        CONTINUES_SESSION[candidate.intent.kind] &&
+        receipts.get(candidate.id)?.status !== "rejected",
     ),
   };
+}
+
+/** Each command's latest receipt: a replay can answer an unreconciled one later. */
+function latestReceipts(receipts: readonly CommandReceipt[]): Map<string, CommandReceipt> {
+  const latest = new Map<string, CommandReceipt>();
+  for (const receipt of receipts) latest.set(receipt.commandId, receipt);
+  return latest;
 }
 
 /** What a surface draws for a schedule: only one that is still going to run. */
@@ -189,7 +215,10 @@ function ended(
 }
 
 /** Another Session on the same Ticket, as much of it as the rule reads. */
-export type ScheduledResumeSibling = Pick<SessionProjection, "session" | "turnActive" | "commands">;
+export type ScheduledResumeSibling = Pick<
+  SessionProjection,
+  "session" | "turnActive" | "commands" | "receipts"
+>;
 
 export interface ScheduledResumeVerdictInput {
   projection: Pick<
@@ -218,7 +247,11 @@ export type ScheduledResumeVerdict =
  * when it has none. In order:
  *
  * 1. **Already fired** — the retry command exists, so a pass after a crash
- *    only settles it: `resumed`, or `refused` when the retry was rejected.
+ *    settles it from its receipt: `resumed` when the engine accepted it,
+ *    `refused` when it rejected it. A retry with no answer yet — recorded, and
+ *    then the process died before delivery — is not proof of anything, so it
+ *    falls through to the rules below and, if they still hold, is issued again
+ *    under the same frozen id, which the engine replays rather than repeats.
  * 2. **Not due** — wait. Nothing below is judged early, because the person may
  *    still act before the time, and a skip decided now would be a guess.
  * 3. **Ended** — archived, stopped, or the failed attachment is no longer the
@@ -226,9 +259,13 @@ export type ScheduledResumeVerdict =
  * 4. **Continued** — a message, a retry, an interrupt, an attach or a compaction
  *    on this Session after the schedule: the person already took it from here.
  * 5. **Superseded** — another Session on the Ticket is running a turn now, or
- *    was sent a message or retried after the schedule was made. Resuming this
- *    one would spend the fresh allowance on the stale Session (compared by
- *    wall-clock stamp: cross-Session sequence order does not exist).
+ *    was sent a message or retried after the schedule was made (and the engine
+ *    did not refuse it). Resuming this one would spend the fresh allowance on
+ *    the stale Session (compared by wall-clock stamp: cross-Session sequence
+ *    order does not exist). A sibling's OWN scheduled resume is not it moving
+ *    on: two Sessions stopped by one spent allowance and both scheduled for its
+ *    reset are both what the person asked for, and whichever fires first must
+ *    not talk the other out of it.
  * 6. Otherwise, resume.
  */
 export function scheduledResumeVerdict(
@@ -241,23 +278,23 @@ export function scheduledResumeVerdict(
     const receipt = projection.receipts.findLast(
       (candidate) => candidate.commandId === pending.retryCommandId,
     );
-    return receipt?.status === "rejected"
-      ? { kind: "settle", outcome: skipped("refused", receipt.detail) }
-      : { kind: "settle", outcome: { kind: "resumed", retryCommandId: pending.retryCommandId } };
+    if (receipt?.status === "rejected") {
+      return { kind: "settle", outcome: skipped("refused", receipt.detail) };
+    }
+    if (receipt?.status === "accepted" || receipt?.status === "completed") {
+      return {
+        kind: "settle",
+        outcome: { kind: "resumed", retryCommandId: pending.retryCommandId },
+      };
+    }
   }
-  if (input.now < pending.resumeAt) return { kind: "wait", at: pending.resumeAt };
+  const fireAt = scheduledResumeFireAt(pending.resumeAt);
+  if (input.now < fireAt) return { kind: "wait", at: fireAt };
   if (ended(projection, pending)) return { kind: "settle", outcome: skipped("ended", null) };
   if (pending.continued) return { kind: "settle", outcome: skipped("continued", null) };
   const superseded = input.ticketSessions.some(
     (sibling) =>
-      sibling.session.id !== projection.session.id &&
-      (sibling.turnActive ||
-        sibling.commands.some(
-          (command) =>
-            (command.intent.kind === "message.submit" ||
-              command.intent.kind === "executor.retry") &&
-            command.createdAt > pending.scheduledAt,
-        )),
+      sibling.session.id !== projection.session.id && movedOn(sibling, pending.scheduledAt),
   );
   if (superseded) return { kind: "settle", outcome: skipped("superseded", null) };
   return {
@@ -266,6 +303,28 @@ export function scheduledResumeVerdict(
     attachmentId: pending.attachmentId,
     retryCommandId: pending.retryCommandId,
   };
+}
+
+/** Whether a sibling was picked up by a person after `since`, or is running a turn they started. */
+function movedOn(sibling: ScheduledResumeSibling, since: number): boolean {
+  const receipts = latestReceipts(sibling.receipts);
+  const scheduledRetries = new Set(
+    sibling.commands.flatMap((command) =>
+      command.intent.kind === "resume.schedule" ? [scheduledResumeRetryCommandId(command.id)] : [],
+    ),
+  );
+  const starts = sibling.commands.filter(
+    (command) =>
+      (command.intent.kind === "message.submit" || command.intent.kind === "executor.retry") &&
+      receipts.get(command.id)?.status !== "rejected",
+  );
+  // The turn running now is the one the latest start opened: a scheduled
+  // resume's own turn is not a person's.
+  const latest = starts.at(-1);
+  if (sibling.turnActive && (latest === undefined || !scheduledRetries.has(latest.id))) {
+    return true;
+  }
+  return starts.some((command) => command.createdAt > since && !scheduledRetries.has(command.id));
 }
 
 function skipped(

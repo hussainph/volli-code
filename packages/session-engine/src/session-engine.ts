@@ -1398,7 +1398,7 @@ function rejectionFor(
       detail: "The model cannot change while a turn is active",
     };
   }
-  const resumeRejection = scheduledResumeRejection(projection, command.intent);
+  const resumeRejection = scheduledResumeRejection(projection, command);
   if (resumeRejection) {
     return {
       id: `rejected:${command.id}`,
@@ -1427,11 +1427,39 @@ function rejectionFor(
  * schedule that is pending now; anything else is a stale click or a pass that
  * lost a race, and refusing it is what keeps "settled once" true. A resumed
  * settle must name the retry the schedule's frozen derivation gives.
+ *
+ * The retry a schedule fires is judged here too, inside the same transaction
+ * that records it: the host decided to fire from a projection it read a moment
+ * earlier, and a person who cancelled or took the Session back in that moment
+ * has the last word. A cancel is refused once the retry has fired — it could
+ * no longer stop anything, and the resumed turn is stopped like any other.
  */
 function scheduledResumeRejection(
   projection: SessionProjection,
-  intent: SessionCommandIntent,
+  command: SessionCommand,
 ): { code: string; detail: string } | null {
+  const intent = command.intent;
+  if (intent.kind === "executor.retry") {
+    const schedule = projection.commands.find(
+      (candidate) =>
+        candidate.intent.kind === "resume.schedule" &&
+        scheduledResumeRetryCommandId(candidate.id) === command.id,
+    );
+    if (schedule === undefined) return null;
+    const pending = pendingScheduledResume(projection);
+    if (pending?.id !== schedule.id) {
+      return {
+        code: "resume_not_pending",
+        detail: `Scheduled resume ${schedule.id} is not pending`,
+      };
+    }
+    return pending.continued
+      ? {
+          code: "resume_continued",
+          detail: `Session ${projection.session.id} was continued before its resume`,
+        }
+      : null;
+  }
   if (intent.kind === "resume.schedule") {
     const attention = projection.attention.active.find(({ id }) => id === intent.attentionId);
     const attachment = projection.attachments.find(({ id }) => id === intent.attachmentId);
@@ -1449,10 +1477,17 @@ function scheduledResumeRejection(
         };
   }
   if (intent.kind !== "resume.cancel" && intent.kind !== "resume.settle") return null;
-  if (pendingScheduledResume(projection)?.id !== intent.scheduleId) {
+  const pending = pendingScheduledResume(projection);
+  if (pending?.id !== intent.scheduleId) {
     return {
       code: "resume_not_pending",
       detail: `Scheduled resume ${intent.scheduleId} is not pending`,
+    };
+  }
+  if (intent.kind === "resume.cancel" && pending.fired) {
+    return {
+      code: "resume_fired",
+      detail: `Scheduled resume ${intent.scheduleId} has already resumed`,
     };
   }
   if (

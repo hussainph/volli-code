@@ -86,7 +86,9 @@ export const SESSION_WATCHDOG_TOOL_TIMEOUT_MARGIN_MS = 2 * 60_000;
 export const SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS = 60 * 60_000;
 
 /**
- * The tools whose whole job is to wait, and which therefore never trip.
+ * The tools whose whole job is to wait, and which therefore never trip — unless
+ * the call named its own limit, which then bounds it like any other declared
+ * timeout (see {@link DECLARED_TIMEOUT_SECONDS_FIELD}).
  *
  * - `ticket_await` / `session_await` park on OTHER Sessions and tickets, and
  *   every Session they can wait on has a watchdog of its own: a wedge there
@@ -106,11 +108,16 @@ export const SESSION_WATCHDOG_WAITING_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * The tools that declare their own limit, and the input field that carries it
- * in seconds. Only `bash` (Pi's name for the `execute` coding tool): a generic
- * `timeout` on an arbitrary MCP tool could be in any unit, and a wrong guess
- * there would either mute a hung call or trip a healthy one.
+ * in seconds: `bash` (Pi's name for the `execute` coding tool), and the two
+ * awaits, whose `timeoutSeconds` the verb registry documents. Nothing else — a
+ * generic `timeout` on an arbitrary MCP tool could be in any unit, and a wrong
+ * guess there would either mute a hung call or trip a healthy one.
  */
-const DECLARED_TIMEOUT_SECONDS_FIELD: Readonly<Record<string, string>> = { bash: "timeout" };
+const DECLARED_TIMEOUT_SECONDS_FIELD: Readonly<Record<string, string>> = {
+  bash: "timeout",
+  [verbToolWireName("ticket.await")!]: "timeoutSeconds",
+  [verbToolWireName("session.await")!]: "timeoutSeconds",
+};
 
 /** One tool call the runtime has started and not yet finished, as the watchdog sees it. */
 export interface SessionInFlightTool {
@@ -190,11 +197,12 @@ export function nextInFlightTools(
  * that is somehow still running is caught by the ordinary rule, not earlier.
  */
 export function inFlightToolAllowanceMs(tool: SessionInFlightTool, thresholdMs: number): number {
-  if (SESSION_WATCHDOG_WAITING_TOOLS.has(tool.toolName)) return Number.POSITIVE_INFINITY;
   const allowance =
-    tool.declaredTimeoutMs === null
-      ? SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS
-      : tool.declaredTimeoutMs + SESSION_WATCHDOG_TOOL_TIMEOUT_MARGIN_MS;
+    tool.declaredTimeoutMs !== null
+      ? tool.declaredTimeoutMs + SESSION_WATCHDOG_TOOL_TIMEOUT_MARGIN_MS
+      : SESSION_WATCHDOG_WAITING_TOOLS.has(tool.toolName)
+        ? Number.POSITIVE_INFINITY
+        : SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS;
   return Math.max(thresholdMs, allowance);
 }
 

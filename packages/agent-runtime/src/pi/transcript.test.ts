@@ -315,6 +315,9 @@ describe("isTransientTransportFailure", () => {
       "quota envelope",
     ],
     ["You exceeded your current quota, please check your plan and billing details.", "OpenAI"],
+    ["429 Insufficient credits. Add more at openrouter.ai/settings/credits", "spent credit"],
+    ["429 You are out of credits", "out of credits"],
+    ["402 Payment Required", "payment required"],
     [
       `401 ${JSON.stringify({
         type: "error",
@@ -331,6 +334,10 @@ describe("isTransientTransportFailure", () => {
     ],
     ["OpenAI Codex token refresh error: invalid_grant", "OAuth refresh refused"],
     ["501 Not Implemented", "a status that is not a transient one"],
+    [
+      `400 Invalid JSON payload received. Unknown name "timeout" at 'tools[3]': Cannot find field.`,
+      "a request error quoting a transport word",
+    ],
   ])("leaves a quota or a credential to the user: %s (%s)", (message) => {
     expect(isTransientTransportFailure(failureFor(message))).toBe(false);
   });

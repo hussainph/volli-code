@@ -6364,6 +6364,56 @@ describe("waiting out a machine with no network", () => {
     await handle.close();
   });
 
+  it("honours a Stop that lands while the reconnecting notice is being written", async () => {
+    // The notice is written before either wait begins, so a Stop there finds
+    // no wait to cancel; each wait re-reads it rather than sitting it out.
+    let stop: (() => void) | undefined;
+    const { spec, observations, sessionDataDir } = fixture({
+      observer: async (observation) => {
+        observations.push(observation);
+        if (observation.kind === "attention" && observation.state === "raised") stop?.();
+      },
+    });
+    const connectivity = fakeConnectivity(false);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      connectivity: connectivity.port,
+      models: modelsWithStream(scriptedStream(drops(1))),
+    });
+    const handle = await runtime.startSession(spec);
+    stop = () => void handle.interrupt();
+
+    await handle.submitUserMessage("go");
+
+    expect(connectivity.signals).toEqual([]);
+    expect(kinds(observations).at(-1)).toBe("turn:interrupted");
+    await handle.close();
+  });
+
+  it("does not sit out a backoff for a Stop that landed as the notice was written", async () => {
+    let stop: (() => void) | undefined;
+    const { spec, observations, sessionDataDir } = fixture({
+      observer: async (observation) => {
+        observations.push(observation);
+        if (observation.kind === "attention" && observation.state === "raised") stop?.();
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      // Instant until the notice is raised, then a wait no test would outlast.
+      retryBackoffMs: (attempt) =>
+        attempt + 1 >= TRANSPORT_NOTICE_AFTER_ATTEMPTS ? 10 * 60_000 : 0,
+      models: modelsWithStream(scriptedStream(drops(TRANSPORT_NOTICE_AFTER_ATTEMPTS))),
+    });
+    const handle = await runtime.startSession(spec);
+    stop = () => void handle.interrupt();
+
+    await handle.submitUserMessage("go");
+
+    expect(kinds(observations).at(-1)).toBe("turn:interrupted");
+    await handle.close();
+  });
+
   it("charges a network wait the host could not keep to the online budget", async () => {
     const { spec, observations, sessionDataDir } = fixture();
     const backoffs: number[] = [];

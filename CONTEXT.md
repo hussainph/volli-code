@@ -633,9 +633,11 @@ _Avoid_: waiting flag, notification state
 A person's choice, made on a run a spent provider allowance stopped, to retry
 that run when the allowance's stated reset arrives. It is three Session
 Commands — schedule, cancel, and the host's settle — whose receipts are the
-whole of its state. At its time the host resumes through the ordinary retry, or
-skips it with a reason when the Session was continued, ended, or overtaken by
-another Session on its Ticket. Never scheduled without being chosen, and never
+whole of its state. A minute after the stated reset (a fast local clock must
+not retry into the spent window) the host resumes through the ordinary retry,
+or skips it with a reason when the Session was continued, ended, or overtaken by
+a person's work in another Session on its Ticket — another Session's own
+scheduled resume does not count. Never scheduled without being chosen, and never
 re-scheduled on its own.
 _Avoid_: auto-retry, auto-resume, Automation
 

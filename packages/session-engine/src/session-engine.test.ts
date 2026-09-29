@@ -1119,6 +1119,56 @@ describe("SessionEngine creation and explicit commands", () => {
       });
     });
 
+    it("judges a schedule's own retry as it records it, and refuses a cancel once it fired", async () => {
+      const retry = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "schedule-1:resume",
+          sessionId: quota.session.id,
+          intent: { kind: "executor.retry", attachmentId: quota.running.id },
+          provenance: systemProvenance,
+        });
+      const cancel = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "cancel-1",
+          sessionId: quota.session.id,
+          intent: { kind: "resume.cancel", scheduleId: "schedule-1" },
+          provenance: userProvenance,
+        });
+
+      // Still pending and untouched: the retry is the schedule's to make, and
+      // a cancel after it could no longer stop anything.
+      const fired = await stoppedOnQuota();
+      await fired.schedule("schedule-1");
+      expect((await retry(fired)).receipt?.status).not.toBe("rejected");
+      await expect(cancel(fired)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_fired" },
+      });
+
+      // Cancelled between the host's decision and its retry.
+      const cancelled = await stoppedOnQuota();
+      await cancelled.schedule("schedule-1");
+      await cancel(cancelled);
+      await expect(retry(cancelled)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+
+      // Taken back by hand in the same gap.
+      const continued = await stoppedOnQuota();
+      await continued.schedule("schedule-1");
+      await continued.plane.submit({
+        commandId: "message-by-hand",
+        sessionId: continued.session.id,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "message-by-hand", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      });
+      await expect(retry(continued)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_continued" },
+      });
+    });
+
     it("settles once, with the schedule's own retry, even on an archived Session", async () => {
       const { plane, session, schedule } = await stoppedOnQuota();
       await schedule("schedule-1");

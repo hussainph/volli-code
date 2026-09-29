@@ -4,6 +4,8 @@ import {
   attentionResumeAt,
   pendingScheduledResume,
   presentedScheduledResume,
+  SCHEDULED_RESUME_GRACE_MS,
+  scheduledResumeFireAt,
   scheduledResumeRetryCommandId,
   scheduledResumeSettleCommandId,
   scheduledResumeVerdict,
@@ -114,6 +116,7 @@ function sibling(
     session: { ...projection([]).session, id },
     turnActive: false,
     commands: [],
+    receipts: [],
     ...rest,
   };
 }
@@ -223,6 +226,19 @@ describe("pendingScheduledResume", () => {
       ]),
     );
     expect(byHand).toMatchObject({ continued: true });
+    // A command the engine refused continued nothing.
+    const refused = pendingScheduledResume(
+      projection([
+        schedule(),
+        row(
+          "m2",
+          200,
+          { kind: "message.submit", reference: { id: "t2", mediaType: null, digest: null } },
+          "rejected",
+        ),
+      ]),
+    );
+    expect(refused).toMatchObject({ continued: false });
   });
 });
 
@@ -263,6 +279,8 @@ describe("presentedScheduledResume", () => {
   });
 });
 
+const FIRE_AT = scheduledResumeFireAt(RESET);
+
 describe("scheduledResumeVerdict", () => {
   const verdict = (
     rows: readonly Row[],
@@ -275,7 +293,7 @@ describe("scheduledResumeVerdict", () => {
     scheduledResumeVerdict({
       projection: projection(rows, options.overrides),
       ticketSessions: options.ticketSessions ?? [],
-      now: options.now ?? RESET,
+      now: options.now ?? FIRE_AT,
     });
 
   it("has nothing to say without a pending schedule", () => {
@@ -296,7 +314,14 @@ describe("scheduledResumeVerdict", () => {
         ],
         { now: RESET - 1 },
       ),
-    ).toEqual({ kind: "wait", at: RESET });
+    ).toEqual({ kind: "wait", at: FIRE_AT });
+  });
+
+  it("fires a grace period after the stated reset, not on it", () => {
+    // A clock a few seconds fast would otherwise retry into the spent window.
+    expect(FIRE_AT).toBe(RESET + SCHEDULED_RESUME_GRACE_MS);
+    expect(verdict([schedule()], { now: RESET })).toEqual({ kind: "wait", at: FIRE_AT });
+    expect(verdict([schedule()], { now: FIRE_AT })).toMatchObject({ kind: "resume" });
   });
 
   it("resumes a due schedule through its frozen retry id", () => {
@@ -310,18 +335,32 @@ describe("scheduledResumeVerdict", () => {
     });
   });
 
-  it("settles an already-fired retry instead of firing it again", () => {
+  it("settles an already-fired retry from its receipt instead of firing it again", () => {
+    // Recorded, then the process died before delivery: nothing says it ran,
+    // so it is issued again under the same id, which the engine replays.
+    const unanswered = row(
+      RETRY_ID,
+      200,
+      { kind: "executor.retry", attachmentId: ATTACHMENT_ID },
+      null,
+    );
+    expect(verdict([schedule(), unanswered])).toEqual({
+      kind: "resume",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      retryCommandId: RETRY_ID,
+    });
+    // ...unless the person took the Session back since.
     expect(
-      verdict(
-        [
-          schedule(),
-          row(RETRY_ID, 200, { kind: "executor.retry", attachmentId: ATTACHMENT_ID }, null),
-        ],
-        {
-          now: 0,
-        },
-      ),
-    ).toEqual({ kind: "settle", outcome: { kind: "resumed", retryCommandId: RETRY_ID } });
+      verdict([
+        schedule(),
+        unanswered,
+        row("m", 300, {
+          kind: "message.submit",
+          reference: { id: "t", mediaType: null, digest: null },
+        }),
+      ]),
+    ).toEqual({ kind: "settle", outcome: { kind: "skipped", reason: "continued", detail: null } });
     expect(
       verdict([
         schedule(),
@@ -382,6 +421,42 @@ describe("scheduledResumeVerdict", () => {
           sibling({
             commands: [row("r", 150, { kind: "executor.retry", attachmentId: "x" }).command],
           }),
+        ],
+      }),
+    ).toEqual(superseded);
+    // A refused message moved nothing on.
+    expect(
+      verdict([schedule()], {
+        ticketSessions: [
+          sibling({
+            commands: [message("m", 101)],
+            receipts: [row("m", 101, { kind: "session.retitle", title: "x" }, "rejected").receipt!],
+          }),
+        ],
+      }),
+    ).toMatchObject({ kind: "resume" });
+    // A sibling resuming on its own schedule — the same spent allowance, the
+    // same reset — is not it moving on, and neither is the turn that opened.
+    const own = schedule("schedule-9", 90);
+    const ownRetry = row(
+      scheduledResumeRetryCommandId("schedule-9"),
+      FIRE_AT,
+      { kind: "executor.retry", attachmentId: "x" },
+      "accepted",
+    );
+    const resuming = sibling({
+      turnActive: true,
+      commands: [own.command, ownRetry.command],
+      receipts: [own.receipt!, ownRetry.receipt!],
+    });
+    expect(verdict([schedule()], { ticketSessions: [resuming] })).toMatchObject({
+      kind: "resume",
+    });
+    // A person's message there after the schedule still supersedes it.
+    expect(
+      verdict([schedule()], {
+        ticketSessions: [
+          { ...resuming, commands: [...resuming.commands, message("m", FIRE_AT + 1)] },
         ],
       }),
     ).toEqual(superseded);

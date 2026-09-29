@@ -306,6 +306,44 @@ describe("provider image guard", () => {
     expect(imagesOf(fifteen).at(-1)!.data).toBe(String(14).padStart(100, "0"));
   });
 
+  it("never lets a step take every image: ten one byte over budget lose only the oldest", async () => {
+    const guard = createProviderImageGuard({ fit: keepAll() });
+    const small = withLimits({ maxRequestBytes: Math.ceil(1_000 / REQUEST_IMAGE_BUDGET_FRACTION) });
+    // Ten images of 101 bytes: 1010 against a 1000-byte budget.
+    const shots = Array.from({ length: 10 }, (_, id) =>
+      screenshotResult(id, image(String(id).padStart(101, "0"))),
+    );
+
+    const sent = await guard.sanitize(shots, small);
+
+    expect(imagesOf(sent).map((one) => one.data)).toEqual(
+      Array.from({ length: 9 }, (_, index) => String(index + 1).padStart(101, "0")),
+    );
+    expect(textsOf(sent).filter((text) => text === EVICTED_IMAGE_TEXT)).toHaveLength(1);
+
+    // The same holds for the count cap: six images against a cap of five.
+    const capped = await guard.sanitize(
+      Array.from({ length: 6 }, (_, id) => screenshotResult(id, image(`shot-${id}`))),
+      withLimits({ images: { maxPerRequest: 5 } }),
+    );
+    expect(imagesOf(capped)).toHaveLength(5);
+  });
+
+  it("fits only the images the byte budget can keep, newest first", async () => {
+    const fit = keepAll();
+    const guard = createProviderImageGuard({ fit });
+    const small = withLimits({ maxRequestBytes: Math.ceil(1_000 / REQUEST_IMAGE_BUDGET_FRACTION) });
+    const shots = Array.from({ length: 25 }, (_, id) =>
+      screenshotResult(id, image(String(id).padStart(100, "0"))),
+    );
+
+    await guard.sanitize(shots, small);
+
+    // The ten that fit, and the one that overflowed the budget; the fourteen
+    // older ones are evicted without being fitted.
+    expect(fit).toHaveBeenCalledTimes(11);
+  });
+
   it("replaces an image no safe copy can be made of with a placeholder", async () => {
     const guard = createProviderImageGuard();
     const messages = [user([image("bm90IGFuIGltYWdl"), { type: "text", text: "what is this" }])];
@@ -481,7 +519,8 @@ describe("withProviderSafeImages", () => {
     expect(model).toBe(capped);
     expect(passed).toBe(options);
     expect(sent.messages[0]).toBe(context.messages[0]);
-    expect(imagesOf(sent.messages)).toEqual([]);
+    // One image allowed: the newest goes, the older one is evicted.
+    expect(imagesOf(sent.messages)).toEqual([image("dHdv")]);
     expect(imagesOf(context.messages)).toHaveLength(2);
   });
 });
