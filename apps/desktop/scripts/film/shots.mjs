@@ -28,9 +28,12 @@ export const FORMATS = {
 
 const directory = join(dirname(fileURLToPath(import.meta.url)), "shots");
 
-export const SHOTS = await Promise.all(
-  readdirSync(directory)
-    .filter((file) => file.endsWith(".mjs"))
-    .toSorted()
-    .map(async (file) => (await import(pathToFileURL(join(directory, file)).href)).shot),
-);
+// A module without a `shot` export is a helper shared between rigs.
+export const SHOTS = (
+  await Promise.all(
+    readdirSync(directory)
+      .filter((file) => file.endsWith(".mjs"))
+      .toSorted()
+      .map(async (file) => (await import(pathToFileURL(join(directory, file)).href)).shot),
+  )
+).filter((shot) => shot !== undefined);

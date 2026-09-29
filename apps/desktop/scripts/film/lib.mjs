@@ -44,6 +44,11 @@ export const ease = {
   cinematic: (x) => x * x * x * (x * (x * 6 - 15) + 10),
 };
 
+/** Eased progress of t through [from, to], clamped 0..1. */
+export function progress(t, from, to, curve = ease.linear) {
+  return curve(clamp01((t - from) / (to - from)));
+}
+
 /** Piecewise track over `[t, value]` stops, each segment eased. */
 export function track(t, stops, curve = ease.inOutCubic) {
   if (t <= stops[0][0]) return stops[0][1];
@@ -78,7 +83,24 @@ export function track3(t, stops, curve = ease.inOutCubic) {
  *     fStop?, focalLength?, maxBlur?
  *   }
  */
-export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30 }) {
+/**
+ * Cubic Hermite from (p0, slope v0) at t0 to (p1, slope v1) at t1 — for joins
+ * where two shots must meet with the same velocity (the loop).
+ */
+export function hermite(t, t0, t1, p0, p1, v0 = 0, v1 = 0) {
+  const h = t1 - t0;
+  const s = clamp01((t - t0) / h);
+  const s2 = s * s;
+  const s3 = s2 * s;
+  return (
+    (2 * s3 - 3 * s2 + 1) * p0 +
+    (s3 - 2 * s2 + s) * h * v0 +
+    (-2 * s3 + 3 * s2) * p1 +
+    (s3 - s2) * h * v1
+  );
+}
+
+export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30, guard = [] }) {
   const times = [];
   for (let t = 0; t < durationMs; t += stepMs) times.push(Math.round(t * 1000) / 1000);
   times.push(durationMs);
@@ -102,6 +124,15 @@ export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30 }) 
       focalLength: r.focalLength ?? 50,
       maxBlur: r.maxBlur ?? 6,
     };
+    // Nothing may reach the camera plane: a surface at or past it renders
+    // inside out, and Flute flags it. `guard` lists the scene's extreme points.
+    for (const point of guard) {
+      const [, , vz] = rotate(point, rotation);
+      const depth = perspective - (vz - camera.z);
+      if (depth < 120) {
+        console.warn(`  near-plane: t=${t.toFixed(0)} point ${JSON.stringify(point)} depth ${depth.toFixed(0)}`);
+      }
+    }
     return { t, camera, focus };
   });
   const round = (v) => Math.round(v * 100) / 100;
@@ -133,8 +164,8 @@ export function sampleRig({ durationMs, perspective, rig, stepMs = 1000 / 30 }) 
 }
 
 /** One recipe document, in Flute's `src/flute/scenes/<id>.scene.json` shape. */
-export function recipe({ id, title, description, width, height, durationMs, perspective, rig, nodes, surfaceTracks = [], stepMs }) {
-  const { camera, focus, tracks } = sampleRig({ durationMs, perspective, rig, stepMs });
+export function recipe({ id, title, description, width, height, durationMs, perspective, rig, nodes, surfaceTracks = [], stepMs, guard }) {
+  const { camera, focus, tracks } = sampleRig({ durationMs, perspective, rig, stepMs, guard });
   return {
     version: 1,
     id,

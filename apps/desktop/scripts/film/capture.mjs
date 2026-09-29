@@ -66,7 +66,7 @@ function executable() {
 const browser = await chromium.launch({
   executablePath: executable(),
   headless: true,
-  args: ["--force-color-profile=srgb", "--hide-scrollbars", "--disable-lcd-text"],
+  args: ["--force-color-profile=srgb", "--hide-scrollbars", "--disable-lcd-text", "--mute-audio"],
 });
 const page = await browser.newPage({ viewport: size, deviceScaleFactor: dsf, colorScheme: "dark" });
 page.on("pageerror", (error) => console.error("[page error]", error.message));

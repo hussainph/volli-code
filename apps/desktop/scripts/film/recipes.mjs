@@ -37,6 +37,7 @@ for (const shot of SHOTS) {
       rig: shot.rig(format),
       nodes: typeof shot.nodes === "function" ? shot.nodes(format) : shot.nodes,
       surfaceTracks: shot.surfaceTracks?.(format) ?? [],
+      guard: shot.guard ?? [],
     });
     writeFileSync(join(scenes, `${id}.scene.json`), JSON.stringify(doc, null, 2) + "\n");
     const binding = join(scenes, `${id}.tsx`);
@@ -45,4 +46,5 @@ for (const shot of SHOTS) {
   }
 }
 
-execFileSync("npx", ["flute", "sync"], { cwd: desktop, stdio: "inherit" });
+execFileSync("npx", ["flute", "sync"], { cwd: desktop, stdio: ["ignore", "ignore", "inherit"] });
+console.log("flute sync: catalog updated");
