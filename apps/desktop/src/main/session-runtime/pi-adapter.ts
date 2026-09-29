@@ -546,6 +546,13 @@ export interface PiAdapterOptions {
    * is allowed to touch.
    */
   usageLimits?: PiRuntimeHostOptions["usageLimits"];
+  /**
+   * Whether host-authored parallel-read marks frozen into a Session's MCP
+   * definitions may take effect (VC-454). Developer-only: main turns it on
+   * only in an unpackaged build given `VOLLI_DEV_MCP_PARALLEL`. Absent, the
+   * runtime's default holds and every Session dispatches sequentially.
+   */
+  parallelMcpReads?: PiRuntimeHostOptions["parallelMcpReads"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -749,6 +756,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
     ...(options.observability === undefined ? {} : { observability: options.observability }),
     ...(options.connectivity === undefined ? {} : { connectivity: options.connectivity }),
     usageLimits: options.usageLimits ?? { fetch: platformUsageFetch },
+    ...(options.parallelMcpReads === undefined
+      ? {}
+      : { parallelMcpReads: options.parallelMcpReads }),
   });
 
   return {

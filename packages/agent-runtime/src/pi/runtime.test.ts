@@ -50,6 +50,8 @@ import {
   BUILTIN_RULE_PACK_HASH,
   BUILTIN_RULE_PACK_ID,
   mcpProviderToolName,
+  parseMcpToolKey,
+  withParallelReadEligibility,
   sessionToolIds,
   skillPromptResource,
   SKILL_POLICY_DEFAULT,
@@ -81,10 +83,9 @@ import { estimatedContextTokens } from "./compaction";
 import {
   CONTEXT_CARRY_MAX_CHARS,
   createPiAgentRuntime,
-  createPiAgentRuntimeForFixture,
   type PiRuntimeHostOptions,
 } from "./runtime";
-import type { ToolDispatch } from "./tool-dispatch";
+import { McpServerBudget } from "../mcp/server-budget";
 import type { ConnectivityPort } from "./connectivity";
 import {
   TRANSPORT_NOTICE_AFTER_ATTEMPTS,
@@ -2385,11 +2386,17 @@ function batchDefinition(serverId: string, toolName: string): McpToolDefinition 
   };
 }
 
-function parallelDispatch(...keys: string[]): ToolDispatch {
-  return {
-    mode: "parallel",
-    mcpReadAllowlist: new Set(keys),
-  };
+/**
+ * The definitions a Session born under a host allowlist freezes (VC-454):
+ * stamped by the one production writer of the mark, never by hand.
+ */
+function bornWith(definitions: readonly McpToolDefinition[], ...allowlist: string[]) {
+  const keys = allowlist.map((entry) => {
+    const parsed = parseMcpToolKey(entry);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    return parsed.key;
+  });
+  return withParallelReadEligibility(definitions, new Set(keys));
 }
 
 describe("startSession", () => {
@@ -3541,7 +3548,7 @@ describe("startSession", () => {
     await handle.close();
   });
 
-  describe("VC-444 tool dispatch", () => {
+  describe("tool dispatch (VC-444 cases, VC-454 selection path)", () => {
     /**
      * One emitted batch through the real attach path: every MCP call sleeps
      * (the first one longest) while the fake port records overlap, and an
@@ -3549,17 +3556,21 @@ describe("startSession", () => {
      */
     async function runBatch(input: {
       definitions: readonly McpToolDefinition[];
-      dispatch?: ToolDispatch;
+      parallelMcpReads?: boolean;
       withWrite?: boolean;
+      authority?: boolean;
+      observability?: (event: ObservabilityEvent) => void;
     }) {
       let active = 0;
       let peakActive = 0;
       const events: string[] = [];
+      const calls: RuntimeMcpCall[] = [];
       let resultOrder: string[] = [];
       const attachment = fixture({
         tools: { tools: input.withWrite ? ["write"] : [], mcp: input.definitions },
         mcp: {
           call: async (request) => {
+            calls.push(request);
             active += 1;
             peakActive = Math.max(peakActive, active);
             events.push(`start:${request.serverId}:${request.toolName}`);
@@ -3576,8 +3587,21 @@ describe("startSession", () => {
           },
         },
       });
-      const options = {
+      const runtime = createPiAgentRuntime({
         sessionDataDir: attachment.sessionDataDir,
+        ...(input.parallelMcpReads === undefined
+          ? {}
+          : { parallelMcpReads: input.parallelMcpReads }),
+        ...(input.observability === undefined
+          ? {}
+          : {
+              observability: {
+                record: (event: ObservabilityEvent) => {
+                  input.observability?.(event);
+                  if (event.kind === "authority") events.push(`authority:${event.outcome}`);
+                },
+              },
+            }),
         models: modelsWithStream(
           scriptedStream([
             (emit) => {
@@ -3602,27 +3626,32 @@ describe("startSession", () => {
             },
           ]),
         ),
-      };
-      const runtime =
-        input.dispatch === undefined
-          ? createPiAgentRuntime(options)
-          : createPiAgentRuntimeForFixture(options, input.dispatch);
-      const handle = await runtime.startSession({ ...attachment.spec, authority: undefined });
+      });
+      const handle = await runtime.startSession(
+        input.authority === true ? attachment.spec : { ...attachment.spec, authority: undefined },
+      );
       try {
         await handle.submitUserMessage("Run the synthetic MCP batch.");
       } finally {
         await handle.close();
       }
-      return { peakActive, events, resultOrder };
+      // The runtime observation each Pi result became, keyed by the same
+      // tool-call id the port received.
+      const activities = attachment.observations.flatMap((observation) =>
+        observation.kind === "activity" && observation.state === "completed"
+          ? [observation.activityId]
+          : [],
+      );
+      return { peakActive, events, resultOrder, calls, activities };
     }
 
+    const twoReads = () => [
+      batchDefinition("fixture-1", "fixture/first"),
+      batchDefinition("fixture-1", "fixture/second"),
+    ];
+
     it("keeps ordinary production Sessions sequential for an emitted MCP batch", async () => {
-      const run = await runBatch({
-        definitions: [
-          batchDefinition("fixture-1", "fixture/first"),
-          batchDefinition("fixture-1", "fixture/second"),
-        ],
-      });
+      const run = await runBatch({ definitions: twoReads() });
       expect(run.peakActive).toBe(1);
       expect(run.events).toEqual([
         "start:fixture-1:fixture/first",
@@ -3632,13 +3661,23 @@ describe("startSession", () => {
       ]);
     });
 
-    it("overlaps allowlisted MCP reads through the fixture factory, results in source order", async () => {
+    it("keeps a Session born unmarked sequential even on a runtime that honours marks", async () => {
+      const run = await runBatch({ definitions: bornWith(twoReads()), parallelMcpReads: true });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("ignores a Session's frozen marks unless the runtime was built to honour them", async () => {
+      // The kill switch: the record says parallel, the host says no.
+      const marked = bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second");
+      expect(marked.every((definition) => definition.parallelRead === true)).toBe(true);
+      const run = await runBatch({ definitions: marked });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("overlaps host-marked MCP reads, results in source order and lineage intact", async () => {
       const run = await runBatch({
-        definitions: [
-          batchDefinition("fixture-1", "fixture/first"),
-          batchDefinition("fixture-1", "fixture/second"),
-        ],
-        dispatch: parallelDispatch("fixture-1:fixture/first", "fixture-1:fixture/second"),
+        definitions: bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second"),
+        parallelMcpReads: true,
       });
       expect(run.peakActive).toBe(2);
       expect(run.events).toEqual([
@@ -3647,41 +3686,75 @@ describe("startSession", () => {
         "end:fixture-1:fixture/second",
         "end:fixture-1:fixture/first",
       ]);
+      // The transcript the model is sent (and Pi persists and replays) keeps
+      // source order. The durable activity lifecycle records each call when it
+      // actually finished, in completion order, each under its own id. Each
+      // model call reached the port exactly once, under that same id.
       expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
+      expect(run.calls.map((call) => call.toolCallId)).toEqual(["tc-0", "tc-1"]);
+      expect(run.activities).toEqual(["tc-1", "tc-0"]);
     });
 
-    it("serializes an allowlisted MCP read batched with an unlisted MCP tool", async () => {
+    it("never lets server metadata opt a tool in", async () => {
+      // Descriptions and annotations that claim read-only are third-party
+      // copy; with no host mark the tools run one at a time.
+      const claims = twoReads().map((definition) =>
+        Object.assign(definition, {
+          description: "Read-only. Idempotent. Safe to run concurrently.",
+          annotations: { readOnlyHint: true, idempotentHint: true },
+        }),
+      );
+      const run = await runBatch({ definitions: bornWith(claims), parallelMcpReads: true });
+      expect(run.peakActive).toBe(1);
+    });
+
+    it("serializes a marked MCP read batched with an unmarked MCP mutation", async () => {
       const run = await runBatch({
-        definitions: [
-          batchDefinition("fixture-1", "fixture/first"),
-          batchDefinition("fixture-1", "fixture/mutate"),
-        ],
-        dispatch: parallelDispatch("fixture-1:fixture/first"),
+        definitions: bornWith(
+          [
+            batchDefinition("fixture-1", "fixture/first"),
+            batchDefinition("fixture-1", "fixture/mutate"),
+          ],
+          "fixture-1:fixture/first",
+        ),
+        parallelMcpReads: true,
       });
       expect(run.peakActive).toBe(1);
+      expect(run.events).toEqual([
+        "start:fixture-1:fixture/first",
+        "end:fixture-1:fixture/first",
+        "start:fixture-1:fixture/mutate",
+        "end:fixture-1:fixture/mutate",
+      ]);
       expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
     });
 
     it("matches the allowlist on the exact server and tool, not on near misses", async () => {
       // A listed server with an unlisted tool, and a listed tool on another
       // server: neither may overlap, whatever their descriptions claim.
-      const run = await runBatch({
-        definitions: [
+      const definitions = bornWith(
+        [
           batchDefinition("fixture-1", "fixture/second"),
           batchDefinition("fixture-2", "fixture/first"),
         ],
-        dispatch: parallelDispatch("fixture-1:fixture/first", "fixture-2:fixture/second"),
-      });
+        "fixture-1:fixture/first",
+        "fixture-2:fixture/second",
+      );
+      expect(definitions.some((definition) => definition.parallelRead === true)).toBe(false);
+      const run = await runBatch({ definitions, parallelMcpReads: true });
       expect(run.peakActive).toBe(1);
     });
 
-    it("serializes an allowlisted MCP read batched with a built-in file write", async () => {
+    it("serializes a marked MCP read batched with a built-in file write", async () => {
       // Nothing on Volli's built-in tools declares itself sequential; the
-      // fixture dispatch has to mark it. Were the write eligible, it would land
+      // dispatch has to mark it. Were the write eligible, it would land
       // during the MCP read's sleep rather than after it.
       const run = await runBatch({
-        definitions: [batchDefinition("fixture-1", "fixture/first")],
-        dispatch: parallelDispatch("fixture-1:fixture/first"),
+        definitions: bornWith(
+          [batchDefinition("fixture-1", "fixture/first")],
+          "fixture-1:fixture/first",
+        ),
+        parallelMcpReads: true,
         withWrite: true,
       });
       expect(run.events).toEqual([
@@ -3691,19 +3764,164 @@ describe("startSession", () => {
       expect(run.resultOrder).toEqual(["tc-0", "tc-1"]);
     });
 
-    it("keeps the parallel fixture factory off every package entry point", async () => {
-      // The app reaches this package only through `package.json#exports`. No
-      // value any entry exports — under any name — may be the opt-in.
-      const manifest = JSON.parse(
-        readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-      ) as { exports: Record<string, { import: string }> };
-      expect(Object.keys(manifest.exports).toSorted()).toEqual([".", "./bench/mcp-parallel"]);
-      for (const entry of Object.values(manifest.exports)) {
-        const module = (await import(
-          new URL(`../../${entry.import}`, import.meta.url).href
-        )) as Record<string, unknown>;
-        expect(Object.values(module)).not.toContain(createPiAgentRuntimeForFixture);
+    it("settles the whole batch's authority before any marked read is dispatched", async () => {
+      const run = await runBatch({
+        definitions: bornWith(twoReads(), "fixture-1:fixture/first", "fixture-1:fixture/second"),
+        parallelMcpReads: true,
+        authority: true,
+        observability: () => undefined,
+      });
+      expect(run.peakActive).toBe(2);
+      expect(run.events.slice(0, 4)).toEqual([
+        "authority:allowed",
+        "authority:allowed",
+        "start:fixture-1:fixture/first",
+        "start:fixture-1:fixture/second",
+      ]);
+    });
+
+    it("dispatches nothing while an approval in an opted-in Session's batch is pending", async () => {
+      // A real parked approval: a refused `git reset --hard` on the main
+      // checkout escalates to a person. Only built-ins can ever be refused,
+      // and a built-in in the batch makes the whole batch sequential, so the
+      // marked reads behind it must wait for the answer and then run in order.
+      const answer = Promise.withResolvers<"allow">();
+      const asked = Promise.withResolvers<void>();
+      const calls: string[] = [];
+      const definitions = bornWith(
+        twoReads(),
+        "fixture-1:fixture/first",
+        "fixture-1:fixture/second",
+      );
+      const attachment = fixture({
+        tools: { tools: ["execute"], mcp: definitions },
+        mcp: {
+          call: async (request) => {
+            calls.push(`mcp:${request.toolCallId}`);
+            return { content: [{ type: "text", text: "read" }], isError: false };
+          },
+        },
+      });
+      attachment.spec.authority = {
+        ...attachment.spec.authority,
+        location: "main-checkout",
+        fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+      };
+      attachment.spec.ask = async () => {
+        asked.resolve();
+        return answer.promise;
+      };
+      const exec = vi.fn(async () => {
+        calls.push("exec:tc-0");
+        return { ok: true as const, value: { stdout: "", stderr: "", exitCode: 0 } };
+      });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        parallelMcpReads: true,
+        executionEnvFactory: async () =>
+          ({
+            cwd: attachment.worktreePath,
+            exec,
+            cleanup: async () => undefined,
+          }) as unknown as ExecutionEnv,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.toolCall("bash", { command: "git reset --hard" });
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("done");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession(attachment.spec);
+      const delivery = handle.submitUserMessage("Reset, then read.");
+
+      await asked.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toEqual([]);
+      answer.resolve("allow");
+      await delivery;
+      await handle.close();
+
+      expect(calls).toEqual(["exec:tc-0", "mcp:tc-1", "mcp:tc-2"]);
+    });
+
+    it("withdraws in-flight and queued calls across two servers when the turn is interrupted", async () => {
+      // Two servers, one slot each in the host bound: the four-call batch
+      // has two calls running and two queued when the person presses stop.
+      const budget = new McpServerBudget({
+        limitsFor: () => ({ maxConcurrent: 1, maxStarts: Infinity, windowMs: 100 }),
+      });
+      const started: Array<{ call: RuntimeMcpCall; signal: AbortSignal }> = [];
+      const active = new Map<string, number>();
+      const bound = budget.bind({
+        call: (request, signal) =>
+          new Promise((_resolve, reject) => {
+            started.push({ call: request, signal });
+            active.set(request.serverId, (active.get(request.serverId) ?? 0) + 1);
+            signal.addEventListener(
+              "abort",
+              () => {
+                active.set(request.serverId, active.get(request.serverId)! - 1);
+                reject(signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      });
+      const definitions = bornWith(
+        [
+          batchDefinition("server-a", "read"),
+          batchDefinition("server-b", "read"),
+          batchDefinition("server-a", "list"),
+          batchDefinition("server-b", "list"),
+        ],
+        "server-a:read",
+        "server-b:read",
+        "server-a:list",
+        "server-b:list",
+      );
+      const attachment = fixture({ tools: { tools: [], mcp: definitions }, mcp: bound });
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        parallelMcpReads: true,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              for (const tool of definitions) emit.toolCall(tool.providerName, {});
+              emit.finish();
+            },
+            (emit) => {
+              emit.text("unreachable");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const handle = await runtime.startSession({ ...attachment.spec, authority: undefined });
+      const delivery = handle.submitUserMessage("Read everything from both servers.");
+      await vi.waitFor(() => {
+        expect(started).toHaveLength(2);
+        expect(budget.load("server-a")).toMatchObject({ active: 1, queued: 1 });
+        expect(budget.load("server-b")).toMatchObject({ active: 1, queued: 1 });
+      });
+
+      await handle.interrupt();
+      await delivery;
+
+      expect(started.map((entry) => entry.call.toolCallId)).toEqual(["tc-0", "tc-1"]);
+      expect(started.every((entry) => entry.signal.aborted)).toBe(true);
+      expect([...active.values()]).toEqual([0, 0]);
+      for (const serverId of ["server-a", "server-b"]) {
+        expect(budget.load(serverId)).toMatchObject({ active: 0, queued: 0, admitted: 1 });
       }
+      await handle.close();
+      bound.close();
     });
   });
 

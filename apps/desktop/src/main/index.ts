@@ -69,6 +69,7 @@ import type {
 } from "../ipc/contract";
 import type { HarnessUninstallResult, ManagedConflict } from "./harness-install";
 import { McpSessionHost, serversForFrozenMcpTools } from "./mcp/session-host";
+import { desktopMcpDispatch } from "./mcp/dispatch-policy";
 import { McpSettingsService } from "./mcp/settings";
 import {
   abandonAcceptedUpdateInstall,
@@ -1051,6 +1052,14 @@ app.whenReady().then(async () => {
   // birth grants and the door later consumes the exact durable record.
   const sessionDelegation = dbHandle.ok ? createTicketSessionDelegationStore(dbHandle.db) : null;
   const mcpSettings = dbHandle.ok ? new McpSettingsService({ db: dbHandle.db }) : null;
+  // How MCP calls are dispatched and bounded (VC-454): the developer-only
+  // parallel-read opt-in, read once from an unpackaged build's environment
+  // (no setting, no UI), and one per-server bound every Session shares.
+  const mcpDispatch = desktopMcpDispatch({
+    env: process.env,
+    packaged: !isDev,
+    log: (message) => console.warn(`[volli] ${message}`),
+  });
   const webAccess = dbHandle.ok
     ? new WebAccessSettings({
         db: dbHandle.db,
@@ -1133,7 +1142,11 @@ app.whenReady().then(async () => {
               mcpTools,
             });
           },
-          resolveMcp: (projectId) => mcpSettings?.selectedTools(projectId) ?? [],
+          // A root Session freezes today's selection, marked eligible for
+          // parallel reads only where the developer allowlist names the exact
+          // tool (VC-454).
+          resolveMcp: (projectId) =>
+            mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
@@ -1288,6 +1301,9 @@ app.whenReady().then(async () => {
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
           catalogs: piModelAccess.catalogs,
+          // Frozen parallel-read marks take effect only while the developer
+          // opt-in is set (VC-454); unset, every Session is sequential again.
+          parallelMcpReads: mcpDispatch.parallelMcpReads,
           // A stable reference for the life of the process: flipping the
           // Settings switch swaps what is behind this owner rather than
           // replacing it, so a Session started before the flip is observed
@@ -1373,7 +1389,10 @@ app.whenReady().then(async () => {
                       scope.mcpTools,
                     ),
                   });
-                  return { call: host.port.call, dispose: () => host.close() };
+                  // Behind the one per-server budget (VC-454): over-budget
+                  // calls queue, and closing the attachment withdraws this
+                  // Session's queued and in-flight calls and nobody else's.
+                  return mcpDispatch.bind(host);
                 },
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
@@ -1442,7 +1461,9 @@ app.whenReady().then(async () => {
             } as const;
             const events = await sessionEngine.listEvents({ sessionId });
             let toolSurface = recordedToolSurface(events);
-            let mcpTools = recordedMcpTools(events);
+            // Frozen parallel-read marks, narrowed to today's developer
+            // allowlist (VC-454): a tool taken off it stops overlapping.
+            let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
             let mcpManagementNames = recordedMcpManagementNames(events);
             if (toolSurface === null) {
               mcpManagementNames = "server";

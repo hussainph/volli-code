@@ -125,7 +125,7 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools } from "./tools";
-import { applyToolDispatch, SEQUENTIAL_TOOL_DISPATCH, type ToolDispatch } from "./tool-dispatch";
+import { applyToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
   attentionReasonFor,
@@ -314,12 +314,21 @@ export interface PiRuntimeHostOptions {
     holder?: UsageLimitsHolder;
     fetch: UsageProbeFetch;
   };
+  /**
+   * Whether a Session's frozen, host-authored parallel-read marks may take
+   * effect (VC-454). Developer-only for now, and off unless a host says
+   * otherwise: absent, every Session dispatches its tool batches one call at a
+   * time whatever its record holds, which makes this the kill switch for
+   * Sessions already born with marks. On, a Session runs Pi's parallel mode
+   * only if its own MCP definitions carry the mark — see `tool-dispatch.ts`.
+   */
+  parallelMcpReads?: boolean;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
-  toolDispatch: ToolDispatch;
+  parallelMcpReads: boolean;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -362,41 +371,19 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one production structured executor port. Every Session it attaches
- * dispatches a model-issued tool batch sequentially.
- */
-export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
-  return createPiAgentRuntimeWithToolDispatch(options, SEQUENTIAL_TOOL_DISPATCH);
-}
-
-/**
- * Test-only opt-in (VC-444): the same runtime with a fixture-chosen
- * {@link ToolDispatch}. Parallel dispatch is never a bare flag — only MCP tools
- * whose exact `serverId:toolName` is on the fixture's allowlist may overlap,
- * and every built-in or unlisted tool is marked sequential, so a batch that
- * mixes them runs serially. Deliberately absent from `src/index.ts` and every
- * `package.json#exports` entry; a runtime test pins that.
- */
-export function createPiAgentRuntimeForFixture(
-  options: PiRuntimeHostOptions,
-  toolDispatch: ToolDispatch,
-): AgentRuntime {
-  return createPiAgentRuntimeWithToolDispatch(options, toolDispatch);
-}
-
-/**
  * Build the one structured executor port. The models are resolved once rather
  * than per attachment: the credential store behind them serializes this
  * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ *
+ * Every Session it attaches dispatches a model-issued tool batch sequentially,
+ * unless {@link PiRuntimeHostOptions.parallelMcpReads} is on AND that Session's
+ * own frozen MCP definitions carry host-authored parallel-read marks.
  */
-function createPiAgentRuntimeWithToolDispatch(
-  options: PiRuntimeHostOptions,
-  toolDispatch: ToolDispatch,
-): AgentRuntime {
+export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
-    toolDispatch,
+    parallelMcpReads: options.parallelMcpReads === true,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -2056,13 +2043,15 @@ async function attachSession(
     // bindings: the array Pi resolves against and the list the Snapshot records
     // cannot disagree, which is what let the pack drop its rule about tool
     // identity (VC-3).
-    // Sequential dispatch hands the array back untouched; the fixture-only
-    // parallel dispatch marks every tool that is not an allowlisted MCP read
-    // sequential. Names and schemas — the provider-visible half — never change.
+    // Selected per Session from its own frozen record (VC-454). Sequential
+    // dispatch hands the array back untouched; a Session whose MCP definitions
+    // carry host-authored parallel-read marks — honoured only when this
+    // runtime was built to — gets every other tool marked sequential. Names
+    // and schemas, the provider-visible half, never change.
     const { tools, toolExecution } = applyToolDispatch(
       createSessionTools(spec, ownedToolEnv),
       spec.tools.mcp ?? [],
-      host.toolDispatch,
+      host.parallelMcpReads,
     );
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the

@@ -313,6 +313,74 @@ ticket comment, because that is where someone doing the work will look. The
 project row remains canonical: the Board Role holds these verbs, and a Board
 Session has no Ticket to comment on.
 
+## How calls reach a server
+
+### One connection per Session, shared by its calls
+
+Each Session attachment opens one connection per server, lazily, and every call
+that Session makes to the server shares it. A call that is stopped, or that the
+server answers with an error — including an HTTP 429 or 5xx — leaves that
+connection in place for the others. The connection is replaced only when it has
+failed: a closed pipe, a dropped socket, an HTTP 400 or 404 that ends the
+protocol session, or a call that got no answer within its 30-second deadline.
+Even then the old connection is closed only after the last call still running
+on it finishes. Every connection is closed when the attachment closes.
+
+### Every Session shares one bound per server
+
+All Sessions share a single bound per configured server: at most **8 calls in
+flight** and **32 call starts per second**. A call over the bound waits its turn
+instead of failing, and stopping the turn withdraws it. A start counts against
+the second until one second after its call *finishes*, not after it began: the
+server has certainly seen the call by then, so no matter how the network
+delays a request, the server never sees more than 32 in any second. Nothing a
+server says about itself raises or lowers the bound, and no call is ever
+retried.
+
+Ordinary Sessions run one tool call at a time, so the bound only comes into
+play when several Sessions call the same server at once. A call that waited a
+second or more for it is logged in the main-process log, so a queued call is
+not mistaken for a slow server. The bound belongs to one configured server: the
+same endpoint configured in two projects is two servers with a bound each.
+
+### Parallel reads (developer-only)
+
+A model sometimes asks for several independent tool calls in one reply. Volli
+runs them **one at a time**. An unpackaged development build can opt specific,
+audited read tools into running at the same time, with no setting and no UI:
+
+```sh
+VOLLI_DEV_MCP_PARALLEL='{
+  "reads": ["<serverId>:<toolName>"],
+  "limits": { "<serverId>": { "maxConcurrent": 2, "maxStarts": 6, "windowMs": 100 } }
+}' pnpm dev
+```
+
+- `reads` lists exact server id and tool name pairs that someone has checked are
+  idempotent reads. A server's description of its own tool, its annotations and
+  any `readOnlyHint` are never consulted.
+- Sessions **created** while the variable is set are marked with that list, and
+  the marks are frozen into the Session like the rest of its tools. A subagent
+  Session inherits its parent's marks along with its tools. Every new root
+  Session in that launch is marked the same way; there is no per-Session
+  choice.
+- When a Session attaches, each frozen mark is kept only if that exact tool is
+  still in `reads`. Taking a tool off the list stops it running in parallel
+  everywhere at the next launch. Adding a tool never marks a Session that was
+  born without it.
+- A reply runs in parallel only if **every** call in it is a marked read. Any
+  other call in the same reply — a file edit, a shell command, a verb, a browser
+  action, an unmarked MCP tool — makes the whole reply run one call at a time,
+  in order.
+- Approval happens for the whole reply before any call in it starts.
+- `limits` replaces the shared bound for the named servers; set it to what the
+  server can actually handle. `maxStarts` left out means no start-rate limit;
+  `windowMs` defaults to one second.
+- Relaunching without the variable turns parallel dispatch off for every
+  Session, including ones created with marks. A packaged build ignores the
+  variable entirely. A value that does not parse is logged at launch and
+  ignored.
+
 ## What is out of scope
 
 - Downloading, unpacking or verifying packages from npm, PyPI, OCI or anywhere
@@ -336,5 +404,10 @@ Session has no Ticket to comment on.
 | Discovery | `apps/desktop/src/main/mcp/discovery.ts` |
 | Client, transports, launch environment | `apps/desktop/src/main/mcp/client.ts` |
 | Per-attachment connection owner | `apps/desktop/src/main/mcp/session-host.ts` |
+| Shared per-server bound | `packages/agent-runtime/src/mcp/server-budget.ts` |
+| Parallel-read marks | `withParallelReadEligibility` in `packages/shared/src/mcp.ts` |
+| Parallel dispatch rule | `packages/agent-runtime/src/pi/tool-dispatch.ts` |
+| Developer opt-in, stamping, attach narrowing, budget binding | `apps/desktop/src/main/mcp/parallel-dev-config.ts`, `dispatch-policy.ts` |
+| Parallel-dispatch benchmark | `apps/desktop/e2e/bench/mcp-parallel/` (`pnpm -C apps/desktop bench:mcp-parallel`) |
 | Storage | `apps/desktop/src/main/db/mcp-servers-repo.ts`, `mcp-operations-repo.ts` |
 | Configure pane | `apps/desktop/src/renderer/src/components/settings/configure/mcp-pane.tsx` |
