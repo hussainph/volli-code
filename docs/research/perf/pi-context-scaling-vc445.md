@@ -399,6 +399,10 @@ JSONL load, or otherwise avoid parsing the whole file in one task, and this
 bench's large-sidecar arm is the before/after test. The ticket is scoped as an
 Option-2 yield only: no topology, hibernation, concurrency or scheduling change.
 
+**Done in VC-462** ([report](pi-sidecar-rebind-yield-vc462.md)). The
+47 MB re-bind's loop-delay max fell from about 190 ms to about 23 ms, with
+the IPC echo max following it.
+
 ## Caveats
 
 - **Shared, loaded host.** Latency and bind times are directional. The

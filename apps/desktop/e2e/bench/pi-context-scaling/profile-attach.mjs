@@ -64,9 +64,13 @@ try {
     for (let index = 0; index < TIMED; index += 1) {
       // VC-462: the longest the loop was held during each re-attach, the
       // plain-Node stand-in for the Electron bench's hydration-window max.
+      // The histogram records a stall only when its timer next fires, so it
+      // stays enabled for a few ms after the attach; disabled at once, it
+      // would miss a stall that ends the attach.
       const delay = monitorEventLoopDelay({ resolution: 1 });
       delay.enable();
       timings.push(Math.round(await generator.reattachOnce({ ...base, target })));
+      await new Promise((resolve) => setTimeout(resolve, 20));
       delay.disable();
       stalls.push(Math.round(delay.max / 1e6));
     }
