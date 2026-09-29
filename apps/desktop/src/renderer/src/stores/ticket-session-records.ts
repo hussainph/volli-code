@@ -33,6 +33,7 @@ import {
 
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import { markSessionRead } from "./session-read-mark";
 
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
@@ -282,40 +283,38 @@ export function createTicketSessionRecordsStore() {
       });
     },
 
-    async setSessionRead(ticketId, sessionId, unread) {
-      const previous = sessionRowReadState(get().byTicket[ticketId], sessionId);
-      // The optimistic stamp is local only: main owns the receipt's clock, and
-      // the recorded one replaces this on the push.
-      const write = (read: SessionReadState): void => {
-        set((state) => {
-          const rows = state.byTicket[ticketId];
-          if (rows === undefined) return state;
-          return {
-            byTicket: {
-              ...state.byTicket,
-              [ticketId]: rows.map((row) => {
-                if (rowSessionId(row) !== sessionId) return row;
-                const marked = read.unreadSince === null ? {} : { read };
-                // Object.assign, not a spread in a map callback (the lint rule
-                // `renameLocally` above records), and the key is DELETED rather
-                // than set to undefined when a Session is read: absence is the
-                // resting state everywhere else in this row's life.
-                const { read: _dropped, ...rest } = row;
-                return Object.assign({}, rest, marked) as SessionListingRow;
-              }),
-            },
-          };
-        });
-      };
-      write(unread ? { unreadSince: Date.now() } : { unreadSince: null });
-      try {
-        const result = await window.api.sessions.setRead({ sessionId, unread });
-        if (result.ok) return;
-        toastError(`Couldn't mark the session: ${result.error}`);
-      } catch (error) {
-        toastError(`Couldn't mark the session: ${errorMessage(error)}`);
-      }
-      write(previous);
+    setSessionRead(ticketId, sessionId, unread) {
+      // Shared with the project listing through `session-read-mark.ts`: the
+      // optimistic stamp, the toast and the conditional revert are one rule,
+      // and this store contributes only how a row is read and written here.
+      return markSessionRead(
+        { sessionId, unread },
+        {
+          readState: () => sessionRowReadState(get().byTicket[ticketId], sessionId),
+          write: (read) => {
+            set((state) => {
+              const rows = state.byTicket[ticketId];
+              if (rows === undefined) return state;
+              return {
+                byTicket: {
+                  ...state.byTicket,
+                  [ticketId]: rows.map((row) => {
+                    if (rowSessionId(row) !== sessionId) return row;
+                    const marked = read.unreadSince === null ? {} : { read };
+                    // Object.assign, not a spread in a map callback (the lint
+                    // rule `renameLocally` above records), and the key is
+                    // DELETED rather than set to undefined when a Session is
+                    // read: absence is the resting state everywhere else in
+                    // this row's life.
+                    const { read: _dropped, ...rest } = row;
+                    return Object.assign({}, rest, marked) as SessionListingRow;
+                  }),
+                },
+              };
+            });
+          },
+        },
+      );
     },
   }));
 }

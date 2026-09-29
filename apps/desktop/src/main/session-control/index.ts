@@ -60,6 +60,8 @@ export type { TerminalAttachmentDetail } from "./terminal-attachment";
 export { chatSessionRecord, latestStructuredAttachment } from "./chat-attachment";
 export { sessionListingRow, sessionListingRows } from "./listing-row";
 export { sessionListingNotice, sessionListingRowsForRoster } from "./listing-roster";
+export { publishSessionListingRow } from "./row-republish";
+export type { SessionRowPublishPorts } from "./row-republish";
 export { watchSessionActivity } from "./activity-watch";
 export type { SessionActivityWatch, SessionActivityWatchPorts } from "./activity-watch";
 export { createSessionReadWatch } from "./session-read-watch";

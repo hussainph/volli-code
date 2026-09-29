@@ -141,10 +141,15 @@ export function createSessionReadWatch(ports: SessionReadWatchPorts): SessionRea
       phases.set(sessionId, { turnActive: false, lastTurnOutcome: null });
     },
     observeFocused(sessionIds) {
-      try {
-        for (const sessionId of sessionIds) ports.markRead(sessionId);
-      } catch (error) {
-        onError(error);
+      // One try PER SESSION, not one around the loop: two windows can show two
+      // Sessions, and a receipt that throws for the first must not decide that
+      // the second stays unread while somebody is looking straight at it.
+      for (const sessionId of sessionIds) {
+        try {
+          ports.markRead(sessionId);
+        } catch (error) {
+          onError(error);
+        }
       }
     },
   };

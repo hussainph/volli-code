@@ -251,4 +251,23 @@ describe("createSessionReadWatch — viewing clears unread (A1)", () => {
 
     expect(onError).toHaveBeenCalledOnce();
   });
+
+  it("keeps reading the rest when one Session's receipt throws", () => {
+    const onError = vi.fn();
+    const read: string[] = [];
+    const { watch } = watchWith({
+      markRead: (sessionId: string) => {
+        if (sessionId === "b") throw new Error("publish refused");
+        read.push(sessionId);
+      },
+      onError,
+    });
+
+    watch.observeFocused(new Set(["a", "b", "c"]));
+
+    // "c" is the point: a throw for "b" used to abandon the loop, leaving a
+    // Session the person is looking at marked unread.
+    expect(read).toEqual(["a", "c"]);
+    expect(onError).toHaveBeenCalledOnce();
+  });
 });

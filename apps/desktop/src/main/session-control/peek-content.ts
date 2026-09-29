@@ -57,13 +57,14 @@ export interface SessionPeekContentPorts {
  * counts beside them. `null` means no such Session — a row the listing still
  * holds for a Session the ledger no longer has.
  *
- * `limit` defaults to {@link SESSION_PEEK_ENTRIES}, which is far smaller than
- * the CLI's own default for the reason that constant records: this is a glance,
- * and the conversation is one press away.
+ * It holds {@link SESSION_PEEK_ENTRIES}, which is far smaller than the CLI's
+ * own default for the reason that constant records: this is a glance, and the
+ * conversation is one press away. The depth is the app's, not the caller's —
+ * no surface has ever wanted a different one.
  */
 export async function readSessionPeekContent(
   ports: SessionPeekContentPorts,
-  input: { sessionId: string; limit?: number },
+  input: { sessionId: string },
 ): Promise<SessionPeekContent | null> {
   const projection = await ports.getSession({ sessionId: input.sessionId });
   if (projection === null) return null;
@@ -72,7 +73,7 @@ export async function readSessionPeekContent(
       listEvents: ports.listEvents,
       ...(ports.readArtifact === undefined ? {} : { readArtifact: ports.readArtifact }),
     },
-    { sessionId: input.sessionId, limit: input.limit ?? SESSION_PEEK_ENTRIES },
+    { sessionId: input.sessionId, limit: SESSION_PEEK_ENTRIES },
   );
   // `interactions.active[0]` is the app's one answer to "which question is this
   // Session asking" — `sessionNotificationItem` picks the same one, so the card

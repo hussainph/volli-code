@@ -146,7 +146,7 @@ import {
   createSessionReadWatch,
   createSessionWatchdog,
   createSuspendClock,
-  sessionListingNotice,
+  publishSessionListingRow,
   watchSessionActivity,
   type ScheduledResumeHost,
 } from "./session-control";
@@ -934,21 +934,18 @@ app.whenReady().then(async () => {
   // same builder, or one window's dot would outlive the other's.
   const publishSessionRow = (sessionId: string): void => {
     if (watchedDb === null || sessionEngine === null) return;
-    void sessionListingNotice(
+    void publishSessionListingRow(
       {
         db: watchedDb,
         getSession: (query) => sessionEngine.getSession(query),
         liveAttachmentIds: () =>
           new Set(listOpenNativeBindings().map((binding) => binding.attachmentId)),
+        publish: broadcastSessionActivity,
       },
       sessionId,
-    )
-      .then((notice) => {
-        if (notice !== null) broadcastSessionActivity(notice);
-      })
-      .catch((error: unknown) => {
-        console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
-      });
+    ).catch((error: unknown) => {
+      console.warn(`[volli] could not publish the read row of ${sessionId}:`, error);
+    });
   };
   const sessionReadWatch =
     watchedDb !== null

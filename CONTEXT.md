@@ -646,6 +646,36 @@ whether recovery or input is needed. It is not a source of truth and never
 turns silence alone into an agent lifecycle fact.
 _Avoid_: waiting flag, notification state
 
+**Unread**:
+Whether a Session has said something nobody has seen. Its own axis, not an
+activity state: a working Session can be read and an idle one unread. Set when a
+turn ends out of sight — not in front of a focused window — and cleared by
+opening the Session, replying to it, viewing its conversation, or marking it by
+hand. A peek never reads: glancing at a row is not having seen the work.
+_Avoid_: Attention, new, active, notification
+
+**Read receipt**:
+The durable per-Session stamp behind Unread — when it went unread, or nothing
+for a Session that is read. It lives beside the ledger, never in it: what one
+person has looked at is not a Session fact, so it is never an event, never
+replayed, and never part of history. Main owns its clock.
+_Avoid_: Session Event, Receipt (that is a Command's), seen flag
+
+**Held order**:
+The order of the sidebar's Active band. A new question floats to the very top; a
+new turn or a Session's first appearance lifts it to the top but under the
+lowest open question; nothing else moves, so an answered question stays where it
+floated. The order is frozen while the pointer is in a sidebar or a peek is open,
+and pending moves land on leave. The ticket rail follows the same order.
+_Avoid_: sort, ranking, recency order
+
+**Session peek**:
+The card shown on hover over a sidebar row: that Session's recent conversation,
+the question it is asking, and transient action without navigating. A read, not
+an adoption — it opens no stream and leaves nothing to tear down. A Previous-band
+ticket folder peeks its ticket instead, read-only, with one line per Session.
+_Avoid_: preview, tooltip, Split view, Presentation
+
 **Scheduled Resume**:
 A person's choice, made on a run a spent provider allowance stopped, to retry
 that run when the allowance's stated reset arrives. It is three Session

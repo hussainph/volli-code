@@ -951,14 +951,9 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input)) return false;
-      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
-      // Absent is the card's ordinary ask. A present limit must be a usable
-      // count: a NaN would reach the fold as a slice that keeps nothing and
-      // draw as an empty transcript rather than as the mistake it is.
-      const limit = input["limit"];
-      return (
-        limit === undefined || (typeof limit === "number" && Number.isInteger(limit) && limit > 0)
-      );
+      // A peek's depth is the app's (`SESSION_PEEK_ENTRIES`), so the id is the
+      // whole ask and there is nothing else here to check.
+      return typeof input["sessionId"] === "string" && input["sessionId"].length > 0;
     },
     invalidError: "Invalid session peek",
   },

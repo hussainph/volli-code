@@ -165,8 +165,8 @@ import {
  */
 import {
   createDesktopSessionEngine,
+  publishSessionListingRow,
   readSessionPeekContent,
-  sessionListingNotice,
   sessionListingRowsForRoster,
   type SessionPeekContentPorts,
 } from "./session-control";
@@ -1296,11 +1296,15 @@ export function registerDataIpcHandlers(
       // stamp from a window with a skewed clock would date the dot wrongly for
       // every other window.
       writeSessionUnread(db, input.sessionId, input.unread ? Date.now() : null);
-      const notice = await sessionListingNotice(
-        { db, getSession: (query) => sessionEngine.getSession(query), liveAttachmentIds },
+      await publishSessionListingRow(
+        {
+          db,
+          getSession: (query) => sessionEngine.getSession(query),
+          liveAttachmentIds,
+          publish: broadcastSessionActivity,
+        },
         input.sessionId,
       );
-      if (notice !== null) broadcastSessionActivity(notice);
       return { ok: true, read: readSessionUnread(db, input.sessionId) };
     },
 

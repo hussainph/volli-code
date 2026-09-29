@@ -2729,10 +2729,7 @@ describe("volli:session-peek-content (VC-30)", () => {
       invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: 7 }),
     ).toEqual({ ok: false, error: "Invalid session peek" });
     expect(
-      invoke<SessionPeekContentResult>("volli:session-peek-content", {
-        sessionId: "s1",
-        limit: 0,
-      }),
+      invoke<SessionPeekContentResult>("volli:session-peek-content", { sessionId: "" }),
     ).toEqual({ ok: false, error: "Invalid session peek" });
   });
 });

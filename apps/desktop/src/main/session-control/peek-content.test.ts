@@ -152,22 +152,18 @@ describe("readSessionPeekContent", () => {
     });
   });
 
-  it("asks for six entries unless the caller names a limit", async () => {
+  it("asks for a glance's worth of entries, which no caller picks", async () => {
     const listEvents = vi.fn(async () => []);
 
-    await readSessionPeekContent(
+    const content = await readSessionPeekContent(
       { listEvents, getSession: async () => projection() },
       { sessionId: "session-1" },
     );
-    const bounded = await readSessionPeekContent(
-      { listEvents, getSession: async () => projection() },
-      { sessionId: "session-1", limit: 2 },
-    );
 
-    // The limit reaches the fold; with no artifact store there are no entries
-    // to count it against, and `unreadable` stays 0 — nothing looked.
-    expect(bounded).toMatchObject({ entries: [], unreadable: 0 });
-    expect(listEvents).toHaveBeenCalledTimes(2);
+    // With no artifact store there are no entries to count, and `unreadable`
+    // stays 0 — nothing looked.
+    expect(content).toMatchObject({ entries: [], unreadable: 0 });
+    expect(listEvents).toHaveBeenCalledTimes(1);
   });
 
   it("counts a tail message whose artifact could not be read", async () => {

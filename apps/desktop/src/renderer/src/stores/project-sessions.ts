@@ -46,6 +46,7 @@ import {
 
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import { markSessionRead } from "./session-read-mark";
 
 /** One project's rows, split into the two shapes every consumer wants them in. */
 export interface ProjectSessionRows {
@@ -442,32 +443,29 @@ export function createProjectSessionsStore() {
       });
     },
 
-    async setSessionRead(projectId, sessionId, unread) {
-      const previous = sessionReadOf(get().byProject[projectId], sessionId);
-      // Optimistic, and local-only: the stamp a person's mark really carries is
-      // main's (it owns the receipt), so this holds the shape the dot needs now
-      // and the push replaces it with the recorded one.
-      const write = (read: SessionReadState): void => {
-        set((state) => {
-          const current = state.byProject[projectId];
-          if (current === undefined) return state;
-          const next = { ...current.read };
-          if (read.unreadSince === null) delete next[sessionId];
-          else next[sessionId] = read;
-          return {
-            byProject: { ...state.byProject, [projectId]: { ...current, read: next } },
-          };
-        });
-      };
-      write(unread ? { unreadSince: Date.now() } : { unreadSince: null });
-      try {
-        const result = await window.api.sessions.setRead({ sessionId, unread });
-        if (result.ok) return;
-        toastError(`Couldn't mark the session: ${result.error}`);
-      } catch (error) {
-        toastError(`Couldn't mark the session: ${errorMessage(error)}`);
-      }
-      write(previous);
+    setSessionRead(projectId, sessionId, unread) {
+      // The optimistic stamp, the toast and the conditional revert are
+      // `session-read-mark.ts`' — shared with the ticket rail, which marks the
+      // same Sessions. This store contributes only how a row is read and
+      // written here.
+      return markSessionRead(
+        { sessionId, unread },
+        {
+          readState: () => sessionReadOf(get().byProject[projectId], sessionId),
+          write: (read) => {
+            set((state) => {
+              const current = state.byProject[projectId];
+              if (current === undefined) return state;
+              const next = { ...current.read };
+              if (read.unreadSince === null) delete next[sessionId];
+              else next[sessionId] = read;
+              return {
+                byProject: { ...state.byProject, [projectId]: { ...current, read: next } },
+              };
+            });
+          },
+        },
+      );
     },
   }));
 }

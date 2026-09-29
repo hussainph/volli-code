@@ -3192,10 +3192,9 @@ export interface SessionReadSetInput {
  */
 export type SessionReadSetResult = Result<{ read: SessionReadState }>;
 
-/** One peek's fold (VC-30): `limit` defaults to `SESSION_PEEK_ENTRIES`. */
+/** One peek's fold (VC-30). How much it holds is `SESSION_PEEK_ENTRIES`, not the caller's to pick. */
 export interface SessionPeekContentInput {
   sessionId: string;
-  limit?: number;
 }
 
 /**
