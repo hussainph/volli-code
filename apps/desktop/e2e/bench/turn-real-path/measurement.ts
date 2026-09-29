@@ -31,12 +31,18 @@ import {
   type Distribution,
   type RealTurnSample,
 } from "./analysis";
-import { AUTHORITY_THINK_MS, createRealPathComposition, type ArtifactStoreKind } from "./harness";
+import {
+  AUTHORITY_THINK_MS,
+  createRealPathComposition,
+  type ArtifactStoreKind,
+  type WatchMode,
+} from "./harness";
 
 export const FIXTURE_VERSION = "vc456-turn-real-path-v1";
 const DEFAULT_CONCURRENCIES = [1, 5, 15, 20] as const;
 const DEFAULT_REPETITIONS = 20;
 const WARMUP_WAVES = 1;
+const DEFAULT_DELTAS_PER_REPLY = 8;
 const ARTIFACTS = ["benchmark.json", "benchmark.md", "run-manifest.json"] as const;
 
 const round = (value: number): number => Number(value.toFixed(3));
@@ -44,12 +50,33 @@ const round = (value: number): number => Number(value.toFixed(3));
 export interface BenchmarkParameters {
   concurrencies: readonly number[];
   repetitions: number;
-  /** Diagnostic arms run on the in-memory artifact store; `none` skips them. */
+  /**
+   * `memory-artifacts` adds diagnostic arms on the in-memory artifact store;
+   * `none` runs the production store only.
+   */
   control: "memory-artifacts" | "none";
+  /** Which subscriber postures to run: every Session watched, none, or both. */
+  watch: readonly WatchMode[];
+  /** Text deltas per stand-in reply. */
+  deltasPerReply: number;
+  /**
+   * Adds the overlay-cache sweep: in-memory artifacts, both watch postures,
+   * {@link CLIFF_DELTAS} deltas per reply, at {@link CLIFF_CONCURRENCIES} in
+   * flight — either side of the Session runtime's eight-entry overlay cache.
+   */
+  cliff: boolean;
 }
 
+/** One side of the eight-entry overlay cache, the other, and the matrix's top. */
+export const CLIFF_CONCURRENCIES = [8, 9, 20] as const;
+/** VC-441's single-chunk-like reply against one that streams like a provider. */
+export const CLIFF_DELTAS = [8, 256] as const;
+
 export interface ArmReport {
+  section: "matrix" | "cliff";
   artifactStore: ArtifactStoreKind;
+  watch: WatchMode;
+  deltasPerReply: number;
   concurrency: number;
   warmupWavesDiscarded: number;
   waves: number;
@@ -68,14 +95,22 @@ function hostLoad(): number[] | null {
 }
 
 export async function runArm(input: {
+  section?: ArmReport["section"];
   artifactStore: ArtifactStoreKind;
+  watch?: WatchMode;
   concurrency: number;
   repetitions: number;
+  deltasPerReply?: number;
   /** Receives every analyzed sample, for tests that inspect them. */
   onSample?: (sample: RealTurnSample) => void;
 }): Promise<ArmReport> {
   const { artifactStore, concurrency, repetitions } = input;
-  const composition = await createRealPathComposition({ artifactStore });
+  const watch = input.watch ?? "all";
+  const composition = await createRealPathComposition({
+    artifactStore,
+    watch,
+    ...(input.deltasPerReply === undefined ? {} : { deltasPerReply: input.deltasPerReply }),
+  });
   try {
     for (let wave = 0; wave < WARMUP_WAVES; wave += 1) {
       await composition.runWave({ concurrency, wave: -1 - wave });
@@ -98,7 +133,7 @@ export async function runArm(input: {
       for (const [index, turn] of result.turns.entries()) {
         const sample = analyzeRealTurn(
           turn,
-          `${artifactStore}-${concurrency}-${wave + 1}-${index + 1}`,
+          `${artifactStore}-${watch}-${concurrency}-${wave + 1}-${index + 1}`,
         );
         samples.push(sample);
         input.onSample?.(sample);
@@ -117,7 +152,10 @@ export async function runArm(input: {
     );
     const toMs = (ns: number): number | null => (Number.isFinite(ns) ? round(ns / 1e6) : null);
     return {
+      section: input.section ?? "matrix",
       artifactStore,
+      watch,
+      deltasPerReply: input.deltasPerReply ?? DEFAULT_DELTAS_PER_REPLY,
       concurrency,
       warmupWavesDiscarded: WARMUP_WAVES,
       waves: repetitions,
@@ -157,7 +195,7 @@ export async function runArm(input: {
 /** Refuses a run whose harness could not vouch for what it measured. */
 export function integrityFailures(arm: ArmReport): string[] {
   const failures: string[] = [];
-  const label = `${arm.artifactStore}@${arm.concurrency}`;
+  const label = `${arm.artifactStore}/${arm.watch}/${arm.deltasPerReply}d@${arm.concurrency}`;
   const summary = arm.summary as { turnSampleCount: number; completeTurnCount: number };
   if (arm.integrity.networkAttempts !== 0) failures.push(`${label}: network was attempted`);
   if (arm.integrity.unscopedEnvelopes !== 0)
@@ -287,6 +325,7 @@ type Summary = Record<string, Distribution | null> & {
     turnsWithAllFactsPaired: number;
     orderInversions: number;
     causalityViolations: number;
+    commitMismatches: number;
     streamMismatches: number;
   };
   vc119OrderViolations: number;
@@ -301,17 +340,26 @@ function timingRow(arm: ArmReport): string {
     measuredCpuPercentOfOneCore: number | null;
     loadAverageAfter: number[] | null;
   };
-  return `| ${arm.concurrency} | ${s.turnSampleCount} | ${fmt(s["submitToAcceptedMs"])} | ${fmt(s["queuedMs"])} | ${fmt(s["turnStartDurableLagMs"])} | ${fmt(s["runtimeTurnMs"])} | ${fmt(s["firstMessageToCompletionMs"])} | ${fmt(s["submitToResolvedMs"])} | ${host.eventLoopDelayMs.p95 ?? "n/a"} / ${host.eventLoopDelayMs.max ?? "n/a"} | ${host.measuredCpuMsPerTurn ?? "n/a"} | ${host.measuredCpuPercentOfOneCore ?? "n/a"} | ${host.loadAverageAfter?.[0] ?? "n/a"} |`;
+  return `| ${arm.concurrency} | ${s.turnSampleCount} | ${fmt(s["submitToAcceptedMs"])} | ${fmt(s["queuedMs"])} | ${fmt(s["turnStartDurableLagMs"])} | ${fmt(s["runtimeTurnMs"])} | ${fmt(s["firstMessageToCompletionMs"])} | ${fmt(s["submitToResolvedMs"])} | ${fmt(s["subscriberLagMs"])} | ${host.eventLoopDelayMs.p95 ?? "n/a"} / ${host.eventLoopDelayMs.max ?? "n/a"} | ${host.measuredCpuMsPerTurn ?? "n/a"} | ${host.measuredCpuPercentOfOneCore ?? "n/a"} | ${host.loadAverageAfter?.[0] ?? "n/a"} |`;
 }
 
 function attributionRow(arm: ArmReport): string {
   const s = arm.summary as Summary;
-  return `| ${arm.concurrency} | ${fmt(s["providerPerTurnMs"])} | ${fmt(s.toolsByName["read"])} | ${fmt(s.toolsByName["bash"])} | ${fmt(s["authorityWaitMs"])} | ${fmt(s["questionDeliveryMs"])} | ${fmt(s["answerCommandMs"])} | ${fmt(s["compactionDurationMs"])} | ${fmt(s["unaccountedGapMs"])} | ${fmt(s["artifactWriteMs"])} | ${fmt(s["artifactWriteTotalPerTurnMs"])} | ${fmt(s["ledgerServicePerTurnMs"], 2)} | ${fmt(s["ledgerTransactionWaitMs"], 2)} |`;
+  return `| ${arm.concurrency} | ${fmt(s["providerPerTurnMs"])} | ${fmt(s.toolsByName["read"])} | ${fmt(s.toolsByName["bash"])} | ${fmt(s["authorityWaitMs"])} | ${fmt(s["questionDeliveryMs"])} | ${fmt(s["answerCommandMs"])} | ${fmt(s["compactionDurationMs"])} | ${fmt(s["unaccountedGapMs"])} | ${fmt(s["artifactWriteMs"])} | ${fmt(s["artifactWriteTotalPerTurnMs"])} | ${fmt(s["ledgerReadsPerTurn"], 0)} | ${fmt(s["ledgerTransactionsPerTurn"], 0)} | ${fmt(s["ledgerServicePerTurnMs"], 2)} | ${fmt(s["ledgerTransactionWaitMs"], 2)} |`;
 }
 
 function checkRow(arm: ArmReport): string {
   const s = arm.summary as Summary;
-  return `| ${arm.artifactStore} | ${arm.concurrency} | ${s.completeTurnCount} / ${s.turnSampleCount} | ${s.vc119OrderViolations} | ${s.crossCheck.turnsWithAllFactsPaired} | ${s.crossCheck.orderInversions} | ${s.crossCheck.causalityViolations} | ${s.crossCheck.streamMismatches} | ${s.ledgerShapes.length} | ${arm.integrity.networkAttempts} |`;
+  return `| ${arm.section} | ${arm.artifactStore} | ${arm.watch} | ${arm.deltasPerReply} | ${arm.concurrency} | ${s.completeTurnCount} / ${s.turnSampleCount} | ${s.vc119OrderViolations} | ${s.crossCheck.turnsWithAllFactsPaired} | ${s.crossCheck.orderInversions} | ${s.crossCheck.causalityViolations} | ${s.crossCheck.commitMismatches} | ${s.crossCheck.streamMismatches} | ${s.ledgerShapes.length} | ${arm.integrity.networkAttempts} |`;
+}
+
+function cliffRow(arm: ArmReport): string {
+  const s = arm.summary as Summary;
+  const host = arm.host as {
+    measuredCpuMsPerTurn: number | null;
+    measuredCpuPercentOfOneCore: number | null;
+  };
+  return `| ${arm.watch} | ${arm.deltasPerReply} | ${arm.concurrency} | ${fmt(s["ledgerReadsPerTurn"], 0)} | ${fmt(s["ledgerTransactionsPerTurn"], 0)} | ${fmt(s["ledgerServicePerTurnMs"], 1)} | ${host.measuredCpuMsPerTurn ?? "n/a"} | ${host.measuredCpuPercentOfOneCore ?? "n/a"} | ${fmt(s["runtimeTurnMs"])} | ${fmt(s["firstMessageToCompletionMs"])} |`;
 }
 
 function fileSyncLine(probe: unknown): string {
@@ -332,48 +380,61 @@ export function formatMarkdown(report: {
   arms: ArmReport[];
 }): string {
   const { concurrencies, repetitions, control } = report.parameters;
-  const file = report.arms.filter((arm) => arm.artifactStore === "file");
-  const memory = report.arms.filter((arm) => arm.artifactStore === "memory");
   const env = report.environment;
   const timingHeader =
-    "| In flight | Turns | Submit → accepted | Submit → turn start (`queuedMs`) | `turn-queue` → durable `turn.started` | Runtime turn (VC-119) | First message → completion | Submit → `command()` resolved | Loop delay p95 / max (ms) | CPU per turn (ms) | Loop busy (% one core) | Load 1m after |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+    "| In flight | Turns | Submit → accepted | Submit → turn start (`queuedMs`) | `turn-queue` → `turn.started` committed | Runtime turn (VC-119) | First message → completion | Submit → `command()` resolved | Commit → subscriber (`turn.completed`) | Loop delay p95 / max (ms) | CPU per turn (ms) | Loop busy (% one core) | Load 1m after |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const attributionHeader =
-    "| In flight | Provider per turn | `read` ×2 per turn | `bash` | Authority wait | Wait start → question seen | `interaction.resolve` round trip | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
-  const shape = (file[0]?.summary as Summary | undefined)?.ledgerShapes[0]?.shape ?? "n/a";
+    "| In flight | Provider per turn | `read` ×2 per turn | `bash` | Authority wait | Wait start → question seen | `interaction.resolve` round trip | Compaction | Unaccounted gap (runtime turn) | Artifact write, per call | Artifact writes, per turn | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | Ledger txn queue wait |\n| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+  const shape = (report.arms[0]?.summary as Summary | undefined)?.ledgerShapes[0]?.shape ?? "n/a";
+  const title = (store: ArtifactStoreKind, watch: WatchMode): string =>
+    `## ${store === "file" ? "Production path" : "Diagnostic control"}: ${store === "file" ? "file" : "in-memory"} transcript artifacts, ${watch === "all" ? "every Session watched" : "no Session watched"}\n`;
   const sections = [
     `# Agent turn critical path on the real Session path (VC-456)\n`,
     `Fixture \`${FIXTURE_VERSION}\` · generated ${report.generatedAt} · ${repetitions} measured waves per arm after ${WARMUP_WAVES} discarded warm-up wave · in flight ${concurrencies.join(" / ")}.\n`,
     `Reproduction: \`VC456_OUTPUT=$PWD/performance-results/vc-456-turn-real-path pnpm -C apps/desktop bench:turn-real-path\`.\n`,
-    `All values are p50 / p95 in ms, nearest-rank, over individual turns. Turns in one wave share a host interval and are not independent.\n`,
-    `## Production path (file transcript artifacts)\n`,
-    timingHeader,
-    ...file.map(timingRow),
-    ``,
-    attributionHeader,
-    ...file.map(attributionRow),
-    ``,
+    `All values are p50 / p95 in ms, nearest-rank, over individual turns. Turns in one wave share a host interval and are not independent. "Watched" means a live subscriber per Session, as a chat open in a tab; "no Session watched" is Sessions working in the background.\n`,
   ];
-  if (memory.length > 0) {
+  const groups = new Map<string, ArmReport[]>();
+  for (const arm of report.arms.filter(({ section }) => section === "matrix")) {
+    const key = `${arm.artifactStore}|${arm.watch}`;
+    groups.set(key, [...(groups.get(key) ?? []), arm]);
+  }
+  for (const arms of groups.values()) {
+    const first = arms[0]!;
+    sections.push(title(first.artifactStore, first.watch));
+    if (first.artifactStore === "memory") {
+      sections.push(
+        `Everything else identical: SQLite ledger, Pi sidecars, tools, gate, subscribers. Not a product configuration; it isolates what durable artifact publication costs.\n`,
+      );
+    }
     sections.push(
-      `## Diagnostic control: in-memory transcript artifacts\n`,
-      `Everything else identical: SQLite ledger, Pi sidecars, tools, gate, subscriber. Not a product configuration; it isolates what durable artifact publication costs.\n`,
       timingHeader,
-      ...memory.map(timingRow),
+      ...arms.map(timingRow),
       ``,
       attributionHeader,
-      ...memory.map(attributionRow),
+      ...arms.map(attributionRow),
+      ``,
+    );
+  }
+  const cliff = report.arms.filter(({ section }) => section === "cliff");
+  if (cliff.length > 0) {
+    sections.push(
+      `## Overlay cache sweep: either side of eight Sessions streaming\n`,
+      `In-memory artifacts (so bottleneck 1 is out of the way), ${repetitions} waves per row. The Session runtime keeps a live overlay for at most eight Sessions (\`OVERLAY_CACHE_LIMIT\`), and a fold for at most eight unwatched ones (\`PROJECTION_CACHE_LIMIT\`).\n`,
+      `| Watched | Deltas per reply | In flight | Ledger reads per turn | Ledger txns per turn | Ledger txn CPU per turn | CPU per turn (ms) | Loop busy (% one core) | Runtime turn | First message → completion |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
+      ...cliff.map(cliffRow),
       ``,
     );
   }
   sections.push(
     `## Accounting and cross-checks\n`,
-    `| Artifact store | In flight | Complete turns | VC-119 order violations | Turns with all 6 facts paired | Envelope/ledger order inversions | Causality violations | Live stream ≠ SQLite read-back | Distinct ledger shapes | Network attempts |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
+    `| Section | Artifact store | Watched | Deltas | In flight | Complete turns | VC-119 order violations | Turns with all 6 facts paired | Envelope/ledger order inversions | Causality violations | Commits ≠ SQLite read-back | Live stream ≠ SQLite read-back | Distinct ledger shapes | Network attempts |\n| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
     ...report.arms.map(checkRow),
     ``,
     `Ledger shape of a turn, \`command.recorded\` → \`turn.completed\`: \`${shape}\`.\n`,
     `## Method\n`,
     `- Composition: \`SessionRuntime\` + the desktop Pi adapter over \`createPiAgentRuntime\` + the desktop \`SqliteSessionLedger\` on a migrated \`volli.db\` opened by \`openVolliDb\`, the file transcript-artifact store, and one VC-119 sink shared by the Session runtime and the Pi runtime, as \`createDesktopSessionRuntime\` composes them. Differences: an Electron-free location resolver answering a fixed directory, and a fixed \`resolveRuntimeContext\`.\n`,
-    `- Script per turn: a tool round (\`read\` inside the workspace, \`read\` outside it, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
+    `- Script per turn (${report.parameters.deltasPerReply} text deltas per reply): a tool round (\`read\` inside the workspace, \`read\` outside it, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
       REAL_PATH_REQUEST_PLAN,
     )
       .map((plan) => `${plan.kind} ${plan.serviceMs} ms (first event ${plan.ttftMs} ms)`)
@@ -382,9 +443,9 @@ export function formatMarkdown(report: {
       )}. Expected per turn: ${REAL_PATH_EXPECTED.modelAttempts} provider attempts, ${Object.values(REAL_PATH_EXPECTED.toolsByName).reduce((sum, count) => sum + count, 0)} tools, ${REAL_PATH_EXPECTED.authorityWaits} authority wait, ${REAL_PATH_EXPECTED.compactions} compaction, ${REAL_PATH_EXPECTED.retries} retry, ${REAL_PATH_EXPECTED.turnQueues} \`turn-queue\`.\n`,
     `- Authority: \`enforcement: "enforce"\` with a one-refusal fallback (the shipped default is \`observe\`, which installs no gate). The outside read is refused by \`path.outside-workspace\` and escalated; a live subscriber answers \`once\` via \`interaction.resolve\` after ${AUTHORITY_THINK_MS} ms.\n`,
     `- Clocks: \`queuedMs\` and every VC-119 duration come from the product's own \`Date.now\` clocks, so they have 1 ms resolution. Submit, frame arrival and envelope record times are the harness's \`performance.now()\`.\n`,
-    `- Accepted is this command's durable \`command.recorded\` reaching a live subscriber. \`turn-queue\` → durable \`turn.started\` is one fact's ledger write and publish. Artifact and ledger timings wrap the real store and ledger and are filed per Session through \`AsyncLocalStorage\`, which also joins VC-119 envelopes to turns.\n`,
+    `- Accepted is this command's \`command.recorded\` committed: the engine call that wrote it resolved. Commit times are read when \`SessionEngine.observe\` / \`submit\` resolve and are checked against the SQLite read-back. \`turn-queue\` → \`turn.started\` committed is one fact's durable write; commit → subscriber is its publish. Artifact and ledger timings wrap the real store and ledger and are filed per Session through \`AsyncLocalStorage\`, which also joins VC-119 envelopes to turns.\n`,
     `- Cross-check facts (VC-119 envelope ↔ ledger event): turn start (\`turn-queue\` ↔ \`turn.started\`), first attempt (first \`provider-attempt\` ↔ first \`usage.recorded\`), authority answer (wait-bearing \`authority\` ↔ \`interaction.resolved\`), compaction (\`compaction\` ↔ \`context.compacted\`), final attempt (last of each), turn end (\`turn\` ↔ \`turn.completed\`).\n`,
-    `- ${control === "none" ? "No diagnostic control arm ran." : "The control arms swap only the transcript-artifact store for the in-memory one."}\n`,
+    `- ${control === "none" ? "No diagnostic control arm ran." : "The control arms swap only the transcript-artifact store for the in-memory one."} Unwatched arms have no subscriber; their stand-in person answers when \`interaction.opened\` commits.\n`,
     `File sync on the profile's volume (\`FileHandle.sync()\`, 600-byte file): ${fileSyncLine(env["fileSyncProbe"])}.\n`,
     `Environment: Node ${String(env["nodeVersion"])} · ${String(env["platform"])} ${String(env["osRelease"])} · ${String(env["cpuModel"])} · ${String(env["logicalCores"])} logical cores · ${String(env["totalMemoryBytes"])} bytes RAM · UV_THREADPOOL_SIZE ${String(env["uvThreadpoolSize"])} · initial load ${JSON.stringify(env["initialLoadAverage"])} · commit ${String(env["gitSha"])} (dirty=${String(env["dirty"])}).\n`,
   );
@@ -399,7 +460,19 @@ export async function runBenchmark(input: {
     concurrencies: input.parameters?.concurrencies ?? DEFAULT_CONCURRENCIES,
     repetitions: input.parameters?.repetitions ?? DEFAULT_REPETITIONS,
     control: input.parameters?.control ?? "memory-artifacts",
+    deltasPerReply: input.parameters?.deltasPerReply ?? DEFAULT_DELTAS_PER_REPLY,
+    watch: input.parameters?.watch ?? ["all", "none"],
+    cliff: input.parameters?.cliff ?? true,
   };
+  if (
+    parameters.watch.length === 0 ||
+    !parameters.watch.every((mode) => mode === "all" || mode === "none")
+  ) {
+    throw new Error("watch accepts all and/or none.");
+  }
+  if (!Number.isInteger(parameters.deltasPerReply) || parameters.deltasPerReply < 1) {
+    throw new Error("deltasPerReply must be a positive integer.");
+  }
   if (!Number.isInteger(parameters.repetitions) || parameters.repetitions < 20) {
     throw new Error("repetitions must be an integer >= 20 so p95 is not just a maximum.");
   }
@@ -416,8 +489,36 @@ export async function runBenchmark(input: {
   const arms: ArmReport[] = [];
   const stores: ArtifactStoreKind[] = parameters.control === "none" ? ["file"] : ["file", "memory"];
   for (const artifactStore of stores) {
-    for (const concurrency of concurrencies) {
-      arms.push(await runArm({ artifactStore, concurrency, repetitions: parameters.repetitions }));
+    for (const watch of parameters.watch) {
+      for (const concurrency of concurrencies) {
+        arms.push(
+          await runArm({
+            artifactStore,
+            watch,
+            concurrency,
+            repetitions: parameters.repetitions,
+            deltasPerReply: parameters.deltasPerReply,
+          }),
+        );
+      }
+    }
+  }
+  if (parameters.cliff) {
+    for (const watch of ["all", "none"] as const) {
+      for (const deltasPerReply of CLIFF_DELTAS) {
+        for (const concurrency of CLIFF_CONCURRENCIES) {
+          arms.push(
+            await runArm({
+              section: "cliff",
+              artifactStore: "memory",
+              watch,
+              concurrency,
+              repetitions: parameters.repetitions,
+              deltasPerReply,
+            }),
+          );
+        }
+      }
     }
   }
   const failures = arms.flatMap(integrityFailures);

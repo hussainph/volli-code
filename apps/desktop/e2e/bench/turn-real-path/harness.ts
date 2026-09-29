@@ -108,6 +108,27 @@ export interface RealPathOptions {
    * to artifact durability. The headline arms always run `file`.
    */
   artifactStore?: ArtifactStoreKind;
+  /** Text deltas the provider stand-in streams per reply. Default 8. */
+  deltasPerReply?: number;
+  /**
+   * `all` (the default): every Session has a live subscriber, as a chat open
+   * in a tab does, and the stand-in person answers from that stream. `none`:
+   * nobody subscribes, as for Sessions working in the background, and the
+   * stand-in answers when the question is durably recorded, as a notification
+   * would reach them.
+   */
+  watch?: WatchMode;
+}
+
+export type WatchMode = "all" | "none";
+
+/** One durable fact as the Session Engine committed it. */
+export interface LedgerCommit {
+  sequence: number;
+  kind: string;
+  commandId: string | null;
+  /** `performance.now()` when the engine call that wrote it resolved. */
+  committedAt: number;
 }
 
 /** One VC-119 envelope as the shared sink saw it. */
@@ -158,7 +179,10 @@ export interface LedgerTransaction {
 
 /** What the auto-answerer did for one question. */
 export interface AnswerRecord {
-  /** `performance.now()` when the `interaction.opened` frame reached it. */
+  /**
+   * `performance.now()` when the question reached it: the `interaction.opened`
+   * frame when it watches, the fact's commit when it does not.
+   */
   seenAt: number;
   /** When it sent `interaction.resolve`, after its think time. */
   sentAt: number;
@@ -179,11 +203,18 @@ export interface RawTurn {
   resolvedAt: number;
   receiptStatus: string | null;
   envelopes: RecordedEnvelope[];
-  /** The Session's live frames from the submit on. */
+  /** Every durable fact written for the turn, when its engine call resolved. */
+  commits: LedgerCommit[];
+  /** The Session's live frames from the submit on; empty when nobody watched. */
   frames: LedgerFrame[];
   /** The same Session's ledger, read back from SQLite after the wave settled. */
   ledger: Array<{ sequence: number; kind: string; commandId: string | null }>;
   answers: AnswerRecord[];
+  /**
+   * Session Engine calls made for this turn, by method. Counts, not times, so
+   * they survive a loaded host: `listEvents` is one ledger read transaction.
+   */
+  engineCalls: Record<string, number>;
   timers: TimerSample[];
   artifactCalls: ArtifactCall[];
   ledgerTransactions: LedgerTransaction[];
@@ -202,6 +233,7 @@ export interface WaveResult {
 
 export interface RealPathComposition {
   readonly artifactStore: ArtifactStoreKind;
+  readonly watch: WatchMode;
   /**
    * `around` wraps only the measured phase (every submit, until every turn and
    * answer settled), so a diagnostic can profile it without setup or teardown.
@@ -224,6 +256,9 @@ export interface RealPathComposition {
 
 /** Per-Session evidence, filed under the Session's scope as it is produced. */
 interface SessionEvidence {
+  /** Session Engine calls made on this Session's behalf, by method. */
+  engineCalls: Record<string, number>;
+  commits: LedgerCommit[];
   timers: TimerSample[];
   artifactCalls: ArtifactCall[];
   ledgerTransactions: LedgerTransaction[];
@@ -248,6 +283,37 @@ function yieldToMainProcess(): Promise<void> {
   });
 }
 
+interface WrittenEvent {
+  sequence: number;
+  commandId?: string | null;
+  payload: Record<string, unknown>;
+}
+
+function isWrittenEvent(value: unknown): value is WrittenEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const payload = record["payload"];
+  return (
+    typeof record["sequence"] === "number" &&
+    typeof payload === "object" &&
+    payload !== null &&
+    typeof (payload as Record<string, unknown>)["kind"] === "string"
+  );
+}
+
+/**
+ * The events one `observe` or `submit` committed: the event itself, or the
+ * events a submit result carries beside its command (`commandEvent`, `event`,
+ * `receiptEvent`), in sequence order.
+ */
+function writtenEvents(written: unknown): WrittenEvent[] {
+  if (isWrittenEvent(written)) return [written];
+  if (typeof written !== "object" || written === null) return [];
+  return Object.values(written as Record<string, unknown>)
+    .filter(isWrittenEvent)
+    .toSorted((left, right) => left.sequence - right.sequence);
+}
+
 function interactionIdOf(payload: Record<string, unknown>): string | null {
   const interaction = payload["interaction"];
   if (typeof interaction !== "object" || interaction === null) return null;
@@ -259,6 +325,7 @@ export async function createRealPathComposition(
   options: RealPathOptions = {},
 ): Promise<RealPathComposition> {
   const artifactStore = options.artifactStore ?? "file";
+  const watch = options.watch ?? "all";
   const profile = mkdtempSync(join(tmpdir(), "volli-vc456-profile-"));
   const workspace = join(profile, "workspace");
   const outside = join(profile, "outside");
@@ -318,6 +385,7 @@ export async function createRealPathComposition(
     // Fired inside the stand-in's timer callbacks, which inherit the scope of
     // the Session whose request started them.
     onTimer: (kind, latenessMs) => evidenceFor()?.timers.push({ kind, latenessMs }),
+    ...(options.deltasPerReply === undefined ? {} : { deltasPerReply: options.deltasPerReply }),
   });
 
   const db = openVolliDb(join(profile, "volli.db"));
@@ -401,12 +469,51 @@ export async function createRealPathComposition(
   };
   const onProjectionCheckpointFailure = createCheckpointFailureReporter();
   const now = Date.now;
-  const engine = createSessionEngine({
+  const desktopEngine = createSessionEngine({
     ledger,
     clock: { now },
     ids: { next: () => randomUUID() },
     onProjectionCheckpointFailure,
     yieldToHost: yieldToMainProcess,
+  });
+  // Counts each engine call under the Session it was made for, and files the
+  // facts each write committed, with when its call resolved.
+  const onCommit = new Map<
+    string,
+    (commit: LedgerCommit, payload: Record<string, unknown>) => void
+  >();
+  const engine = new Proxy(desktopEngine, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const sessionId = scope.getStore();
+        const filed = evidenceFor();
+        if (filed !== undefined) {
+          const name = String(property);
+          filed.engineCalls[name] = (filed.engineCalls[name] ?? 0) + 1;
+        }
+        const result = (value as (...values: unknown[]) => unknown).apply(target, args);
+        if (filed === undefined || sessionId === undefined || !(result instanceof Promise)) {
+          return result;
+        }
+        if (property !== "observe" && property !== "submit") return result;
+        return result.then((written: unknown) => {
+          const committedAt = performance.now();
+          for (const event of writtenEvents(written)) {
+            const commit: LedgerCommit = {
+              sequence: event.sequence,
+              kind: String(event.payload["kind"]),
+              commandId: event.commandId ?? null,
+              committedAt,
+            };
+            filed.commits.push(commit);
+            onCommit.get(sessionId)?.(commit, event.payload);
+          }
+          return written;
+        });
+      };
+    },
   });
 
   const innerArtifacts =
@@ -448,12 +555,15 @@ export async function createRealPathComposition(
     around?: (measure: () => Promise<void>) => Promise<void>;
   }): Promise<WaveResult> {
     const { concurrency, wave } = input;
-    // Setup, untimed: N fresh Sessions, each attached and watched, so every
-    // measured turn is the first turn of an identical Session.
+    // Setup, untimed: N fresh Sessions, each attached (and watched, when the
+    // composition watches), so every measured turn is the first turn of an
+    // identical Session.
     const sessions = await Promise.all(
       Array.from({ length: concurrency }, async (_value, index) => {
         const sessionId = randomUUID();
         const filed: SessionEvidence = {
+          engineCalls: {},
+          commits: [],
           timers: [],
           artifactCalls: [],
           ledgerTransactions: [],
@@ -493,56 +603,66 @@ export async function createRealPathComposition(
           throw new Error("VC-456 bench: the attach recorded no opened attachment");
         }
         const attachmentId = opened.payload.attachment.id;
-        const unsubscribe = await runtime.subscribe(
-          { sessionId, afterSequence: attached.throughSequence },
-          (emission) => {
-            if (!isSessionStreamFrame(emission)) return;
-            const arrivedAt = performance.now();
-            const payload = emission.event.payload as unknown as Record<string, unknown>;
-            const kind = String(payload["kind"]);
-            frames.push({
-              sequence: emission.sequence,
-              kind,
-              commandId: emission.event.commandId ?? null,
-              arrivedAt,
-            });
-            if (kind !== "interaction.opened") return;
-            const interactionId = interactionIdOf(payload);
-            if (interactionId === null) return;
-            // The stand-in person: sees the question on their live stream,
-            // thinks for a fixed moment, allows the one call.
-            pendingAnswers.push(
-              scope.run(sessionId, async () => {
-                const target = arrivedAt + AUTHORITY_THINK_MS;
-                await new Promise((resolvePromise) =>
-                  setTimeout(resolvePromise, AUTHORITY_THINK_MS),
-                );
-                const sentAt = performance.now();
-                filed.timers.push({ kind: "authority", latenessMs: sentAt - target });
-                const answered = await runtime.command({
-                  commandId: randomUUID(),
-                  sessionId,
-                  command: {
-                    kind: "interaction.resolve",
-                    interactionId,
-                    resolution: { optionIds: [ALLOW_ONCE_OPTION_ID], response: null },
-                  },
-                });
-                answers.push({
-                  seenAt: arrivedAt,
-                  sentAt,
-                  resolvedAt: performance.now(),
-                  status: answered.receipt?.status ?? null,
-                });
-              }),
-            );
-          },
-        );
+        // The stand-in person: sees the question, thinks for a fixed moment,
+        // allows the one call.
+        const answer = (interactionId: string, seenAt: number): void => {
+          pendingAnswers.push(
+            scope.run(sessionId, async () => {
+              const target = seenAt + AUTHORITY_THINK_MS;
+              await new Promise((resolvePromise) => setTimeout(resolvePromise, AUTHORITY_THINK_MS));
+              const sentAt = performance.now();
+              filed.timers.push({ kind: "authority", latenessMs: sentAt - target });
+              const answered = await runtime.command({
+                commandId: randomUUID(),
+                sessionId,
+                command: {
+                  kind: "interaction.resolve",
+                  interactionId,
+                  resolution: { optionIds: [ALLOW_ONCE_OPTION_ID], response: null },
+                },
+              });
+              answers.push({
+                seenAt,
+                sentAt,
+                resolvedAt: performance.now(),
+                status: answered.receipt?.status ?? null,
+              });
+            }),
+          );
+        };
+        let unsubscribe = (): void => undefined;
+        if (watch === "all") {
+          unsubscribe = await runtime.subscribe(
+            { sessionId, afterSequence: attached.throughSequence },
+            (emission) => {
+              if (!isSessionStreamFrame(emission)) return;
+              const arrivedAt = performance.now();
+              const payload = emission.event.payload as unknown as Record<string, unknown>;
+              const kind = String(payload["kind"]);
+              frames.push({
+                sequence: emission.sequence,
+                kind,
+                commandId: emission.event.commandId ?? null,
+                arrivedAt,
+              });
+              const interactionId = kind === "interaction.opened" ? interactionIdOf(payload) : null;
+              if (interactionId !== null) answer(interactionId, arrivedAt);
+            },
+          );
+        } else {
+          onCommit.set(sessionId, (commit, payload) => {
+            const interactionId =
+              commit.kind === "interaction.opened" ? interactionIdOf(payload) : null;
+            if (interactionId !== null) answer(interactionId, commit.committedAt);
+          });
+        }
         return { sessionId, attachmentId, filed, frames, answers, pendingAnswers, unsubscribe };
       }),
     );
     // Only the measured turn's evidence counts; setup's is dropped.
     for (const session of sessions) {
+      session.filed.engineCalls = {};
+      session.filed.commits.length = 0;
       session.filed.timers.length = 0;
       session.filed.artifactCalls.length = 0;
       session.filed.ledgerTransactions.length = 0;
@@ -605,6 +725,9 @@ export async function createRealPathComposition(
     for (const entry of measured) {
       const { session } = entry;
       session.unsubscribe();
+      onCommit.delete(session.sessionId);
+      const engineCalls = { ...session.filed.engineCalls };
+      const commits = [...session.filed.commits];
       const timers = [...session.filed.timers];
       const artifactCalls = [...session.filed.artifactCalls];
       const ledgerTransactions = [...session.filed.ledgerTransactions];
@@ -634,6 +757,8 @@ export async function createRealPathComposition(
           commandId: event.commandId ?? null,
         })),
         answers: session.answers,
+        engineCalls,
+        commits,
         timers,
         artifactCalls,
         ledgerTransactions,
@@ -645,6 +770,7 @@ export async function createRealPathComposition(
 
   return {
     artifactStore,
+    watch,
     runWave,
     unscopedEnvelopeCount: () => unscoped,
     runIdConflictCount: () => runIdConflicts,

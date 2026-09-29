@@ -10,8 +10,10 @@
  *   VC456_OUTPUT=$PWD/performance-results/vc-456-turn-real-path \
  *     pnpm -C apps/desktop bench:turn-real-path
  *
- * `VC456_REPETITIONS` (default 20), `VC456_CONCURRENCIES` (default 1,5,15,20)
- * and `VC456_CONTROL` (`memory-artifacts` or `none`) tune the matrix.
+ * `VC456_REPETITIONS` (default 20), `VC456_CONCURRENCIES` (default 1,5,15,20),
+ * `VC456_CONTROL` (`memory-artifacts` or `none`), `VC456_DELTAS` (text deltas
+ * per stand-in reply, default 8), `VC456_WATCH` (`all`, `none`, or both,
+ * default both) and `VC456_CLIFF=0` (skip the overlay-cache sweep) tune it.
  */
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +25,7 @@ import { analyzeRealTurn, crossCheckLedger, summarizeTurns } from "./analysis";
 import {
   createRealPathComposition,
   PRIVATE_CONTENT_CANARY,
+  type LedgerCommit,
   type LedgerFrame,
   type RawTurn,
   type RecordedEnvelope,
@@ -39,6 +42,7 @@ const RUN = { runId: "run-1" };
 /** One turn's six paired facts in causal order on both sides. */
 function consistentTurn(): {
   envelopes: RecordedEnvelope[];
+  commits: LedgerCommit[];
   frames: LedgerFrame[];
   ledger: RawTurn["ledger"];
 } {
@@ -102,7 +106,12 @@ function consistentTurn(): {
     commandId: ledger[index]!.commandId,
     arrivedAt,
   }));
-  return { envelopes, frames, ledger };
+  // Each fact commits half a millisecond before its frame arrives.
+  const commits = frames.map(({ arrivedAt, ...frame }) => ({
+    ...frame,
+    committedAt: arrivedAt - 0.5,
+  }));
+  return { envelopes, commits, frames, ledger };
 }
 
 describe("VC-456 ledger cross-check", () => {
@@ -112,6 +121,7 @@ describe("VC-456 ledger cross-check", () => {
     expect(check.paired).toHaveLength(6);
     expect(check.orderInversions).toBe(0);
     expect(check.causalityViolations).toEqual([]);
+    expect(check.commitsMatchLedger).toBe(true);
     expect(check.streamMatchesLedger).toBe(true);
   });
 
@@ -124,6 +134,8 @@ describe("VC-456 ledger cross-check", () => {
     turn.ledger[compacted]!.kind = "interaction.resolved";
     turn.frames[resolved]!.kind = "context.compacted";
     turn.frames[compacted]!.kind = "interaction.resolved";
+    turn.commits[resolved]!.kind = "context.compacted";
+    turn.commits[compacted]!.kind = "interaction.resolved";
     expect(crossCheckLedger({ commandId: COMMAND, ...turn }).orderInversions).toBe(1);
   });
 
@@ -157,6 +169,18 @@ describe("VC-456 ledger cross-check", () => {
     expect(check.missing).toHaveLength(6);
   });
 
+  it("flags a durable fact no engine call was seen committing", () => {
+    const turn = consistentTurn();
+    turn.commits.splice(4, 1);
+    expect(crossCheckLedger({ commandId: COMMAND, ...turn }).commitsMatchLedger).toBe(false);
+  });
+
+  it("has no stream to compare when nobody subscribed", () => {
+    const check = crossCheckLedger({ commandId: COMMAND, ...consistentTurn(), frames: [] });
+    expect(check.streamMatchesLedger).toBeNull();
+    expect(check.causalityViolations).toEqual([]);
+  });
+
   it("flags a live stream that skipped a durable fact", () => {
     const turn = consistentTurn();
     turn.frames.splice(3, 1);
@@ -165,69 +189,80 @@ describe("VC-456 ledger cross-check", () => {
 });
 
 describe("VC-456 real-path smoke", () => {
-  it("runs scripted turns through the real path with complete, ordered, content-free accounting", async () => {
-    const composition = await createRealPathComposition();
-    let turns: RawTurn[];
-    try {
-      ({ turns } = await composition.runWave({ concurrency: 3, wave: 0 }));
-      expect(composition.networkAttempts()).toBe(0);
-      expect(composition.unscopedEnvelopeCount()).toBe(0);
-      expect(composition.runIdConflictCount()).toBe(0);
-      expect(composition.requests()).toEqual({
-        "tool-round": 3,
-        overflow: 3,
-        summary: 3,
-        final: 3,
-      });
-    } finally {
-      await composition.close();
-    }
-    const samples = turns.map((turn, index) => analyzeRealTurn(turn, `smoke-${index}`));
-    for (const sample of samples) {
-      expect(sample.complete).toBe(true);
-      expect(sample.gapIncludesMissingSpans).toBe(false);
-      expect(sample.eventOrderValid).toBe(true);
-      expect(sample.modelAttemptCount).toBe(3);
-      expect(sample.toolRoundCount).toBe(1);
-      expect(sample.toolsByName["read"]?.count).toBe(2);
-      expect(sample.toolsByName["bash"]?.count).toBe(1);
-      expect(sample.authorityWaitCount).toBe(1);
-      expect(sample.compactionCount).toBe(1);
-      expect(sample.retryCount).toBe(1);
-      // The Session runtime's own queue measurement, not a fixture timer.
-      expect(sample.submissionToTurnStartMs).not.toBeNull();
-      expect(sample.crossCheck.missing).toEqual([]);
-      expect(sample.crossCheck.orderInversions).toBe(0);
-      expect(sample.crossCheck.causalityViolations).toEqual([]);
-      expect(sample.crossCheck.streamMatchesLedger).toBe(true);
-      expect(sample.artifactWriteCount).toBeGreaterThan(0);
-      expect(sample.ledgerTransactionCount).toBeGreaterThan(0);
-    }
-    // One ledger shape: the same script produced the same durable history.
-    expect(new Set(samples.map(({ ledgerShape }) => ledgerShape)).size).toBe(1);
+  it.each(["all", "none"] as const)(
+    "runs scripted turns through the real path with complete, ordered, content-free accounting (watch %s)",
+    async (watch) => {
+      const composition = await createRealPathComposition({ watch });
+      let turns: RawTurn[];
+      try {
+        ({ turns } = await composition.runWave({ concurrency: 3, wave: 0 }));
+        expect(composition.networkAttempts()).toBe(0);
+        expect(composition.unscopedEnvelopeCount()).toBe(0);
+        expect(composition.runIdConflictCount()).toBe(0);
+        expect(composition.requests()).toEqual({
+          "tool-round": 3,
+          overflow: 3,
+          summary: 3,
+          final: 3,
+        });
+      } finally {
+        await composition.close();
+      }
+      const samples = turns.map((turn, index) => analyzeRealTurn(turn, `smoke-${index}`));
+      for (const sample of samples) {
+        expect(sample.complete).toBe(true);
+        expect(sample.gapIncludesMissingSpans).toBe(false);
+        expect(sample.eventOrderValid).toBe(true);
+        expect(sample.modelAttemptCount).toBe(3);
+        expect(sample.toolRoundCount).toBe(1);
+        expect(sample.toolsByName["read"]?.count).toBe(2);
+        expect(sample.toolsByName["bash"]?.count).toBe(1);
+        expect(sample.authorityWaitCount).toBe(1);
+        expect(sample.compactionCount).toBe(1);
+        expect(sample.retryCount).toBe(1);
+        // The Session runtime's own queue measurement, not a fixture timer.
+        expect(sample.submissionToTurnStartMs).not.toBeNull();
+        expect(sample.crossCheck.missing).toEqual([]);
+        expect(sample.crossCheck.orderInversions).toBe(0);
+        expect(sample.crossCheck.causalityViolations).toEqual([]);
+        expect(sample.crossCheck.commitsMatchLedger).toBe(true);
+        expect(sample.crossCheck.streamMatchesLedger).toBe(watch === "all" ? true : null);
+        expect(sample.artifactWriteCount).toBeGreaterThan(0);
+        expect(sample.ledgerTransactionCount).toBeGreaterThan(0);
+      }
+      // One ledger shape: the same script produced the same durable history.
+      expect(new Set(samples.map(({ ledgerShape }) => ledgerShape)).size).toBe(1);
 
-    // Privacy: the canary sat in the prompt, the replies and both tool files.
-    const outputs = [
-      JSON.stringify(turns.flatMap((turn) => turn.envelopes.map(({ event }) => event))),
-      JSON.stringify(turns.map((turn) => [turn.frames, turn.ledger])),
-      JSON.stringify(samples),
-      JSON.stringify(summarizeTurns(samples)),
-    ];
-    for (const output of outputs) {
-      expect(output).not.toContain(PRIVATE_CONTENT_CANARY);
-      expect(output).not.toContain("vc456-call-");
-    }
-  });
+      // Privacy: the canary sat in the prompt, the replies and both tool files.
+      const outputs = [
+        JSON.stringify(turns.flatMap((turn) => turn.envelopes.map(({ event }) => event))),
+        JSON.stringify(turns.map((turn) => [turn.frames, turn.ledger])),
+        JSON.stringify(samples),
+        JSON.stringify(summarizeTurns(samples)),
+      ];
+      for (const output of outputs) {
+        expect(output).not.toContain(PRIVATE_CONTENT_CANARY);
+        expect(output).not.toContain("vc456-call-");
+      }
+    },
+  );
 
   it("publishes nothing from an arm whose harness could not vouch for it", async () => {
     const arm = await runArm({ artifactStore: "memory", concurrency: 1, repetitions: 1 });
     expect(integrityFailures(arm)).toEqual([]);
     const tampered = { ...arm, integrity: { ...arm.integrity, networkAttempts: 1 } };
-    expect(integrityFailures(tampered)).toEqual(["memory@1: network was attempted"]);
+    expect(integrityFailures(tampered)).toEqual(["memory/all/8d@1: network was attempted"]);
     const markdown = formatMarkdown({
       generatedAt: "now",
       environment: {},
-      parameters: { concurrencies: [1], repetitions: 1, control: "none" },
+      parameters: {
+        concurrencies: [1],
+        repetitions: 1,
+        control: "none",
+        deltasPerReply: 8,
+        watch: ["all"],
+        cliff: false,
+      },
       arms: [arm],
     });
     expect(markdown).not.toContain(PRIVATE_CONTENT_CANARY);
@@ -267,12 +302,18 @@ describe.runIf(output !== undefined)("VC-456 full matrix", () => {
     const concurrencies = process.env["VC456_CONCURRENCIES"]?.split(",").map(Number);
     const repetitions = process.env["VC456_REPETITIONS"];
     const control = process.env["VC456_CONTROL"];
+    const deltas = process.env["VC456_DELTAS"];
+    const watch = process.env["VC456_WATCH"]?.split(",");
+    const cliff = process.env["VC456_CLIFF"];
     const { failures } = await runBenchmark({
       output: output!,
       parameters: {
         ...(concurrencies === undefined ? {} : { concurrencies }),
         ...(repetitions === undefined ? {} : { repetitions: Number(repetitions) }),
         ...(control === "none" || control === "memory-artifacts" ? { control } : {}),
+        ...(deltas === undefined ? {} : { deltasPerReply: Number(deltas) }),
+        ...(watch === undefined ? {} : { watch: watch as Array<"all" | "none"> }),
+        ...(cliff === undefined ? {} : { cliff: cliff !== "0" }),
       },
     });
     expect(failures).toEqual([]);

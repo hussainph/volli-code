@@ -20,6 +20,7 @@ import type { ObservabilityEvent } from "@volli/shared";
 
 import {
   AUTHORITY_THINK_MS,
+  type LedgerCommit,
   type LedgerFrame,
   type RawTurn,
   type RecordedEnvelope,
@@ -69,19 +70,26 @@ export interface LedgerCrossCheck {
    *
    * - `turn-queue`, `compaction` and the terminal `turn` envelope are recorded
    *   before the durable fact they describe is written, so each must be
-   *   recorded no later than the subscriber receives that fact.
-   * - An authority wait cannot end before the question reached the person, so
-   *   its envelope must be recorded no earlier than the `interaction.opened`
-   *   frame arrived.
+   *   recorded no later than the engine call that wrote that fact resolved.
+   * - An authority wait cannot end before the question was durably opened, nor
+   *   (when a subscriber watches) before its `interaction.opened` frame arrived.
    */
   causalityViolations: string[];
-  /** The live frames and the SQLite read-back list the same facts in the same order. */
-  streamMatchesLedger: boolean;
+  /**
+   * The facts the engine calls committed are exactly the SQLite read-back, in
+   * order, from this command's `command.recorded` to its `turn.completed`.
+   */
+  commitsMatchLedger: boolean;
+  /**
+   * The live frames list the same facts as the SQLite read-back, in the same
+   * order. Null when nobody subscribed.
+   */
+  streamMatchesLedger: boolean | null;
 }
 
 interface LedgerSide {
   sequence: number;
-  arrivedAt: number | null;
+  committedAt: number | null;
 }
 
 function envelopeOf(
@@ -121,13 +129,15 @@ function ledgerWindow(
 export function crossCheckLedger(input: {
   commandId: string;
   envelopes: readonly RecordedEnvelope[];
+  commits: readonly LedgerCommit[];
   frames: readonly LedgerFrame[];
   ledger: RawTurn["ledger"];
 }): LedgerCrossCheck {
+  const committed = new Map(input.commits.map((commit) => [commit.sequence, commit.committedAt]));
   const arrival = new Map(input.frames.map((frame) => [frame.sequence, frame.arrivedAt]));
   const side = (sequence: number | undefined): LedgerSide | undefined =>
-    sequence === undefined ? undefined : { sequence, arrivedAt: arrival.get(sequence) ?? null };
-  const { started, completed } = ledgerWindow(input.commandId, input.ledger);
+    sequence === undefined ? undefined : { sequence, committedAt: committed.get(sequence) ?? null };
+  const { accepted, started, completed } = ledgerWindow(input.commandId, input.ledger);
   const inTurn = input.ledger.filter(
     (entry) =>
       started !== undefined &&
@@ -179,47 +189,89 @@ export function crossCheckLedger(input: {
   const causalityViolations: string[] = [];
   for (const fact of ["turn-start", "compaction", "turn-end"] as const) {
     const envelope = envelopeFacts[fact];
-    const arrivedAt = ledgerFacts[fact]?.arrivedAt;
-    if (envelope === undefined || arrivedAt === undefined || arrivedAt === null) continue;
-    if (envelope.recordedAt > arrivedAt)
+    const committedAt = ledgerFacts[fact]?.committedAt;
+    if (envelope === undefined || committedAt === undefined || committedAt === null) continue;
+    if (envelope.recordedAt > committedAt)
       causalityViolations.push(`${fact}: envelope after its durable fact`);
   }
   const authority = envelopeFacts["authority-answer"];
-  const openedAt = opened === undefined ? undefined : arrival.get(opened.sequence);
-  if (authority !== undefined && openedAt !== undefined && authority.recordedAt < openedAt) {
-    causalityViolations.push("authority-answer: wait ended before the question arrived");
+  if (authority !== undefined && opened !== undefined) {
+    const openedAt = committed.get(opened.sequence);
+    const seenAt = arrival.get(opened.sequence);
+    if (
+      (openedAt !== undefined && authority.recordedAt < openedAt) ||
+      (seenAt !== undefined && authority.recordedAt < seenAt)
+    ) {
+      causalityViolations.push("authority-answer: wait ended before the question arrived");
+    }
   }
+
+  const window = input.ledger.filter(
+    (entry) =>
+      accepted !== undefined &&
+      completed !== undefined &&
+      entry.sequence >= accepted &&
+      entry.sequence <= completed,
+  );
+  const commitsInWindow = input.commits
+    .filter(
+      (commit) =>
+        accepted !== undefined &&
+        completed !== undefined &&
+        commit.sequence >= accepted &&
+        commit.sequence <= completed,
+    )
+    .toSorted((left, right) => left.sequence - right.sequence);
+  const commitsMatchLedger =
+    window.length > 0 &&
+    commitsInWindow.length === window.length &&
+    window.every(
+      (entry, index) =>
+        commitsInWindow[index]?.sequence === entry.sequence &&
+        commitsInWindow[index]?.kind === entry.kind,
+    );
 
   const bySequence = new Map(input.ledger.map((entry) => [entry.sequence, entry.kind]));
   const frameSequences = input.frames.map((frame) => frame.sequence);
   const first = frameSequences[0];
   const last = frameSequences.at(-1);
   const streamMatchesLedger =
-    first !== undefined &&
-    last !== undefined &&
-    frameSequences.length === last - first + 1 &&
-    frameSequences.every((sequence, index) => sequence === first + index) &&
-    input.frames.every((frame) => bySequence.get(frame.sequence) === frame.kind);
+    input.frames.length === 0
+      ? null
+      : first !== undefined &&
+        last !== undefined &&
+        frameSequences.length === last - first + 1 &&
+        frameSequences.every((sequence, index) => sequence === first + index) &&
+        input.frames.every((frame) => bySequence.get(frame.sequence) === frame.kind);
 
-  return { paired, missing, orderInversions, causalityViolations, streamMatchesLedger };
+  return {
+    paired,
+    missing,
+    orderInversions,
+    causalityViolations,
+    commitsMatchLedger,
+    streamMatchesLedger,
+  };
 }
 
 export interface RealTurnSample extends TurnSample {
-  /** Submit → this command's durable `command.recorded` reaching the subscriber. */
+  /** Submit → this command's `command.recorded` committed: the message accepted. */
   submitToAcceptedMs: number | null;
-  /** `command.recorded` → `turn.started`, both as the subscriber received them. */
+  /** `command.recorded` committed → `turn.started` committed. */
   acceptedToTurnStartMs: number | null;
-  /** Submit → `turn.started` as the subscriber received it. */
-  submitToTurnStartFrameMs: number | null;
-  /** `turn.started` → `turn.completed`, both as the subscriber received them. */
+  /** Submit → `turn.started` committed. */
+  submitToTurnStartCommitMs: number | null;
+  /** `turn.started` committed → `turn.completed` committed. */
   turnStartToCompletionMs: number | null;
   /** Submit → `command()` resolving, which the default settle holds to the turn's end. */
   submitToResolvedMs: number | null;
-  /** The `turn-queue` envelope → its durable `turn.started` frame: one fact's write-and-publish. */
+  /** The `turn-queue` envelope → its `turn.started` committed: one fact's durable write. */
   turnStartDurableLagMs: number | null;
+  /** `turn.completed` committed → its frame reaching the subscriber. Null when unwatched. */
+  subscriberLagMs: number | null;
   /** Authority wait beyond the stand-in's fixed think time. */
   authorityBeyondThinkMs: number | null;
-  /** Wait start → the `interaction.opened` frame reaching the stand-in person. */
+  /** Wait start → the question reaching the stand-in person. */
   questionDeliveryMs: number | null;
   /** The stand-in's `interaction.resolve` command, sent → resolved. */
   answerCommandMs: number | null;
@@ -228,6 +280,8 @@ export interface RealTurnSample extends TurnSample {
   artifactWriteDurationsMs: number[];
   artifactReadCount: number;
   artifactReadTotalMs: number;
+  /** `SessionEngine.listEvents` calls: ledger read transactions made for this turn. */
+  ledgerReadCount: number;
   ledgerTransactionCount: number;
   /** The transactions' work plus their BEGIN and COMMIT: the ledger's time on the loop. */
   ledgerServiceTotalMs: number;
@@ -261,12 +315,16 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     expected: REAL_PATH_EXPECTED,
   });
   const { accepted, started, completed } = ledgerWindow(raw.commandId, raw.ledger);
-  const arrival = new Map(raw.frames.map((frame) => [frame.sequence, frame.arrivedAt]));
+  const committed = new Map(raw.commits.map((commit) => [commit.sequence, commit.committedAt]));
   const at = (sequence: number | undefined): number | undefined =>
-    sequence === undefined ? undefined : arrival.get(sequence);
+    sequence === undefined ? undefined : committed.get(sequence);
   const acceptedAt = at(accepted);
   const startedAt = at(started);
   const completedAt = at(completed);
+  const completedSeenAt =
+    completed === undefined
+      ? undefined
+      : raw.frames.find((frame) => frame.sequence === completed)?.arrivedAt;
 
   const authority = envelopeOf(raw.envelopes, hasWait);
   const answer = raw.answers.length === 1 ? raw.answers[0] : undefined;
@@ -291,6 +349,7 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     !base.gapIncludesMissingSpans &&
     base.toolRoundCount === 1 &&
     crossCheck.missing.length === 0 &&
+    crossCheck.commitsMatchLedger &&
     raw.receiptStatus === "accepted" &&
     answer?.status === "accepted" &&
     acceptedAt !== undefined &&
@@ -301,10 +360,11 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     ...base,
     submitToAcceptedMs: gap(raw.submittedAt, acceptedAt),
     acceptedToTurnStartMs: gap(acceptedAt, startedAt),
-    submitToTurnStartFrameMs: gap(raw.submittedAt, startedAt),
+    submitToTurnStartCommitMs: gap(raw.submittedAt, startedAt),
     turnStartToCompletionMs: gap(startedAt, completedAt),
     submitToResolvedMs: gap(raw.submittedAt, raw.resolvedAt),
     turnStartDurableLagMs: gap(turnQueue?.recordedAt, startedAt),
+    subscriberLagMs: gap(completedAt, completedSeenAt),
     authorityBeyondThinkMs: waitMs === null ? null : round(waitMs - AUTHORITY_THINK_MS),
     questionDeliveryMs: gap(waitStartedAt, answer?.seenAt),
     answerCommandMs: gap(answer?.sentAt, answer?.resolvedAt),
@@ -313,6 +373,7 @@ export function analyzeRealTurn(raw: RawTurn, sampleId: string): RealTurnSample 
     artifactWriteDurationsMs: writes.map((call) => round(call.durationMs)),
     artifactReadCount: reads.length,
     artifactReadTotalMs: round(reads.reduce((sum, call) => sum + call.durationMs, 0)),
+    ledgerReadCount: raw.engineCalls["listEvents"] ?? 0,
     ledgerTransactionCount: raw.ledgerTransactions.length,
     ledgerServiceTotalMs: round(
       raw.ledgerTransactions.reduce((sum, transaction) => sum + transaction.serviceMs, 0) +
@@ -345,9 +406,10 @@ export function summarizeTurns(samples: readonly RealTurnSample[]): Record<strin
     completeTurnCount: samples.filter(({ complete }) => complete).length,
     submitToAcceptedMs: pick((sample) => sample.submitToAcceptedMs),
     queuedMs: pick((sample) => sample.submissionToTurnStartMs),
-    submitToTurnStartFrameMs: pick((sample) => sample.submitToTurnStartFrameMs),
+    submitToTurnStartCommitMs: pick((sample) => sample.submitToTurnStartCommitMs),
     acceptedToTurnStartMs: pick((sample) => sample.acceptedToTurnStartMs),
     turnStartDurableLagMs: pick((sample) => sample.turnStartDurableLagMs),
+    subscriberLagMs: pick((sample) => sample.subscriberLagMs),
     runtimeTurnMs: pick((sample) => sample.runtimeTurnMs),
     turnStartToCompletionMs: pick((sample) => sample.turnStartToCompletionMs),
     firstMessageToCompletionMs: pick((sample) => sample.firstMessageToCompletionMs),
@@ -376,6 +438,7 @@ export function summarizeTurns(samples: readonly RealTurnSample[]): Record<strin
     artifactReadsPerTurn: pick((sample) => sample.artifactReadCount),
     artifactReadTotalPerTurnMs: pick((sample) => sample.artifactReadTotalMs),
     ledgerTransactionsPerTurn: pick((sample) => sample.ledgerTransactionCount),
+    ledgerReadsPerTurn: pick((sample) => sample.ledgerReadCount),
     ledgerServicePerTurnMs: pick((sample) => sample.ledgerServiceTotalMs),
     ledgerTransactionWaitMs: summarize(samples.flatMap((sample) => sample.ledgerWaitDurationsMs)),
     timerLatenessMs: {
@@ -392,7 +455,9 @@ export function summarizeTurns(samples: readonly RealTurnSample[]): Record<strin
         (sum, sample) => sum + sample.crossCheck.causalityViolations.length,
         0,
       ),
-      streamMismatches: samples.filter(({ crossCheck }) => !crossCheck.streamMatchesLedger).length,
+      commitMismatches: samples.filter(({ crossCheck }) => !crossCheck.commitsMatchLedger).length,
+      streamMismatches: samples.filter(({ crossCheck }) => crossCheck.streamMatchesLedger === false)
+        .length,
     },
     ledgerShapes: [...shapes.entries()].map(([shape, turns]) => ({ shape, turns })),
   };

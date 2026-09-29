@@ -44,6 +44,8 @@ export {
   type TurnSample,
 } from "./measurement";
 
+const DEFAULT_DELTAS_PER_REPLY = 8;
+
 export const REAL_PATH_PROVIDER_ID = "vc456-fixture-local";
 export const REAL_PATH_MODEL_ID = "vc456-fixture-model";
 
@@ -99,7 +101,9 @@ export interface RealPathProviderOptions {
    * privacy test can prove the instrumentation and ledger reading drop it.
    */
   replyText: string;
-  /** Receives signed lateness for the stand-in's own timers. */
+  /** Text deltas per reply, spread from the first event to the settle. Default 8. */
+  deltasPerReply?: number;
+  /** Receives signed lateness for the stand-in's first-event and settle timers. */
   onTimer?: (kind: "ttft" | "completion", latenessMs: number) => void;
 }
 
@@ -123,7 +127,7 @@ function classify(context: TranscriptContext): RealPathRequestKind {
 
 function timer(
   targetAt: number,
-  kind: "ttft" | "completion",
+  kind: "ttft" | "completion" | "delta",
   onTimer: RealPathProviderOptions["onTimer"],
   signal: AbortSignal | undefined,
 ): Promise<void> {
@@ -132,7 +136,7 @@ function timer(
       () => {
         signal?.removeEventListener("abort", abort);
         // Signed, as in VC-441: libuv's cached loop clock can fire early.
-        onTimer?.(kind, performance.now() - targetAt);
+        if (kind !== "delta") onTimer?.(kind, performance.now() - targetAt);
         resolvePromise();
       },
       Math.max(0, targetAt - performance.now()),
@@ -210,10 +214,28 @@ export function realPathProvider(options: RealPathProviderOptions): RealPathProv
       await timer(startedAt + plan.ttftMs, "ttft", options.onTimer, signal);
       stream.push({ type: "start", partial: message });
       const text = kind === "summary" ? "## Goal\nfinish the fixture turn" : options.replyText;
-      message.content.push({ type: "text", text });
+      const block = { type: "text" as const, text: "" };
+      message.content.push(block);
       stream.push({ type: "text_start", contentIndex: 0, partial: message });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
-      stream.push({ type: "text_end", contentIndex: 0, content: text, partial: message });
+      // The reply streams as several deltas spread across the request, as a
+      // provider's does, so the Session runtime's live overlay sees a stream
+      // rather than one chunk.
+      const deltas = Math.max(1, options.deltasPerReply ?? DEFAULT_DELTAS_PER_REPLY);
+      for (let index = 0; index < deltas; index += 1) {
+        if (index > 0) {
+          const at = startedAt + plan.ttftMs + ((plan.serviceMs - plan.ttftMs) * index) / deltas;
+          // Node clamps a timer to 1 ms, so a delta due sooner than that is
+          // pushed on the next turn of the loop instead; waiting a whole
+          // millisecond per delta would make a many-delta reply slower than
+          // its script.
+          if (at - performance.now() >= 1) await timer(at, "delta", undefined, signal);
+          else await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+        }
+        const delta = `${index === 0 ? "" : " "}${text}`;
+        block.text += delta;
+        stream.push({ type: "text_delta", contentIndex: 0, delta, partial: message });
+      }
+      stream.push({ type: "text_end", contentIndex: 0, content: block.text, partial: message });
       await timer(startedAt + plan.serviceMs, "completion", options.onTimer, signal);
       if (signal?.aborted === true) {
         message.stopReason = "aborted";
